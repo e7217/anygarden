@@ -69,8 +69,22 @@ class Room(Base):
         "Room", remote_side="Room.id", back_populates="child_rooms"
     )
     child_rooms: Mapped[list["Room"]] = relationship("Room", back_populates="parent_room")
-    participants: Mapped[list["Participant"]] = relationship("Participant", back_populates="room")
-    messages: Mapped[list["Message"]] = relationship("Message", back_populates="room")
+    # passive_deletes defers to the FK's ON DELETE CASCADE — without
+    # it the ORM tries to UPDATE the child's room_id to NULL before
+    # cascade fires, which violates NOT NULL. Same pattern as the
+    # Machine.engines / Machine.tokens relationships.
+    participants: Mapped[list["Participant"]] = relationship(
+        "Participant",
+        back_populates="room",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    messages: Mapped[list["Message"]] = relationship(
+        "Message",
+        back_populates="room",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     representative_agent: Mapped[Optional["Agent"]] = relationship(
         "Agent", foreign_keys=[representative_agent_id]
     )
