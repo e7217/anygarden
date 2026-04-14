@@ -545,6 +545,13 @@ class AgentRoomOut(BaseModel):
     room_id: str
     room_name: str = ""
     role: str
+    # Surfaced so the admin UI can hide DM rooms from the "Manage
+    # rooms" dialog — the DM is a fixed 1:1 channel and showing it
+    # alongside regular rooms invites admins to accidentally detach
+    # it. Keeping it in the payload (rather than filtering
+    # server-side) lets other callers keep seeing DM rooms if they
+    # need to.
+    is_dm: bool = False
 
 
 @router.get("/{agent_id}/rooms", response_model=list[AgentRoomOut])
@@ -561,13 +568,18 @@ async def list_agent_rooms(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     result = await db.execute(
-        select(Participant, Room.name)
+        select(Participant, Room.name, Room.is_dm)
         .join(Room, Room.id == Participant.room_id)
         .where(Participant.agent_id == agent_id)
     )
     return [
-        AgentRoomOut(room_id=p.room_id, room_name=name or "", role=p.role)
-        for p, name in result.all()
+        AgentRoomOut(
+            room_id=p.room_id,
+            room_name=name or "",
+            role=p.role,
+            is_dm=is_dm,
+        )
+        for p, name, is_dm in result.all()
     ]
 
 
