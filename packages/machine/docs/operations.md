@@ -7,8 +7,7 @@
 ```bash
 uvx doorae-machine register \
   --server http://localhost:8001 \
-  --name "my-machine" \
-  --max-agents 5
+  --name "my-machine"
 ```
 
 서버에 인증 후 `~/.doorae/machine.toml`에 머신 ID와 토큰이 저장된다.

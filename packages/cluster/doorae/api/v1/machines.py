@@ -25,7 +25,6 @@ class MachineCreate(BaseModel):
     name: str
     hostname: str = "localhost"
     labels: Optional[dict] = None
-    max_agents: int = 4
 
 
 class MachineOut(BaseModel):
@@ -35,7 +34,6 @@ class MachineOut(BaseModel):
     owner_user_id: str
     status: str
     daemon_version: Optional[str] = None
-    max_agents: int
     labels: Optional[dict] = None
     model_config = {"from_attributes": True}
 
@@ -43,7 +41,6 @@ class MachineOut(BaseModel):
 class MachineUpdate(BaseModel):
     name: Optional[str] = None
     hostname: Optional[str] = None
-    max_agents: Optional[int] = None
     labels: Optional[dict] = None
 
 
@@ -70,7 +67,6 @@ async def register_machine(
         hostname=body.hostname,
         owner_user_id=identity.id,
         labels=body.labels,
-        max_agents=body.max_agents,
     )
     db.add(machine)
     await db.flush()
@@ -94,7 +90,6 @@ async def register_machine(
         owner_user_id=machine.owner_user_id,
         status=machine.status,
         daemon_version=machine.daemon_version,
-        max_agents=machine.max_agents,
         labels=machine.labels,
         machine_token=plaintext,
     )
@@ -134,7 +129,7 @@ async def update_machine(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update machine settings (name, hostname, max_agents, labels)."""
+    """Update machine settings (name, hostname, labels)."""
     machine = await _get_owned_machine(db, machine_id, identity)
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(machine, field, value)

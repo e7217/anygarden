@@ -69,7 +69,6 @@ def daemon(tmp_path: Path) -> MachineDaemon:
         server_url="wss://localhost:8000/ws/machines/machine-test-001",
         machine_id="machine-test-001",
         machine_token="test-machine-token",
-        max_agents=4,
         labels={"region": "local"},
         agent_dirs_root=tmp_path / "agents",
     )
@@ -108,7 +107,6 @@ class TestRegisterFrame:
         frame = sent_frames[0]
         assert frame["type"] == "register"
         assert frame["machine_id"] == "machine-test-001"
-        assert frame["max_agents"] == 4
         assert len(frame["capabilities"]) == 1
         assert frame["capabilities"][0]["engine"] == "claude-code"
 

@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 
-export interface Machine { id: string; name: string; hostname: string; status: string; daemon_version?: string; max_agents: number; labels?: Record<string, string>; }
+export interface Machine { id: string; name: string; hostname: string; status: string; daemon_version?: string; labels?: Record<string, string>; }
 
 export interface RegisterMachineResult {
   id: string;
   machine_token: string;
   name: string;
   hostname: string;
-  max_agents: number;
   /**
    * Present only when the POST itself succeeded (machine was created
    * and ``machine_token`` is valid) but the follow-up list refresh
@@ -78,7 +77,7 @@ export function useMachines() {
     refreshInBackground();
   }, [refreshInBackground]);
 
-  const registerMachine = useCallback(async (data: { name: string; hostname: string; max_agents: number }): Promise<RegisterMachineResult> => {
+  const registerMachine = useCallback(async (data: { name: string; hostname: string }): Promise<RegisterMachineResult> => {
     const resp = await apiFetch('/api/v1/machines', { method: 'POST', body: JSON.stringify(data) });
     if (!resp.ok) throw new Error('Failed to register machine');
     const result: RegisterMachineResult & {
@@ -105,7 +104,6 @@ export function useMachines() {
             hostname: result.hostname,
             status: result.status ?? 'offline',
             daemon_version: result.daemon_version,
-            max_agents: result.max_agents,
             labels: result.labels,
           },
         ]);
@@ -127,7 +125,7 @@ export function useMachines() {
     }
   }, [fetchMachines, refreshInBackground]);
 
-  const updateMachine = useCallback(async (id: string, data: { name?: string; hostname?: string; max_agents?: number; labels?: Record<string, string> }) => {
+  const updateMachine = useCallback(async (id: string, data: { name?: string; hostname?: string; labels?: Record<string, string> }) => {
     const resp = await apiFetch(`/api/v1/machines/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
     if (!resp.ok) throw new Error('Failed to update machine');
     const updated: Machine = await resp.json();

@@ -147,7 +147,11 @@ class Machine(Base):
     )
     cpu_cores: Mapped[int] = mapped_column(Integer, default=0)
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
-    max_agents: Mapped[int] = mapped_column(Integer, default=1)
+    # Placement capacity limit. Hidden from UI/API/CLI as of 2026-04-15
+    # (issue #2) — kept in the schema so ``placement.py`` can still
+    # enforce a soft cap and we can re-expose it later without a
+    # migration. Set absurdly high so it never bites in practice.
+    max_agents: Mapped[int] = mapped_column(Integer, default=1000)
     labels: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 

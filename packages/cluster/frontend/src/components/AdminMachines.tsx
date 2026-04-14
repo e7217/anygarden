@@ -96,7 +96,6 @@ export default function AdminMachines() {
   const [registerOpen, setRegisterOpen] = useState(false)
   const [regName, setRegName] = useState('')
   const [regHostname, setRegHostname] = useState('')
-  const [regMaxAgents, setRegMaxAgents] = useState('4')
   const [regLoading, setRegLoading] = useState(false)
   const [tokenResult, setTokenResult] = useState<RegisterMachineResult | null>(null)
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
@@ -108,10 +107,9 @@ export default function AdminMachines() {
     try {
       const result = await registerMachine({
         name: regName.trim(), hostname: regHostname.trim(),
-        max_agents: parseInt(regMaxAgents) || 4,
       })
       setTokenResult(result)
-      setRegName(''); setRegHostname(''); setRegMaxAgents('4')
+      setRegName(''); setRegHostname('')
       setRegisterOpen(false)
       setTokenDialogOpen(true)
     } catch { /* ignore */ }
@@ -245,9 +243,9 @@ export default function AdminMachines() {
                   </div>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Capacity</span>
+                  <span className="text-[var(--color-foreground-muted)]">Active agents</span>
                   <p className="text-[var(--color-foreground)] font-medium">
-                    {machineAgents.filter(a => a.actual_state === 'running' || a.actual_state === 'starting' || a.actual_state === 'pending').length} / {selectedMachine.max_agents} agents
+                    {machineAgents.filter(a => a.actual_state === 'running' || a.actual_state === 'starting' || a.actual_state === 'pending').length}
                   </p>
                 </div>
               </div>
@@ -415,10 +413,6 @@ export default function AdminMachines() {
             <div className="space-y-2">
               <Label>Hostname</Label>
               <Input placeholder="e.g. worker01.example.com" value={regHostname} onChange={e => setRegHostname(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>Max Agents</Label>
-              <Input type="number" min="1" value={regMaxAgents} onChange={e => setRegMaxAgents(e.target.value)} />
             </div>
           </div>
           <DialogFooter>

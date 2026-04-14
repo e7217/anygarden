@@ -17,12 +17,11 @@ TOKEN_PATH = DOORAE_DIR / "machine.token"
 class MachineConfig(BaseSettings):
     """Machine daemon configuration loaded from file, env, or defaults."""
 
-    model_config = {"env_prefix": "DOORAE_MACHINE_"}
+    model_config = {"env_prefix": "DOORAE_MACHINE_", "extra": "ignore"}
 
     machine_id: str = ""
     name: str = ""
     server_url: str = "wss://localhost:8000/ws/machine"
-    max_agents: int = 4
     labels: dict = Field(default_factory=dict)
 
     @classmethod
@@ -50,7 +49,6 @@ class MachineConfig(BaseSettings):
             f'machine_id = "{_toml_escape(self.machine_id)}"',
             f'name = "{_toml_escape(self.name)}"',
             f'server_url = "{_toml_escape(self.server_url)}"',
-            f"max_agents = {self.max_agents}",
         ]
         if self.labels:
             # Serialize labels as a proper TOML inline table
