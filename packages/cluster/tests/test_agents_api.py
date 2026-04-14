@@ -155,6 +155,59 @@ class TestAgentsAPI:
         assert data["deleted"] is True
 
     @pytest.mark.asyncio
+    async def test_delete_agent_also_removes_dm_room(self, agents_env) -> None:
+        """Auto-created DM rooms must not outlive their owning agent.
+
+        Regression test: the sidebar's "Agents" section lists every
+        is_dm=True room, so an orphan DM surfaces as a ghost entry
+        the admin can never clear.
+        """
+        from doorae.db.models import Room as RoomModel
+
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        # Create — auto-creates a DM room named "DM: <name>"
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "dm-del-agent"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        agent_id = resp.json()["id"]
+
+        # Precondition: DM room exists
+        async with factory() as db:
+            dm = (
+                await db.execute(
+                    select(RoomModel).where(
+                        RoomModel.is_dm.is_(True),
+                        RoomModel.name == "DM: dm-del-agent",
+                    )
+                )
+            ).scalar_one_or_none()
+            assert dm is not None
+
+        # Delete the agent
+        resp = await client.delete(
+            f"/api/v1/agents/{agent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+        # Postcondition: DM room is gone
+        async with factory() as db:
+            dm = (
+                await db.execute(
+                    select(RoomModel).where(
+                        RoomModel.is_dm.is_(True),
+                        RoomModel.name == "DM: dm-del-agent",
+                    )
+                )
+            ).scalar_one_or_none()
+            assert dm is None
+
+    @pytest.mark.asyncio
     async def test_non_admin_cannot_create_agent(self, agents_env) -> None:
         """Regular users must be blocked from creating agents."""
         client = agents_env["client"]

@@ -484,9 +484,26 @@ async def delete_agent(
         lifecycle = request.app.state.agent_lifecycle
         await lifecycle.request_stop(agent.id)
 
+    # Locate the agent's DM rooms BEFORE wiping its Participant rows —
+    # once the agent/user Participant link is gone we can't tell which
+    # DM belonged to this agent. A DM here is any ``is_dm=True`` room
+    # the agent currently participates in; there is normally exactly
+    # one (auto-created at agent create time). Cascading FKs on Room
+    # handle Participants / Messages / Tasks, so ``db.delete(room)``
+    # is enough.
+    dm_rooms = (
+        await db.execute(
+            select(Room)
+            .join(Participant, Participant.room_id == Room.id)
+            .where(Participant.agent_id == agent_id, Room.is_dm.is_(True))
+        )
+    ).scalars().all()
+
     # Clean up related records and delete agent
     await db.execute(delete(Participant).where(Participant.agent_id == agent_id))
     await db.execute(delete(AgentToken).where(AgentToken.agent_id == agent_id))
+    for room in dm_rooms:
+        await db.delete(room)
     await db.delete(agent)
     await db.commit()
     return {"deleted": True}
