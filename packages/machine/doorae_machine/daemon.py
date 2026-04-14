@@ -1,0 +1,486 @@
+"""WebSocket daemon: main loop, frame dispatch, and declarative reconciliation."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse, urlunparse
+
+import structlog
+import websockets
+from websockets.asyncio.client import connect
+
+from doorae_machine.config import save_token
+from doorae_machine.crash_budget import CrashBudget
+from doorae_machine.detector import detect_engines
+from doorae_machine.manifest_store import ManifestStore
+from doorae_machine.protocol.frames import (
+    AgentActual,
+    RegisterFrame,
+    ReportActualStateFrame,
+    RequestReplacementFrame,
+    SyncDesiredStateFrame,
+    TokenRequestFrame,
+    parse_server_frame,
+)
+from doorae_machine.spawner import Spawner, SpawnManifest
+
+log = structlog.get_logger()
+
+REPORT_INTERVAL = 30  # seconds between report_actual_state sends
+RECONNECT_BASE = 1  # initial backoff in seconds
+RECONNECT_MAX = 60  # max backoff in seconds
+TOKEN_REQUEST_TIMEOUT = 30  # seconds to wait for a token_grant
+
+
+def _base_url_from_machine_url(machine_ws_url: str) -> str:
+    """Trim the ``/ws/machines/<id>`` endpoint suffix off the daemon URL.
+
+    The daemon is already connected to a server it can reach. Agents spawned
+    on this host should target that same prefix — regardless of what the
+    server thinks its own hostname/port is (which may be wrong under
+    0.0.0.0 binds, reverse proxies, or container networking).
+
+    Only the daemon endpoint suffix is stripped; any leading path segments
+    (reverse-proxy mount like ``/doorae``, API version like ``/api/v1``)
+    are preserved so the SDK's ``{base}/ws/rooms/<id>`` composition still
+    traverses the same proxy the daemon authenticated against.
+    """
+    if not machine_ws_url:
+        return ""
+    parsed = urlparse(machine_ws_url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+
+    path = parsed.path
+    marker = "/ws/machines"
+    idx = path.rfind(marker)
+    if idx != -1:
+        path = path[:idx]
+    # ``urlunparse`` normalizes an empty path to "", which is what the SDK
+    # expects so that it can safely append ``/ws/rooms/<id>``.
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
+class MachineDaemon:
+    """Machine daemon that connects to doorae-server via WebSocket.
+
+    Implements a **declarative desired-state protocol**: the server sends
+    SyncDesiredStateFrame / SyncBatchFrame describing which agents should
+    be running, and the daemon reconciles its actual state toward the
+    desired state.  The daemon requests agent tokens on demand via
+    TokenRequestFrame and handles local crash-restart with CrashBudget.
+    """
+
+    def __init__(
+        self,
+        server_url: str,
+        machine_id: str,
+        machine_token: str,
+        max_agents: int = 4,
+        labels: dict | None = None,
+        token_path: Any = None,
+        agent_dirs_root: Path | None = None,
+    ) -> None:
+        self.server_url = server_url
+        self.machine_id = machine_id
+        self.machine_token = machine_token
+        self.max_agents = max_agents
+        self.labels = labels or {}
+        self._token_path = token_path
+        self._draining = False
+        self._ws: Any = None
+
+        self._spawner = Spawner(
+            on_stopped=self._on_agent_stopped,
+            on_crashed=self._on_agent_crashed,
+            agent_server_url=_base_url_from_machine_url(server_url),
+            agent_dirs_root=agent_dirs_root,
+        )
+        self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
+        self._crash_budgets: dict[str, CrashBudget] = {}
+        self._token_futures: dict[str, asyncio.Future[str]] = {}
+        self._running_generations: dict[str, int] = {}
+
+    # ── Main loop ──────────────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Main WebSocket reconnection loop with exponential backoff."""
+        backoff = RECONNECT_BASE
+        while True:
+            try:
+                await self._connect_and_serve()
+                backoff = RECONNECT_BASE
+            except (
+                websockets.exceptions.ConnectionClosed,
+                websockets.exceptions.WebSocketException,
+                OSError,
+            ) as exc:
+                log.warning(
+                    "ws_disconnected",
+                    error=str(exc),
+                    reconnect_in=backoff,
+                )
+            except asyncio.CancelledError:
+                log.info("daemon_cancelled")
+                await self._spawner.drain()
+                return
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, RECONNECT_MAX)
+
+    async def _connect_and_serve(self) -> None:
+        """Establish WS connection and run message + report loops."""
+        subprotocols = [
+            websockets.Subprotocol("doorae.v1"),
+            websockets.Subprotocol(f"bearer.{self.machine_token}"),
+        ]
+
+        async with connect(
+            self.server_url,
+            subprotocols=subprotocols,
+        ) as ws:
+            self._ws = ws
+            log.info("ws_connected", url=self.server_url)
+
+            await self._register()
+
+            # Send initial report so server knows which agents survived a reconnect
+            await self._report_actual_state()
+
+            # Run report loop and message handler concurrently
+            report_task = asyncio.create_task(self._report_loop())
+            try:
+                async for raw_msg in ws:
+                    try:
+                        data = json.loads(raw_msg)
+                        await self._handle(data)
+                    except json.JSONDecodeError:
+                        log.warning("invalid_json", raw=str(raw_msg)[:200])
+                    except Exception as exc:
+                        log.error("handle_error", error=str(exc))
+            finally:
+                report_task.cancel()
+                try:
+                    await report_task
+                except asyncio.CancelledError:
+                    pass
+                self._ws = None
+
+    async def _register(self) -> None:
+        """Send register frame with detected capabilities."""
+        detection = await detect_engines()
+        capabilities = [
+            {"engine": e.engine, "version": e.version, "path": e.path}
+            for e in detection.engines
+        ]
+        frame = RegisterFrame(
+            machine_id=self.machine_id,
+            capabilities=capabilities,
+            max_agents=self.max_agents,
+            labels=self.labels,
+        )
+        await self._send(frame.model_dump())
+        log.info(
+            "registered",
+            machine_id=self.machine_id,
+            capabilities=len(capabilities),
+        )
+
+    async def _report_loop(self) -> None:
+        """Send report_actual_state every REPORT_INTERVAL seconds."""
+        while True:
+            await asyncio.sleep(REPORT_INTERVAL)
+            await self._report_actual_state()
+
+    # ── Frame dispatch ─────────────────────────────────────────────────
+
+    async def _handle(self, data: dict) -> None:
+        """Dispatch incoming server frame to the appropriate handler."""
+        frame = parse_server_frame(data)
+
+        match frame.type:
+            case "sync_desired_state":
+                await self._handle_sync_desired_state(frame)
+            case "sync_batch":
+                await self._handle_sync_batch(frame)
+            case "token_grant":
+                self._handle_token_grant(frame)
+            case "drain":
+                await self._handle_drain()
+            case "ping":
+                await self._report_actual_state()
+            case "rotate_token":
+                await self._handle_rotate_token(frame)
+
+    # ── Desired-state handlers ─────────────────────────────────────────
+
+    async def _handle_sync_desired_state(self, frame: Any) -> None:
+        """Handle a single agent's desired state declaration."""
+        self._manifest_store.save(frame)
+        await self._reconcile_agent(frame.agent_id)
+
+    async def _handle_sync_batch(self, frame: Any) -> None:
+        """Handle a batch of agent desired states (full reconciliation)."""
+        # Save all manifests
+        desired_ids: set[str] = set()
+        for agent_frame in frame.agents:
+            self._manifest_store.save(agent_frame)
+            desired_ids.add(agent_frame.agent_id)
+
+        # Kill orphans: agents running locally but not in the batch
+        running_list = self._spawner.list_running()
+        for info in running_list:
+            agent_id = info["agent_id"]
+            if agent_id not in desired_ids:
+                log.info("killing_orphan", agent_id=agent_id)
+                await self._spawner.kill(agent_id)
+                self._running_generations.pop(agent_id, None)
+
+        # Reconcile all desired agents
+        for agent_frame in frame.agents:
+            await self._reconcile_agent(agent_frame.agent_id)
+
+    async def _reconcile_agent(self, agent_id: str) -> None:
+        """Reconcile a single agent's actual state toward its desired state."""
+        manifest = self._manifest_store.load(agent_id)
+        if manifest is None:
+            return
+
+        running = self._spawner.get_running(agent_id)
+
+        if manifest.desired_state == "stopped":
+            if running is not None:
+                log.info("stopping_agent", agent_id=agent_id)
+                await self._spawner.kill(agent_id)
+                self._running_generations.pop(agent_id, None)
+            return
+
+        # desired_state == "running"
+        if running is not None:
+            current_gen = self._running_generations.get(agent_id, 0)
+            if current_gen >= manifest.generation:
+                # Already running with same or newer generation — no-op
+                return
+            # Running with older generation — kill (will respawn below)
+            log.info(
+                "killing_old_generation",
+                agent_id=agent_id,
+                current=current_gen,
+                desired=manifest.generation,
+            )
+            await self._spawner.kill(agent_id)
+            self._running_generations.pop(agent_id, None)
+
+        # Need to start: request token and spawn.
+        # Reset crash budget since this is a server-driven reconciliation
+        # (not a crash-driven restart).
+        budget = self._crash_budgets.get(agent_id)
+        if budget is not None:
+            budget.reset()
+        # IMPORTANT: run as background task so the WS message loop stays
+        # unblocked. _request_token_and_spawn awaits a Future that is
+        # resolved by an incoming token_grant frame — if we await it here
+        # in the handler, the WS loop deadlocks.
+        asyncio.create_task(self._request_token_and_spawn(agent_id, manifest))
+
+    async def _request_token_and_spawn(
+        self,
+        agent_id: str,
+        manifest: SyncDesiredStateFrame,
+    ) -> None:
+        """Request an agent token from the server, then spawn the agent."""
+        # Create a future for the token grant
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        self._token_futures[agent_id] = future
+
+        # Send token request
+        token_req = TokenRequestFrame(agent_ids=[agent_id])
+        await self._send(token_req.model_dump())
+
+        try:
+            agent_token = await asyncio.wait_for(
+                future, timeout=TOKEN_REQUEST_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            log.error("token_request_timeout", agent_id=agent_id)
+            self._token_futures.pop(agent_id, None)
+            return
+        finally:
+            self._token_futures.pop(agent_id, None)
+
+        # Build SpawnManifest from manifest + token
+        spawn_manifest = SpawnManifest(
+            agent_id=agent_id,
+            engine=manifest.engine,
+            agent_token=agent_token,
+            profile_yaml=manifest.profile_yaml,
+            rooms=list(manifest.rooms),
+            server_url="",  # spawner uses its own agent_server_url
+            name=manifest.name,
+            agents_md=manifest.agents_md,
+            files=dict(manifest.files),
+            engine_secrets=dict(manifest.engine_secrets),
+            reasoning_effort=manifest.reasoning_effort,
+            sub_rooms=list(manifest.sub_rooms),
+        )
+
+        result = await self._spawner.spawn(spawn_manifest)
+        if result.success:
+            self._running_generations[agent_id] = manifest.generation
+            log.info(
+                "agent_spawned",
+                agent_id=agent_id,
+                pid=result.pid,
+                generation=manifest.generation,
+            )
+        else:
+            log.error(
+                "spawn_failed",
+                agent_id=agent_id,
+                error=result.error,
+            )
+        await self._report_actual_state()
+
+    # ── Token grant ────────────────────────────────────────────────────
+
+    def _handle_token_grant(self, frame: Any) -> None:
+        """Resolve the pending Future for a token request."""
+        future = self._token_futures.get(frame.agent_id)
+        if future is not None and not future.done():
+            future.set_result(frame.agent_token)
+        else:
+            log.warning(
+                "unexpected_token_grant",
+                agent_id=frame.agent_id,
+            )
+
+    # ── Crash / stop callbacks ─────────────────────────────────────────
+
+    async def _on_agent_stopped(self, agent_id: str, exit_code: int) -> None:
+        """Callback when an agent exits normally (exit code 0)."""
+        self._running_generations.pop(agent_id, None)
+        log.info("agent_stopped", agent_id=agent_id, exit_code=exit_code)
+        await self._report_actual_state()
+
+    async def _on_agent_crashed(
+        self, agent_id: str, exit_code: int, stderr_tail: str
+    ) -> None:
+        """Callback when an agent crashes. Attempt local restart if budget allows."""
+        self._running_generations.pop(agent_id, None)
+        log.warning(
+            "agent_crashed",
+            agent_id=agent_id,
+            exit_code=exit_code,
+            stderr_tail=stderr_tail[:200],
+        )
+
+        manifest = self._manifest_store.load(agent_id)
+        if manifest is None or manifest.desired_state != "running":
+            await self._report_actual_state()
+            return
+
+        if manifest.restart_policy == "stop":
+            await self._report_actual_state()
+            return
+
+        # Get or create crash budget for this agent
+        budget = self._crash_budgets.get(agent_id)
+        if budget is None:
+            budget = CrashBudget(
+                max_restarts=manifest.max_restarts,
+                window_seconds=manifest.restart_window_seconds,
+            )
+            self._crash_budgets[agent_id] = budget
+
+        if budget.record_crash():
+            # Budget allows restart
+            log.info(
+                "crash_restart",
+                agent_id=agent_id,
+                crash_count=budget.crash_count,
+                max_restarts=manifest.max_restarts,
+            )
+            await self._request_token_and_spawn(agent_id, manifest)
+        else:
+            # Budget exhausted
+            log.warning(
+                "crash_budget_exhausted",
+                agent_id=agent_id,
+                crash_count=budget.crash_count,
+            )
+            if manifest.restart_policy == "restart_anywhere":
+                # Ask server to reschedule on another machine
+                replacement = RequestReplacementFrame(
+                    agent_id=agent_id,
+                    reason=f"Crash budget exhausted ({budget.crash_count} "
+                    f"crashes in {manifest.restart_window_seconds}s)",
+                )
+                await self._send(replacement.model_dump())
+            else:
+                # restart_on_same_machine but budget exhausted — stop
+                try:
+                    self._manifest_store.update_desired_state(
+                        agent_id, "stopped"
+                    )
+                except FileNotFoundError:
+                    pass
+            await self._report_actual_state()
+
+    # ── Report actual state ────────────────────────────────────────────
+
+    async def _report_actual_state(self) -> None:
+        """Build and send a ReportActualStateFrame from current state."""
+        now = time.time()
+        agents: list[AgentActual] = []
+
+        for info in self._spawner.list_running():
+            agent_id = info["agent_id"]
+            agents.append(
+                AgentActual(
+                    agent_id=agent_id,
+                    actual_state="running",
+                    pid=info.get("pid"),
+                    engine=info.get("engine", ""),
+                    generation=self._running_generations.get(agent_id, 0),
+                    uptime_seconds=info.get("uptime_seconds", 0),
+                )
+            )
+
+        frame = ReportActualStateFrame(agents=agents)
+        await self._send(frame.model_dump())
+
+    # ── Drain & rotate ─────────────────────────────────────────────────
+
+    async def _handle_drain(self) -> None:
+        """Handle drain command: stop accepting new agents and kill existing ones."""
+        self._draining = True
+        log.info("drain_started")
+        await self._spawner.drain()
+
+    async def _handle_rotate_token(self, frame: Any) -> None:
+        """Handle rotate_token command: persist the new token and update memory."""
+        new_token = frame.new_token
+        try:
+            save_token(new_token, path=self._token_path)
+        except Exception as exc:
+            log.error("rotate_token_save_failed", error=str(exc))
+            return
+        self.machine_token = new_token
+        log.info("rotate_token_applied")
+
+    # ── WebSocket send ─────────────────────────────────────────────────
+
+    async def _send(self, data: dict) -> None:
+        """Send a JSON frame over the WebSocket."""
+        if self._ws is None:
+            log.warning("send_no_ws", frame_type=data.get("type"))
+            return
+        try:
+            await self._ws.send(json.dumps(data))
+        except Exception as exc:
+            log.error("send_error", error=str(exc), frame_type=data.get("type"))
