@@ -358,7 +358,9 @@ export default function AdminMachines() {
                       try {
                         await deleteMachine(selectedMachine.id, machineAgents.length > 0)
                         setSelectedId(null)
-                      } catch { /* ignore */ }
+                      } catch (e) {
+                        alert(`Failed to delete machine: ${(e as Error).message}`)
+                      }
                     }}
                   >
                     <Trash2 className="mr-1.5 h-3 w-3" /> Delete Machine

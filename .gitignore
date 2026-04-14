@@ -29,6 +29,7 @@ htmlcov/
 
 # Frontend
 node_modules/
+.vite/
 
 # Doorae runtime
 .doorae/
