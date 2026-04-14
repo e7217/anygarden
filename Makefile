@@ -1,4 +1,4 @@
-.PHONY: install test lint clean dev
+.PHONY: install test lint clean dev release-agent release-machine release-cluster
 
 install:                ## Install all packages (workspace)
 	uv sync --all-packages
@@ -11,6 +11,15 @@ lint:                   ## Run ruff across all packages
 
 dev:                    ## Run cluster dev server + frontend
 	$(MAKE) -C packages/cluster dev
+
+release-agent:          ## Build and publish doorae-agent to PyPI
+	cd packages/agent && rm -rf dist/ && uv build && twine upload dist/*
+
+release-machine:        ## Build and publish doorae-machine to PyPI
+	cd packages/machine && rm -rf dist/ && uv build && twine upload dist/*
+
+release-cluster:        ## Build and publish doorae-cluster to PyPI
+	cd packages/cluster && rm -rf dist/ && uv build && twine upload dist/*
 
 clean:                  ## Remove build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} +
