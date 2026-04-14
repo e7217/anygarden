@@ -325,7 +325,9 @@ export default function AdminMachines() {
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Active agents</span>
                   <p className="text-[var(--color-foreground)] font-medium">
-                    {machineAgents.filter(a => a.actual_state === 'running' || a.actual_state === 'starting' || a.actual_state === 'pending').length}
+                    {selectedMachine.status === 'offline'
+                      ? <span className="text-[var(--color-foreground-subtle)]">unknown (offline)</span>
+                      : machineAgents.filter(a => a.actual_state === 'running' || a.actual_state === 'starting' || a.actual_state === 'pending').length}
                   </p>
                 </div>
               </div>
@@ -356,16 +358,27 @@ export default function AdminMachines() {
                     <p className="text-sm text-[var(--color-foreground-muted)]">No agents on this machine</p>
                   </div>
                 ) : machineAgents.map(agent => {
+                  // When the hosting machine's WS is disconnected we
+                  // have no way to know the agent's real state — the
+                  // DB still shows whatever was last reported, which
+                  // is misleading (e.g. "running" on an offline box).
+                  // Surface the uncertainty as a derived
+                  // "unreachable" display without touching the
+                  // underlying actual_state in the DB; once the
+                  // machine reconnects the daemon's reports will
+                  // reconcile state naturally.
+                  const isMachineOffline = selectedMachine.status === 'offline'
+                  const displayState = isMachineOffline ? 'unreachable' : agent.actual_state
                   const isStopped = agent.actual_state === 'stopped' || agent.actual_state === 'idle' || agent.actual_state === 'crashed'
                   const isRunning = agent.actual_state === 'running' || agent.actual_state === 'starting'
                   return (
-                    <div key={agent.id} className={`flex items-center justify-between px-4 py-3 ${isStopped ? 'opacity-50' : ''}`}>
+                    <div key={agent.id} className={`flex items-center justify-between px-4 py-3 ${isStopped || isMachineOffline ? 'opacity-50' : ''}`}>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
                           <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
-                            <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(agent.actual_state)}`} />
-                            {agent.actual_state}
+                            <span className={`inline-block h-1.5 w-1.5 rounded-full ${isMachineOffline ? 'bg-[var(--color-foreground-subtle)]' : statusDot(agent.actual_state)}`} />
+                            {displayState}
                           </span>
                         </div>
                         <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
@@ -378,11 +391,23 @@ export default function AdminMachines() {
                       </div>
                       <div className="flex items-center gap-1">
                         {isRunning ? (
-                          <Button variant="ghost" size="icon" onClick={() => { stopAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }} title="Stop">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => { stopAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }}
+                            title={isMachineOffline ? 'Machine is offline' : 'Stop'}
+                            disabled={isMachineOffline}
+                          >
                             <Square className="h-3.5 w-3.5 text-red-500" />
                           </Button>
                         ) : (
-                          <Button variant="ghost" size="icon" onClick={() => { startAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }} title="Start">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => { startAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }}
+                            title={isMachineOffline ? 'Machine is offline' : 'Start'}
+                            disabled={isMachineOffline}
+                          >
                             <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                           </Button>
                         )}
