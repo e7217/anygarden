@@ -62,7 +62,7 @@ export default function AdminMachines() {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
   } = useAgents()
-  const { projects, rooms: roomsByProject } = useRooms()
+  const { projects, rooms: roomsByProject, fetchAgentDMs } = useRooms()
 
   // ``selectedId`` can be either a real machine id or the sentinel
   // ``UNPLACED`` meaning "show agents that aren't placed on any
@@ -217,7 +217,11 @@ export default function AdminMachines() {
   const handleDeleteAgent = async (agentId: string) => {
     if (!confirm('Delete this agent? This cannot be undone.')) return
     await deleteAgent(agentId)
-    if (selectedId) fetchDetail(selectedId)
+    // Delete cascades the DM room (see PR #12) — refresh both the
+    // per-machine detail and the sidebar DM list so the ghost entry
+    // doesn't linger until a manual reload.
+    if (selectedId && selectedId !== UNPLACED) fetchDetail(selectedId)
+    fetchAgentDMs()
   }
 
   const handleCreateAgent = async () => {
@@ -235,6 +239,10 @@ export default function AdminMachines() {
       setAgentModel(''); setAgentCatalog(null); setAgentRooms(new Set())
       setCreateAgentOpen(false)
       fetchDetail(selectedId)
+      // create_agent auto-creates a DM room server-side; the sidebar
+      // caches DMs separately so nudge it to refetch otherwise the
+      // new agent only appears after a full page reload.
+      fetchAgentDMs()
     } catch { /* ignore */ }
     setCreating(false)
   }
