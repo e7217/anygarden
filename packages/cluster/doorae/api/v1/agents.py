@@ -14,6 +14,7 @@ from doorae.agent_files import AgentFilePathError, validate_agent_file_path
 from doorae.auth.dependencies import Identity
 from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Project, Room
 from doorae.dependencies import get_admin_identity, get_db
+from doorae.engines import get_engine_entry
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -389,6 +390,48 @@ async def list_available_engines(
     )
     rows = (await db.execute(stmt)).all()
     return [EngineInfo(engine=row.engine, machine_count=row.machine_count) for row in rows]
+
+
+class EngineModelOut(BaseModel):
+    id: str
+    label: str
+    reasoning_levels: list[str]
+
+
+class EngineCatalogOut(BaseModel):
+    engine: str
+    default_model: str
+    models: list[EngineModelOut]
+    reasoning_levels: list[str]
+
+
+@router.get("/engines/{engine}/models", response_model=EngineCatalogOut)
+async def get_engine_models(
+    engine: str,
+    identity: Identity = Depends(get_admin_identity),
+):
+    """Return the model catalog for ``engine``.
+
+    The ``reasoning_levels`` on each model narrow the engine-level
+    levels. When a model's ``reasoning_levels`` is empty, the
+    engine-level list applies. Clients should union them as needed.
+    """
+    entry = get_engine_entry(engine)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    return EngineCatalogOut(
+        engine=entry.engine,
+        default_model=entry.default_model,
+        models=[
+            EngineModelOut(
+                id=m.id,
+                label=m.label,
+                reasoning_levels=list(m.reasoning_levels),
+            )
+            for m in entry.models
+        ],
+        reasoning_levels=list(entry.reasoning_levels),
+    )
 
 
 @router.post("/{agent_id}/stop", status_code=200)
