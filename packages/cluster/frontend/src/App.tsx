@@ -3,7 +3,6 @@ import { useAuth } from '@/hooks/useAuth'
 import { RoomsProvider } from '@/hooks/useRooms'
 import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
-import AdminAgentsPage from '@/pages/AdminAgentsPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -34,7 +33,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-          <Route path="/admin/agents" element={<AdminRoute><AdminAgentsPage /></AdminRoute>} />
+          <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
           <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
         </Routes>
       </RoomsProvider>
