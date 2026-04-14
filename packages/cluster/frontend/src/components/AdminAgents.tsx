@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo } from 'react'
-import { useAgents, type Agent } from '@/hooks/useAgents'
+import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useAgents, type Agent, type EngineCatalog } from '@/hooks/useAgents'
 import { useMachines } from '@/hooks/useMachines'
 import { useRooms } from '@/hooks/useRooms'
 import { apiFetch } from '@/lib/api'
@@ -51,6 +51,7 @@ export default function AdminAgents() {
     agents,
     availableEngines,
     fetchAvailableEngines,
+    fetchEngineCatalog,
     createAgent,
     deleteAgent,
     startAgent,
@@ -110,7 +111,41 @@ export default function AdminAgents() {
   const [name, setName] = useState('')
   const [engine, setEngine] = useState('')
   const [reasoningEffort, setReasoningEffort] = useState('')
+  const [model, setModel] = useState('')
+  const [engineCatalog, setEngineCatalog] = useState<EngineCatalog | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // When the engine changes in the Create dialog, re-fetch the model
+  // catalog for that engine. Reset model + reasoning to "default" so
+  // a stale selection from the previous engine can't leak through
+  // (e.g. picking "xhigh" on codex then switching to gemini).
+  useEffect(() => {
+    if (!engine) {
+      setEngineCatalog(null)
+      setModel('')
+      setReasoningEffort('')
+      return
+    }
+    let cancelled = false
+    setModel('')
+    setReasoningEffort('')
+    fetchEngineCatalog(engine).then(cat => {
+      if (!cancelled) setEngineCatalog(cat)
+    })
+    return () => { cancelled = true }
+  }, [engine, fetchEngineCatalog])
+
+  // Reasoning levels to offer. If a specific model is selected and
+  // narrows the engine's default set, use its per-model list;
+  // otherwise fall back to the engine-level list.
+  const reasoningLevels = useMemo(() => {
+    if (!engineCatalog) return []
+    if (model) {
+      const m = engineCatalog.models.find(x => x.id === model)
+      if (m && m.reasoning_levels.length > 0) return m.reasoning_levels
+    }
+    return engineCatalog.reasoning_levels
+  }, [engineCatalog, model])
   // Initial room assignments for the new agent. Multi-select
   // because the server accepts ``rooms: string[]`` and because
   // without at least one room the lifecycle's
@@ -155,6 +190,8 @@ export default function AdminAgents() {
     setName('')
     setEngine('')
     setReasoningEffort('')
+    setModel('')
+    setEngineCatalog(null)
     setSelectedRoomIds(new Set())
   }
 
@@ -167,6 +204,7 @@ export default function AdminAgents() {
         engine,
         rooms: Array.from(selectedRoomIds),
         ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+        ...(model ? { model } : {}),
       })
       resetCreateDialog()
       setDialogOpen(false)
@@ -319,20 +357,40 @@ export default function AdminAgents() {
                   </select>
                 )}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="agent-reasoning">Reasoning Effort</Label>
-                <select
-                  id="agent-reasoning"
-                  value={reasoningEffort}
-                  onChange={e => setReasoningEffort(e.target.value)}
-                  className="flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
-                >
-                  <option value="">Default</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </div>
+              {engineCatalog && engineCatalog.models.length > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="agent-model">Model</Label>
+                  <select
+                    id="agent-model"
+                    value={model}
+                    onChange={e => setModel(e.target.value)}
+                    className="flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                  >
+                    <option value="">Default ({engineCatalog.default_model})</option>
+                    {engineCatalog.models.map(m => (
+                      <option key={m.id} value={m.id}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {reasoningLevels.length > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="agent-reasoning">Reasoning Effort</Label>
+                  <select
+                    id="agent-reasoning"
+                    value={reasoningEffort}
+                    onChange={e => setReasoningEffort(e.target.value)}
+                    className="flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+                  >
+                    <option value="">Default</option>
+                    {reasoningLevels.map(level => (
+                      <option key={level} value={level}>
+                        {level.charAt(0).toUpperCase() + level.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>Initial rooms</Label>
                 {roomsStatus === 'idle' || roomsStatus === 'loading' ? (

@@ -14,6 +14,7 @@ from doorae.agent_files import AgentFilePathError, validate_agent_file_path
 from doorae.auth.dependencies import Identity
 from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Project, Room
 from doorae.dependencies import get_admin_identity, get_db
+from doorae.engines import get_engine_entry
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -35,6 +36,7 @@ class AgentCreate(BaseModel):
     agents_md: Optional[str] = None
     files: Optional[dict[str, str]] = None
     reasoning_effort: Optional[str] = None
+    model: Optional[str] = None
     restart_policy: str = "restart_anywhere"
 
 
@@ -59,6 +61,8 @@ class AgentUpdate(BaseModel):
     agents_md_set: bool = False
     reasoning_effort: Optional[str] = None
     reasoning_effort_set: bool = False
+    model: Optional[str] = None
+    model_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -77,8 +81,9 @@ class AgentOut(BaseModel):
     # ``spawn_refused_no_rooms``); None for agents that never
     # failed.
     reasoning_effort: Optional[str] = None
+    model: Optional[str] = None
     last_crash_reason: Optional[str] = None
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class AgentFileOut(BaseModel):
@@ -148,6 +153,7 @@ async def create_agent(
         profile_yaml=body.profile_yaml,
         agents_md=body.agents_md,
         reasoning_effort=body.reasoning_effort,
+        model=body.model,
         restart_policy=body.restart_policy,
     )
     db.add(agent)
@@ -200,9 +206,9 @@ async def update_agent(
 ):
     """Update mutable scalar fields on an agent.
 
-    Currently supported: ``name``, ``agents_md``, ``reasoning_effort``.
-    When config fields change the agent's generation is bumped so the
-    machine knows to restart with the new config.
+    Currently supported: ``name``, ``agents_md``, ``reasoning_effort``,
+    ``model``. When config fields change the agent's generation is
+    bumped so the machine knows to restart with the new config.
     """
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
@@ -221,6 +227,9 @@ async def update_agent(
         changed = True
     if body.reasoning_effort_set:
         agent.reasoning_effort = body.reasoning_effort
+        changed = True
+    if body.model_set:
+        agent.model = body.model
         changed = True
 
     await db.commit()
@@ -389,6 +398,48 @@ async def list_available_engines(
     )
     rows = (await db.execute(stmt)).all()
     return [EngineInfo(engine=row.engine, machine_count=row.machine_count) for row in rows]
+
+
+class EngineModelOut(BaseModel):
+    id: str
+    label: str
+    reasoning_levels: list[str]
+
+
+class EngineCatalogOut(BaseModel):
+    engine: str
+    default_model: str
+    models: list[EngineModelOut]
+    reasoning_levels: list[str]
+
+
+@router.get("/engines/{engine}/models", response_model=EngineCatalogOut)
+async def get_engine_models(
+    engine: str,
+    identity: Identity = Depends(get_admin_identity),
+):
+    """Return the model catalog for ``engine``.
+
+    The ``reasoning_levels`` on each model narrow the engine-level
+    levels. When a model's ``reasoning_levels`` is empty, the
+    engine-level list applies. Clients should union them as needed.
+    """
+    entry = get_engine_entry(engine)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+    return EngineCatalogOut(
+        engine=entry.engine,
+        default_model=entry.default_model,
+        models=[
+            EngineModelOut(
+                id=m.id,
+                label=m.label,
+                reasoning_levels=list(m.reasoning_levels),
+            )
+            for m in entry.models
+        ],
+        reasoning_levels=list(entry.reasoning_levels),
+    )
 
 
 @router.post("/{agent_id}/stop", status_code=200)
