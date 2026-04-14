@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useMachines } from '@/hooks/useMachines'
-import { useAgents } from '@/hooks/useAgents'
+import { useAgents, type EngineCatalog } from '@/hooks/useAgents'
 import { useRooms } from '@/hooks/useRooms'
 import type { Machine, RegisterMachineResult } from '@/hooks/useMachines'
 import { Button } from '@/components/ui/button'
@@ -53,7 +53,7 @@ function statusLabel(status: string) {
 
 export default function AdminMachines() {
   const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, regenerateToken } = useMachines()
-  const { createAgent, agents, startAgent, stopAgent } = useAgents()
+  const { createAgent, fetchEngineCatalog, agents, startAgent, stopAgent } = useAgents()
   const { projects, rooms: roomsByProject } = useRooms()
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -121,8 +121,39 @@ export default function AdminMachines() {
   const [agentName, setAgentName] = useState('')
   const [agentEngine, setAgentEngine] = useState('')
   const [agentReasoning, setAgentReasoning] = useState('')
+  const [agentModel, setAgentModel] = useState('')
+  const [agentCatalog, setAgentCatalog] = useState<EngineCatalog | null>(null)
   const [agentRooms, setAgentRooms] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
+
+  // Keep the model/reasoning catalog in sync with the selected engine.
+  // Resetting model + reasoning on every change prevents a stale
+  // selection from a previous engine (e.g. codex "xhigh") leaking
+  // into a different one (gemini).
+  useEffect(() => {
+    if (!agentEngine) {
+      setAgentCatalog(null)
+      setAgentModel('')
+      setAgentReasoning('')
+      return
+    }
+    let cancelled = false
+    setAgentModel('')
+    setAgentReasoning('')
+    fetchEngineCatalog(agentEngine).then(cat => {
+      if (!cancelled) setAgentCatalog(cat)
+    })
+    return () => { cancelled = true }
+  }, [agentEngine, fetchEngineCatalog])
+
+  const agentReasoningLevels = useMemo(() => {
+    if (!agentCatalog) return []
+    if (agentModel) {
+      const m = agentCatalog.models.find(x => x.id === agentModel)
+      if (m && m.reasoning_levels.length > 0) return m.reasoning_levels
+    }
+    return agentCatalog.reasoning_levels
+  }, [agentCatalog, agentModel])
 
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
@@ -133,8 +164,10 @@ export default function AdminMachines() {
         engine: agentEngine,
         rooms: Array.from(agentRooms),
         ...(agentReasoning ? { reasoning_effort: agentReasoning } : {}),
+        ...(agentModel ? { model: agentModel } : {}),
       })
-      setAgentName(''); setAgentEngine(''); setAgentReasoning(''); setAgentRooms(new Set())
+      setAgentName(''); setAgentEngine(''); setAgentReasoning('')
+      setAgentModel(''); setAgentCatalog(null); setAgentRooms(new Set())
       setCreateAgentOpen(false)
       fetchDetail(selectedId)
     } catch { /* ignore */ }
@@ -475,15 +508,30 @@ export default function AdminMachines() {
                 ))}
               </select>
             </div>
-            <div className="space-y-2">
-              <Label>Reasoning Effort</Label>
-              <select value={agentReasoning} onChange={e => setAgentReasoning(e.target.value)} className={selectCSS}>
-                <option value="">Default</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </div>
+            {agentCatalog && agentCatalog.models.length > 0 && (
+              <div className="space-y-2">
+                <Label>Model</Label>
+                <select value={agentModel} onChange={e => setAgentModel(e.target.value)} className={selectCSS}>
+                  <option value="">Default ({agentCatalog.default_model})</option>
+                  {agentCatalog.models.map(m => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {agentReasoningLevels.length > 0 && (
+              <div className="space-y-2">
+                <Label>Reasoning Effort</Label>
+                <select value={agentReasoning} onChange={e => setAgentReasoning(e.target.value)} className={selectCSS}>
+                  <option value="">Default</option>
+                  {agentReasoningLevels.map(level => (
+                    <option key={level} value={level}>
+                      {level.charAt(0).toUpperCase() + level.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Rooms (optional)</Label>
               <div className="max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
