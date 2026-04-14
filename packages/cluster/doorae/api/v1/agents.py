@@ -36,6 +36,7 @@ class AgentCreate(BaseModel):
     agents_md: Optional[str] = None
     files: Optional[dict[str, str]] = None
     reasoning_effort: Optional[str] = None
+    model: Optional[str] = None
     restart_policy: str = "restart_anywhere"
 
 
@@ -60,6 +61,8 @@ class AgentUpdate(BaseModel):
     agents_md_set: bool = False
     reasoning_effort: Optional[str] = None
     reasoning_effort_set: bool = False
+    model: Optional[str] = None
+    model_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -78,8 +81,9 @@ class AgentOut(BaseModel):
     # ``spawn_refused_no_rooms``); None for agents that never
     # failed.
     reasoning_effort: Optional[str] = None
+    model: Optional[str] = None
     last_crash_reason: Optional[str] = None
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
 class AgentFileOut(BaseModel):
@@ -149,6 +153,7 @@ async def create_agent(
         profile_yaml=body.profile_yaml,
         agents_md=body.agents_md,
         reasoning_effort=body.reasoning_effort,
+        model=body.model,
         restart_policy=body.restart_policy,
     )
     db.add(agent)
@@ -201,9 +206,9 @@ async def update_agent(
 ):
     """Update mutable scalar fields on an agent.
 
-    Currently supported: ``name``, ``agents_md``, ``reasoning_effort``.
-    When config fields change the agent's generation is bumped so the
-    machine knows to restart with the new config.
+    Currently supported: ``name``, ``agents_md``, ``reasoning_effort``,
+    ``model``. When config fields change the agent's generation is
+    bumped so the machine knows to restart with the new config.
     """
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
@@ -222,6 +227,9 @@ async def update_agent(
         changed = True
     if body.reasoning_effort_set:
         agent.reasoning_effort = body.reasoning_effort
+        changed = True
+    if body.model_set:
+        agent.model = body.model
         changed = True
 
     await db.commit()

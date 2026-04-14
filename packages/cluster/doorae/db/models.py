@@ -116,6 +116,12 @@ class Agent(Base):
     reasoning_effort: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, default=None
     )
+    # Engine-specific model id (e.g. "gpt-5.4-mini"). None means the
+    # adapter's built-in default is used. See doorae.engines.catalog
+    # for supported ids per engine.
+    model: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, default=None
+    )
     restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
     generation: Mapped[int] = mapped_column(Integer, default=0)
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)
