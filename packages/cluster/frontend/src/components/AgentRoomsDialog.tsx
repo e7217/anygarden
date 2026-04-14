@@ -34,18 +34,27 @@ export default function AgentRoomsDialog({ open, onOpenChange, agentId, onChange
     try {
       const assignedResp = await apiFetch(`/api/v1/agents/${id}/rooms`)
       const rawAssigned = assignedResp.ok ? await assignedResp.json() : []
-      const assigned: RoomInfo[] = rawAssigned.map((r: { room_id: string; room_name: string }) => ({
-        id: r.room_id,
-        name: r.room_name,
-        project_id: '',
-      }))
+      // Drop DM rooms from the display. The agent is still a
+      // participant on the backend — we just don't want an admin
+      // to accidentally detach a DM from this dialog.
+      const assigned: RoomInfo[] = rawAssigned
+        .filter((r: { is_dm?: boolean }) => !r.is_dm)
+        .map((r: { room_id: string; room_name: string }) => ({
+          id: r.room_id,
+          name: r.room_name,
+          project_id: '',
+        }))
       setAssignedRooms(assigned)
 
+      // is_dm=false: DM rooms are auto-created 1:1 channels between
+      // a user and an agent; they cannot be meaningfully assigned to
+      // a different agent, so they must not appear in the
+      // "Available Rooms" list at all.
       const projResp = await apiFetch('/api/v1/projects')
       const projects = projResp.ok ? await projResp.json() : []
       const allRooms: RoomInfo[] = []
       for (const proj of projects) {
-        const roomResp = await apiFetch(`/api/v1/rooms?project_id=${proj.id}`)
+        const roomResp = await apiFetch(`/api/v1/rooms?project_id=${proj.id}&is_dm=false`)
         if (roomResp.ok) {
           const rooms = await roomResp.json()
           allRooms.push(...rooms.map((r: RoomInfo) => ({
