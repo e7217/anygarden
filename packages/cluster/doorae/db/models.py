@@ -153,8 +153,21 @@ class Machine(Base):
 
     owner: Mapped["User"] = relationship("User")
     agents: Mapped[list["Agent"]] = relationship("Agent", back_populates="machine")
-    engines: Mapped[list["MachineEngine"]] = relationship("MachineEngine", back_populates="machine")
-    tokens: Mapped[list["MachineToken"]] = relationship("MachineToken", back_populates="machine")
+    # cascade + passive_deletes: let the DB's ON DELETE CASCADE handle
+    # these. Without passive_deletes the ORM tries to UPDATE machine_id
+    # to NULL on delete, which fails NOT NULL on these tables.
+    engines: Mapped[list["MachineEngine"]] = relationship(
+        "MachineEngine",
+        back_populates="machine",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    tokens: Mapped[list["MachineToken"]] = relationship(
+        "MachineToken",
+        back_populates="machine",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class MachineEngine(Base):
