@@ -32,8 +32,7 @@ def main() -> None:
 @main.command()
 @click.option("--server", required=True, help="Doorae server URL (e.g. https://doorae.example.com)")
 @click.option("--name", required=True, help="Human-readable machine name")
-@click.option("--max-agents", default=4, help="Maximum concurrent agents")
-def register(server: str, name: str, max_agents: int) -> None:
+def register(server: str, name: str) -> None:
     """Register this machine with a Doorae server."""
     # Step 1: Authenticate user
     click.echo("Authenticate with Doorae server:")
@@ -68,7 +67,6 @@ def register(server: str, name: str, max_agents: int) -> None:
                 json={
                     "name": name,
                     "capabilities": capabilities,
-                    "max_agents": max_agents,
                 },
                 headers={"Authorization": f"Bearer {jwt_token}"},
             )
@@ -93,7 +91,6 @@ def register(server: str, name: str, max_agents: int) -> None:
         machine_id=machine_id,
         name=name,
         server_url=ws_url,
-        max_agents=max_agents,
     )
     config.save()
     save_token(machine_token)
@@ -109,8 +106,7 @@ def register(server: str, name: str, max_agents: int) -> None:
 @click.option("--server", default=None, help="Server WS URL override (e.g. ws://host:8000)")
 @click.option("--token", default=None, help="Machine token override (or use ~/.doorae/machine.token)")
 @click.option("--machine-id", default=None, help="Machine ID override")
-@click.option("--max-agents", default=None, type=int, help="Max agents override")
-def run(config_path: str | None, server: str | None, token: str | None, machine_id: str | None, max_agents: int | None) -> None:
+def run(config_path: str | None, server: str | None, token: str | None, machine_id: str | None) -> None:
     """Run the machine daemon (connects to server via WebSocket)."""
     # Try loading config file, but allow all-CLI usage
     try:
@@ -129,7 +125,6 @@ def run(config_path: str | None, server: str | None, token: str | None, machine_
     final_id = machine_id or config.machine_id
     final_server = server or config.server_url
     final_token = token or file_token
-    final_max = max_agents or config.max_agents or 4
 
     # Build WS URL if HTTP URL given
     if final_server and final_server.startswith("http"):
@@ -153,7 +148,6 @@ def run(config_path: str | None, server: str | None, token: str | None, machine_
         server_url=final_server,
         machine_id=final_id,
         machine_token=final_token,
-        max_agents=final_max,
         labels=config.labels if hasattr(config, 'labels') else {},
     )
     try:

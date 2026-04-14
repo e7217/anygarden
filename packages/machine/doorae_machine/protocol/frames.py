@@ -120,7 +120,6 @@ class RegisterFrame(BaseModel):
     type: Literal["register"] = "register"
     machine_id: str
     capabilities: list[dict] = Field(default_factory=list)
-    max_agents: int = 4
     labels: dict = Field(default_factory=dict)
 
 

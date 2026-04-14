@@ -81,7 +81,7 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "my-machine", "hostname": "my-host", "max_agents": 4},
+            json={"name": "my-machine", "hostname": "my-host"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201
@@ -213,21 +213,20 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "old-name", "hostname": "old-host", "max_agents": 2},
+            json={"name": "old-name", "hostname": "old-host"},
             headers={"Authorization": f"Bearer {token}"},
         )
         machine_id = resp.json()["id"]
 
         resp = await client.patch(
             f"/api/v1/machines/{machine_id}",
-            json={"name": "new-name", "hostname": "new-host", "max_agents": 8},
+            json={"name": "new-name", "hostname": "new-host"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "new-name"
         assert data["hostname"] == "new-host"
-        assert data["max_agents"] == 8
 
     @pytest.mark.asyncio
     async def test_update_machine_partial(self, machines_env) -> None:
@@ -237,7 +236,7 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "partial", "hostname": "host1", "max_agents": 3},
+            json={"name": "partial", "hostname": "host1"},
             headers={"Authorization": f"Bearer {token}"},
         )
         machine_id = resp.json()["id"]
@@ -251,7 +250,6 @@ class TestMachinesAPI:
         data = resp.json()
         assert data["name"] == "partial-updated"
         assert data["hostname"] == "host1"
-        assert data["max_agents"] == 3
 
     @pytest.mark.asyncio
     async def test_delete_machine(self, machines_env) -> None:

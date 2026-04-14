@@ -80,7 +80,6 @@ class MachineDaemon:
         server_url: str,
         machine_id: str,
         machine_token: str,
-        max_agents: int = 4,
         labels: dict | None = None,
         token_path: Any = None,
         agent_dirs_root: Path | None = None,
@@ -88,7 +87,6 @@ class MachineDaemon:
         self.server_url = server_url
         self.machine_id = machine_id
         self.machine_token = machine_token
-        self.max_agents = max_agents
         self.labels = labels or {}
         self._token_path = token_path
         self._draining = False
@@ -180,7 +178,6 @@ class MachineDaemon:
         frame = RegisterFrame(
             machine_id=self.machine_id,
             capabilities=capabilities,
-            max_agents=self.max_agents,
             labels=self.labels,
         )
         await self._send(frame.model_dump())
