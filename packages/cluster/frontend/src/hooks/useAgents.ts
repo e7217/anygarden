@@ -13,11 +13,26 @@ export interface Agent {
   // prompt / role / rules body the materializer writes into
   // ``agent_root/AGENTS.md``. Nullable so the admin can clear it.
   agents_md?: string | null;
+  reasoning_effort?: string | null;
+  model?: string | null;
   // Lifecycle populates this on crash or refused dispatch
   // (e.g. ``spawn_refused_no_rooms``). The admin-agents table
   // surfaces it as a tooltip on ``pending`` / ``crashed`` state
   // badges so admins can tell at a glance why an agent is stuck.
   last_crash_reason?: string | null;
+}
+
+export interface EngineModel {
+  id: string;
+  label: string;
+  reasoning_levels: string[];
+}
+
+export interface EngineCatalog {
+  engine: string;
+  default_model: string;
+  models: EngineModel[];
+  reasoning_levels: string[];
 }
 
 export interface AvailableEngine {
@@ -45,6 +60,8 @@ export function useAgents() {
     rooms?: string[];
     agents_md?: string;
     files?: Record<string, string>;
+    reasoning_effort?: string;
+    model?: string;
   }) => {
     const resp = await apiFetch('/api/v1/agents', {
       method: 'POST',
@@ -166,11 +183,22 @@ export function useAgents() {
     if (resp.ok) setAvailableEngines(await resp.json());
   }, []);
 
+  // Fetch model catalog for a specific engine. Returns null when the
+  // engine is not in the static catalog (e.g. a custom "echo" engine
+  // running on a dev machine), letting the caller skip the model
+  // dropdown entirely instead of displaying an empty one.
+  const fetchEngineCatalog = useCallback(async (engineName: string): Promise<EngineCatalog | null> => {
+    const resp = await apiFetch(`/api/v1/agents/engines/${encodeURIComponent(engineName)}/models`);
+    if (resp.ok) return await resp.json();
+    return null;
+  }, []);
+
   useEffect(() => { fetchAgents(); fetchAvailableEngines(); }, [fetchAgents, fetchAvailableEngines]);
   return {
     agents,
     availableEngines,
     fetchAvailableEngines,
+    fetchEngineCatalog,
     createAgent,
     deleteAgent,
     startAgent,
