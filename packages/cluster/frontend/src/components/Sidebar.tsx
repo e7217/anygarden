@@ -329,17 +329,6 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
           </p>
           <div className="flex flex-col gap-0.5">
             <button
-              onClick={() => go('/admin/agents')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/admin/agents'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              Agents
-            </button>
-            <button
               onClick={() => go('/admin/machines')}
               className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
                 location.pathname === '/admin/machines'

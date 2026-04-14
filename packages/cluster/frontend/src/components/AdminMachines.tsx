@@ -13,8 +13,13 @@ import {
 import {
   Plus, Copy, Check, Trash2, RefreshCw, Save as SaveIcon,
   PauseCircle, Server, Bot, Square, Settings, Play,
+  DoorOpen, FileCog, History,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import AgentEditDialog from '@/components/AgentEditDialog'
+import AgentRoomsDialog from '@/components/AgentRoomsDialog'
+import AgentHistoryDialog from '@/components/AgentHistoryDialog'
+import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -53,7 +58,10 @@ function statusLabel(status: string) {
 
 export default function AdminMachines() {
   const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, regenerateToken } = useMachines()
-  const { createAgent, fetchEngineCatalog, agents, startAgent, stopAgent } = useAgents()
+  const {
+    createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
+    deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
+  } = useAgents()
   const { projects, rooms: roomsByProject } = useRooms()
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -154,6 +162,45 @@ export default function AdminMachines() {
     }
     return agentCatalog.reasoning_levels
   }, [agentCatalog, agentModel])
+
+  // ── Per-agent row dialogs (rooms / edit / history) ───────────────
+  const [roomsDialogOpen, setRoomsDialogOpen] = useState(false)
+  const [roomsAgentId, setRoomsAgentId] = useState<string | null>(null)
+
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyAgentId, setHistoryAgentId] = useState<string | null>(null)
+  const [historyAgentName, setHistoryAgentName] = useState('')
+
+  // The machine-detail agent list carries a stripped-down shape
+  // (MachineAgent) that misses fields AgentEditDialog needs
+  // (agents_md, model, restart_policy, etc.). Look up the full
+  // record from the cluster-wide ``agents`` list when opening edit.
+  const handleEditManifest = (agentId: string) => {
+    const full = agents.find(a => a.id === agentId)
+    if (!full) return
+    setEditingAgent(full)
+    setEditDialogOpen(true)
+  }
+
+  const handleManageRooms = (agentId: string) => {
+    setRoomsAgentId(agentId)
+    setRoomsDialogOpen(true)
+  }
+
+  const handleShowHistory = (agentId: string, name: string) => {
+    setHistoryAgentId(agentId)
+    setHistoryAgentName(name)
+    setHistoryOpen(true)
+  }
+
+  const handleDeleteAgent = async (agentId: string) => {
+    if (!confirm('Delete this agent? This cannot be undone.')) return
+    await deleteAgent(agentId)
+    if (selectedId) fetchDetail(selectedId)
+  }
 
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
@@ -339,6 +386,18 @@ export default function AdminMachines() {
                             <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                           </Button>
                         )}
+                        <Button variant="ghost" size="icon" onClick={() => handleManageRooms(agent.id)} title="Manage rooms">
+                          <DoorOpen className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleEditManifest(agent.id)} title="Edit manifest">
+                          <FileCog className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleShowHistory(agent.id, agent.name)} title="Activity">
+                          <History className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleDeleteAgent(agent.id)} title="Delete">
+                          <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                        </Button>
                       </div>
                     </div>
                   )
@@ -571,6 +630,29 @@ export default function AdminMachines() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Per-agent management dialogs ── */}
+      <AgentRoomsDialog
+        open={roomsDialogOpen}
+        onOpenChange={setRoomsDialogOpen}
+        agentId={roomsAgentId}
+        onChange={() => selectedId && fetchDetail(selectedId)}
+      />
+      <AgentEditDialog
+        agent={editingAgent}
+        open={editDialogOpen}
+        onOpenChange={setEditDialogOpen}
+        fetchAgentFiles={fetchAgentFiles}
+        updateAgent={updateAgent}
+        upsertAgentFile={upsertAgentFile}
+        deleteAgentFile={deleteAgentFile}
+      />
+      <AgentHistoryDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        agentId={historyAgentId}
+        agentName={historyAgentName}
+      />
     </div>
   )
 }
