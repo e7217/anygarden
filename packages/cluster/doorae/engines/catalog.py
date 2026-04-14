@@ -82,16 +82,16 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     ),
     "claude-code": EngineCatalogEntry(
         engine="claude-code",
-        default_model="claude-opus-4-5",
+        default_model="claude-opus-4-6",
         models=(
             EngineModel(
-                id="claude-opus-4-5",
-                label="Claude Opus 4.5",
+                id="claude-opus-4-6",
+                label="Claude Opus 4.6",
                 reasoning_levels=("disabled", "enabled", "adaptive"),
             ),
             EngineModel(
-                id="claude-sonnet-4-5",
-                label="Claude Sonnet 4.5",
+                id="claude-sonnet-4-6",
+                label="Claude Sonnet 4.6",
                 reasoning_levels=("disabled", "enabled", "adaptive"),
             ),
             EngineModel(
@@ -122,10 +122,11 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     ),
     "anthropic": EngineCatalogEntry(
         engine="anthropic",
-        default_model="claude-opus-4-5",
+        default_model="claude-opus-4-6",
         models=(
-            EngineModel(id="claude-opus-4-5", label="Claude Opus 4.5"),
-            EngineModel(id="claude-sonnet-4-5", label="Claude Sonnet 4.5"),
+            EngineModel(id="claude-opus-4-6", label="Claude Opus 4.6"),
+            EngineModel(id="claude-sonnet-4-6", label="Claude Sonnet 4.6"),
+            EngineModel(id="claude-haiku-4-5", label="Claude Haiku 4.5"),
         ),
         reasoning_levels=("disabled", "enabled", "adaptive"),
     ),
