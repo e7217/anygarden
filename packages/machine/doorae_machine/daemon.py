@@ -323,6 +323,7 @@ class MachineDaemon:
             files=dict(manifest.files),
             engine_secrets=dict(manifest.engine_secrets),
             reasoning_effort=manifest.reasoning_effort,
+            model=manifest.model,
             sub_rooms=list(manifest.sub_rooms),
         )
 

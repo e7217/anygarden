@@ -359,6 +359,7 @@ class AgentLifecycle:
             "files": files_map,
             "engine_secrets": {},
             "reasoning_effort": agent.reasoning_effort,
+            "model": agent.model,
             "sub_rooms": sub_rooms_info,
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,

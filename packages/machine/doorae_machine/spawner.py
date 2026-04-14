@@ -47,6 +47,7 @@ class SpawnManifest:
     files: dict[str, str] = field(default_factory=dict)
     engine_secrets: dict[str, str] = field(default_factory=dict)
     reasoning_effort: str | None = None
+    model: str | None = None
     sub_rooms: list[dict] = field(default_factory=list)
 
 
@@ -545,6 +546,8 @@ class Spawner:
             cmd.extend(["--room", room])
         if msg.reasoning_effort:
             cmd.extend(["--reasoning-effort", msg.reasoning_effort])
+        if msg.model:
+            cmd.extend(["--model", msg.model])
 
         # Spawn the subprocess with its cwd set to the agent's
         # workspace/. Engines that do upward file discovery (Codex

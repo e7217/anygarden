@@ -40,8 +40,11 @@ class SyncDesiredStateFrame(BaseModel):
     files: dict[str, str] = Field(default_factory=dict)
     engine_secrets: dict[str, str] = Field(default_factory=dict)
 
-    # Per-agent reasoning effort (low/medium/high)
+    # Per-agent reasoning effort (low/medium/high/etc — engine-dependent)
     reasoning_effort: str | None = None
+
+    # Per-agent engine model (e.g. "gpt-5.4-mini"). None = adapter default.
+    model: str | None = None
 
     # Sub-rooms this agent can delegate to (v2 delegation)
     # Each entry: {"name": "...", "description": "..." or null}
