@@ -64,13 +64,31 @@ export default function AdminMachines() {
   } = useAgents()
   const { projects, rooms: roomsByProject } = useRooms()
 
+  // ``selectedId`` can be either a real machine id or the sentinel
+  // ``UNPLACED`` meaning "show agents that aren't placed on any
+  // machine". Centralising as a single constant keeps the string
+  // from leaking into a dozen equality checks.
+  const UNPLACED = '__unplaced__'
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selectedMachine = machines.find(m => m.id === selectedId) ?? null
+  const isUnplacedView = selectedId === UNPLACED
 
-  // Auto-select first machine
+  // Agents without a placed_on_machine_id — created but never
+  // successfully scheduled (or detached after a stop). Filtered from
+  // the cluster-wide list so any CRUD on them reacts to it. Stopped
+  // included so delete/retry are reachable.
+  const unplacedAgents = useMemo(
+    () => agents.filter(a => !a.placed_on_machine_id),
+    [agents],
+  )
+
+  // Auto-select first machine (or unplaced if it's the only thing
+  // with content and there are no machines)
   useEffect(() => {
-    if (!selectedId && machines.length > 0) setSelectedId(machines[0].id)
-  }, [machines, selectedId])
+    if (selectedId) return
+    if (machines.length > 0) setSelectedId(machines[0].id)
+    else if (unplacedAgents.length > 0) setSelectedId(UNPLACED)
+  }, [machines, selectedId, unplacedAgents.length])
 
   // ── Detail data ──────────────────────────────────────────────────
   const [machineAgents, setMachineAgents] = useState<MachineAgent[]>([])
@@ -248,35 +266,128 @@ export default function AdminMachines() {
                 <Plus className="mr-1 h-3 w-3" /> Register
               </Button>
             </div>
-          ) : machines.map(m => (
-            <button
-              key={m.id}
-              onClick={() => setSelectedId(m.id)}
-              className={`w-full text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all ${
-                selectedId === m.id
-                  ? 'bg-[#f2f9ff] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
-                  : 'bg-white border-[rgba(0,0,0,0.1)] hover:shadow-[var(--shadow-card)]'
-              }`}
-            >
-              <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
-              <div className="text-xs text-[var(--color-foreground-muted)] truncate">{m.hostname}</div>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
-                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(m.status)}`} />
-                  {statusLabel(m.status)}
-                </span>
-                <span className="text-xs text-[var(--color-foreground-subtle)]">
-                  {agentCountByMachine.get(m.id) ?? 0} agents
-                </span>
-              </div>
-            </button>
-          ))}
+          ) : (
+            <>
+              {machines.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => setSelectedId(m.id)}
+                  className={`w-full text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all ${
+                    selectedId === m.id
+                      ? 'bg-[#f2f9ff] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[rgba(0,0,0,0.1)] hover:shadow-[var(--shadow-card)]'
+                  }`}
+                >
+                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
+                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">{m.hostname}</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                      <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(m.status)}`} />
+                      {statusLabel(m.status)}
+                    </span>
+                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                      {agentCountByMachine.get(m.id) ?? 0} agents
+                    </span>
+                  </div>
+                </button>
+              ))}
+              {unplacedAgents.length > 0 && (
+                <button
+                  onClick={() => setSelectedId(UNPLACED)}
+                  className={`w-full text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all ${
+                    isUnplacedView
+                      ? 'bg-[#fff7ed] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[rgba(0,0,0,0.2)] hover:shadow-[var(--shadow-card)]'
+                  }`}
+                >
+                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">Unplaced</div>
+                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">Agents not bound to any machine</div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                      {unplacedAgents.length} agent{unplacedAgents.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                </button>
+              )}
+            </>
+          )}
         </div>
       </div>
 
       {/* ── Right: Machine Detail ── */}
       <div className="flex-1 overflow-y-auto p-6">
-        {!selectedMachine ? (
+        {isUnplacedView ? (
+          <div className="max-w-2xl space-y-6">
+            <div>
+              <h1 className="text-lg font-semibold text-[var(--color-foreground)]">Unplaced agents</h1>
+              <p className="text-sm text-[var(--color-foreground-muted)]">
+                These agents exist but are not bound to any machine — usually
+                because their last spawn attempt found no eligible host.
+                Delete to remove, or Retry to let the scheduler try placing
+                them again.
+              </p>
+            </div>
+            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
+              {unplacedAgents.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
+                  <p className="text-sm text-[var(--color-foreground-muted)]">No unplaced agents</p>
+                </div>
+              ) : unplacedAgents.map(agent => (
+                <div key={agent.id} className="flex items-center justify-between px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
+                      <span className="text-xs text-[var(--color-foreground-muted)]">· {agent.actual_state}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
+                      <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
+                      {agent.last_crash_reason && (
+                        <span className="truncate text-[var(--color-warning)]" title={agent.last_crash_reason}>
+                          · {agent.last_crash_reason}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={async () => { try { await startAgent(agent.id) } catch { /* ignore */ } }}
+                      title="Retry placement"
+                    >
+                      <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleEditManifest(agent.id)}
+                      title="Edit manifest"
+                    >
+                      <FileCog className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleShowHistory(agent.id, agent.name)}
+                      title="Activity"
+                    >
+                      <History className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleDeleteAgent(agent.id)}
+                      title="Delete"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : !selectedMachine ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-[var(--color-foreground-muted)]">Select a machine</p>
           </div>
