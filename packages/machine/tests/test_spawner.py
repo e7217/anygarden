@@ -88,6 +88,63 @@ class TestSpawn:
         assert result.success is True
         assert "uvx" in captured_cmd[0]
 
+    async def test_spawn_logs_agent_binary_path_source(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """PATH hit path: the spawn must emit
+        ``agent_binary_resolved`` with source=path and the discovered
+        binary path. This is the forensic trail operators rely on when
+        debugging which ``doorae-agent`` actually ran."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 60
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ), patch("doorae_machine.spawner.log") as mock_log:
+            await spawner.spawn(spawn_msg)
+            calls = [
+                c
+                for c in mock_log.info.call_args_list
+                if c.args and c.args[0] == "agent_binary_resolved"
+            ]
+            assert len(calls) == 1
+            assert calls[0].kwargs["source"] == "path"
+            assert calls[0].kwargs["path"] == "/usr/local/bin/doorae-agent"
+
+    async def test_spawn_logs_agent_binary_uvx_source(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """uvx fallback path: same event key, ``source=uvx`` and
+        ``path=None`` (the binary is fetched on demand so no stable
+        filesystem path exists at spawn time)."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 61
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value=None,
+        ), patch("doorae_machine.spawner.log") as mock_log:
+            await spawner.spawn(spawn_msg)
+            calls = [
+                c
+                for c in mock_log.info.call_args_list
+                if c.args and c.args[0] == "agent_binary_resolved"
+            ]
+            assert len(calls) == 1
+            assert calls[0].kwargs["source"] == "uvx"
+            assert calls[0].kwargs["path"] is None
+
     async def test_spawn_duplicate_agent_kills_old_and_respawns(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:

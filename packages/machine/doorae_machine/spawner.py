@@ -522,7 +522,12 @@ class Spawner:
         # didn't provide one (older versions).
         agent_server = self._agent_server_url or msg.server_url
 
-        # Build command — prefer local doorae-agent, fall back to uvx
+        # Build command — prefer local doorae-agent, fall back to uvx.
+        # Log which source was picked so operators can later answer the
+        # "which doorae-agent actually ran?" question without rebuilding
+        # the environment. Two different spawns on the same machine
+        # can end up with different binaries (PATH shadowing, uvx
+        # cache drift) and the log is our only forensic trail.
         doorae_agent = shutil.which("doorae-agent")
         if doorae_agent:
             cmd = [
@@ -531,6 +536,12 @@ class Spawner:
                 "--name", msg.name or f"agent-{agent_id[:8]}",
                 "--server", agent_server,
             ]
+            log.info(
+                "agent_binary_resolved",
+                agent_id=agent_id,
+                source="path",
+                path=doorae_agent,
+            )
         else:
             # doorae-agent not in PATH — use uvx to fetch from PyPI
             cmd = [
@@ -540,6 +551,12 @@ class Spawner:
                 "--name", msg.name or f"agent-{agent_id[:8]}",
                 "--server", agent_server,
             ]
+            log.info(
+                "agent_binary_resolved",
+                agent_id=agent_id,
+                source="uvx",
+                path=None,
+            )
         if msg.profile_yaml.strip():
             cmd.extend(["--profile", str(profile_path)])
         for room in msg.rooms:
