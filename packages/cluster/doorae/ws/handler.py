@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -336,9 +337,31 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     room_id=room_id,
                                     agent_id=rep_agent_id,
                                 )
+                                # ``query_id`` pairs the question
+                                # message with the eventual ``room_
+                                # query_result`` broadcast so the
+                                # source-room banner (issue #55) can
+                                # transition pending → completed/
+                                # timeout/solo without needing a new
+                                # WS event type. ``role`` lets the
+                                # client cheaply distinguish the
+                                # originating question from forwarded
+                                # / result messages — all three
+                                # share the ``room_query*`` metadata
+                                # family. ``source_participant_id``
+                                # is what the target-room forward
+                                # badge renders as ``↪ #room ·
+                                # @user`` (we don't have the source
+                                # participant on the agent side
+                                # otherwise — the agent SDK only
+                                # sees the routing token, not the
+                                # human author).
                                 metadata["room_query"] = {
                                     "target_room_id": target_room_id,
                                     "source_room_id": room_id,
+                                    "role": "question",
+                                    "query_id": str(uuid4()),
+                                    "source_participant_id": participant.id,
                                 }
 
                 async with session_factory() as db:

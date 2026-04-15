@@ -1,10 +1,12 @@
-import { useState, useCallback, memo } from 'react'
-import { Bookmark, BookmarkCheck } from 'lucide-react'
+import { useState, useCallback, memo, useMemo } from 'react'
+import { Bookmark, BookmarkCheck, CornerDownRight } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
+import RoomQueryResultCard from '@/components/RoomQueryResultCard'
 import { apiFetch } from '@/lib/api'
 import { useRooms } from '@/hooks/useRooms'
+import { parseForward, parseResult, stripRoomQueryPrefix } from '@/lib/room-query'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -47,6 +49,23 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
     }
   }
 
+  // ---------- Issue #55: room_query result / forward variants ----------
+  // Result variant delegates entirely to RoomQueryResultCard. The
+  // card ignores the body (which still carries the legacy
+  // ``[취합 결과] ...`` text so ``should_respond`` keeps working)
+  // and renders from metadata. We pre-compute the participant
+  // names / room name here so the card stays presentational.
+  const resultMeta = useMemo(() => parseResult(message), [message])
+  const forwardMeta = useMemo(() => parseForward(message), [message])
+
+  const participantNamesMap = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const [pid, p] of Object.entries(participants)) {
+      m.set(pid, p.display_name)
+    }
+    return m
+  }, [participants])
+
   const toggleSave = async () => {
     if (saved) {
       await apiFetch(`/api/v1/saved/${message.id}`, { method: 'DELETE' })
@@ -71,6 +90,90 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
         : <Bookmark className="h-3.5 w-3.5 text-[var(--color-foreground-subtle)]" />}
     </button>
   )
+
+  // Result variant: full-width structured card. We still expose
+  // the bookmark button in the corner so users can save the
+  // aggregated result like any other message.
+  if (resultMeta) {
+    const targetRoomName = resolveRoom(resultMeta.target_room_id)?.name
+    return (
+      <div className="group flex flex-col items-start">
+        <div className="flex items-center gap-1 mb-1 pl-1">
+          <span className="text-badge text-[var(--color-foreground-muted)]">
+            {displayName}
+          </span>
+          {bookmarkBtn}
+        </div>
+        <div className="w-full">
+          <RoomQueryResultCard
+            result={resultMeta}
+            participantNames={participantNamesMap}
+            targetRoomName={targetRoomName}
+          />
+        </div>
+        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
+
+  // Forward variant: shown in the *target* room. Looks like a
+  // normal agent message with a left accent bar and a source
+  // badge (``↪ #srcRoom · @srcUser``). We strip the
+  // ``[ROOM_QUERY] `` prefix for rendering only — the wire body
+  // stays prefixed so ``should_respond`` can still detect it.
+  if (forwardMeta) {
+    const srcRoom = resolveRoom(forwardMeta.source_room_id)
+    const srcRoomLabel = srcRoom?.name ?? forwardMeta.source_room_id.slice(-6)
+    const srcUserLabel = forwardMeta.source_participant_id
+      ? (resolveUser(forwardMeta.source_participant_id) ??
+        forwardMeta.source_participant_id.slice(-6))
+      : null
+    const stripped = stripRoomQueryPrefix(message.content)
+    return (
+      <div className="group flex flex-col items-start">
+        <div className="flex items-center gap-1 mb-1 pl-1">
+          <span className="text-badge text-[var(--color-foreground-muted)]">
+            {displayName}
+          </span>
+          {bookmarkBtn}
+        </div>
+        <div
+          className="relative w-full rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] border border-[var(--color-border)] bg-white pl-4 pr-3 py-2"
+          data-testid="room-query-forward"
+        >
+          <div
+            aria-hidden="true"
+            className="absolute left-0 top-0 h-full w-[3px] rounded-l-[var(--radius-lg)] bg-[var(--color-brand)]"
+          />
+          <div
+            className="mb-1 flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]"
+            data-testid="room-query-forward-badge"
+          >
+            <CornerDownRight className="h-3 w-3" aria-hidden="true" />
+            <span className="font-medium text-[var(--color-foreground)]">
+              #{srcRoomLabel}
+            </span>
+            {srcUserLabel && (
+              <>
+                <span>·</span>
+                <span>@{srcUserLabel}</span>
+              </>
+            )}
+          </div>
+          <MarkdownContent
+            content={stripped}
+            resolveUser={resolveUser}
+            resolveRoom={resolveRoom}
+          />
+        </div>
+        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
 
   if (isMine) {
     // 나 = 오른쪽

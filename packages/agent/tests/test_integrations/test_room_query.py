@@ -35,13 +35,38 @@ class TestParseRoomQuery:
         msg = {
             "content": "<#room:xyz> 의견?",
             "metadata": {
-                "room_query": {"target_room_id": "xyz", "source_room_id": "abc"},
+                "room_query": {
+                    "target_room_id": "xyz",
+                    "source_room_id": "abc",
+                    "query_id": "q-1",
+                    "source_participant_id": "user-pid",
+                },
             },
         }
         rq = parse_room_query(msg)
         assert rq is not None
         assert rq.target_room_id == "xyz"
         assert rq.source_room_id == "abc"
+        assert rq.query_id == "q-1"
+        assert rq.source_participant_id == "user-pid"
+
+    def test_parse_legacy_metadata_without_query_id(self):
+        """Legacy queue items (pre-#55 broadcast still in flight)
+        must not crash. ``query_id`` falls back to empty string and
+        ``source_participant_id`` to ``None`` so downstream code can
+        still send the forward; the UI just won't have the matching
+        token to dismiss the chip — acceptable since the affected
+        window is the single deploy in which the upgrade lands."""
+        msg = {
+            "content": "<#room:xyz> 의견?",
+            "metadata": {
+                "room_query": {"target_room_id": "xyz", "source_room_id": "abc"},
+            },
+        }
+        rq = parse_room_query(msg)
+        assert rq is not None
+        assert rq.query_id == ""
+        assert rq.source_participant_id is None
 
     def test_parse_without_room_query(self):
         msg = {"content": "hello", "metadata": {}}
@@ -93,16 +118,26 @@ class TestStripRoomMention:
         assert _strip_room_mention("<#room:r1>") == ""
 
 
+def _make_query(**overrides) -> RoomQuery:
+    """Build a ``RoomQuery`` with the new (post-#55) fields populated.
+    Tests can pass overrides for the bits they actually care about."""
+    defaults = dict(
+        target_room_id="room-b",
+        source_room_id="room-a",
+        content="API 설계 의견?",
+        query_id="q-test",
+        source_participant_id="user-source-pid",
+    )
+    defaults.update(overrides)
+    return RoomQuery(**defaults)
+
+
 class TestExecuteRoomQuery:
     @pytest.mark.asyncio
     async def test_sends_room_query_to_target(self):
         """Representative sends [ROOM_QUERY] to target room."""
         client = _make_client()
-        query = RoomQuery(
-            target_room_id="room-b",
-            source_room_id="room-a",
-            content="API 설계 의견?",
-        )
+        query = _make_query()
 
         with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
@@ -110,10 +145,17 @@ class TestExecuteRoomQuery:
             await execute_room_query(client, {}, query)
 
         # Should send [ROOM_QUERY] to target room
-        client.send.assert_called_once_with(
-            "room-b",
-            "[ROOM_QUERY] API 설계 의견?",
-        )
+        assert client.send.call_count == 1
+        args, kwargs = client.send.call_args
+        assert args == ("room-b", "[ROOM_QUERY] API 설계 의견?")
+        # Issue #55: forward carries metadata so the target-room
+        # bubble can render the ``↪ #source · @author`` badge.
+        forward_meta = kwargs["metadata"]["room_query_forward"]
+        assert forward_meta == {
+            "source_room_id": "room-a",
+            "source_participant_id": "user-source-pid",
+            "query_id": "q-test",
+        }
         # Should register a message handler
         assert len(client._message_handlers) == 1
 
@@ -125,21 +167,15 @@ class TestExecuteRoomQuery:
         server re-attaches ``room_query`` metadata and the target
         room's representative kicks off another hop."""
         client = _make_client()
-        query = RoomQuery(
-            target_room_id="room-b",
-            source_room_id="room-a",
-            content="<#room:room-b> 내일 동탄 날씨는?",
-        )
+        query = _make_query(content="<#room:room-b> 내일 동탄 날씨는?")
 
         with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
-        client.send.assert_called_once_with(
-            "room-b",
-            "[ROOM_QUERY] 내일 동탄 날씨는?",
-        )
+        args, _ = client.send.call_args
+        assert args == ("room-b", "[ROOM_QUERY] 내일 동탄 날씨는?")
 
     @pytest.mark.asyncio
     async def test_forward_falls_back_when_strip_empties_content(self):
@@ -148,51 +184,57 @@ class TestExecuteRoomQuery:
         original so we never send ``"[ROOM_QUERY] "`` (which is
         useless to the target room agents)."""
         client = _make_client()
-        query = RoomQuery(
-            target_room_id="room-b",
-            source_room_id="room-a",
-            content="<#room:room-b>",
-        )
+        query = _make_query(content="<#room:room-b>")
 
         with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
-        client.send.assert_called_once_with(
-            "room-b",
-            "[ROOM_QUERY] <#room:room-b>",
-        )
+        args, _ = client.send.call_args
+        assert args == ("room-b", "[ROOM_QUERY] <#room:room-b>")
 
     @pytest.mark.asyncio
-    async def test_solo_representative_returns_early(self):
-        """If no other agents in target room, return early."""
+    async def test_solo_representative_delivers_solo_result(self):
+        """Issue #55: if no other agents are in the target room the
+        representative MUST still deliver a result message back to
+        the source room — otherwise the user's banner chip would
+        sit pending forever. The ``status="solo"`` tag tells the UI
+        to render a distinct ``대상 방에 응답할 에이전트가 없음``
+        header instead of the timeout one."""
         client = _make_client()
         # Only self in the room
         client.get_room_participants = AsyncMock(return_value=[
             {"id": "my-pid", "kind": "agent"},
         ])
-        query = RoomQuery(
-            target_room_id="room-b",
-            source_room_id="room-a",
-            content="질문",
-        )
+        query = _make_query(content="질문")
 
         await execute_room_query(client, {}, query)
 
-        # Should NOT send anything (solo mode)
-        client.send.assert_not_called()
+        # Should send the solo result message to the source room
+        assert client.send.call_count == 1
+        args, kwargs = client.send.call_args
+        assert args[0] == "room-a"
+        # Body still uses the existing ``[취합 결과]`` prefix so
+        # ``should_respond``'s startswith path is unaffected.
+        assert args[1].startswith("[취합 결과]")
+        result_meta = kwargs["metadata"]["room_query_result"]
+        assert result_meta["query_id"] == "q-test"
+        assert result_meta["target_room_id"] == "room-b"
+        assert result_meta["status"] == "solo"
+        assert result_meta["responded"] == 0
+        assert result_meta["expected"] == 0
+        assert result_meta["responses"] == []
+        # No ``[ROOM_QUERY]`` fanout, no callback registration —
+        # the solo path short-circuits before either.
         assert len(client._message_handlers) == 0
 
     @pytest.mark.asyncio
     async def test_callback_collects_and_synthesizes(self):
-        """Callback collects all responses then delivers summary."""
+        """Callback collects all responses then delivers summary
+        with ``status="completed"`` metadata."""
         client = _make_client()
-        query = RoomQuery(
-            target_room_id="room-b",
-            source_room_id="room-a",
-            content="API 의견?",
-        )
+        query = _make_query(content="API 의견?")
 
         with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
@@ -211,7 +253,101 @@ class TestExecuteRoomQuery:
         await handler({"room_id": "room-b", "participant_id": "agent-e-pid", "content": "REST가 더 적합합니다"})
         # Now complete (2/2) — should synthesize and deliver
         assert client.send.call_count == 1
-        call_args = client.send.call_args
-        assert call_args[0][0] == "room-a"  # delivered to source room
-        assert "취합 결과" in call_args[0][1]
-        assert "2/2" in call_args[0][1]
+        args, kwargs = client.send.call_args
+        assert args[0] == "room-a"  # delivered to source room
+        # Body format unchanged (regression guard for ``should_
+        # respond`` startswith path).
+        assert "[취합 결과]" in args[1]
+        assert "2/2" in args[1]
+        # Issue #55: structured result metadata.
+        result_meta = kwargs["metadata"]["room_query_result"]
+        assert result_meta["query_id"] == "q-test"
+        assert result_meta["target_room_id"] == "room-b"
+        assert result_meta["status"] == "completed"
+        assert result_meta["responded"] == 2
+        assert result_meta["expected"] == 2
+        assert result_meta["responses"] == [
+            {"participant_id": "agent-d-pid", "content": "GraphQL이 좋겠습니다"},
+            {"participant_id": "agent-e-pid", "content": "REST가 더 적합합니다"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_timeout_path_marks_status_timeout(self):
+        """If the safety timeout fires before all responses arrive
+        the result still ships with ``status="timeout"`` so the
+        banner chip flips from pending → ⚠ and the result card can
+        show ``N/M 응답 · K명 미응답``."""
+        client = _make_client()
+        query = _make_query(content="API 의견?")
+
+        # Patch only the create_task / sleep calls so we can drive
+        # the timeout path manually instead of waiting 5 minutes.
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            captured: dict[str, Any] = {}
+
+            def _capture_task(coro):
+                captured["coro"] = coro
+                return MagicMock()
+
+            mock_asyncio.get_event_loop.return_value.create_task = (
+                _capture_task
+            )
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+            handler = client._message_handlers[0]
+            client.send.reset_mock()
+
+            # Only one of two agents responds.
+            await handler({
+                "room_id": "room-b",
+                "participant_id": "agent-d-pid",
+                "content": "GraphQL이 좋겠습니다",
+            })
+            assert client.send.call_count == 0
+
+            # Now run the captured cleanup coroutine — sleep is
+            # already a no-op AsyncMock so it fires immediately.
+            await captured["coro"]
+
+        assert client.send.call_count == 1
+        args, kwargs = client.send.call_args
+        assert args[0] == "room-a"
+        assert "[취합 결과]" in args[1]
+        result_meta = kwargs["metadata"]["room_query_result"]
+        assert result_meta["status"] == "timeout"
+        assert result_meta["responded"] == 1
+        assert result_meta["expected"] == 2
+        assert len(result_meta["responses"]) == 1
+
+
+class TestForwardBodyRegression:
+    """Plan §6.1: ``[ROOM_QUERY]`` / ``[취합 결과]`` body prefixes
+    are load-bearing — ``should_respond`` keys off ``startswith`` to
+    decide whether to ignore a forwarded message. If we accidentally
+    rename them while structuring the metadata, agents in the target
+    room would start replying to the forward as if it were a
+    regular question, kicking off the loop that issue #42 closed."""
+
+    @pytest.mark.asyncio
+    async def test_forward_body_unchanged(self):
+        client = _make_client()
+        query = _make_query(content="quick check")
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+        args, _ = client.send.call_args
+        assert args[1].startswith("[ROOM_QUERY] ")
+
+    @pytest.mark.asyncio
+    async def test_result_body_unchanged(self):
+        client = _make_client()
+        # solo path is the simplest way to drive a result body.
+        client.get_room_participants = AsyncMock(return_value=[
+            {"id": "my-pid", "kind": "agent"},
+        ])
+        query = _make_query(content="quick check")
+        await execute_room_query(client, {}, query)
+        args, _ = client.send.call_args
+        assert args[1].startswith("[취합 결과]")
