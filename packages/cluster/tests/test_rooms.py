@@ -513,11 +513,15 @@ class TestRoomCRUD:
 
         deleted_frames = _frames(deleted_received)
         sibling_frames = _frames(sibling_received)
-        assert len(deleted_frames) >= 1
+        # Each subscriber receives exactly one ``RoomDeletedOut``:
+        # the deleted-room WS picks it up via the ``broadcast`` step,
+        # and the sibling-room WS via the per-user ``send_to`` step.
+        # No duplication because the deleted room's participant rows
+        # are already gone by the time the per-user query runs, so
+        # ``other_pids`` cannot include them.
+        assert len(deleted_frames) == 1
         assert deleted_frames[0]["room_id"] == room.id
-        # Sibling-room WS also got pinged so the sidebar can refresh
-        # without having to reach the deleted room's stale socket.
-        assert len(sibling_frames) >= 1
+        assert len(sibling_frames) == 1
         assert sibling_frames[0]["room_id"] == room.id
 
     @pytest.mark.asyncio
