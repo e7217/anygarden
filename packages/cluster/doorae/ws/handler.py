@@ -14,6 +14,7 @@ from doorae.auth.dependencies import Identity, get_identity, require_room_member
 from doorae.config import DooraeSettings
 from doorae.db.models import ActivityLog, Agent, Participant, Room
 from doorae.db.repository import append_message, replay_since_seq
+from doorae.rooms.membership import ensure_agent_in_room
 from doorae.observability.metrics import (
     guest_active,
     guest_rate_limited_total,
@@ -321,23 +322,20 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 # Offline — send system message after storing
                                 metadata["_rep_offline"] = True
                             elif rep_agent:
-                                # Auto-join representative to this room if not a participant
-                                existing = (
-                                    await rq_db.execute(
-                                        select(Participant).where(
-                                            Participant.room_id == room_id,
-                                            Participant.agent_id == rep_agent_id,
-                                        )
-                                    )
-                                ).scalar_one_or_none()
-                                if existing is None:
-                                    rq_db.add(Participant(
-                                        room_id=room_id,
-                                        agent_id=rep_agent_id,
-                                        role="member",
-                                    ))
-                                    await rq_db.commit()
-                                # Attach room_query metadata
+                                # Auto-join representative to this room.
+                                # ``ensure_agent_in_room`` is idempotent at
+                                # the DB layer but always pushes a
+                                # ``JoinRoomOut`` through the agent's other
+                                # WS sessions — the frame is what triggers
+                                # the SDK to actually subscribe to this
+                                # room in time for the upcoming broadcast
+                                # (issue #50).
+                                await ensure_agent_in_room(
+                                    rq_db,
+                                    manager,
+                                    room_id=room_id,
+                                    agent_id=rep_agent_id,
+                                )
                                 metadata["room_query"] = {
                                     "target_room_id": target_room_id,
                                     "source_room_id": room_id,

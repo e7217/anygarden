@@ -19,6 +19,7 @@ from doorae.dependencies import (
     get_current_identity,
     get_db,
 )
+from doorae.rooms.membership import add_user_to_room, ensure_agent_in_room
 from doorae.rooms.service import (
     archive_child_rooms,
     create_sub_room,
@@ -302,59 +303,28 @@ async def add_participant(
     if not body.user_id and not body.agent_id:
         raise HTTPException(status_code=400, detail="Must provide user_id or agent_id")
 
-    participant = Participant(
-        room_id=room_id,
-        user_id=body.user_id,
-        agent_id=body.agent_id,
-        role=body.role,
-    )
-    db.add(participant)
-    await db.commit()
-    await db.refresh(participant)
-
-    # Notify the newly added participant through any of their existing
-    # WS connections so the client can react immediately without polling.
-    #
-    # - Agents receive ``JoinRoomOut`` and the SDK auto-connects to the
-    #   new room (see doorae_agent/client.py:298-302). Without this they
-    #   would miss messages until their next full reconnect.
-    # - Users receive ``RoomMembershipChangedOut`` so the frontend
-    #   sidebar/room-list can refresh. Users don't auto-join WS; they
-    #   open it lazily when they navigate to the room.
+    # Both branches funnel through ``doorae.rooms.membership`` so the
+    # Participant-insert and its matching WS notification (JoinRoomOut
+    # for agents, RoomMembershipChangedOut for users) stay in lockstep
+    # — see issue #50 for the history of this invariant drifting.
     manager = getattr(request.app.state, "connection_manager", None)
-    if manager is not None:
-        if body.agent_id:
-            from doorae.ws.protocol import JoinRoomOut
-
-            other_pids = (
-                await db.execute(
-                    select(Participant.id).where(
-                        Participant.agent_id == body.agent_id,
-                        Participant.id != participant.id,
-                    )
-                )
-            ).scalars().all()
-            join_frame = JoinRoomOut(room_id=room_id, participant_id="")
-            for pid in other_pids:
-                await manager.send_to(pid, join_frame)
-        elif body.user_id:
-            from doorae.ws.protocol import RoomMembershipChangedOut
-
-            other_pids = (
-                await db.execute(
-                    select(Participant.id).where(
-                        Participant.user_id == body.user_id,
-                        Participant.id != participant.id,
-                    )
-                )
-            ).scalars().all()
-            user_frame = RoomMembershipChangedOut(
-                action="added",
-                room_id=room_id,
-                user_id=body.user_id,
-            )
-            for pid in other_pids:
-                await manager.send_to(pid, user_frame)
+    if body.agent_id:
+        participant, _ = await ensure_agent_in_room(
+            db,
+            manager,
+            room_id=room_id,
+            agent_id=body.agent_id,
+            role=body.role,
+        )
+    else:
+        assert body.user_id is not None
+        participant = await add_user_to_room(
+            db,
+            manager,
+            room_id=room_id,
+            user_id=body.user_id,
+            role=body.role,
+        )
 
     return participant
 
@@ -702,7 +672,7 @@ async def create_sub_room_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a sub-room under an existing room with permission inheritance."""
-    child = await create_sub_room(
+    child, agent_ids = await create_sub_room(
         db,
         parent_room_id=room_id,
         name=body.name,
@@ -714,16 +684,21 @@ async def create_sub_room_endpoint(
     await db.commit()
     await db.refresh(child)
 
-    # Notify all participants in the parent room so agent SDKs
-    # can dynamically join the new sub-room. broadcast is more
-    # reliable than send_to — it reaches all active WS connections
-    # in the room even if _by_participant was overwritten. Non-agent
-    # clients (browser frontend) silently ignore the join_room frame.
+    # Push ``JoinRoomOut`` directly to each participating agent's
+    # *other* WS sessions via ``ensure_agent_in_room``. The old
+    # implementation broadcast over the parent room, which silently
+    # dropped the frame for any agent that hadn't subscribed to the
+    # parent — a surprisingly common case. Reusing the helper keeps
+    # this path on the same membership invariant as ``#room``
+    # auto-join and ``add_participant`` (issue #50).
     manager = getattr(request.app.state, "connection_manager", None)
-    if manager is not None:
-        from doorae.ws.protocol import JoinRoomOut
-        frame = JoinRoomOut(room_id=child.id, participant_id="")
-        await manager.broadcast(room_id, frame)
+    for agent_id in agent_ids:
+        await ensure_agent_in_room(
+            db,
+            manager,
+            room_id=child.id,
+            agent_id=agent_id,
+        )
 
     return child
 

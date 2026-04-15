@@ -24,8 +24,15 @@ async def create_sub_room(
     participants: list[str],
     is_dm: bool = False,
     creator_participant_id: str,
-) -> Room:
+) -> tuple[Room, set[str]]:
     """Create a child room under *parent_room_id*.
+
+    Returns ``(child, agent_ids)`` where ``agent_ids`` is the set of
+    agent IDs that were added as Participants of the new sub-room. The
+    router layer uses this set to push a ``JoinRoomOut`` to each of
+    those agents' *other* WS sessions so their SDK can auto-subscribe
+    to the new room — a broadcast over the parent room (the previous
+    approach) would miss agents that weren't parent-subscribers.
 
     Enforces:
     - Self-reference prevention: parent must differ from the new room.
@@ -89,6 +96,8 @@ async def create_sub_room(
             detail="A room cannot be its own parent",
         )
 
+    agent_ids: set[str] = set()
+
     # Add creator as first participant
     creator_part = Participant(
         room_id=child.id,
@@ -97,6 +106,8 @@ async def create_sub_room(
         role="owner",
     )
     db.add(creator_part)
+    if creator_in_parent.agent_id:
+        agent_ids.add(creator_in_parent.agent_id)
 
     # Add other participants, inheriting their user/agent IDs from parent
     for pid in participants:
@@ -117,10 +128,12 @@ async def create_sub_room(
                 role="member",
             )
             db.add(new_part)
+            if parent_part.agent_id:
+                agent_ids.add(parent_part.agent_id)
 
     await db.flush()
     await db.refresh(child)
-    return child
+    return child, agent_ids
 
 
 async def _load_pinned_order(
