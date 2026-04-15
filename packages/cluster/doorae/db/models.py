@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Float,
+    text as sa_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -92,11 +93,34 @@ class Room(Base):
 
 class User(Base):
     __tablename__ = "users"
+    # ``email`` is UNIQUE only when present. Anonymous guests (see
+    # §11 design doc) have no email, and the registered-user path
+    # should still reject duplicates. A partial unique index works on
+    # both SQLite (3.8.0+) and PostgreSQL — the migration file creates
+    # the same index at deploy time.
+    __table_args__ = (
+        Index(
+            "ux_users_email_not_null",
+            "email",
+            unique=True,
+            sqlite_where=sa_text("email IS NOT NULL"),
+            postgresql_where=sa_text("email IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Registered users: email + password_hash required. Guests: both NULL.
+    # DB-level uniqueness handled by ``ux_users_email_not_null``.
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Guest marker. True means the row came from ``POST /auth/guest``
+    # and is bound to a single room via the JWT's ``room_id`` claim.
+    is_anonymous: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Guest-supplied display name (host UI can show a badge). Opaque
+    # to the server beyond length limits — enforcement lives in the
+    # auth handler, not the DB.
+    display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

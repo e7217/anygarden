@@ -75,6 +75,53 @@ class TestUserCRUD:
         with pytest.raises(IntegrityError):
             await db.flush()
 
+    @pytest.mark.asyncio
+    async def test_anonymous_guest_row(self, db: AsyncSession) -> None:
+        """Guest rows have no email/password but carry a display_name."""
+        guest = User(
+            email=None,
+            password_hash=None,
+            is_anonymous=True,
+            display_name="Alice",
+        )
+        db.add(guest)
+        await db.flush()
+
+        result = await db.execute(select(User).where(User.id == guest.id))
+        fetched = result.scalar_one()
+        assert fetched.is_anonymous is True
+        assert fetched.email is None
+        assert fetched.password_hash is None
+        assert fetched.display_name == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_many_guests_can_coexist(self, db: AsyncSession) -> None:
+        """The partial unique index must NOT reject multiple NULL emails."""
+        db.add(User(is_anonymous=True, display_name="Guest 1"))
+        db.add(User(is_anonymous=True, display_name="Guest 2"))
+        db.add(User(is_anonymous=True, display_name="Guest 3"))
+        await db.flush()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_email_uniqueness_still_enforced_for_non_null(
+        self, db: AsyncSession
+    ) -> None:
+        """Registered users still cannot share an email — regression check."""
+        await _make_user(db, "registered@doorae.io")
+        db.add(User(email="registered@doorae.io", password_hash="x"))
+        with pytest.raises(IntegrityError):
+            await db.flush()
+
+    @pytest.mark.asyncio
+    async def test_default_user_is_not_anonymous(
+        self, db: AsyncSession
+    ) -> None:
+        """is_anonymous defaults to False so existing callers keep
+        producing registered rows."""
+        u = await _make_user(db, "notguest@doorae.io")
+        assert u.is_anonymous is False
+        assert u.display_name is None
+
 
 class TestRoomCRUD:
     @pytest.mark.asyncio
