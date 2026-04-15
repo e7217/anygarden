@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -103,19 +104,36 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
         if m.get("type") == "legacy":
             name = m.get("name")
             return bool(agent_key) and isinstance(name, str) and name.casefold() == agent_key
-        # ``type == "user"`` carries a User.id which doesn't map to
-        # agents today. We fall back to the content scan below for
-        # legacy ``@Name`` tokens that might share this entry.
+        if m.get("type") == "user":
+            # ID-based mention from the frontend autocomplete — the
+            # ``id`` is a ``participant_id``, which is exactly what
+            # the server puts in our welcome frame and we cache in
+            # ``_my_participant_ids``. Same namespace both ends, so
+            # ``in`` is an exact match (no casefold, no substring
+            # trap). Previously this branch returned False and the
+            # gate silenced every agent whenever the UI's token
+            # format was in play — including the ``@<guest>`` case
+            # where the addressee isn't an agent at all.
+            target = m.get("id")
+            return bool(target) and target in client._my_participant_ids
         return False
 
     mentioned_me = any(_targets_me(m) for m in addressable)
-    # Backward-compat: server's legacy pattern ``@([\w-]+)`` can't
+    # Backward-compat: the server's legacy pattern ``@([\w-]+)`` can't
     # span whitespace, so names like "@테스트 에이전트" never land in
-    # ``addressable`` as a single mention. Keep the content scan as
-    # a fallback — but only to recognise *this agent*, not as the
-    # source of truth for "is there any mention".
-    if not mentioned_me and agent_key and f"@{agent_name}".casefold() in content.casefold():
-        mentioned_me = True
+    # ``addressable`` as a single mention. The content scan is a
+    # last-resort fallback that recognises *this agent* directly.
+    #
+    # ``(?![\w:])`` is load-bearing: without it the scan matches
+    # substrings, so an agent literally named ``user`` would
+    # falsely flag the ID-based token ``<@user:<pid>>`` as a hit,
+    # re-opening the fan-out bug. A word-or-colon lookahead stops
+    # the match at ``@user`` followed by ``:``, while still
+    # allowing ``@테스트 에이전트 안녕`` (space after the name).
+    if not mentioned_me and agent_name:
+        pattern = rf"@{re.escape(agent_name)}(?![\w:])"
+        if re.search(pattern, content, re.IGNORECASE):
+            mentioned_me = True
 
     # 3. Directly mentioned → respond.
     if mentioned_me:
