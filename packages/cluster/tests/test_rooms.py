@@ -211,6 +211,57 @@ class TestRoomCRUD:
             assert all(p["is_anonymous"] is False for p in registered)
 
     @pytest.mark.asyncio
+    async def test_get_room_detail_exposes_presence_fields(self, room_env) -> None:
+        """#54 — ``GET /rooms/{id}`` must carry ``online`` and
+        ``last_seen_at`` per participant so the UI can render the
+        presence dot without polling. The owner in the fixture has no
+        WS subscription here, so online defaults to False; we then
+        subscribe via ``ConnectionManager`` and verify the response
+        flips."""
+        from doorae.presence import PresenceService
+        from doorae.ws.manager import ConnectionManager
+
+        app = room_env["app"]
+        room = room_env["room"]
+        participant = room_env["participant"]
+        token = room_env["token"]
+
+        # Fixture app doesn't run lifespan → wire presence manually.
+        mgr = ConnectionManager()
+        presence = PresenceService(mgr)
+        mgr.set_presence_service(presence)
+        app.state.connection_manager = mgr
+        app.state.presence_service = presence
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            parts = resp.json()["participants"]
+            owner = next(p for p in parts if p["id"] == participant.id)
+            # Not yet subscribed → offline, no memo.
+            assert owner["online"] is False
+            assert owner["last_seen_at"] is None
+
+            class _FakeWS:
+                async def send_text(self, data: str) -> None:
+                    pass
+
+            await mgr.subscribe(room.id, participant.id, _FakeWS())  # type: ignore[arg-type]
+
+            resp2 = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            parts2 = resp2.json()["participants"]
+            owner2 = next(p for p in parts2 if p["id"] == participant.id)
+            assert owner2["online"] is True
+            assert owner2["last_seen_at"] is not None
+
+    @pytest.mark.asyncio
     async def test_add_participant(self, room_env) -> None:
         app = room_env["app"]
         room = room_env["room"]

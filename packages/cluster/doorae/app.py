@@ -31,6 +31,7 @@ from doorae.orchestration.rules import (
     GuestRoomAggregateLimiter,
     TypingTracker,
 )
+from doorae.presence import PresenceService
 from doorae.scheduler.machine_bus import MachineBus
 from doorae.scheduler.lifecycle import AgentLifecycle
 from doorae.ws.manager import ConnectionManager
@@ -251,6 +252,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # per-worker isolation issues in multi-worker deployments).
     if not getattr(app.state, "connection_manager", None):
         app.state.connection_manager = ConnectionManager()
+    # Wire PresenceService (#54) — single source of truth for agent
+    # liveness. The setter pattern keeps ConnectionManager free of
+    # direct presence imports so we don't introduce a cycle.
+    if not getattr(app.state, "presence_service", None):
+        app.state.presence_service = PresenceService(app.state.connection_manager)
+        app.state.connection_manager.set_presence_service(
+            app.state.presence_service
+        )
     if not getattr(app.state, "cooldown_manager", None):
         app.state.cooldown_manager = CooldownManager(capacity=5, refill_rate=1.0)
     # Guests get a stricter bucket — §11.7 of the design doc. The two

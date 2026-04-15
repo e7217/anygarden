@@ -14,6 +14,7 @@ import SearchDialog from '@/components/SearchDialog'
 import TaskPanel from '@/components/TaskPanel'
 import { Button } from '@/components/ui/button'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
@@ -34,6 +35,10 @@ export interface Participant {
   // "guest" badge without having to introduce a new ``kind`` value,
   // which would break legacy callers expecting ``user``/``agent``.
   is_anonymous?: boolean
+  // Presence fields (#54). Populated from ``GET /rooms/{id}`` and
+  // merged in realtime via ``useParticipantPresence`` WS patches.
+  online?: boolean
+  last_seen_at?: string | null
 }
 
 export default function ChatPage() {
@@ -129,6 +134,8 @@ export default function ChatPage() {
             agent_id: p.agent_id,
             role: p.role,
             is_anonymous: Boolean(p.is_anonymous),
+            online: typeof p.online === 'boolean' ? p.online : false,
+            last_seen_at: p.last_seen_at ?? null,
           }
           if (user && p.user_id === user.id) {
             myPid = p.id
@@ -167,12 +174,44 @@ export default function ChatPage() {
     [participants],
   )
 
+  // #54 — realtime presence. REST ``/rooms/{id}`` seeds the initial
+  // map; WS ``presence_update`` frames keep it current. Downstream
+  // consumers (agent list, popover, header) read through this so
+  // they stay in sync without re-fetching.
+  const presenceSeed = useMemo(
+    () =>
+      Object.values(participants).map(p => ({
+        id: p.id,
+        online: p.online,
+        last_seen_at: p.last_seen_at,
+      })),
+    [participants],
+  )
+  const presence = useParticipantPresence(selectedRoom, presenceSeed)
+
   const agentParticipants = useMemo(
     () => Object.values(participants)
       .filter(p => p.kind === 'agent' && p.agent_id)
-      .map(p => ({ id: p.id, agent_id: p.agent_id!, display_name: p.display_name })),
-    [participants],
+      .map(p => ({
+        id: p.id,
+        agent_id: p.agent_id!,
+        display_name: p.display_name,
+        online: presence[p.id]?.online ?? Boolean(p.online),
+      })),
+    [participants, presence],
   )
+
+  // Aggregate "agents N online / M total" for the header badge (#54).
+  const { agentsOnline, agentsTotal } = useMemo(() => {
+    let total = 0
+    let on = 0
+    for (const p of Object.values(participants)) {
+      if (p.kind !== 'agent') continue
+      total += 1
+      if (presence[p.id]?.online ?? Boolean(p.online)) on += 1
+    }
+    return { agentsOnline: on, agentsTotal: total }
+  }, [participants, presence])
 
   // Mirror the server auth rule (api/v1/invites.py::_require_room_admin_or_owner):
   // global admin OR a room-level admin/owner Participant. The server
@@ -307,6 +346,8 @@ export default function ChatPage() {
                 roomName={currentRoom.name}
                 connected={connected}
                 participantCount={Object.keys(participants).length}
+                agentsOnline={agentsOnline}
+                agentsTotal={agentsTotal}
                 parentBreadcrumb={parentBreadcrumb}
                 representativeAgentId={currentRoom.representative_agent_id}
                 agentParticipants={user?.is_admin ? agentParticipants : undefined}
@@ -341,6 +382,7 @@ export default function ChatPage() {
               />
               <ParticipantListPopover
                 participants={participants}
+                presence={presence}
                 open={participantsOpen}
                 onClose={() => setParticipantsOpen(false)}
                 myParticipantId={myParticipantId}

@@ -77,6 +77,17 @@ export function useWebSocket(roomId: string | null) {
         //      or an empty chat view).
         window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
         window.dispatchEvent(new CustomEvent('doorae:room:deleted', { detail: data }));
+      } else if (data.type === 'presence_update') {
+        // #54 — participant liveness toggled in the current room.
+        // The hook that actually tracks presence state
+        // (``useParticipantPresence``) lives in the component tree
+        // and can't receive this directly; we rebroadcast on
+        // ``window`` the same way membership/pin-order events already
+        // do. Detail mirrors the server frame exactly:
+        //   { type, room_id, participant_id, online, last_seen_at }.
+        window.dispatchEvent(
+          new CustomEvent('doorae:presence:update', { detail: data }),
+        );
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         if (data.is_typing) {

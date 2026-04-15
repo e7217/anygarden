@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -64,6 +65,33 @@ def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
     )
 
 
+def _fmt_ago(last_seen_at: str | None, *, now: datetime | None = None) -> str:
+    """Human-readable "N분 전" style relative timestamp.
+
+    Accepts the ISO string the server emits in ``last_seen_at``.
+    Graceful: unparseable / missing values fall back to ``"알 수 없음"``
+    so log/summary lines never crash on a funky backend response.
+    """
+    if not last_seen_at:
+        return "알 수 없음"
+    try:
+        # ``datetime.fromisoformat`` accepts ``Z``-suffixed UTC in 3.11+.
+        ts = datetime.fromisoformat(last_seen_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "알 수 없음"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    delta = (now or datetime.now(timezone.utc)) - ts
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return "방금 전"
+    if seconds < 3600:
+        return f"{seconds // 60}분 전"
+    if seconds < 86400:
+        return f"{seconds // 3600}시간 전"
+    return f"{seconds // 86400}일 전"
+
+
 def _strip_room_mention(content: str) -> str:
     """Remove every ``<#room:...>`` token from *content* and tidy up
     the whitespace that gets left behind. Public for tests."""
@@ -87,14 +115,24 @@ async def execute_room_query(
         await client.join_room(query.target_room_id)
         await asyncio.sleep(1)
 
-    # Get agent participants in target room (excluding self)
+    # Get agent participants in target room (excluding self).
+    # #54 — exclude offline agents from the expected responder set so
+    # a dead process doesn't make every cross-room query time out at
+    # (N-1/N) then report "(1/2) — 1명 미응답". Default ``online``
+    # to True when the field is absent so we stay compatible with
+    # older server builds that don't populate presence.
     participants = await client.get_room_participants(query.target_room_id)
     my_pids = client._my_participant_ids
-    agent_participants = [
+    # Candidates = every non-self agent in the target room, regardless
+    # of presence. ``online`` filtering applies to ``expected_count``
+    # only; the full candidate list is still used for the missing-
+    # responder label so the summary can flag *who* was offline.
+    agent_candidates = [
         p for p in participants
         if p.get("kind") == "agent" and p.get("id") not in my_pids
     ]
-    expected_count = len(agent_participants)
+    online_agents = [p for p in agent_candidates if p.get("online", True)]
+    expected_count = len(online_agents)
 
     if expected_count == 0:
         # Issue #55: pre-#55 the representative just logged and
@@ -112,6 +150,7 @@ async def execute_room_query(
             responses=[],
             expected_count=0,
             status="solo",
+            candidates=agent_candidates,
         )
         return
 
@@ -140,6 +179,7 @@ async def execute_room_query(
         query_id=query.query_id,
         expected_count=expected_count,
         question=query.content,
+        agent_candidates=agent_candidates,
     )
 
 
@@ -153,6 +193,7 @@ async def _deliver_result(
     responses: list[dict[str, str]],
     expected_count: int,
     status: str,
+    candidates: list[dict[str, Any]] | None = None,
 ) -> None:
     """Build the ``[취합 결과]`` body + structured metadata and
     broadcast it back to the source room.
@@ -164,6 +205,7 @@ async def _deliver_result(
     intact (plan §6.1)."""
     total = len(responses)
     missing = max(expected_count - total, 0)
+    candidates = candidates or []
 
     if status == "solo":
         header = "[취합 결과] (대상 방에 응답할 에이전트가 없음)"
@@ -175,6 +217,26 @@ async def _deliver_result(
         parts = [f"응답 {i}: {r['content']}" for i, r in enumerate(responses, 1)]
         summary = "\n".join(parts)
         body = f"{header}\n\n질문: {question}\n\n{summary}"
+
+        # #54 — annotate *who* missed. Offline candidates get a
+        # "(offline, N분 전)" tag so users can tell "dead agent" from
+        # "slow agent". Offline candidates are excluded from
+        # ``expected_count`` but still listed here — the user asked
+        # the room and deserves to know an agent was unreachable
+        # rather than silently dropped.
+        responded_pids = {r["participant_id"] for r in responses}
+        missing_lines: list[str] = []
+        for p in candidates:
+            if p.get("id") in responded_pids:
+                continue
+            name = p.get("display_name") or p.get("id") or "unknown"
+            if not p.get("online", True):
+                ago = _fmt_ago(p.get("last_seen_at"))
+                missing_lines.append(f"- {name} (offline, 마지막 응답 {ago})")
+            else:
+                missing_lines.append(f"- {name} (응답 없음)")
+        if missing_lines:
+            body += "\n\n미응답:\n" + "\n".join(missing_lines)
 
     await client.send(
         source_room_id,
@@ -205,6 +267,7 @@ def _register_multi_reply_callback(
     query_id: str,
     expected_count: int,
     question: str,
+    agent_candidates: list[dict[str, Any]] | None = None,
 ) -> None:
     """Register a callback that collects N responses from agents.
 
@@ -213,6 +276,7 @@ def _register_multi_reply_callback(
     my_pids = client._my_participant_ids
     responses: list[dict[str, str]] = []
     done = False
+    candidates = agent_candidates or []
 
     async def _on_reply(msg: dict[str, Any]) -> None:
         nonlocal done
@@ -249,6 +313,7 @@ def _register_multi_reply_callback(
                 responses=responses,
                 expected_count=expected_count,
                 status="completed",
+                candidates=candidates,
             )
             _detach_handler()
 
@@ -280,6 +345,7 @@ def _register_multi_reply_callback(
                 responses=responses,
                 expected_count=expected_count,
                 status="timeout",
+                candidates=candidates,
             )
             _detach_handler()
 

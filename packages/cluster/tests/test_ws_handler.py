@@ -412,6 +412,70 @@ class TestSinceSeqRecovery:
                 assert r2["seq"] == 3
 
 
+class TestPresenceBroadcast:
+    """#54 — ConnectionManager must publish presence_update frames
+    on subscribe/unsubscribe so other subscribers in the same room
+    see the participant flip online/offline in near real time."""
+
+    @pytest.mark.asyncio
+    async def test_subscribe_emits_presence_update_online(self, ws_env) -> None:
+        """When a second participant subscribes, the first one's WS
+        must receive a presence_update(online=True) frame."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        config = ws_env["config"]
+        token = ws_env["token"]
+        room = ws_env["room"]
+        session_factory = ws_env["session_factory"]
+
+        # Seed a second user + participant so two distinct WS
+        # sessions can observe one another's presence updates.
+        async with session_factory() as db:
+            other = User(email="ws2@test.com", password_hash="x")
+            db.add(other)
+            await db.flush()
+            other_part = Participant(
+                room_id=room.id, user_id=other.id, role="member"
+            )
+            db.add(other_part)
+            await db.commit()
+            await db.refresh(other)
+
+        other_token = create_user_token(
+            other.id, other.email, False, secret=config.jwt_secret
+        )
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws1:
+                welcome1 = json.loads(ws1.receive_text())
+                assert welcome1["type"] == "welcome"
+
+                # ``publish`` excludes the subject participant from the
+                # broadcast, so ws1 does NOT receive its own subscribe
+                # frame. Only the second participant's subscribe is
+                # what ws1 observes.
+                with client.websocket_connect(
+                    f"/ws/rooms/{room.id}",
+                    subprotocols=["doorae.v1", f"bearer.{other_token}"],
+                ) as ws2:
+                    _ = json.loads(ws2.receive_text())  # welcome2
+                    online_frame = json.loads(ws1.receive_text())
+                    assert online_frame["type"] == "presence_update"
+                    assert online_frame["online"] is True
+                    assert online_frame["participant_id"] == other_part.id
+                    assert online_frame["room_id"] == room.id
+
+                # ws2 has now disconnected → ws1 should see offline.
+                off = json.loads(ws1.receive_text())
+                assert off["type"] == "presence_update"
+                assert off["online"] is False
+                assert off["participant_id"] == other_part.id
+
+
 class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
 
