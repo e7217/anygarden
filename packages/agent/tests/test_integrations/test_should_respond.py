@@ -23,6 +23,54 @@ class TestShouldRespond:
         msg = {"participant_id": "other", "content": "[DELEGATED] do something", "metadata": {"_nonce": "x"}}
         assert should_respond(msg, client) is True
 
+    def test_mentioned_via_user_id_token(self):
+        """Frontend autocomplete produces ``<@user:<participant_id>>``
+        tokens; the server parses them as ``{type: user, id: …}``.
+        The ``id`` is one of our ``_my_participant_ids`` — we must
+        treat that as a direct mention and respond."""
+        client = _make_client(my_pids={"alice-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<@user:alice-pid> 이거 봐줘",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "alice-pid"}],
+            },
+        }
+        assert should_respond(msg, client) is True
+
+    def test_user_id_token_for_other_participant_skips(self):
+        """Same autocomplete path but the ``id`` is someone else's
+        participant_id (another agent, a human, or a guest). The
+        current agent must stay out."""
+        client = _make_client(my_pids={"alice-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<@user:bob-pid> 이거 봐줘",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "bob-pid"}],
+            },
+        }
+        assert should_respond(msg, client) is False
+
+    def test_guest_user_id_mention_silences_all_agents(self):
+        """Regression guard for the @guest fan-out bug: when a user
+        mentions a guest via autocomplete, the server emits a
+        ``{type: user, id: <guest_pid>}`` token. No agent's
+        ``_my_participant_ids`` contains that id, so every agent
+        should skip instead of treating the human sender as an
+        implicit "respond" cue."""
+        alice = _make_client(agent_name="Alice", my_pids={"alice-pid"})
+        bob = _make_client(agent_name="Bob", my_pids={"bob-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<@user:guest-pid> 안녕하세요",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "guest-pid"}],
+            },
+        }
+        assert should_respond(msg, alice) is False
+        assert should_respond(msg, bob) is False
+
     def test_mentioned_in_metadata_legacy(self):
         """Server's ``parse_mentions`` emits legacy tokens as
         ``{"type": "legacy", "name": ...}``. A match on ``name``
@@ -109,6 +157,34 @@ class TestShouldRespond:
                 "mentions": [{"type": "legacy", "name": "테스트에이전트"}],
                 "_nonce": "x",
             },
+        }
+        assert should_respond(msg, client) is True
+
+    def test_content_scan_does_not_match_id_token(self):
+        """Regression guard: an agent literally named ``user`` must
+        not be falsely matched by the content substring ``@user``
+        inside the ID-based token ``<@user:<pid>>``. Without the
+        ``(?![\\w:])`` lookahead in the fallback content scan, the
+        agent would wrongly claim the message is addressed to it
+        and respond on every autocomplete mention."""
+        client = _make_client(agent_name="user", my_pids={"unrelated-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<@user:bob-pid> 확인해줘",
+            "metadata": {"mentions": [{"type": "user", "id": "bob-pid"}]},
+        }
+        assert should_respond(msg, client) is False
+
+    def test_content_scan_matches_name_with_space(self):
+        """Counterpart to the previous test: the fallback content
+        scan must still recognise names containing whitespace, which
+        the server's ID/legacy regexes can't capture as a single
+        token."""
+        client = _make_client(agent_name="Alice Kim")
+        msg = {
+            "participant_id": "human-pid",
+            "content": "@Alice Kim 봐줄래?",
+            "metadata": {"mentions": [{"type": "legacy", "name": "Bob"}]},
         }
         assert should_respond(msg, client) is True
 
