@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from doorae.api.v1.invites import _require_room_admin_or_owner
 from doorae.auth.dependencies import Identity, GuestClaims
 from doorae.db.models import Agent, Participant, Room, User
 from doorae.dependencies import (
@@ -292,6 +293,136 @@ async def add_participant(
                 await manager.send_to(pid, user_frame)
 
     return participant
+
+
+@router.delete(
+    "/{room_id}/participants/{participant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_participant(
+    room_id: str,
+    participant_id: str,
+    request: Request,
+    # Guests cannot manage membership (§11.5). ``forbid_guest`` yields
+    # a user or agent identity; ``_require_room_admin_or_owner`` below
+    # further restricts to global admins or room admin/owner roles.
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a participant (user or agent) from a room.
+
+    Authorisation is 403-before-404: non-admin non-members get 403
+    regardless of whether the participant or room exists, mirroring
+    the invites endpoint policy (see api/v1/invites.py).
+
+    Guard rails:
+    - Caller cannot remove themselves — they should leave via a
+      dedicated flow. Returns 400 with ``"Use leave-room instead"``.
+    - Removing the last admin/owner in a room is refused with 409 to
+      avoid orphaning the room.
+    - If the removed participant is the room's representative agent,
+      ``Room.representative_agent_id`` is cleared atomically in the
+      same transaction to avoid dangling references.
+
+    Invite revocation for removed guests is intentionally NOT
+    performed here: ``require_room_member`` on the WS side will reject
+    any further action from a user with no Participant row, so the
+    guest session is effectively neutralised by the DELETE alone.
+
+    ``Message.participant_id`` is ``ON DELETE SET NULL`` (migration
+    004) so chat history is preserved when a participant is removed.
+    """
+    # 1. Authz FIRST — do not leak room/participant existence to
+    #    callers who would 403 regardless. Matches invites.py ordering.
+    await _require_room_admin_or_owner(room_id, identity, db)
+
+    # 2. Load the target participant row.
+    target_stmt = select(Participant).where(
+        Participant.id == participant_id,
+        Participant.room_id == room_id,
+    )
+    target = (await db.execute(target_stmt)).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Participant not found")
+
+    # 3. Self-removal guard — direct this to the (future) leave flow.
+    if (
+        identity.kind == "user"
+        and target.user_id is not None
+        and target.user_id == identity.id
+    ) or (
+        identity.kind == "agent"
+        and target.agent_id is not None
+        and target.agent_id == identity.id
+    ):
+        raise HTTPException(status_code=400, detail="Use leave-room instead")
+
+    # 4. Last-admin guard. Prevent orphaning a room by checking
+    #    whether removing this row would leave zero admin/owner
+    #    participants. We count admin/owner rows in the room and
+    #    compute the post-delete count inline rather than running a
+    #    second query — SQLite/PG both promise snapshot consistency
+    #    within this session.
+    if target.role in ("admin", "owner"):
+        admin_count_stmt = select(Participant).where(
+            Participant.room_id == room_id,
+            Participant.role.in_(("admin", "owner")),
+        )
+        admins = (await db.execute(admin_count_stmt)).scalars().all()
+        remaining = sum(1 for a in admins if a.id != target.id)
+        if remaining == 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove the last admin/owner of the room",
+            )
+
+    # 5. If the removed participant is the room's representative
+    #    agent, clear the field BEFORE deleting the row — keeps the
+    #    FK invariant even if the DB skips the SET NULL cascade.
+    if target.agent_id is not None:
+        room_stmt = select(Room).where(Room.id == room_id)
+        room = (await db.execute(room_stmt)).scalar_one_or_none()
+        if room is not None and room.representative_agent_id == target.agent_id:
+            room.representative_agent_id = None
+
+    # 6. Capture a snapshot for the broadcast BEFORE the delete — we
+    #    still want ``user_id`` (or empty string for agent removals)
+    #    in the outgoing frame, and we need the list of remaining
+    #    subscribers who aren't the departed participant.
+    removed_user_id = target.user_id or ""
+
+    # 7. Find remaining subscribers (all OTHER participants in the
+    #    room). We deliberately exclude ``target.id`` so we don't send
+    #    to the socket that's about to be disconnected anyway — and
+    #    so we match the "existing members" semantics used by the
+    #    ``added`` broadcast in auth/routes.py and add_participant.
+    other_pids = (
+        await db.execute(
+            select(Participant.id).where(
+                Participant.room_id == room_id,
+                Participant.id != target.id,
+            )
+        )
+    ).scalars().all()
+
+    # 8. Delete the row and commit.
+    await db.execute(delete(Participant).where(Participant.id == target.id))
+    await db.commit()
+
+    # 9. Broadcast ``RoomMembershipChangedOut`` to remaining subscribers.
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        from doorae.ws.protocol import RoomMembershipChangedOut
+
+        frame = RoomMembershipChangedOut(
+            action="removed",
+            room_id=room_id,
+            user_id=removed_user_id,
+        )
+        for pid in other_pids:
+            await manager.send_to(pid, frame)
+
+    return None
 
 
 class RoomUpdate(BaseModel):

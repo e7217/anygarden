@@ -471,3 +471,338 @@ class TestRepresentativeAgent:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 400
+
+
+class TestRemoveParticipant:
+    """Tests for DELETE /api/v1/rooms/{room_id}/participants/{participant_id}."""
+
+    @pytest_asyncio.fixture()
+    async def removal_env(self, config: DooraeSettings):
+        """Room with an owner, a regular member, an agent (representative),
+        and an outsider (not a member of the room)."""
+        engine = build_engine(config.db_url)
+        session_factory = build_session_factory(engine)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            owner = User(email="owner@doorae.io", password_hash="x")
+            member = User(email="member@doorae.io", password_hash="x")
+            outsider = User(email="outsider@doorae.io", password_hash="x")
+            admin = User(email="admin@doorae.io", password_hash="x", is_admin=True)
+            db.add_all([owner, member, outsider, admin])
+            await db.flush()
+
+            project = Project(name="rm-proj")
+            db.add(project)
+            await db.flush()
+
+            agent = Agent(name="rep-bot", engine="codex")
+            db.add(agent)
+            await db.flush()
+
+            room = Room(
+                project_id=project.id,
+                name="rm-room",
+                representative_agent_id=agent.id,
+            )
+            db.add(room)
+            await db.flush()
+
+            owner_part = Participant(room_id=room.id, user_id=owner.id, role="owner")
+            member_part = Participant(room_id=room.id, user_id=member.id, role="member")
+            agent_part = Participant(room_id=room.id, agent_id=agent.id, role="member")
+            db.add_all([owner_part, member_part, agent_part])
+            await db.flush()
+
+            await db.commit()
+            for obj in (owner, member, outsider, admin, project, agent, room,
+                        owner_part, member_part, agent_part):
+                await db.refresh(obj)
+
+            owner_token = create_user_token(
+                owner.id, owner.email, False, secret=config.jwt_secret
+            )
+            member_token = create_user_token(
+                member.id, member.email, False, secret=config.jwt_secret
+            )
+            outsider_token = create_user_token(
+                outsider.id, outsider.email, False, secret=config.jwt_secret
+            )
+            admin_token = create_user_token(
+                admin.id, admin.email, True, secret=config.jwt_secret
+            )
+
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = session_factory
+
+            yield {
+                "app": app,
+                "config": config,
+                "room": room,
+                "agent": agent,
+                "owner": owner,
+                "member": member,
+                "outsider": outsider,
+                "admin": admin,
+                "owner_part": owner_part,
+                "member_part": member_part,
+                "agent_part": agent_part,
+                "owner_token": owner_token,
+                "member_token": member_token,
+                "outsider_token": outsider_token,
+                "admin_token": admin_token,
+            }
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_owner_removes_user_participant(self, removal_env) -> None:
+        """Owner removes a regular user: 204, row gone, broadcast received."""
+        import json
+
+        app = removal_env["app"]
+        room = removal_env["room"]
+        owner_part = removal_env["owner_part"]
+        member_part = removal_env["member_part"]
+        owner_token = removal_env["owner_token"]
+
+        from doorae.ws.manager import ConnectionManager
+
+        if not getattr(app.state, "connection_manager", None):
+            app.state.connection_manager = ConnectionManager()
+        manager = app.state.connection_manager
+
+        received: list[str] = []
+
+        class FakeWS:
+            async def send_text(self, data: str) -> None:
+                received.append(data)
+
+        ws = FakeWS()
+        # Subscribe the owner's WS — they must receive the broadcast.
+        await manager.subscribe(room.id, owner_part.id, ws)  # type: ignore[arg-type]
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(
+                    f"/api/v1/rooms/{room.id}/participants/{member_part.id}",
+                    headers={"Authorization": f"Bearer {owner_token}"},
+                )
+                assert resp.status_code == 204
+
+                # Row is gone
+                sf = app.state.session_factory
+                async with sf() as db:
+                    from sqlalchemy import select as _select
+                    result = await db.execute(
+                        _select(Participant).where(Participant.id == member_part.id)
+                    )
+                    assert result.scalar_one_or_none() is None
+        finally:
+            await manager.unsubscribe(owner_part.id)
+
+        frames = [json.loads(raw) for raw in received]
+        removed = [f for f in frames if f.get("type") == "room_membership_changed"]
+        assert len(removed) == 1
+        assert removed[0]["action"] == "removed"
+        assert removed[0]["room_id"] == room.id
+        assert removed[0]["user_id"] == removal_env["member"].id
+
+    @pytest.mark.asyncio
+    async def test_owner_removes_agent_clears_representative(self, removal_env) -> None:
+        """Removing the representative agent must clear ``Room.representative_agent_id``."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        agent_part = removal_env["agent_part"]
+        owner_token = removal_env["owner_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/{agent_part.id}",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            assert resp.status_code == 204
+
+        sf = app.state.session_factory
+        async with sf() as db:
+            from sqlalchemy import select as _select
+            result = await db.execute(_select(Room).where(Room.id == room.id))
+            reloaded = result.scalar_one()
+            assert reloaded.representative_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_rank_and_file_member_cannot_remove(self, removal_env) -> None:
+        """A regular member gets 403 when attempting removal."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        agent_part = removal_env["agent_part"]
+        member_token = removal_env["member_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/{agent_part.id}",
+                headers={"Authorization": f"Bearer {member_token}"},
+            )
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_outsider_gets_403_not_404(self, removal_env) -> None:
+        """Non-member, non-admin gets 403 even for unknown participant/room IDs
+        to avoid existence enumeration."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        outsider_token = removal_env["outsider_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Unknown participant id inside a real room
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/does-not-exist",
+                headers={"Authorization": f"Bearer {outsider_token}"},
+            )
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_guest_forbidden(self, removal_env) -> None:
+        """A guest token is rejected by ``forbid_guest`` before any DB work."""
+        from doorae.auth.jwt import create_guest_token
+        from datetime import datetime, timedelta, timezone
+
+        app = removal_env["app"]
+        room = removal_env["room"]
+        member_part = removal_env["member_part"]
+        config = removal_env["config"]
+
+        # Create a guest user and token bound to this room
+        sf = app.state.session_factory
+        async with sf() as db:
+            guest = User(
+                email=None,
+                password_hash=None,
+                is_anonymous=True,
+                display_name="G",
+            )
+            db.add(guest)
+            await db.commit()
+            await db.refresh(guest)
+
+        guest_token = create_guest_token(
+            user_id=guest.id,
+            room_id=room.id,
+            invite_id="dummy",
+            display_name="G",
+            secret=config.jwt_secret,
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/{member_part.id}",
+                headers={"Authorization": f"Bearer {guest_token}"},
+            )
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_self_removal_returns_400(self, removal_env) -> None:
+        """Owner trying to remove themselves via this endpoint gets 400."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        owner_part = removal_env["owner_part"]
+        owner_token = removal_env["owner_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/{owner_part.id}",
+                headers={"Authorization": f"Bearer {owner_token}"},
+            )
+            assert resp.status_code == 400
+            assert "leave-room" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_removing_last_admin_returns_409(self, config: DooraeSettings) -> None:
+        """Removing the only admin/owner of a room returns 409."""
+        engine = build_engine(config.db_url)
+        session_factory = build_session_factory(engine)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            global_admin = User(email="ga@doorae.io", password_hash="x", is_admin=True)
+            sole_owner = User(email="sole@doorae.io", password_hash="x")
+            db.add_all([global_admin, sole_owner])
+            await db.flush()
+
+            project = Project(name="la-proj")
+            db.add(project)
+            await db.flush()
+
+            room = Room(project_id=project.id, name="la-room")
+            db.add(room)
+            await db.flush()
+
+            sole_part = Participant(room_id=room.id, user_id=sole_owner.id, role="owner")
+            db.add(sole_part)
+            await db.flush()
+
+            await db.commit()
+            for obj in (global_admin, sole_owner, project, room, sole_part):
+                await db.refresh(obj)
+
+            admin_token = create_user_token(
+                global_admin.id, global_admin.email, True, secret=config.jwt_secret
+            )
+
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = session_factory
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(
+                    f"/api/v1/rooms/{room.id}/participants/{sole_part.id}",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                )
+                assert resp.status_code == 409
+        finally:
+            await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_unknown_participant_with_admin_returns_404(self, removal_env) -> None:
+        """Admin caller + non-existent participant id → 404."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        admin_token = removal_env["admin_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/does-not-exist",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_global_admin_can_remove_without_membership(self, removal_env) -> None:
+        """Global admin is not a room member but can still remove."""
+        app = removal_env["app"]
+        room = removal_env["room"]
+        member_part = removal_env["member_part"]
+        admin_token = removal_env["admin_token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}/participants/{member_part.id}",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert resp.status_code == 204

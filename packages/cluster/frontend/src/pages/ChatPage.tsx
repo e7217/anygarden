@@ -174,6 +174,46 @@ export default function ChatPage() {
     [participants],
   )
 
+  // Mirror the server auth rule (api/v1/invites.py::_require_room_admin_or_owner):
+  // global admin OR a room-level admin/owner Participant. The server
+  // stays the sole authority; this flag only controls whether the UI
+  // bothers rendering the X button.
+  const canRemoveParticipants = useMemo(() => {
+    if (user?.is_admin) return true
+    const myRole = myParticipantId ? participants[myParticipantId]?.role : undefined
+    return myRole === 'admin' || myRole === 'owner'
+  }, [user, myParticipantId, participants])
+
+  const handleRemoveParticipant = useCallback(
+    async (participantId: string) => {
+      if (!selectedRoom) return
+      try {
+        const resp = await apiFetch(
+          `/api/v1/rooms/${selectedRoom}/participants/${participantId}`,
+          { method: 'DELETE' },
+        )
+        if (resp.status === 204) {
+          refreshParticipants()
+          return
+        }
+        // Surface the backend's detail string via ``alert`` — other
+        // chat-page flows (representative set, stop-all-agents) rely
+        // on the same plain-alert escape hatch, so this stays
+        // consistent. A richer toast mechanism can be retrofitted in
+        // a follow-up.
+        let detail = `Failed to remove participant (${resp.status})`
+        try {
+          const body = await resp.json()
+          if (body && typeof body.detail === 'string') detail = body.detail
+        } catch { /* ignore body parse */ }
+        window.alert(detail)
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : String(err))
+      }
+    },
+    [selectedRoom, refreshParticipants],
+  )
+
   const handleSetRepresentative = useCallback(async (agentId: string | null) => {
     if (!selectedRoom) return
     await apiFetch(`/api/v1/rooms/${selectedRoom}/representative`, {
@@ -253,6 +293,7 @@ export default function ChatPage() {
                 open={participantsOpen}
                 onClose={() => setParticipantsOpen(false)}
                 myParticipantId={myParticipantId}
+                onRemove={canRemoveParticipants ? handleRemoveParticipant : undefined}
               />
             </div>
             {/* Chat / Tasks tab bar + Search */}

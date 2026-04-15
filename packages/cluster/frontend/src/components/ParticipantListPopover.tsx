@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { X } from 'lucide-react'
 import type { Participant } from '@/pages/ChatPage'
 
 interface Props {
@@ -7,6 +8,16 @@ interface Props {
   onClose: () => void
   myParticipantId?: string | null
   anchorRight?: boolean
+  /** When provided, renders a remove (✕) button for removable rows.
+   *  The server remains the sole authority on who may be removed —
+   *  the parent should only pass this when the caller is a global
+   *  admin or a room admin/owner. Rows for the caller themselves and
+   *  for ``owner``-role participants are never shown a button (the
+   *  first to avoid accidental self-ejection via this endpoint; the
+   *  second because owner removal will arrive in a later PR with its
+   *  own confirmation flow).
+   */
+  onRemove?: (participantId: string) => Promise<void> | void
 }
 
 /**
@@ -24,6 +35,7 @@ export default function ParticipantListPopover({
   onClose,
   myParticipantId,
   anchorRight = true,
+  onRemove,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -86,6 +98,15 @@ export default function ParticipantListPopover({
       <ul className="max-h-80 overflow-y-auto py-1">
         {sorted.map((p) => {
           const isMe = p.id === myParticipantId
+          // Show the remove button only when all of these hold:
+          //  - caller has the capability (onRemove provided)
+          //  - row is not the caller themselves (self-removal is 400
+          //    on the server; the correct path is a future leave flow)
+          //  - row is not a room owner (owner removal is out of scope
+          //    for this PR; matches the server policy of keeping at
+          //    least one admin/owner alive)
+          const canRemoveThis =
+            !!onRemove && !isMe && p.role !== 'owner'
           return (
             <li
               key={p.id}
@@ -120,6 +141,26 @@ export default function ParticipantListPopover({
                   <span className="rounded-[var(--radius-sm)] bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand)]">
                     {p.role}
                   </span>
+                )}
+                {canRemoveThis && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${p.display_name || 'participant'} from this room`}
+                    className="ml-1 rounded-[var(--radius-sm)] p-1 text-red-600 hover:bg-red-50"
+                    onClick={() => {
+                      // A native confirm keeps the component low-
+                      // dependency; this is a rare destructive
+                      // operation and the prompt is enough of a speed
+                      // bump to prevent slips.
+                      const name = p.display_name || 'this participant'
+                      if (!window.confirm(`Remove ${name} from this room?`)) {
+                        return
+                      }
+                      void onRemove!(p.id)
+                    }}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 )}
               </span>
             </li>
