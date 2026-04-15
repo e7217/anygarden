@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Hash, Users, UserPlus, Menu, ChevronLeft, FolderPlus, Settings, OctagonX, Crown } from 'lucide-react'
+import { Hash, Users, UserPlus, Menu, ChevronLeft, FolderPlus, Settings, OctagonX, Crown, Link2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 interface ParentBreadcrumb {
@@ -25,6 +25,7 @@ interface RoomHeaderProps {
   onManageAgents?: () => void
   onCreateSubRoom?: () => void
   onEditRoom?: () => void
+  onManageInvites?: () => void
   onStopAllAgents?: () => void
   onOpenSidebar?: () => void
 }
@@ -40,6 +41,7 @@ export default function RoomHeader({
   onManageAgents,
   onCreateSubRoom,
   onEditRoom,
+  onManageInvites,
   onStopAllAgents,
   onOpenSidebar,
 }: RoomHeaderProps) {
@@ -145,6 +147,17 @@ export default function RoomHeader({
           >
             <UserPlus className="mr-1 h-4 w-4" />
             <span className="hidden sm:inline">Agents</span>
+          </Button>
+        )}
+        {onManageInvites && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onManageInvites}
+            title="Manage guest invite links"
+          >
+            <Link2 className="mr-1 h-4 w-4" />
+            <span className="hidden sm:inline">Invites</span>
           </Button>
         )}
         <Badge variant={connected ? 'default' : 'destructive'}>
