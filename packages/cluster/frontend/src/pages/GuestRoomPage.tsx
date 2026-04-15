@@ -124,18 +124,19 @@ export default function GuestRoomPage() {
     roomId ?? null,
   )
 
-  // Agent-only mention autocomplete. §11.6 disallows room mentions
-  // for guests at the server level; surfacing them in the picker
-  // would just produce a confusing 403 path.
-  const mentionAgents: MentionOption[] = useMemo(
+  // Surface every participant in the ``@``-autocomplete: the server
+  // already restricts a guest's room scope, and any mention outside
+  // the current room is rejected by the ``@user``-token resolution
+  // rules (§11.6). Mirrors the shape used by ``ChatPage`` so the
+  // renderer/agent-routing gates see the same ``participant.id``
+  // token namespace downstream.
+  const mentionParticipants: MentionOption[] = useMemo(
     () =>
-      Object.values(participants)
-        .filter((p) => p.kind === 'agent')
-        .map((p) => ({
-          id: p.user_id || p.agent_id || p.id,
-          display: p.display_name,
-          kind: 'agent' as const,
-        })),
+      Object.values(participants).map((p) => ({
+        id: p.id,
+        display: p.display_name,
+        kind: (p.kind === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
+      })),
     [participants],
   )
 
@@ -236,7 +237,7 @@ export default function GuestRoomPage() {
           onSend={send}
           onTyping={sendTyping}
           disabled={!connected}
-          mentionUsers={mentionAgents}
+          mentionUsers={mentionParticipants}
           // Empty ``mentionRooms`` disables the ``#`` autocomplete —
           // guests can't route cross-room anyway (server strips the
           // mention, §11.6). Leaving the popover in would just be
