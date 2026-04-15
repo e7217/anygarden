@@ -343,6 +343,18 @@ class Participant(Base):
     )
     role: Mapped[str] = mapped_column(String(32), default="member")
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Sidebar pin state — user can drag a room to a top "pinned"
+    # section in the sidebar and reorder within it. ``pinned=False``
+    # keeps the room in the default (alphabetical) section; ``True``
+    # promotes it to the pinned section ordered by ``sort_order``
+    # ascending. Stored per-Participant so each user's order is
+    # independent. ``sort_order`` uses sparse integer spacing (1024
+    # apart) so mid-list reorders don't have to renumber the whole
+    # list — see ``rooms.service.reorder_pinned_rooms``.
+    pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    sort_order: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
 
     room: Mapped["Room"] = relationship("Room", back_populates="participants")
     user: Mapped[Optional["User"]] = relationship("User")
@@ -351,6 +363,17 @@ class Participant(Base):
         "Message",
         back_populates="participant",
         passive_deletes=True,
+    )
+
+    __table_args__ = (
+        # Accelerates the "load my pinned rooms in order" query that
+        # the sidebar runs on every boot and after every reorder.
+        Index(
+            "ix_participants_user_pinned_order",
+            "user_id",
+            "pinned",
+            "sort_order",
+        ),
     )
 
 
