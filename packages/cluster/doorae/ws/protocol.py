@@ -80,6 +80,21 @@ class JoinRoomOut(BaseModel):
     participant_id: str
 
 
+class RoomMembershipChangedOut(BaseModel):
+    """Notify a user that their membership in a room has changed.
+
+    Sent over an existing user WS connection so the frontend can
+    refresh its room list (sidebar) without polling. Distinct from
+    ``JoinRoomOut`` which the agent SDK uses to trigger an automatic
+    WS connection to the new room.
+    """
+
+    type: Literal["room_membership_changed"] = "room_membership_changed"
+    action: Literal["added", "removed"]
+    room_id: str
+    user_id: str
+
+
 class TypingOut(BaseModel):
     type: Literal["typing"] = "typing"
     room_id: str
@@ -98,4 +113,12 @@ class ErrorOut(BaseModel):
     detail: str
 
 
-OutgoingFrame = MessageOut | RoomCreatedOut | JoinRoomOut | TypingOut | WelcomeOut | ErrorOut
+OutgoingFrame = (
+    MessageOut
+    | RoomCreatedOut
+    | JoinRoomOut
+    | RoomMembershipChangedOut
+    | TypingOut
+    | WelcomeOut
+    | ErrorOut
+)

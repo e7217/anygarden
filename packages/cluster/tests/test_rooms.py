@@ -197,6 +197,64 @@ class TestRoomCRUD:
             assert data["role"] == "member"
 
     @pytest.mark.asyncio
+    async def test_add_participant_notifies_user(self, room_env) -> None:
+        """Adding an existing user to a new room pushes a
+        ``room_membership_changed`` frame over the user's existing WS."""
+        import json
+
+        app = room_env["app"]
+        existing_room = room_env["room"]
+        existing_part = room_env["participant"]
+        user = room_env["user"]
+        token = room_env["token"]
+
+        from doorae.ws.manager import ConnectionManager
+
+        if not getattr(app.state, "connection_manager", None):
+            app.state.connection_manager = ConnectionManager()
+        manager = app.state.connection_manager
+
+        received: list[str] = []
+
+        class FakeWS:
+            async def send_text(self, data: str) -> None:
+                received.append(data)
+
+        ws = FakeWS()
+        await manager.subscribe(existing_room.id, existing_part.id, ws)  # type: ignore[arg-type]
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                project = room_env["project"]
+                resp = await client.post(
+                    "/api/v1/rooms",
+                    json={"project_id": project.id, "name": "notif-target"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                new_room_id = resp.json()["id"]
+
+                resp = await client.post(
+                    f"/api/v1/rooms/{new_room_id}/participants",
+                    json={"user_id": user.id, "role": "member"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                assert resp.status_code == 201
+        finally:
+            await manager.unsubscribe(existing_part.id)
+
+        membership_frames = [
+            json.loads(raw)
+            for raw in received
+            if json.loads(raw).get("type") == "room_membership_changed"
+        ]
+        assert len(membership_frames) == 1
+        frame = membership_frames[0]
+        assert frame["action"] == "added"
+        assert frame["room_id"] == new_room_id
+        assert frame["user_id"] == user.id
+
+    @pytest.mark.asyncio
     async def test_delete_room(self, room_env) -> None:
         app = room_env["app"]
         project = room_env["project"]
