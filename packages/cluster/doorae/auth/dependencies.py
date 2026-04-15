@@ -10,7 +10,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.auth.jwt import InvalidToken, UserClaims, verify_user_token
+from doorae.auth.jwt import (
+    GuestClaims,
+    InvalidToken,
+    UserClaims,
+    decode_any_user_token,
+)
 from doorae.auth.machine_token import verify_machine_token_hash
 from doorae.auth.token import verify_token_hash
 from doorae.db.models import AgentToken, MachineToken, Participant
@@ -18,11 +23,20 @@ from doorae.db.models import AgentToken, MachineToken, Participant
 
 @dataclass(frozen=True, slots=True)
 class Identity:
-    """Represents an authenticated caller — either a human or an agent."""
+    """Represents an authenticated caller.
 
-    kind: str  # "user" | "agent"
+    ``kind`` is one of:
+
+    - ``"user"``: registered account (``claims`` is :class:`UserClaims`).
+    - ``"agent"``: agent API token holder (``claims`` is ``None``).
+    - ``"guest"``: anonymous invite-granted session
+      (``claims`` is :class:`GuestClaims`; the ``room_id`` binding
+      MUST be enforced by any endpoint that scopes data per room).
+    """
+
+    kind: str  # "user" | "agent" | "guest"
     id: str
-    claims: Optional[UserClaims] = None
+    claims: Optional[UserClaims | GuestClaims] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,16 +78,19 @@ async def get_identity(
             detail="Missing authentication token",
         )
 
-    # Try JWT first (user tokens)
+    # Try JWT first (user or guest tokens; same HS256 secret, the
+    # payload's ``is_guest`` flag selects the claim shape).
     if not token.startswith("agt_"):
         try:
-            claims = verify_user_token(token, secret=jwt_secret)
-            return Identity(kind="user", id=claims.user_id, claims=claims)
+            claims = decode_any_user_token(token, secret=jwt_secret)
         except InvalidToken:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
             )
+        if isinstance(claims, GuestClaims):
+            return Identity(kind="guest", id=claims.user_id, claims=claims)
+        return Identity(kind="user", id=claims.user_id, claims=claims)
 
     # Agent token — O(1) lookup via AgentToken table using lookup_hint
     hint = token[:12]
@@ -145,9 +162,26 @@ async def require_room_member(
     identity: Identity,
     db: AsyncSession,
 ) -> Participant:
-    """Return the :class:`Participant` row or raise 403."""
+    """Return the :class:`Participant` row or raise 403.
+
+    For guests we impose two checks simultaneously: the caller must
+    hold a Participant row in *room_id* (same as registered users)
+    AND the JWT's ``room_id`` claim must match. Without the claim
+    check, a guest whose Participant happens to exist in more than
+    one room (via a future code path or a hand-edited DB) could
+    authenticate outside its intended room.
+    """
     stmt = select(Participant).where(Participant.room_id == room_id)
-    if identity.kind == "user":
+    if identity.kind in ("user", "guest"):
+        if (
+            identity.kind == "guest"
+            and isinstance(identity.claims, GuestClaims)
+            and identity.claims.room_id != room_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Guest token bound to a different room",
+            )
         stmt = stmt.where(Participant.user_id == identity.id)
     else:
         stmt = stmt.where(Participant.agent_id == identity.id)

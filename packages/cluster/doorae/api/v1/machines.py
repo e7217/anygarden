@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from doorae.auth.dependencies import Identity
 from doorae.auth.machine_token import generate_machine_token, hash_machine_token
 from doorae.db.models import Agent, Machine, MachineActivityLog, MachineEngine, MachineToken
-from doorae.dependencies import get_current_identity, get_db
+from doorae.dependencies import forbid_guest, get_db
 
 router = APIRouter(prefix="/api/v1/machines", tags=["machines"])
 
@@ -55,7 +55,9 @@ class MachineCreateOut(MachineOut):
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=MachineCreateOut)
 async def register_machine(
     body: MachineCreate,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Register a new machine and return a one-time machine token."""
@@ -97,7 +99,9 @@ async def register_machine(
 
 @router.get("", response_model=list[MachineOut])
 async def list_machines(
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List machines owned by the current user (admin sees all)."""
@@ -114,7 +118,9 @@ async def list_machines(
 @router.get("/{machine_id}", response_model=MachineOut)
 async def get_machine(
     machine_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a single machine's details."""
@@ -126,7 +132,9 @@ async def get_machine(
 async def update_machine(
     machine_id: str,
     body: MachineUpdate,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Update machine settings (name, hostname, labels)."""
@@ -143,7 +151,9 @@ async def delete_machine(
     machine_id: str,
     request: Request,
     force: bool = False,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a machine, stopping running agents and disconnecting the daemon.
@@ -217,7 +227,9 @@ async def regenerate_machine_token(
     machine_id: str,
     request: Request,
     revoke_only: bool = False,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke existing tokens, issue a new one, and update the daemon.
@@ -278,7 +290,9 @@ async def regenerate_machine_token(
 @router.post("/{machine_id}/drain", status_code=200)
 async def drain_machine(
     machine_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Set machine status to ``draining`` (no new agents will be placed)."""
@@ -292,7 +306,9 @@ async def drain_machine(
 @router.post("/{machine_id}/tokens/revoke", status_code=200)
 async def revoke_machine_token(
     machine_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke all active tokens for a machine."""
@@ -350,7 +366,9 @@ class MachineEngineOut(BaseModel):
 @router.get("/{machine_id}/agents", response_model=list[MachineAgentOut])
 async def list_machine_agents(
     machine_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List agents placed on a specific machine."""
@@ -388,7 +406,9 @@ async def list_machine_agents(
 @router.get("/{machine_id}/engines", response_model=list[MachineEngineOut])
 async def list_machine_engines(
     machine_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List engines available on a specific machine."""
@@ -415,7 +435,9 @@ class MachineActivityOut(BaseModel):
 async def get_machine_activity(
     machine_id: str,
     limit: int = 50,
-    identity: Identity = Depends(get_current_identity),
+    # Guests are not account holders; machines are a registered-user
+    # concern only.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Return recent activity events for a machine."""
