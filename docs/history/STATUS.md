@@ -1,6 +1,6 @@
 ---
 title: Implementation Status
-updated: 2026-04-14
+updated: 2026-04-15
 auto_generated: true
 ---
 
@@ -15,10 +15,47 @@ auto_generated: true
 | reverted | 1 | feat/web-ui에서 작업 후 롤백 |
 | planned | 2 | 설계만 있고 코드 없음 (Phase 2, 4) |
 
-**Tests**: 436개 (server 235 + SDK 84 + machine 117). `test_e2e_real_conversation.py` 는 실제 codex 서브프로세스를 띄우는 dev-only `pytest.mark.slow` 테스트라 정규 실행에서 `addopts = "-m 'not slow'"` 로 자동 제외.
+**Tests**: 610개 (cluster 316 + SDK/agent 87 + machine 207). `test_e2e_real_conversation.py` 는 실제 codex 서브프로세스를 띄우는 dev-only `pytest.mark.slow` 테스트라 정규 실행에서 `addopts = "-m 'not slow'"` 로 자동 제외.
 **Versions**: doorae-server 0.2.0, doorae-sdk 0.1.0, doorae-machine 0.1.0
 
 ## Recent sessions
+
+### 2026-04-15 — 익명 게스트 참여 RFC + 룸 헤더 정리
+
+브랜치: `docs/guest-rfc`, `feat/guest-*` 시리즈, `feat/participant-list-visibility`, `fix/participant-toggle-hover`, `feat/room-header-overflow-menu` (PR #23–#34, 13 PR)
+
+**Anonymous guest participation (RFC #22 / PR A–H, #23–#31)**:
+- `User.is_anonymous` + `display_name` + `email/password_hash` nullable, partial unique index `ux_users_email_not_null` (마이그레이션 013)
+- `RoomInviteLink` 테이블 + admin API (`/rooms/{id}/invites` POST/GET + `/invites/{id}` DELETE), argon2 해시 + `inv_` 12자 lookup hint, 10/min/user rate limit + 룸당 활성 상한 20 (마이그레이션 014)
+- `Identity.kind="guest"`, `GuestClaims` JWT (`room_id` 바인딩), `POST /auth/guest` 토큰 발급, `forbid_guest` dependency + `require_room_member`에 게스트 분기
+- WS `SendFrame` 게스트 분기: stricter cooldown (cap=3, refill=0.5/s), 멘션 allowlist `{user, legacy}` (`#room` 스트립), `GuestRoomAggregateLimiter` (룸당 20/min), representative 자동 합류 defense-in-depth
+- 읽기 경로 게스트 격리: `list_rooms`에 `Room.id == claims.room_id` 추가 필터, `get_room`/`sub-rooms`에 403-first, `/projects` + `/saved` + `/machines` 전면 `forbid_guest`, `messages` 라우터 `require_room_member` 호출
+- 프론트 호스트: `RoomInviteDialog` (생성/복사 1회/revoke), 버튼 게이팅 `admin OR room admin/owner`
+- 프론트 게스트: `/invite/:token` 닉네임 폼 + `/g/:roomId` 단일 룸 셸, 기존 `doorae_token`을 `doorae_token_prelogin`에 백업 후 덮어써 로그아웃 시 복원, 401/403 시 자동 이탈
+- 운영: `doorae.guest.anonymize` CLI + async util (30일 경과 revoked/expired 게스트의 display_name을 `(former guest)` 센티넬로 덮어씀, idempotent), Prometheus 메트릭 4종 (`guest_active`, `invites_created_total`, `invites_used_total`, `guest_rate_limited_total{scope}`)
+- 디자인 문서 `docs/design/11-anonymous-guests.md` 전체 집필 (정책/토큰 포맷/권한 매트릭스/rate limit/라이프사이클/구현 현황 맵)
+- 각 PR마다 전문가 에이전트 1회 코드 리뷰 후 머지 — 주요 critical 이슈 10+건 반영 (SQLite partial index 마이그레이션 패턴, authz 403-before-404 순서, TOCTOU 문서화, 누수 guard 플래그, 포커스 트랩 대신 role=group 등)
+
+**WS 프로토콜 문서 싱크 (PR #21, 선행 작업)**:
+- `docs/design/01-architecture.md §1.5` C2S/S2C 프레임 표 재작성 — `protocol.py` 실제 정의와 1:1 일치. `send_message`/`leave_room`/`create_sub_room`/`message_ack`/`participant_joined`/`_left`/`rate_limited`/`resync_required` 삭제, `create_room`/`join_room`(S2C)/`room_membership_changed` 추가
+
+**Participant list popover (PR #32)**:
+- `ParticipantOut`에 `is_anonymous: bool` (default False, 외부 호환 유지)
+- `ParticipantListPopover` 컴포넌트 — agent → user → guest 그룹 정렬, 배지 (guest면 role 배지 억제), outside-click/Escape 닫기, `role="group"` (포커스 트랩 없음)
+- `RoomHeader`의 참여자 수 아이콘을 클릭 가능한 토글 버튼으로 전환 (모바일 포함). `ChatPage`와 `GuestRoomPage` 모두 같은 컴포넌트 사용 → 게스트도 로스터 확인 가능
+- 게스트 프라이버시 경계: display_name / kind / role / is_anonymous 만 노출, email/user_id 비노출 — 디자인 문서 §11.5에 명문화
+
+**Ghost-button hover 규약 준수 (PR #33)**:
+- 참여자 토글이 `hover:bg-[var(--color-background-muted)]`로 렌더링되면 해당 변수가 정의 안 돼 하이라이트 누락 → `hover:bg-black/5 cursor-pointer`로 교정 (전역 ghost 버튼 컨벤션, STATUS.md:58 참조)
+
+**룸 헤더 overflow 메뉴 (PR #34)**:
+- 관리자 룸에서 7개 이상의 인라인 버튼이 참여자 카운트까지 밀어내던 문제 해결
+- `RoomSettingsMenu` 신규: `…` 트리거 하나로 Sub-room / Edit / Invites / Manage agents / Stop All 을 묶음. Stop All은 separator + `text-red-600`로 파괴적 섹션 분리
+- 상태 표시(참여자 카운트, 대표 에이전트 select, 연결 배지)는 그대로 헤더에 유지 — "한눈에 읽는 룸 상태"는 클릭 없이
+- `pointerdown` outside-click (iOS Safari 지원), `role="group"` + `aria-haspopup="dialog"` (실제 구현하지 않는 메뉴 역할 semantic 피함), useEffect 전에 early return 두지 않음 (hooks 순서 안정)
+- UI 컨벤션 추가: **룸 헤더의 mutation 액션은 overflow 메뉴로, 상태 read-out은 인라인 유지** — 향후 버튼 신설 시 회귀 방지 기준
+
+**결과**: cluster 316(+81 from 235), SDK 87(+3), machine 207(+90). 총 610 tests.
 
 ### 2026-04-14 — DX 개선 + 에이전트 DM + 활동 히스토리 + 버그 수정
 
