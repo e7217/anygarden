@@ -1,13 +1,16 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useRooms, type Room } from '@/hooks/useRooms'
+import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
+import RoomEditDialog from '@/components/RoomEditDialog'
+import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Bot, Server, MessageSquare, X,
   Pin, PinOff, GripVertical,
@@ -108,11 +111,18 @@ interface SidebarProps {
 export default function Sidebar({ selectedRoom, open = false, onClose }: SidebarProps) {
   const { user, logout } = useAuth()
   const {
-    projects, rooms, agentDMs, createProject, createRoom, pinRoom,
-    reorderPinnedRooms,
+    projects, rooms, agentDMs, createProject, createRoom, fetchRooms,
+    pinRoom, reorderPinnedRooms,
   } = useRooms()
   const navigate = useNavigate()
   const location = useLocation()
+  const isAdmin = !!user?.is_admin
+
+  // Edit dialog state lives at the sidebar root (not inside
+  // ``SidebarRoomMenu``) so closing the menu doesn't unmount the
+  // dialog while the user is typing. ``editRoomId === null`` means
+  // the dialog is closed.
+  const [editRoomId, setEditRoomId] = useState<string | null>(null)
 
   // Pointer needs a small drag-distance activation so a simple
   // click on the room label still navigates — only a genuine drag
@@ -174,6 +184,52 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
       (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
     )
     return { pinnedRooms: allPinned, projectTrees: trees }
+  }, [rooms])
+
+  // Mirror of ChatPage.handleDeleteRoom (see ChatPage.tsx:217-250).
+  // Copied rather than extracted to a shared hook because the
+  // sidebar's control flow (navigate only when the deleted room is
+  // the selected one; refetch the project's rooms regardless) does
+  // not line up with ChatPage's single-room context. Keeping it
+  // inlined keeps the two call sites independently evolvable.
+  const handleDeleteRoom = useCallback(async (roomId: string, projectId: string, roomName: string) => {
+    const ok = window.confirm(
+      `이 룸 "${roomName}"을(를) 삭제하시겠습니까?\n\n` +
+        '룸의 모든 메시지가 사라지며, 하위 룸들은 최상위로 이동합니다. ' +
+        '되돌릴 수 없습니다.',
+    )
+    if (!ok) return
+    try {
+      const resp = await apiFetch(`/api/v1/rooms/${roomId}`, { method: 'DELETE' })
+      if (resp.status === 204) {
+        // The WS ``room_deleted`` broadcast will also trigger a
+        // full ``refetch`` via RoomsProvider's invalidate listener.
+        // The explicit fetchRooms here keeps the UI snappy for the
+        // acting user without waiting on the round-trip.
+        await fetchRooms(projectId)
+        if (selectedRoom === roomId) navigate('/')
+        return
+      }
+      let detail = `Failed to delete room (${resp.status})`
+      try {
+        const body = await resp.json()
+        if (body && typeof body.detail === 'string') detail = body.detail
+      } catch { /* ignore body parse */ }
+      window.alert(detail)
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
+  }, [fetchRooms, navigate, selectedRoom])
+
+  // ``editRoomId`` alone isn't enough for the refetch-after-save
+  // callback — we need the project id too. Build a room→project
+  // map from the same ``rooms`` store the tree renders from.
+  const roomProjectLookup = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const [pid, list] of Object.entries(rooms)) {
+      for (const r of list ?? []) m.set(r.id, pid)
+    }
+    return m
   }, [rooms])
 
   const handleCreateProject = async () => {
@@ -310,6 +366,12 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
                     selectedRoom={selectedRoom}
                     onGo={go}
                     onPin={(roomId) => { void pinRoom(roomId, true) }}
+                    isAdmin={isAdmin}
+                    projectId={project.id}
+                    onRename={(roomId) => setEditRoomId(roomId)}
+                    onDelete={(roomId, name) => {
+                      void handleDeleteRoom(roomId, project.id, name)
+                    }}
                   />
 
                   <button
@@ -361,6 +423,22 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Rename room dialog — reused from ChatPage's room settings
+          menu. Rendered only while ``editRoomId`` is set so the
+          load-on-mount effect inside the dialog fires once per
+          edit session, matching ChatPage's usage pattern. */}
+      {editRoomId && (
+        <RoomEditDialog
+          roomId={editRoomId}
+          open={editRoomId !== null}
+          onOpenChange={(o) => { if (!o) setEditRoomId(null) }}
+          onSaved={() => {
+            const pid = roomProjectLookup.get(editRoomId)
+            if (pid) void fetchRooms(pid)
+          }}
+        />
+      )}
 
       {/* New Room dialog */}
       <Dialog open={roomDialogOpen} onOpenChange={setRoomDialogOpen}>
@@ -461,27 +539,23 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
  * threads don't push the room label off the visible area in
  * the 256px sidebar.
  */
-function RoomTreeBranch({
-  nodes,
-  selectedRoom,
-  onGo,
-  onPin,
-}: {
+interface RoomTreeBranchProps {
   nodes: RoomTreeNode[]
   selectedRoom: string | null
   onGo: (path: string) => void
   onPin: (roomId: string) => void
-}) {
+  isAdmin: boolean
+  projectId: string
+  onRename: (roomId: string) => void
+  onDelete: (roomId: string, roomName: string) => void
+}
+
+function RoomTreeBranch(props: RoomTreeBranchProps) {
+  const { nodes, ...rest } = props
   return (
     <>
       {nodes.map(node => (
-        <RoomTreeNodeView
-          key={node.room.id}
-          node={node}
-          selectedRoom={selectedRoom}
-          onGo={onGo}
-          onPin={onPin}
-        />
+        <RoomTreeNodeView key={node.room.id} node={node} {...rest} />
       ))}
     </>
   )
@@ -492,12 +566,10 @@ function RoomTreeNodeView({
   selectedRoom,
   onGo,
   onPin,
-}: {
-  node: RoomTreeNode
-  selectedRoom: string | null
-  onGo: (path: string) => void
-  onPin: (roomId: string) => void
-}) {
+  isAdmin,
+  onRename,
+  onDelete,
+}: Omit<RoomTreeBranchProps, 'nodes' | 'projectId'> & { node: RoomTreeNode }) {
   // Cap the padding so that at depth >= 4 the label stays visible.
   // Deep threads are rare in practice and the user can still use
   // the room header's parent breadcrumb for navigation.
@@ -538,10 +610,17 @@ function RoomTreeNodeView({
             title="Pin to top"
             aria-label={`Pin ${node.room.name}`}
             data-testid={`sidebar-pin-${node.room.id}`}
-            className="mr-1 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
+            className="shrink-0 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
           >
             <Pin className="h-3 w-3" />
           </button>
+        )}
+        {isAdmin && (
+          <SidebarRoomMenu
+            roomId={node.room.id}
+            onRename={() => onRename(node.room.id)}
+            onDelete={() => onDelete(node.room.id, node.room.name)}
+          />
         )}
       </div>
       {node.children.length > 0 && (
@@ -550,6 +629,10 @@ function RoomTreeNodeView({
           selectedRoom={selectedRoom}
           onGo={onGo}
           onPin={onPin}
+          isAdmin={isAdmin}
+          projectId=""
+          onRename={onRename}
+          onDelete={onDelete}
         />
       )}
     </>
