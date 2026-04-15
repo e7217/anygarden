@@ -1,7 +1,8 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Hash, Users, UserPlus, Menu, ChevronLeft, FolderPlus, Settings, OctagonX, Crown, Link2 } from 'lucide-react'
+import { Hash, Users, Menu, ChevronLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 
 interface ParentBreadcrumb {
   id: string
@@ -30,6 +31,25 @@ interface RoomHeaderProps {
   onOpenSidebar?: () => void
   onToggleParticipants?: () => void
 }
+
+/**
+ * Room header.
+ *
+ * Layout is split into three zones:
+ * - Left: breadcrumb + room name. Always visible.
+ * - Right-status: participant count (toggles the list popover) and
+ *   the connection badge. Always visible so a user can tell at a
+ *   glance "who's here" and "am I connected" without a click.
+ * - Right-controls: representative agent select (when available —
+ *   it doubles as a read-out of the current representative) and a
+ *   single ``…`` overflow menu that holds the admin mutation
+ *   actions: Sub-room / Edit / Invites / Manage agents / Stop All.
+ *
+ * The overflow menu replaces the five inline icon-buttons we had
+ * before. See ``RoomSettingsMenu`` for the grouping rationale — in
+ * short, the header was getting crowded and destructive actions
+ * (Stop All) benefit from sitting one click deeper.
+ */
 
 export default function RoomHeader({
   roomName,
@@ -86,20 +106,12 @@ export default function RoomHeader({
       <div className="flex shrink-0 items-center gap-2 md:gap-3">
         {participantCount !== undefined && (
           onToggleParticipants ? (
-            // Click toggles the ParticipantListPopover that ChatPage /
-            // GuestRoomPage mount next to the header. Visible on
-            // mobile too — the participant list is the whole point
-            // of this button and hiding it behind ``sm:`` made the
-            // feature unreachable on phones.
             <button
               type="button"
               onClick={onToggleParticipants}
               // ``hover:bg-black/5 cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
-              // docs/history/STATUS.md (PR #31/#32). Using the ghost
-              // rule keeps the participant toggle visually aligned
-              // with every other header control and gives it the
-              // expected pointer/highlight affordance.
+              // docs/history/STATUS.md (PR #31/#32).
               className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
               title="Show room participants"
               data-testid="room-header-participants-toggle"
@@ -114,30 +126,10 @@ export default function RoomHeader({
             </div>
           )
         )}
-        {onStopAllAgents && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onStopAllAgents}
-            title="Stop all agents in this room"
-            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-          >
-            <OctagonX className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Stop All</span>
-          </Button>
-        )}
-        {onCreateSubRoom && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onCreateSubRoom}
-            title="Create a sub-room under this room"
-            data-testid="room-header-new-sub-room"
-          >
-            <FolderPlus className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Sub-room</span>
-          </Button>
-        )}
+        {/* Representative agent stays inline — it's a combined
+            read-out + control, and users scanning the header want
+            to know the current representative without opening a
+            menu. */}
         {onSetRepresentative && agentParticipants && agentParticipants.length > 0 && (
           <select
             value={representativeAgentId ?? ''}
@@ -153,43 +145,17 @@ export default function RoomHeader({
             ))}
           </select>
         )}
-        {onEditRoom && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onEditRoom}
-            title="Edit room name and description"
-          >
-            <Settings className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Edit</span>
-          </Button>
-        )}
-        {onManageAgents && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onManageAgents}
-            title="Manage agents in this room"
-          >
-            <UserPlus className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Agents</span>
-          </Button>
-        )}
-        {onManageInvites && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onManageInvites}
-            title="Manage guest invite links"
-          >
-            <Link2 className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Invites</span>
-          </Button>
-        )}
         <Badge variant={connected ? 'default' : 'destructive'}>
           <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
           <span className="sm:hidden">{connected ? '●' : '○'}</span>
         </Badge>
+        <RoomSettingsMenu
+          onCreateSubRoom={onCreateSubRoom}
+          onEditRoom={onEditRoom}
+          onManageInvites={onManageInvites}
+          onManageAgents={onManageAgents}
+          onStopAllAgents={onStopAllAgents}
+        />
       </div>
     </div>
   )
