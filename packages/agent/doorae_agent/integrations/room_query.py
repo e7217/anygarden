@@ -10,6 +10,7 @@ to the source room.
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,16 @@ from doorae_agent.client import ChatClient
 logger = structlog.get_logger(__name__)
 
 COLLECT_TIMEOUT = 300  # 5 minutes
+
+# Strip ``<#room:<id>>`` tokens from forwarded content. Without this
+# the server's ``parse_mentions`` would re-detect the room mention
+# on the forwarded ``[ROOM_QUERY] ...`` message and re-attach
+# ``room_query`` metadata, which the representative of the target
+# room would then process — kicking off an infinite forwarding loop
+# (each iteration prepending another ``[ROOM_QUERY]`` to the
+# content). The forward should carry the *question*, not the
+# *routing token* that triggered it.
+_ROOM_MENTION_TOKEN = re.compile(r"<#room:[^>]+>\s*")
 
 
 @dataclass
@@ -40,6 +51,15 @@ def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
         source_room_id=rq["source_room_id"],
         content=msg.get("content", ""),
     )
+
+
+def _strip_room_mention(content: str) -> str:
+    """Remove every ``<#room:...>`` token from *content* and tidy up
+    the whitespace that gets left behind. Public for tests."""
+    cleaned = _ROOM_MENTION_TOKEN.sub("", content)
+    # Collapse the double-spaces a stripped token sometimes leaves.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
 
 
 async def execute_room_query(
@@ -70,10 +90,14 @@ async def execute_room_query(
         logger.info("room_query.solo", target=query.target_room_id)
         return
 
-    # Send question to target room
+    # Send question to target room. Strip the routing token so the
+    # forward carries the user's question, not the ``#room`` mention
+    # that triggered the original routing — see the comment on
+    # ``_ROOM_MENTION_TOKEN`` for the loop this prevents.
+    forwarded = _strip_room_mention(query.content) or query.content
     await client.send(
         query.target_room_id,
-        f"[ROOM_QUERY] {query.content}",
+        f"[ROOM_QUERY] {forwarded}",
     )
 
     # Register multi-reply callback

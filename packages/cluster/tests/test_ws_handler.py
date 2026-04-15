@@ -510,6 +510,93 @@ class TestRoomQueryMetadata:
                 assert meta["room_query"]["source_room_id"] == source.id
 
     @pytest.mark.asyncio
+    async def test_agent_sender_does_not_trigger_room_query(self, rq_env) -> None:
+        """Regression guard for the infinite forwarding loop. When
+        the message comes from an agent identity (which is what
+        ``room_query`` adapters do when forwarding the question),
+        the server must NOT re-detect the ``#room`` token and
+        re-attach ``room_query`` metadata. Otherwise the target
+        room's representative would forward again, ad infinitum.
+        """
+        from starlette.testclient import TestClient
+
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken, Participant
+
+        app = rq_env["app"]
+        agent = rq_env["agent"]
+        target = rq_env["target_room"]
+        sf = rq_env["session_factory"]
+
+        # Mint an agent token + ensure the agent is a participant of
+        # the source-of-this-test room (target_room — agent is its
+        # representative and seeded as a participant in rq_env).
+        agent_token_plain = generate_token()
+        token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+        async with sf() as db:
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+            await db.commit()
+
+        # Sanity: the agent participant in target_room exists from
+        # the fixture; we connect WS *as that agent* to target_room.
+        # The agent then sends a fresh ``#room`` mention pointing at
+        # itself (target_room) — the server must NOT route this.
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{target.id}",
+                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": f"<#room:{target.id}> 의견?",
+                }))
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                meta = msg.get("metadata") or {}
+                # Mention parsing still records what the agent wrote,
+                # but ``room_query`` MUST NOT have been attached for
+                # an agent-originated message.
+                assert "room_query" not in meta
+
+    @pytest.mark.asyncio
+    async def test_user_typing_room_query_prefix_still_routes(self, rq_env) -> None:
+        """A human user typing the literal text ``[ROOM_QUERY]`` in
+        their message must NOT have routing silently disabled. The
+        agent-identity guard above is enough to stop the loop;
+        adding a content-prefix guard would create a confusing UX
+        trap where users couldn't tell why their ``#room`` mention
+        was ignored.
+        """
+        from starlette.testclient import TestClient
+
+        app = rq_env["app"]
+        token = rq_env["token"]
+        source = rq_env["source_room"]
+        target = rq_env["target_room"]
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{source.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": f"[ROOM_QUERY] <#room:{target.id}> 의견?",
+                }))
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                meta = msg.get("metadata") or {}
+                # User-typed prefix is just text — routing proceeds.
+                assert "room_query" in meta
+                assert meta["room_query"]["target_room_id"] == target.id
+
+    @pytest.mark.asyncio
     async def test_room_mention_no_representative_no_metadata(self, rq_env) -> None:
         """Room mention without representative does not attach room_query."""
         from starlette.testclient import TestClient

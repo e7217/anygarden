@@ -270,9 +270,35 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # in case the guest filter ever loosens: membership
                 # changes are admin-only and the auto-join below
                 # creates a Participant row.
+                #
+                # ``not is_agent`` breaks the ``[ROOM_QUERY]``
+                # forwarding loop: ``room_query`` adapters forward
+                # queries on behalf of users by issuing a fresh
+                # ``send`` from the representative's agent identity.
+                # If the server re-attached ``room_query`` metadata
+                # to that forward, every recipient agent in the
+                # target room would forward again, ad infinitum.
+                # Agents never originate ``#room`` queries — humans
+                # do — so silencing the routing path for agent
+                # senders is both sufficient and safe.
+                #
+                # We deliberately do NOT use a ``content.startswith
+                # ("[ROOM_QUERY]")`` guard here. That looked tempting
+                # as belt-and-suspenders but creates a UX trap: a
+                # human user typing ``[ROOM_QUERY]`` literally in
+                # their message would silently lose room routing
+                # with no error feedback. The agent-identity check
+                # already closes the loop at the source.
+                #
+                # The agent SDK additionally strips the
+                # ``<#room:...>`` token before forwarding
+                # (see ``room_query._strip_room_mention``); this
+                # server guard is the safety net for that strip
+                # ever regressing.
+                is_agent = identity is not None and identity.kind == "agent"
                 room_mentions = (
                     [m for m in mentions if m.get("type") == "room"]
-                    if not is_guest
+                    if not is_guest and not is_agent
                     else []
                 )
                 if room_mentions:
