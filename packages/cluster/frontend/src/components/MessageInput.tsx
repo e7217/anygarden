@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Send } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
-import { insertMentionToken, extractMentionsMetadata } from '@/lib/mentions'
+import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 
 interface MessageInputProps {
   onSend: (content: string, metadata?: Record<string, unknown>) => void
@@ -89,6 +89,9 @@ export default function MessageInput({
     for (const m of trackedMentions.current) {
       content = content.split(m.displayText).join(m.token)
     }
+    // Resolve any remaining directly-typed `#RoomName` plaintext into room tokens.
+    // Issue #53: previously only autocomplete selections were tokenized.
+    content = resolveRoomMentionsInText(content, mentionRooms)
     const mentions = extractMentionsMetadata(content)
     const metadata = mentions.length > 0 ? { mentions } : undefined
     onSend(content, metadata)
