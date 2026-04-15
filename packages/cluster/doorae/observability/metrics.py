@@ -44,3 +44,36 @@ agents_by_state = Gauge(
     "Number of agents grouped by lifecycle state",
     ["state"],  # "pending" | "starting" | "running" | "crashed" | "stopping" | "stopped"
 )
+
+# ── Anonymous-guest metrics (§11 design doc) ─────────────────────────
+
+# Currently-connected guests. Incremented on WS subscribe, decremented
+# on unsubscribe — same lifecycle as ``ws_connections_active`` but
+# filtered to guest sessions.
+guest_active = Gauge(
+    "doorae_guest_active",
+    "Number of currently connected anonymous-guest WebSocket sessions",
+)
+
+# Room invite creation and redemption counters. ``invites_created``
+# lets operators watch admin issuing behaviour; ``invites_used``
+# captures how often guests actually accept. The two together let us
+# catch "tons of invites, few accepts" (likely spam) and "few
+# invites, many accepts" (token leak).
+invites_created_total = Counter(
+    "doorae_invites_created_total",
+    "Total number of room invite links issued",
+)
+invites_used_total = Counter(
+    "doorae_invites_used_total",
+    "Total number of room invite redemptions (POST /auth/guest)",
+)
+
+# Guest-specific rate-limit trip counter keyed by which layer tripped.
+# ``cooldown`` = stricter per-guest token bucket.
+# ``room_aggregate`` = §11.7 room-wide cap across all guests.
+guest_rate_limited_total = Counter(
+    "doorae_guest_rate_limited_total",
+    "Total number of guest WS sends rejected by a rate-limit layer",
+    ["scope"],
+)

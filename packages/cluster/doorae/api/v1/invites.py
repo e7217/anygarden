@@ -35,6 +35,7 @@ from doorae.auth.dependencies import Identity
 from doorae.auth.invite_token import generate_invite_token, hash_invite_token
 from doorae.db.models import Participant, Room, RoomInviteLink
 from doorae.dependencies import get_current_identity, get_db
+from doorae.observability.metrics import invites_created_total
 
 router = APIRouter(tags=["invites"])
 
@@ -260,6 +261,8 @@ async def create_invite(
     db.add(invite)
     await db.commit()
     await db.refresh(invite)
+
+    invites_created_total.inc()
 
     return InviteCreated(
         id=invite.id,

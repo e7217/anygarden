@@ -15,6 +15,7 @@ from doorae.auth.jwt import create_guest_token, create_user_token
 from doorae.auth.password import hash_password, verify_password
 from doorae.db.models import Participant, RoomInviteLink, User
 from doorae.dependencies import forbid_guest, get_db
+from doorae.observability.metrics import invites_used_total
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -313,6 +314,8 @@ async def accept_guest_invite(
 
     await db.commit()
     await db.refresh(participant)
+
+    invites_used_total.inc()
 
     # Best-effort UI-refresh push to *existing* room members. The
     # guest itself has no prior WS in this (or any) room, so the

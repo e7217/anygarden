@@ -158,6 +158,28 @@ invite 발급 자체에도 admin당 분당 10건, 룸당 활성 invite 20개 상
 | DB 폭증 | 룸당 활성 invite 상한(20) + admin 발급 rate limit (분당 10) + invite당 max_uses 권장 |
 | 토큰 유출 대응 | invite revoke API 즉시 반영, revoke 시 해당 invite로 발급된 모든 활성 게스트 JWT를 `ActivityLog.session_revoked`로 기록 |
 
+## 11.10.1 Implementation status
+
+모든 PR (A–H)이 머지되었습니다 (2026-04-15). 주요 모듈 위치:
+
+| 관심사 | 파일 |
+|---|---|
+| 게스트 행 스키마 | `packages/cluster/doorae/db/models.py` (`User.is_anonymous`, `User.display_name`, `RoomInviteLink`) |
+| Invite API | `packages/cluster/doorae/api/v1/invites.py` |
+| 게스트 토큰 codec | `packages/cluster/doorae/auth/jwt.py` (`GuestClaims`, `create_guest_token`, `verify_guest_token`, `decode_any_user_token`) |
+| 게스트 수용 / 발급 | `packages/cluster/doorae/auth/routes.py` (`POST /api/v1/auth/guest`) |
+| 가드 | `packages/cluster/doorae/dependencies.py` (`forbid_guest`), `doorae/auth/dependencies.py` (`require_room_member` 게스트 분기) |
+| WS 필터 / rate limit | `packages/cluster/doorae/ws/handler.py`, `doorae/orchestration/rules.py` (`GuestRoomAggregateLimiter`) |
+| 정리 잡 | `packages/cluster/doorae/guest/anonymize.py` (`python -m doorae.guest.anonymize --db-url …`) |
+| 메트릭 | `packages/cluster/doorae/observability/metrics.py` (`guest_active`, `invites_created_total`, `invites_used_total`, `guest_rate_limited_total`) |
+| 호스트 UI | `packages/cluster/frontend/src/components/RoomInviteDialog.tsx` |
+| 게스트 셸 | `packages/cluster/frontend/src/pages/GuestInvitePage.tsx`, `GuestRoomPage.tsx` |
+
+운영 체크리스트:
+- `doorae.guest.anonymize`를 일 1회 cron으로 예약 (기본 30일 grace, `--after-hours`로 조정 가능)
+- Prometheus 스크레이핑에 위 6개 신규 시리즈가 포함되는지 확인
+- 호스트 admin/owner에게 invite UI가 노출되는지 수동 확인
+
 ## 11.11 Out of scope (후속)
 
 - 게스트의 영구 계정 승격 흐름
