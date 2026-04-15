@@ -628,6 +628,110 @@ class TestRoomQueryMetadata:
                 assert "room_query" not in meta
 
     @pytest.mark.asyncio
+    async def test_room_mention_auto_join_sends_joinroom_to_agent(
+        self, rq_env
+    ) -> None:
+        """Regression guard for issue #50.
+
+        When a user mentions ``<#room:target>`` from a source room
+        the representative agent isn't a member of, the server must
+        auto-add the agent as a Participant AND push a
+        ``JoinRoomOut(room_id=source)`` frame through one of the
+        agent's *other* WS sessions, so the SDK opens a subscription
+        to the source room in time to receive the upcoming
+        ``room_query`` broadcast.
+
+        The original bug only inserted the Participant row — no
+        frame — so the agent was a DB member but never subscribed,
+        and the broadcast was silently dropped.
+        """
+        import queue as _q
+        import threading
+
+        from starlette.testclient import TestClient
+
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken
+
+        app = rq_env["app"]
+        token = rq_env["token"]
+        source = rq_env["source_room"]
+        target = rq_env["target_room"]
+        agent = rq_env["agent"]
+        sf = rq_env["session_factory"]
+
+        agent_token_plain = generate_token()
+        token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+        async with sf() as db:
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{target.id}",
+                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+            ) as agent_ws:
+                agent_welcome = json.loads(agent_ws.receive_text())
+                assert agent_welcome["type"] == "welcome"
+
+                with client.websocket_connect(
+                    f"/ws/rooms/{source.id}",
+                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                ) as user_ws:
+                    user_welcome = json.loads(user_ws.receive_text())
+                    assert user_welcome["type"] == "welcome"
+                    user_ws.send_text(json.dumps({
+                        "type": "send",
+                        "content": f"<#room:{target.id}> 의견 요청",
+                    }))
+                    msg = json.loads(user_ws.receive_text())
+                    assert msg["type"] == "message"
+
+                # Agent's target-room WS must receive a JoinRoomOut
+                # pointing at the *source* room. Wrap in a thread +
+                # queue so a missing frame fails fast instead of
+                # hanging the test suite.
+                received: _q.Queue = _q.Queue()
+
+                def _recv() -> None:
+                    try:
+                        received.put(("ok", agent_ws.receive_text()))
+                    except Exception as exc:  # pragma: no cover
+                        received.put(("err", exc))
+
+                threading.Thread(target=_recv, daemon=True).start()
+                try:
+                    kind, payload = received.get(timeout=3.0)
+                except _q.Empty:
+                    pytest.fail(
+                        "agent WS did not receive JoinRoomOut within 3s "
+                        "— auto-join notification is missing"
+                    )
+
+                assert kind == "ok", payload
+                frame = json.loads(payload)
+                assert frame["type"] == "join_room"
+                assert frame["room_id"] == source.id
+
+                async with sf() as db:
+                    part = (
+                        await db.execute(
+                            select(Participant).where(
+                                Participant.room_id == source.id,
+                                Participant.agent_id == agent.id,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    assert part is not None, (
+                        "auto-join should have created a Participant "
+                        "row for the representative agent"
+                    )
+
+    @pytest.mark.asyncio
     async def test_room_mention_offline_agent_sends_error(self, rq_env) -> None:
         """Offline representative agent triggers error frame."""
         from starlette.testclient import TestClient
