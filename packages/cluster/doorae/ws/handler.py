@@ -14,6 +14,10 @@ from doorae.auth.dependencies import Identity, get_identity, require_room_member
 from doorae.config import DooraeSettings
 from doorae.db.models import ActivityLog, Agent, Participant, Room
 from doorae.db.repository import append_message, replay_since_seq
+from doorae.observability.metrics import (
+    guest_active,
+    guest_rate_limited_total,
+)
 from doorae.ws.manager import ConnectionManager
 from doorae.orchestration.rules import (
     CooldownManager,
@@ -135,9 +139,26 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     )
     await websocket.send_text(welcome.model_dump_json())
 
+    # Decide guest-ness BEFORE subscribe so the ``finally`` block can
+    # safely test ``is_guest_session`` even if an exception fires
+    # during (or immediately after) ``subscribe``. We also flip a
+    # separate ``guest_gauge_incremented`` the moment we actually
+    # bump the gauge — the finally block decrements only when that
+    # happened, so an exception between subscribe and inc() can't
+    # leave the gauge underwater.
+    is_guest_session = identity is not None and identity.kind == "guest"
+    guest_gauge_incremented = False
+
     # Subscribe
     await manager.subscribe(room_id, participant.id, websocket)
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
+
+    # Track guest connections separately from the overall WS gauge so
+    # operators can spot a guest-session spike (e.g. leaked invite
+    # link) without cross-contaminating ws_connections_active.
+    if is_guest_session:
+        guest_active.inc()
+        guest_gauge_incremented = True
 
     try:
         # -- Replay missed messages --
@@ -181,6 +202,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     guest_cooldown_mgr if is_guest else cooldown_mgr
                 )
                 if not active_cooldown.check_cooldown(participant.id):
+                    if is_guest:
+                        guest_rate_limited_total.labels(scope="cooldown").inc()
                     await websocket.send_text(
                         ErrorOut(
                             detail="Rate limited — please wait"
@@ -226,6 +249,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             )
                             continue
                         if not guest_room_limiter.check(room_id):
+                            guest_rate_limited_total.labels(
+                                scope="room_aggregate"
+                            ).inc()
                             await websocket.send_text(
                                 ErrorOut(
                                     detail="Rate limited (room aggregate)"
@@ -370,3 +396,5 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         logger.error("ws.error", room_id=room_id, error=str(exc))
     finally:
         await manager.unsubscribe(participant.id)
+        if guest_gauge_incremented:
+            guest_active.dec()
