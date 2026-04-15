@@ -37,9 +37,34 @@ async def get_admin_identity(
     Used by agent management endpoints and anything that mutates shared
     infrastructure. Agent tokens and non-admin users are both rejected.
     """
-    if identity.kind != "user" or not identity.claims or not identity.claims.is_admin:
+    if (
+        identity.kind != "user"
+        or not identity.claims
+        # Guest claims carry no ``is_admin`` field; be explicit.
+        or not hasattr(identity.claims, "is_admin")
+        or not identity.claims.is_admin
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    return identity
+
+
+async def forbid_guest(
+    identity: Identity = Depends(get_current_identity),
+) -> Identity:
+    """Pass through registered users and agents; reject guests with 403.
+
+    Apply to any endpoint whose semantics would give a guest more
+    authority than the §11 design doc allows (room mutations, sub-room
+    creation, invite management, cross-room reads, etc.). The
+    counterpart to ``get_current_identity`` — call this wherever you
+    would have called that but do NOT want guests to pass.
+    """
+    if identity.kind == "guest":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is not available to guests",
         )
     return identity

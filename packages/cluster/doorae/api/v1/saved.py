@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity
 from doorae.db.models import Message, Participant, SavedMessage
-from doorae.dependencies import get_current_identity, get_db
+from doorae.dependencies import forbid_guest, get_db
 
 router = APIRouter(prefix="/api/v1/saved", tags=["saved"])
 
@@ -35,7 +35,8 @@ class SavedMessageOut(BaseModel):
 @router.post("", status_code=201)
 async def save_message(
     body: SaveMessageBody,
-    identity: Identity = Depends(get_current_identity),
+    # Saved messages are a registered-user feature (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Bookmark a message."""
@@ -65,7 +66,8 @@ async def save_message(
 @router.delete("/{message_id}", status_code=200)
 async def unsave_message(
     message_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Saved messages are a registered-user feature (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Remove a bookmark."""
@@ -86,7 +88,8 @@ async def unsave_message(
 
 @router.get("", response_model=list[SavedMessageOut])
 async def list_saved_messages(
-    identity: Identity = Depends(get_current_identity),
+    # Saved messages are a registered-user feature (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List all bookmarked messages for the current user."""

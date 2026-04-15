@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.auth.dependencies import Identity
+from doorae.auth.dependencies import Identity, require_room_member
 from doorae.dependencies import get_current_identity, get_db
 from doorae.messages.service import get_message_history
 
@@ -41,7 +41,12 @@ async def list_messages(
 
     - ``since_seq=N`` returns messages with seq > N
     - ``limit`` caps the result set (default 50, max 200)
+
+    Callers must be a member of the room — this also enforces the
+    guest ``room_id`` claim check, preventing a guest JWT from
+    scraping any other room's history just by knowing a UUID.
     """
+    await require_room_member(room_id, identity, db)
     limit = min(limit, 200)
     messages = await get_message_history(db, room_id, since_seq, limit)
     return messages

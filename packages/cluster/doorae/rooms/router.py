@@ -12,7 +12,12 @@ from sqlalchemy.orm import selectinload
 
 from doorae.auth.dependencies import Identity
 from doorae.db.models import Agent, Participant, Room, User
-from doorae.dependencies import get_admin_identity, get_current_identity, get_db
+from doorae.dependencies import (
+    forbid_guest,
+    get_admin_identity,
+    get_current_identity,
+    get_db,
+)
 from doorae.rooms.service import archive_child_rooms, create_sub_room
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
@@ -75,7 +80,8 @@ class RoomDetailOut(RoomOut):
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=RoomOut)
 async def create_room(
     body: RoomCreate,
-    identity: Identity = Depends(get_current_identity),
+    # Guests can't create rooms — see §11.5 permission matrix.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new room in a project."""
@@ -183,7 +189,9 @@ async def add_participant(
     room_id: str,
     body: ParticipantAdd,
     request: Request,
-    identity: Identity = Depends(get_current_identity),
+    # Mutating room membership is closed to guests. The guest flow
+    # adds them via ``POST /auth/guest`` instead.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a participant (user or agent) to a room."""
@@ -261,7 +269,8 @@ class RoomUpdate(BaseModel):
 async def update_room(
     room_id: str,
     body: RoomUpdate,
-    identity: Identity = Depends(get_current_identity),
+    # Room metadata changes are closed to guests (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Update room name and/or description."""
@@ -317,7 +326,8 @@ async def set_representative(
 @router.delete("/{room_id}", status_code=204)
 async def delete_room(
     room_id: str,
-    identity: Identity = Depends(get_current_identity),
+    # Guests can't delete rooms (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a room, cascading: archive child rooms."""
@@ -337,7 +347,8 @@ async def delete_room(
 async def stop_all_agents_in_room(
     room_id: str,
     request: Request,
-    identity: Identity = Depends(get_current_identity),
+    # Guests can't control agent lifecycle (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Stop all running agents in a room."""
@@ -385,11 +396,15 @@ async def list_sub_rooms(
 
 
 @router.post("/{room_id}/sub-rooms", status_code=201, response_model=RoomOut)
+# NOTE (PR C): the guest branch is deliberately handled at the
+# ``identity`` dependency below (``forbid_guest``). Sub-room
+# creation is a membership-expanding operation and is therefore
+# closed to guests regardless of their room scope.
 async def create_sub_room_endpoint(
     room_id: str,
     body: SubRoomCreate,
     request: Request,
-    identity: Identity = Depends(get_current_identity),
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a sub-room under an existing room with permission inheritance."""
