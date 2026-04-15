@@ -613,6 +613,70 @@ class TestRemoveParticipant:
         assert removed[0]["user_id"] == removal_env["member"].id
 
     @pytest.mark.asyncio
+    async def test_removed_participant_does_not_receive_broadcast(self, removal_env) -> None:
+        """Regression guard: ``RoomMembershipChangedOut(action="removed")``
+        must reach *remaining* subscribers only. A future refactor that
+        loops over every Participant (including the one about to be
+        deleted) would still pass ``test_owner_removes_user_participant``
+        — this asserts the audience is filtered.
+        """
+        import json
+
+        app = removal_env["app"]
+        room = removal_env["room"]
+        owner_part = removal_env["owner_part"]
+        member_part = removal_env["member_part"]
+        owner_token = removal_env["owner_token"]
+
+        from doorae.ws.manager import ConnectionManager
+
+        if not getattr(app.state, "connection_manager", None):
+            app.state.connection_manager = ConnectionManager()
+        manager = app.state.connection_manager
+
+        owner_received: list[str] = []
+        removed_received: list[str] = []
+
+        class FakeWS:
+            def __init__(self, sink: list[str]) -> None:
+                self._sink = sink
+
+            async def send_text(self, data: str) -> None:
+                self._sink.append(data)
+
+        owner_ws = FakeWS(owner_received)
+        removed_ws = FakeWS(removed_received)
+        await manager.subscribe(room.id, owner_part.id, owner_ws)  # type: ignore[arg-type]
+        await manager.subscribe(room.id, member_part.id, removed_ws)  # type: ignore[arg-type]
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.delete(
+                    f"/api/v1/rooms/{room.id}/participants/{member_part.id}",
+                    headers={"Authorization": f"Bearer {owner_token}"},
+                )
+                assert resp.status_code == 204
+        finally:
+            await manager.unsubscribe(owner_part.id)
+            await manager.unsubscribe(member_part.id)
+
+        owner_frames = [
+            json.loads(raw)
+            for raw in owner_received
+            if json.loads(raw).get("type") == "room_membership_changed"
+        ]
+        removed_frames = [
+            json.loads(raw)
+            for raw in removed_received
+            if json.loads(raw).get("type") == "room_membership_changed"
+        ]
+        assert len(owner_frames) == 1
+        assert owner_frames[0]["action"] == "removed"
+        # Departed participant must NOT receive the removal broadcast.
+        assert removed_frames == []
+
+    @pytest.mark.asyncio
     async def test_owner_removes_agent_clears_representative(self, removal_env) -> None:
         """Removing the representative agent must clear ``Room.representative_agent_id``."""
         app = removal_env["app"]
