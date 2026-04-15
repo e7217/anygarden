@@ -170,6 +170,13 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   // silent implementation changes later, ``refetch`` isn't
   // affected.
   const refetch = useCallback(async () => {
+    // Guest sessions don't have project-tree visibility (§11.5 of the
+    // design doc — /projects and broad /rooms queries both 403 for a
+    // guest JWT). Running the refetch anyway just floods the console
+    // and parks ``status`` at ``error`` forever. No-op and stay on
+    // ``idle`` so consumers treat it as "not applicable" rather than
+    // "failed".
+    if (localStorage.getItem('doorae_is_guest') === '1') return;
     setStatus('loading');
     try {
       const resp = await apiFetch('/api/v1/projects');

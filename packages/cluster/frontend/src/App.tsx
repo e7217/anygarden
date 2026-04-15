@@ -4,6 +4,8 @@ import { RoomsProvider } from '@/hooks/useRooms'
 import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
+import GuestInvitePage from '@/pages/GuestInvitePage'
+import GuestRoomPage from '@/pages/GuestRoomPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -31,6 +33,11 @@ export default function App() {
       <RoomsProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          {/* Guest entry + single-room shell. Intentionally NOT
+              wrapped in ProtectedRoute — the guest flow has its own
+              JWT lifecycle and must not redirect through /login. */}
+          <Route path="/invite/:token" element={<GuestInvitePage />} />
+          <Route path="/g/:roomId" element={<GuestRoomPage />} />
           <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
           <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
