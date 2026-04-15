@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from doorae.auth.dependencies import Identity
+from doorae.auth.dependencies import Identity, GuestClaims
 from doorae.db.models import Agent, Participant, Room, User
 from doorae.dependencies import (
     forbid_guest,
@@ -112,8 +112,19 @@ async def list_rooms(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """List rooms, optionally filtered by project and/or DM status."""
+    """List rooms, optionally filtered by project and/or DM status.
+
+    For guests this returns at most the single room their JWT is
+    bound to (§11.5 "다른 룸 조회 ❌"). Registered users still see
+    the full tree the endpoint used to return — project-/dm-level
+    filtering is unchanged.
+    """
     query = select(Room)
+    if identity.kind == "guest" and isinstance(identity.claims, GuestClaims):
+        # Explicit room-id pin — even a spoofed ``project_id`` query
+        # parameter cannot widen the result set beyond the JWT's
+        # single-room binding.
+        query = query.where(Room.id == identity.claims.room_id)
     if project_id is not None:
         query = query.where(Room.project_id == project_id)
     if is_dm is not None:
@@ -129,7 +140,22 @@ async def get_room(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get room details including participants with display names."""
+    """Get room details including participants with display names.
+
+    Guests may only read the room their JWT is bound to. We check
+    the claim BEFORE the DB lookup so a guest can't learn whether
+    an unrelated room id exists by comparing 403 vs 404.
+    """
+    if identity.kind == "guest":
+        if (
+            not isinstance(identity.claims, GuestClaims)
+            or identity.claims.room_id != room_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Guest token bound to a different room",
+            )
+
     result = await db.execute(
         select(Room)
         .where(Room.id == room_id)
@@ -383,7 +409,9 @@ async def stop_all_agents_in_room(
 async def list_sub_rooms(
     room_id: str,
     name: str | None = None,
-    identity: Identity = Depends(get_current_identity),
+    # Sub-room listing is a tree-nav feature — guests live in a
+    # single flat room (§11.5) and so cannot enumerate children.
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List sub-rooms of a room, optionally filtered by name."""

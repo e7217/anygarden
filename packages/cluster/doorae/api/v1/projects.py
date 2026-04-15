@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity
 from doorae.db.models import Project
-from doorae.dependencies import get_current_identity, get_db
+from doorae.dependencies import forbid_guest, get_db
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -37,7 +37,10 @@ class ProjectOut(BaseModel):
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=ProjectOut)
 async def create_project(
     body: ProjectCreate,
-    identity: Identity = Depends(get_current_identity),
+    # Projects are a registered-user concept — guests only see a
+    # single room and should not discover the surrounding project
+    # tree through this surface (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new project."""
@@ -50,7 +53,10 @@ async def create_project(
 
 @router.get("", response_model=list[ProjectOut])
 async def list_projects(
-    identity: Identity = Depends(get_current_identity),
+    # Projects are a registered-user concept — guests only see a
+    # single room and should not discover the surrounding project
+    # tree through this surface (§11.5).
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
     """List all projects."""
