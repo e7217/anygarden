@@ -214,6 +214,56 @@ export default function ChatPage() {
     [selectedRoom, refreshParticipants],
   )
 
+  const handleDeleteRoom = useCallback(async () => {
+    if (!selectedRoom || !currentRoom) return
+    // Native confirm — same low-friction pattern the participant
+    // removal flow uses. The body spells out the cascade rules so
+    // the host doesn't discover them by surprise after the fact.
+    const ok = window.confirm(
+      `이 룸 "${currentRoom.name}"을(를) 삭제하시겠습니까?\n\n` +
+        '룸의 모든 메시지가 사라지며, 하위 룸들은 최상위로 이동합니다. ' +
+        '되돌릴 수 없습니다.',
+    )
+    if (!ok) return
+    try {
+      const resp = await apiFetch(`/api/v1/rooms/${selectedRoom}`, {
+        method: 'DELETE',
+      })
+      if (resp.status === 204) {
+        // The server's broadcast also tells us via WS, but acting
+        // immediately on the success response avoids depending on
+        // the round-trip — keeps the UI snappy. Navigate away
+        // first; the room-deleted event listener will repeat the
+        // navigation harmlessly when the WS frame eventually lands.
+        navigate('/')
+        return
+      }
+      let detail = `Failed to delete room (${resp.status})`
+      try {
+        const body = await resp.json()
+        if (body && typeof body.detail === 'string') detail = body.detail
+      } catch { /* ignore body parse */ }
+      window.alert(detail)
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
+  }, [selectedRoom, currentRoom, navigate])
+
+  // Listen for ``room_deleted`` WS frames pushed for OTHER sessions
+  // — e.g. another tab the same user has open, or a host deleted a
+  // room while we were in it. Without this we'd silently keep
+  // showing the deleted room's stale content.
+  useEffect(() => {
+    const onDeleted = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { room_id?: string } | undefined
+      if (detail?.room_id && detail.room_id === selectedRoom) {
+        navigate('/')
+      }
+    }
+    window.addEventListener('doorae:room:deleted', onDeleted)
+    return () => window.removeEventListener('doorae:room:deleted', onDeleted)
+  }, [selectedRoom, navigate])
+
   const handleSetRepresentative = useCallback(async (agentId: string | null) => {
     if (!selectedRoom) return
     await apiFetch(`/api/v1/rooms/${selectedRoom}/representative`, {
@@ -285,6 +335,7 @@ export default function ChatPage() {
                   if (!selectedRoom) return
                   await apiFetch(`/api/v1/rooms/${selectedRoom}/stop-agents`, { method: 'POST' })
                 } : undefined}
+                onDeleteRoom={canRemoveParticipants ? handleDeleteRoom : undefined}
                 onOpenSidebar={() => setSidebarOpen(true)}
                 onToggleParticipants={() => setParticipantsOpen((v) => !v)}
               />

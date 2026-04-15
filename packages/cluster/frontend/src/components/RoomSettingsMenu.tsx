@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { FolderPlus, Link2, MoreHorizontal, OctagonX, Settings, UserPlus } from 'lucide-react'
+import { FolderPlus, Link2, MoreHorizontal, OctagonX, Settings, Trash2, UserPlus } from 'lucide-react'
 
 /**
  * Overflow menu that groups the room's admin-scoped actions into a
@@ -27,6 +27,7 @@ export interface RoomSettingsMenuProps {
   onManageInvites?: () => void
   onManageAgents?: () => void
   onStopAllAgents?: () => void
+  onDeleteRoom?: () => void
 }
 
 export default function RoomSettingsMenu({
@@ -35,6 +36,7 @@ export default function RoomSettingsMenu({
   onManageInvites,
   onManageAgents,
   onStopAllAgents,
+  onDeleteRoom,
 }: RoomSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -98,7 +100,12 @@ export default function RoomSettingsMenu({
 
   // No handlers at all → render nothing, mirroring the old
   // "button only appears when its callback exists" behavior.
-  if (safeActions.length === 0 && !onStopAllAgents) return null
+  if (
+    safeActions.length === 0 &&
+    !onStopAllAgents &&
+    !onDeleteRoom
+  )
+    return null
 
   const handleSelect = (run: () => void) => {
     setOpen(false)
@@ -146,30 +153,46 @@ export default function RoomSettingsMenu({
                 </button>
               </li>
             ))}
+            {(onStopAllAgents || onDeleteRoom) && safeActions.length > 0 && (
+              <li
+                aria-hidden="true"
+                className="my-1 border-t border-[var(--color-border)]"
+              />
+            )}
             {onStopAllAgents && (
-              <>
-                {safeActions.length > 0 && (
-                  <li
-                    aria-hidden="true"
-                    className="my-1 border-t border-[var(--color-border)]"
-                  />
-                )}
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => handleSelect(onStopAllAgents)}
-                    data-testid="room-menu-stop-all"
-                    // Destructive row — red text makes the consequence
-                    // obvious. The divider above further separates it
-                    // from the safe-action group so a stray click is
-                    // less likely.
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
-                  >
-                    <OctagonX className="h-4 w-4" />
-                    <span>Stop all agents</span>
-                  </button>
-                </li>
-              </>
+              <li>
+                <button
+                  type="button"
+                  onClick={() => handleSelect(onStopAllAgents)}
+                  data-testid="room-menu-stop-all"
+                  // Destructive row — red text makes the consequence
+                  // obvious. The divider above further separates it
+                  // from the safe-action group so a stray click is
+                  // less likely.
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                >
+                  <OctagonX className="h-4 w-4" />
+                  <span>Stop all agents</span>
+                </button>
+              </li>
+            )}
+            {onDeleteRoom && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => handleSelect(onDeleteRoom)}
+                  data-testid="room-menu-delete"
+                  // Sits in the same destructive group as Stop All —
+                  // shares red styling. Caller is expected to gate
+                  // this prop on the same admin/owner check the
+                  // server enforces, and to prompt for confirmation
+                  // before actually firing the DELETE.
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span>Delete room</span>
+                </button>
+              </li>
             )}
           </ul>
         </div>

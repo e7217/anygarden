@@ -491,20 +491,83 @@ async def set_representative(
 @router.delete("/{room_id}", status_code=204)
 async def delete_room(
     room_id: str,
-    # Guests can't delete rooms (§11.5).
+    request: Request,
+    # ``forbid_guest`` is the dep gate; the per-room admin/owner
+    # check happens below before any DB write so a non-member
+    # outsider gets 403, not 404 (no room-existence oracle).
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a room, cascading: archive child rooms."""
+    """Delete a room, cascading: archive child rooms.
+
+    Authorisation: global admin OR a room-level ``admin``/``owner``
+    Participant. Same rule as invite issuance and participant
+    removal — see ``api/v1/invites.py::_require_room_admin_or_owner``.
+    Anyone else (rank-and-file member, outsider, agent, guest) is
+    rejected with 403.
+
+    On success we broadcast ``RoomDeletedOut`` so any user with a
+    live WS in this room (or any of its participants reached via a
+    sibling-room WS) can remove the room from their tree without
+    waiting for a polled refetch.
+    """
+    # Lazy import keeps the module dependency graph flat — same
+    # pattern the membership-change broadcast follows in
+    # ``add_participant``.
+    from doorae.api.v1.invites import _require_room_admin_or_owner
+
+    await _require_room_admin_or_owner(room_id, identity, db)
+
     result = await db.execute(select(Room).where(Room.id == room_id))
     room = result.scalar_one_or_none()
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    # Capture the audience BEFORE we delete the participant rows. We
+    # need:
+    # - participant_ids in the room being deleted, so we can broadcast
+    #   over those still-open WS connections,
+    # - user_ids of those participants, so we can also reach each
+    #   user's OTHER active WS (e.g. a sidebar mounted in a sibling
+    #   room) — the ``add_participant`` push pattern from #19.
+    parts = (
+        await db.execute(
+            select(Participant).where(Participant.room_id == room_id)
+        )
+    ).scalars().all()
+    user_ids = {p.user_id for p in parts if p.user_id}
+
     await archive_child_rooms(db, room_id)
     await db.execute(delete(Participant).where(Participant.room_id == room_id))
     await db.delete(room)
     await db.commit()
+
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        from doorae.ws.protocol import RoomDeletedOut
+
+        frame = RoomDeletedOut(room_id=room_id)
+        # 1) Anyone subscribed to the deleted room's WS at this
+        #    instant gets the news directly. ``broadcast`` is best
+        #    effort and tolerant of already-closed sockets.
+        await manager.broadcast(room_id, frame)
+
+        # 2) Members who were NOT subscribed to the deleted room (e.g.
+        #    they were viewing a sibling room) need a poke too so
+        #    their sidebar refetches and the stale entry disappears.
+        #    Look up each user's other active participant_ids and
+        #    push the same frame.
+        if user_ids:
+            other_pids = (
+                await db.execute(
+                    select(Participant.id).where(
+                        Participant.user_id.in_(user_ids)
+                    )
+                )
+            ).scalars().all()
+            for pid in other_pids:
+                await manager.send_to(pid, frame)
+
     return None
 
 
