@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -40,11 +39,28 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
     Called at the top of each adapter's ``_handle`` function.
 
     Rules (evaluated in order):
-    1. Own message → False (self-echo prevention)
-    2. [DELEGATED] prefix → True (task initiation always processed)
-    3. @mentioned by name → True
-    4. Human message + agent is sole agent in room → True (1:1 chat)
-    5. Otherwise → False (ignore unaddressed agent chatter)
+    1. Own message → False (self-echo prevention).
+    2. ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or ``room_query``
+       metadata → True (task initiation / room-routed query
+       always processed).
+    3. Server-parsed explicit mention matching this agent → True.
+       The server's ``parse_mentions`` (``orchestration/rules.py``)
+       drops non-word ``@`` tokens — e.g. ``alice@example.com`` or
+       ``@dataclass`` — so we only see addressable mentions here.
+       This mirrors how Slack/Discord route via resolved mentions
+       instead of having every client re-parse raw text.
+    4. **Explicit mentions present but NOT for us → False.**
+       Previously rule 4 ("human message → respond") fired for
+       every agent in the room regardless of mention target, so a
+       multi-agent room echoed N responses to a single-addressed
+       message. When the server saw at least one addressable
+       mention, treat the message as targeted and stay out unless
+       rule 3 matched.
+    5. No addressable mentions + human sender → True. Covers 1:1
+       DMs and "no one in particular" broadcasts where the previous
+       behaviour (respond) is still the most useful default.
+    6. Agent sender, no mention → False (ignore unaddressed agent
+       chatter so agents don't ping-pong forever).
     """
     content = msg.get("content", "")
     sender = msg.get("participant_id")
@@ -60,25 +76,64 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
         return True
 
     # 2b. room_query metadata → representative agent should respond
-    room_query = metadata.get("room_query")
-    if room_query:
+    if metadata.get("room_query"):
         return True
 
-    # 3. @mention check — look in server-parsed mentions list first,
-    #    then fall back to content scan for names with spaces.
     agent_name = client._agent_name
-    mentions = metadata.get("mentions", [])
-    if agent_name and agent_name in mentions:
-        return True
-    # Content scan: handles "@테스트 에이전트" (with space)
-    if agent_name and f"@{agent_name}" in content:
+    raw_mentions = metadata.get("mentions") or []
+
+    # Only ``user``/``legacy`` mentions route to a specific participant.
+    # Room mentions drive cross-room queries and are handled separately
+    # above via ``room_query`` metadata, so they shouldn't force a skip
+    # here (e.g. ``<#room:xyz>`` alone should not silence the room).
+    addressable: list[dict[str, Any]] = [
+        m
+        for m in raw_mentions
+        if isinstance(m, dict) and m.get("type") in ("user", "legacy")
+    ]
+
+    # Normalise both sides so "alice" / "Alice" match. Without this
+    # the bug we're fixing would flip polarity: if the server's
+    # legacy regex captured "@alice" but the agent registered as
+    # "Alice", rule 3 would miss and rule 4 would silence the
+    # agent. Casefold handles Unicode case-insensitivity.
+    agent_key = agent_name.casefold() if agent_name else None
+
+    def _targets_me(m: dict[str, Any]) -> bool:
+        if m.get("type") == "legacy":
+            name = m.get("name")
+            return bool(agent_key) and isinstance(name, str) and name.casefold() == agent_key
+        # ``type == "user"`` carries a User.id which doesn't map to
+        # agents today. We fall back to the content scan below for
+        # legacy ``@Name`` tokens that might share this entry.
+        return False
+
+    mentioned_me = any(_targets_me(m) for m in addressable)
+    # Backward-compat: server's legacy pattern ``@([\w-]+)`` can't
+    # span whitespace, so names like "@테스트 에이전트" never land in
+    # ``addressable`` as a single mention. Keep the content scan as
+    # a fallback — but only to recognise *this agent*, not as the
+    # source of truth for "is there any mention".
+    if not mentioned_me and agent_key and f"@{agent_name}".casefold() in content.casefold():
+        mentioned_me = True
+
+    # 3. Directly mentioned → respond.
+    if mentioned_me:
         return True
 
-    # 4. Human message (no _nonce) — respond if this is a direct
-    #    conversation (no other agent chatter to worry about).
+    # 4. Explicit mention list exists and does not include us →
+    # someone else is being addressed, so we stay out. This is the
+    # fix for the "every agent in the room responds" bug — rule 5
+    # below used to short-circuit it.
+    if addressable:
+        return False
+
+    # 5. No addressable mention. Humans talking generally to the
+    # room keep the historical "everyone replies" behaviour; this
+    # preserves the 1:1 DM UX where no explicit mention is needed.
     sender_is_agent = bool(metadata.get("_nonce"))
     if not sender_is_agent:
         return True
 
-    # 5. Agent message without mention → skip
+    # 6. Agent sender, no mention → skip
     return False
