@@ -28,6 +28,7 @@ interface RoomHeaderProps {
   onEditRoom?: () => void
   onManageInvites?: () => void
   onStopAllAgents?: () => void
+  onDeleteRoom?: () => void
   onOpenSidebar?: () => void
   onToggleParticipants?: () => void
 }
@@ -64,6 +65,7 @@ export default function RoomHeader({
   onEditRoom,
   onManageInvites,
   onStopAllAgents,
+  onDeleteRoom,
   onOpenSidebar,
   onToggleParticipants,
 }: RoomHeaderProps) {
@@ -155,6 +157,7 @@ export default function RoomHeader({
           onManageInvites={onManageInvites}
           onManageAgents={onManageAgents}
           onStopAllAgents={onStopAllAgents}
+          onDeleteRoom={onDeleteRoom}
         />
       </div>
     </div>

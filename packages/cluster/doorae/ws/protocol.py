@@ -80,6 +80,21 @@ class JoinRoomOut(BaseModel):
     participant_id: str
 
 
+class RoomDeletedOut(BaseModel):
+    """A room has been removed.
+
+    Distinct from ``RoomMembershipChangedOut`` which signals
+    individual add/remove. Here the room itself ceases to exist, so
+    the frontend should:
+    - drop the room from its tree (sidebar refresh),
+    - if the user is currently viewing the deleted room, navigate
+      away to a safe place (project root or fallback).
+    """
+
+    type: Literal["room_deleted"] = "room_deleted"
+    room_id: str
+
+
 class RoomMembershipChangedOut(BaseModel):
     """Notify a user that their membership in a room has changed.
 
@@ -117,6 +132,7 @@ OutgoingFrame = (
     MessageOut
     | RoomCreatedOut
     | JoinRoomOut
+    | RoomDeletedOut
     | RoomMembershipChangedOut
     | TypingOut
     | WelcomeOut

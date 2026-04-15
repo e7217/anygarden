@@ -56,6 +56,18 @@ export function useWebSocket(roomId: string | null) {
         // consumers (toasts, focus-the-new-room flows) can read it
         // without parsing again.
         window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
+      } else if (data.type === 'room_deleted') {
+        // The whole room is gone. Bubble two events:
+        //   1. ``doorae:rooms:invalidate`` — same listener
+        //      ``RoomsProvider`` already uses for membership changes,
+        //      so the sidebar drops the room without us having to
+        //      reach into the store.
+        //   2. ``doorae:room:deleted`` — carries the room_id so a
+        //      page currently *viewing* that room can navigate
+        //      away (otherwise the user is left staring at a 404
+        //      or an empty chat view).
+        window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
+        window.dispatchEvent(new CustomEvent('doorae:room:deleted', { detail: data }));
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         if (data.is_typing) {

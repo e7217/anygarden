@@ -326,6 +326,244 @@ class TestRoomCRUD:
             assert resp.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_delete_room_member_forbidden(self, room_env) -> None:
+        """Rank-and-file members cannot delete the room — only
+        admin/owner can. Server enforces this regardless of the FE
+        button gating."""
+        app = room_env["app"]
+        room = room_env["room"]
+        sf = app.state.session_factory
+
+        # Seed a member-role user in the room and mint their token.
+        async with sf() as db:
+            from doorae.auth.jwt import create_user_token as _mk_token
+            from doorae.db.models import Participant as _P
+            from doorae.db.models import User as _U
+
+            member = _U(email="member@doorae.io", password_hash="x")
+            db.add(member)
+            await db.flush()
+            db.add(_P(room_id=room.id, user_id=member.id, role="member"))
+            await db.commit()
+            await db.refresh(member)
+        # Use the env's existing config to sign — the server in
+        # ``room_env`` was built from the same one.
+        member_token = _mk_token(
+            member.id,
+            member.email,
+            False,
+            secret=app.state.config.jwt_secret,
+        )
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {member_token}"},
+            )
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_delete_room_outsider_403_not_404(self, room_env) -> None:
+        """Outsider attempting to delete an unrelated/unknown room
+        gets 403 — never 404. Otherwise an attacker probing UUIDs
+        could enumerate room existence by 403-vs-404 timing, the
+        same oracle the invite endpoints already close (#25)."""
+        app = room_env["app"]
+        sf = app.state.session_factory
+
+        async with sf() as db:
+            from doorae.auth.jwt import create_user_token as _mk_token
+            from doorae.db.models import User as _U
+
+            outsider = _U(email="outsider@doorae.io", password_hash="x")
+            db.add(outsider)
+            await db.commit()
+            await db.refresh(outsider)
+        outsider_token = _mk_token(
+            outsider.id,
+            outsider.email,
+            False,
+            secret=app.state.config.jwt_secret,
+        )
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                "/api/v1/rooms/does-not-exist",
+                headers={"Authorization": f"Bearer {outsider_token}"},
+            )
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_delete_room_global_admin_can_delete_unrelated(
+        self, room_env
+    ) -> None:
+        """Global admins (``User.is_admin``) can delete any room
+        even if they aren't a Participant — same rule as invite
+        management."""
+        app = room_env["app"]
+        room = room_env["room"]
+        sf = app.state.session_factory
+
+        async with sf() as db:
+            from doorae.auth.jwt import create_user_token as _mk_token
+            from doorae.db.models import User as _U
+
+            admin = _U(email="g-admin@doorae.io", password_hash="x", is_admin=True)
+            db.add(admin)
+            await db.commit()
+            await db.refresh(admin)
+        admin_token = _mk_token(
+            admin.id,
+            admin.email,
+            True,
+            secret=app.state.config.jwt_secret,
+        )
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert resp.status_code == 204
+
+    @pytest.mark.asyncio
+    async def test_delete_room_broadcasts_room_deleted(self, room_env) -> None:
+        """Successful delete pushes ``RoomDeletedOut`` to subscribers
+        of the deleted room AND to each member's other active WS
+        sessions (sibling-room sidebars). The frontend depends on
+        this push for snappy sidebar refresh — see useWebSocket's
+        ``room_deleted`` branch."""
+        import json
+
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+        owner_part = room_env["participant"]
+        sf = app.state.session_factory
+
+        from doorae.ws.manager import ConnectionManager
+
+        if not getattr(app.state, "connection_manager", None):
+            app.state.connection_manager = ConnectionManager()
+        manager = app.state.connection_manager
+
+        # Seed a sibling room with the same owner — gives us a
+        # second participant_id under the same user_id, which is
+        # what the "other-WS push" path reaches for.
+        async with sf() as db:
+            from doorae.db.models import Participant as _P
+            from doorae.db.models import Project as _Proj
+            from doorae.db.models import Room as _R
+
+            other_proj = _Proj(name="sib-proj")
+            db.add(other_proj)
+            await db.flush()
+            sibling = _R(project_id=other_proj.id, name="sibling")
+            db.add(sibling)
+            await db.flush()
+            sib_part = _P(
+                room_id=sibling.id,
+                user_id=room_env["user"].id,
+                role="owner",
+            )
+            db.add(sib_part)
+            await db.commit()
+            await db.refresh(sib_part)
+
+        deleted_received: list[str] = []
+        sibling_received: list[str] = []
+
+        class FakeWS:
+            def __init__(self, sink: list[str]) -> None:
+                self._sink = sink
+
+            async def send_text(self, data: str) -> None:
+                self._sink.append(data)
+
+        # Two WS subscriptions for the same user: one in the room
+        # being deleted, one in a sibling room.
+        await manager.subscribe(room.id, owner_part.id, FakeWS(deleted_received))  # type: ignore[arg-type]
+        await manager.subscribe(
+            sibling.id, sib_part.id, FakeWS(sibling_received)
+        )  # type: ignore[arg-type]
+
+        try:
+            transport = ASGITransport(app=app)
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                resp = await client.delete(
+                    f"/api/v1/rooms/{room.id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                assert resp.status_code == 204
+        finally:
+            await manager.unsubscribe(owner_part.id)
+            await manager.unsubscribe(sib_part.id)
+
+        def _frames(sink: list[str]) -> list[dict]:
+            return [
+                json.loads(raw)
+                for raw in sink
+                if json.loads(raw).get("type") == "room_deleted"
+            ]
+
+        deleted_frames = _frames(deleted_received)
+        sibling_frames = _frames(sibling_received)
+        assert len(deleted_frames) >= 1
+        assert deleted_frames[0]["room_id"] == room.id
+        # Sibling-room WS also got pinged so the sidebar can refresh
+        # without having to reach the deleted room's stale socket.
+        assert len(sibling_frames) >= 1
+        assert sibling_frames[0]["room_id"] == room.id
+
+    @pytest.mark.asyncio
+    async def test_delete_room_archives_child_rooms(self, room_env) -> None:
+        """Child rooms aren't deleted with the parent — they detach
+        (parent_room_id → NULL). This is the ``archive_child_rooms``
+        contract, pinned here so a future cleanup that switches to
+        cascade-delete doesn't silently destroy users' content."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+        sf = app.state.session_factory
+
+        async with sf() as db:
+            from doorae.db.models import Room as _R
+
+            child = _R(
+                project_id=room.project_id,
+                name="child",
+                parent_room_id=room.id,
+            )
+            db.add(child)
+            await db.commit()
+            await db.refresh(child)
+            child_id = child.id
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 204
+
+        async with sf() as db:
+            from sqlalchemy import select as _select
+
+            from doorae.db.models import Room as _R
+
+            reloaded = (
+                await db.execute(_select(_R).where(_R.id == child_id))
+            ).scalar_one()
+            # Child still exists, just orphaned to project root.
+            assert reloaded.parent_room_id is None
+
+    @pytest.mark.asyncio
     async def test_unauthenticated_request_returns_401(self, room_env) -> None:
         """Requests without an auth token should be rejected."""
         app = room_env["app"]
