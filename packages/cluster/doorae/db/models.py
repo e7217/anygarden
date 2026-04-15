@@ -284,6 +284,50 @@ class AgentToken(Base):
     agent: Mapped["Agent"] = relationship("Agent")
 
 
+class RoomInviteLink(Base):
+    """Shareable invite token that lets an anonymous guest join a room.
+
+    Design doc: §11.3. Tokens follow the ``AgentToken`` shape —
+    plaintext is generated once (``inv_<urlsafe>``), only the argon2
+    hash plus a 12-char ``lookup_hint`` are stored. Validation happens
+    in ``POST /auth/guest`` (PR C); this table carries issue/list/
+    revoke state only.
+    """
+
+    __tablename__ = "room_invite_links"
+    __table_args__ = (
+        Index("ix_room_invite_links_room", "room_id"),
+        Index("ix_room_invite_links_hint", "lookup_hint"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    lookup_hint: Mapped[str] = mapped_column(String(12), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # None = no expiry. Checked only at acceptance time in PR C.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # Non-null ⇒ admin called DELETE /invites/{id}. Accepting this
+    # invite is rejected regardless of ``expires_at``/``use_count``.
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    # None = unlimited uses. Acceptance increments ``use_count`` and
+    # refuses when ``use_count >= max_uses``.
+    max_uses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    room: Mapped["Room"] = relationship("Room")
+    created_by: Mapped["User"] = relationship("User")
+
+
 class Participant(Base):
     __tablename__ = "participants"
 
