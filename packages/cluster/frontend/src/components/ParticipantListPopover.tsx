@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { X } from 'lucide-react'
 import type { Participant } from '@/pages/ChatPage'
+import PresenceDot from '@/components/PresenceDot'
+import type { PresenceMap } from '@/hooks/useParticipantPresence'
 
 interface Props {
   participants: Record<string, Participant>
+  /**
+   * Realtime presence map from ``useParticipantPresence``. When
+   * present, each row renders a ``<PresenceDot>`` that updates
+   * without re-fetching the room. Optional so the popover still
+   * works for callers that haven't wired presence yet (e.g. the
+   * guest room view).
+   */
+  presence?: PresenceMap
   open: boolean
   onClose: () => void
   myParticipantId?: string | null
@@ -31,6 +41,7 @@ interface Props {
  */
 export default function ParticipantListPopover({
   participants,
+  presence,
   open,
   onClose,
   myParticipantId,
@@ -112,6 +123,14 @@ export default function ParticipantListPopover({
               key={p.id}
               className="flex items-center gap-2 px-3 py-2 text-sm"
             >
+              <PresenceDot
+                online={
+                  presence?.[p.id]?.online ?? Boolean(p.online)
+                }
+                lastSeenAt={
+                  presence?.[p.id]?.lastSeenAt ?? p.last_seen_at ?? null
+                }
+              />
               <span className="truncate">
                 {p.display_name || p.id.slice(0, 8)}
                 {isMe && (

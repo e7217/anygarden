@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -85,6 +86,14 @@ class ParticipantOut(BaseModel):
     # keep a separate kind value (the server would otherwise risk
     # breaking callers that assume kind ∈ {"user", "agent"}).
     is_anonymous: bool = False
+    # Presence fields (#54). ``online`` tracks whether the participant
+    # currently has an open WS subscription; ``last_seen_at`` exposes
+    # the most recent liveness signal (WS disconnect or agent
+    # heartbeat) so the UI can render "last seen N min ago" tooltips.
+    # Defaulted so legacy clients that build ParticipantOut without
+    # presence info keep working.
+    online: bool = False
+    last_seen_at: Optional[datetime] = None
     model_config = {"from_attributes": True}
 
 
@@ -208,6 +217,7 @@ async def list_rooms(
 @router.get("/{room_id}", response_model=RoomDetailOut)
 async def get_room(
     room_id: str,
+    request: Request,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -236,6 +246,19 @@ async def get_room(
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
 
+    # Presence snapshot (#54) — batch resolve online/last_seen_at for
+    # every participant in a single call so we don't round-trip per
+    # row. Falls back silently if the presence service isn't wired
+    # (e.g. tests that construct ``create_app`` without running the
+    # lifespan): participants still serialize with default offline.
+    presence_by_pid: dict[str, tuple[bool, Optional[datetime]]] = {}
+    presence = getattr(request.app.state, "presence_service", None)
+    if presence is not None:
+        snapshot = await presence.room_snapshot(room_id, db=db)
+        presence_by_pid = {
+            s.participant_id: (s.online, s.last_seen_at) for s in snapshot
+        }
+
     participant_outs: list[ParticipantOut] = []
     for p in room.participants:
         display_name = ""
@@ -262,6 +285,7 @@ async def get_room(
             if agent:
                 display_name = agent.name
             kind = "agent"
+        online, last_seen_at = presence_by_pid.get(p.id, (False, None))
         participant_outs.append(ParticipantOut(
             id=p.id,
             room_id=p.room_id,
@@ -271,6 +295,8 @@ async def get_room(
             display_name=display_name,
             kind=kind,
             is_anonymous=is_anonymous,
+            online=online,
+            last_seen_at=last_seen_at,
         ))
 
     return RoomDetailOut(

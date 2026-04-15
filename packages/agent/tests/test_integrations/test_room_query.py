@@ -230,6 +230,102 @@ class TestExecuteRoomQuery:
         assert len(client._message_handlers) == 0
 
     @pytest.mark.asyncio
+    async def test_expected_count_excludes_offline(self):
+        """#54 — offline agents MUST NOT count toward ``expected_count``.
+
+        A dead process otherwise forces every cross-room query to
+        wait the full timeout and then report "(1/2) — 1명 미응답",
+        which is misleading: the agent wasn't slow, it was gone.
+        """
+        client = _make_client()
+        # One online, one offline target agent besides self.
+        client.get_room_participants = AsyncMock(return_value=[
+            {"id": "my-pid", "kind": "agent"},
+            {
+                "id": "agent-online",
+                "kind": "agent",
+                "online": True,
+                "display_name": "alive",
+            },
+            {
+                "id": "agent-offline",
+                "kind": "agent",
+                "online": False,
+                "display_name": "dead",
+                "last_seen_at": None,
+            },
+        ])
+        query = RoomQuery(
+            target_room_id="room-b",
+            source_room_id="room-a",
+            content="의견?",
+        )
+
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        # Only the online agent should be awaited → one response
+        # completes the collection.
+        handler = client._message_handlers[0]
+        client.send.reset_mock()
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-online",
+            "content": "좋습니다",
+        })
+        assert client.send.call_count == 1
+        body = client.send.call_args[0][1]
+        # Header should read "1/1", not "1/2".
+        assert "1/1" in body
+        assert "2명 미응답" not in body
+
+    @pytest.mark.asyncio
+    async def test_missing_responder_label_offline(self):
+        """#54 — the offline candidate is listed in the summary with a
+        ``(offline, ...)`` tag so users can see *why* they missed."""
+        client = _make_client()
+        client.get_room_participants = AsyncMock(return_value=[
+            {"id": "my-pid", "kind": "agent"},
+            {
+                "id": "agent-online",
+                "kind": "agent",
+                "online": True,
+                "display_name": "alive",
+            },
+            {
+                "id": "agent-offline",
+                "kind": "agent",
+                "online": False,
+                "display_name": "dead-codex",
+                "last_seen_at": None,
+            },
+        ])
+        query = RoomQuery(
+            target_room_id="room-b",
+            source_room_id="room-a",
+            content="의견?",
+        )
+
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        handler = client._message_handlers[0]
+        client.send.reset_mock()
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-online",
+            "content": "좋습니다",
+        })
+
+        body = client.send.call_args[0][1]
+        assert "dead-codex" in body
+        assert "offline" in body
+
+    @pytest.mark.asyncio
     async def test_callback_collects_and_synthesizes(self):
         """Callback collects all responses then delivers summary
         with ``status="completed"`` metadata."""

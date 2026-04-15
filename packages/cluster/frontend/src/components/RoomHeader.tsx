@@ -13,12 +13,22 @@ interface AgentParticipant {
   id: string
   agent_id: string
   display_name: string
+  /** #54 — surfaced so the representative dropdown can append
+   *  "(offline)" for agents that don't currently have a WS
+   *  subscription. Optional: legacy callers that omit it keep
+   *  working; the label simply reads the bare name. */
+  online?: boolean
 }
 
 interface RoomHeaderProps {
   roomName: string
   connected: boolean
   participantCount?: number
+  /** #54 — "n/N agents online". Rendered next to the Connected
+   *  badge when both are supplied. ``agentsOnline`` can exceed
+   *  ``agentsTotal`` briefly during reconnects; we clamp on display. */
+  agentsOnline?: number
+  agentsTotal?: number
   parentBreadcrumb?: ParentBreadcrumb[]
   representativeAgentId?: string | null
   agentParticipants?: AgentParticipant[]
@@ -56,6 +66,8 @@ export default function RoomHeader({
   roomName,
   connected,
   participantCount,
+  agentsOnline,
+  agentsTotal,
   parentBreadcrumb,
   representativeAgentId,
   agentParticipants,
@@ -143,6 +155,7 @@ export default function RoomHeader({
             {agentParticipants.map((ap) => (
               <option key={ap.agent_id} value={ap.agent_id}>
                 {ap.display_name}
+                {ap.online === false ? ' (offline)' : ''}
               </option>
             ))}
           </select>
@@ -151,6 +164,18 @@ export default function RoomHeader({
           <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
           <span className="sm:hidden">{connected ? '●' : '○'}</span>
         </Badge>
+        {agentsTotal !== undefined && agentsTotal > 0 && agentsOnline !== undefined && (
+          /* #54 — surface agent liveness count alongside the server
+             connection badge. Clamped in case of brief
+             online>total reconnection races. */
+          <span
+            className="text-caption rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-foreground-muted)]"
+            title={`${agentsOnline} of ${agentsTotal} agents online`}
+            data-testid="room-header-agent-liveness"
+          >
+            agents {Math.min(agentsOnline, agentsTotal)}/{agentsTotal}
+          </span>
+        )}
         <RoomSettingsMenu
           onCreateSubRoom={onCreateSubRoom}
           onEditRoom={onEditRoom}

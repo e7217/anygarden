@@ -131,6 +131,22 @@ class TypingOut(BaseModel):
     is_typing: bool
 
 
+class PresenceUpdateOut(BaseModel):
+    """A participant's WS subscription state changed (#54).
+
+    Emitted from ``ConnectionManager.subscribe``/``unsubscribe`` via
+    ``PresenceService.publish``. Frontend consumers merge this into
+    ``useParticipantPresence`` state so dots and "last seen" labels
+    refresh in near real time without polling.
+    """
+
+    type: Literal["presence_update"] = "presence_update"
+    room_id: str
+    participant_id: str
+    online: bool
+    last_seen_at: Optional[datetime] = None
+
+
 class WelcomeOut(BaseModel):
     type: Literal["welcome"] = "welcome"
     participant_id: str
@@ -150,6 +166,7 @@ OutgoingFrame = (
     | RoomMembershipChangedOut
     | RoomPinOrderChangedOut
     | TypingOut
+    | PresenceUpdateOut
     | WelcomeOut
     | ErrorOut
 )
