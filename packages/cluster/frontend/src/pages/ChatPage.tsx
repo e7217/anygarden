@@ -9,6 +9,7 @@ import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import RoomInviteDialog from '@/components/RoomInviteDialog'
+import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import TaskPanel from '@/components/TaskPanel'
 import { Button } from '@/components/ui/button'
@@ -29,6 +30,10 @@ export interface Participant {
   // Used for per-room admin-ish UI gating (e.g. the Invites button)
   // — the server remains the sole authority.
   role?: string
+  // True for anonymous guest users. Lets the UI show a distinct
+  // "guest" badge without having to introduce a new ``kind`` value,
+  // which would break legacy callers expecting ``user``/``agent``.
+  is_anonymous?: boolean
 }
 
 export default function ChatPage() {
@@ -44,6 +49,7 @@ export default function ChatPage() {
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
+  const [participantsOpen, setParticipantsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'chat' | 'tasks'>('chat')
@@ -122,6 +128,7 @@ export default function ChatPage() {
             user_id: p.user_id,
             agent_id: p.agent_id,
             role: p.role,
+            is_anonymous: Boolean(p.is_anonymous),
           }
           if (user && p.user_id === user.id) {
             myPid = p.id
@@ -205,40 +212,49 @@ export default function ChatPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedRoom && currentRoom ? (
           <>
-            <RoomHeader
-              roomName={currentRoom.name}
-              connected={connected}
-              participantCount={Object.keys(participants).length}
-              parentBreadcrumb={parentBreadcrumb}
-              representativeAgentId={currentRoom.representative_agent_id}
-              agentParticipants={user?.is_admin ? agentParticipants : undefined}
-              onSetRepresentative={user?.is_admin ? handleSetRepresentative : undefined}
-              onManageAgents={user?.is_admin ? () => setAgentDialogOpen(true) : undefined}
-              onCreateSubRoom={() => setSubRoomDialogOpen(true)}
-              onEditRoom={() => setRoomEditOpen(true)}
-              onManageInvites={
-                // Match the server's auth rule in invites.py: global
-                // admin OR a room-level admin/owner Participant. The
-                // backend stays the sole authority — hiding the
-                // button is purely to avoid leading non-privileged
-                // users to a 403.
-                (() => {
-                  if (user?.is_admin) return () => setRoomInvitesOpen(true)
-                  const myRole = myParticipantId
-                    ? participants[myParticipantId]?.role
-                    : undefined
-                  if (myRole === 'admin' || myRole === 'owner') {
-                    return () => setRoomInvitesOpen(true)
-                  }
-                  return undefined
-                })()
-              }
-              onStopAllAgents={user?.is_admin ? async () => {
-                if (!selectedRoom) return
-                await apiFetch(`/api/v1/rooms/${selectedRoom}/stop-agents`, { method: 'POST' })
-              } : undefined}
-              onOpenSidebar={() => setSidebarOpen(true)}
-            />
+            <div className="relative">
+              <RoomHeader
+                roomName={currentRoom.name}
+                connected={connected}
+                participantCount={Object.keys(participants).length}
+                parentBreadcrumb={parentBreadcrumb}
+                representativeAgentId={currentRoom.representative_agent_id}
+                agentParticipants={user?.is_admin ? agentParticipants : undefined}
+                onSetRepresentative={user?.is_admin ? handleSetRepresentative : undefined}
+                onManageAgents={user?.is_admin ? () => setAgentDialogOpen(true) : undefined}
+                onCreateSubRoom={() => setSubRoomDialogOpen(true)}
+                onEditRoom={() => setRoomEditOpen(true)}
+                onManageInvites={
+                  // Match the server's auth rule in invites.py: global
+                  // admin OR a room-level admin/owner Participant.
+                  // The backend stays the sole authority — hiding the
+                  // button is purely to avoid leading non-privileged
+                  // users to a 403.
+                  (() => {
+                    if (user?.is_admin) return () => setRoomInvitesOpen(true)
+                    const myRole = myParticipantId
+                      ? participants[myParticipantId]?.role
+                      : undefined
+                    if (myRole === 'admin' || myRole === 'owner') {
+                      return () => setRoomInvitesOpen(true)
+                    }
+                    return undefined
+                  })()
+                }
+                onStopAllAgents={user?.is_admin ? async () => {
+                  if (!selectedRoom) return
+                  await apiFetch(`/api/v1/rooms/${selectedRoom}/stop-agents`, { method: 'POST' })
+                } : undefined}
+                onOpenSidebar={() => setSidebarOpen(true)}
+                onToggleParticipants={() => setParticipantsOpen((v) => !v)}
+              />
+              <ParticipantListPopover
+                participants={participants}
+                open={participantsOpen}
+                onClose={() => setParticipantsOpen(false)}
+                myParticipantId={myParticipantId}
+              />
+            </div>
             {/* Chat / Tasks tab bar + Search */}
             <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4">
               <div className="flex items-center gap-1">

@@ -171,7 +171,9 @@ class TestRoomCRUD:
     @pytest.mark.asyncio
     async def test_get_room_detail_renders_guest_display_name(self, room_env) -> None:
         """Guests have no email; the detail endpoint must fall back to
-        display_name instead of crashing on ``None.split('@')``."""
+        display_name instead of crashing on ``None.split('@')``. The
+        response also surfaces ``is_anonymous`` so the frontend can
+        render a "Guest" badge in the participant list."""
         app = room_env["app"]
         room = room_env["room"]
         token = room_env["token"]
@@ -199,8 +201,14 @@ class TestRoomCRUD:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 200
-            names = [p["display_name"] for p in resp.json()["participants"]]
-            assert "Visitor" in names
+            parts = resp.json()["participants"]
+            by_name = {p["display_name"]: p for p in parts}
+            assert "Visitor" in by_name
+            assert by_name["Visitor"]["is_anonymous"] is True
+            # Registered owner in the same room must be marked not-anonymous.
+            registered = [p for p in parts if p["display_name"] != "Visitor"]
+            assert registered
+            assert all(p["is_anonymous"] is False for p in registered)
 
     @pytest.mark.asyncio
     async def test_add_participant(self, room_env) -> None:

@@ -67,6 +67,11 @@ class ParticipantOut(BaseModel):
     role: str
     display_name: str = ""
     kind: str = "user"
+    # True when the underlying User row is an anonymous guest. Lets
+    # the client render a distinct "Guest" badge without having to
+    # keep a separate kind value (the server would otherwise risk
+    # breaking callers that assume kind ∈ {"user", "agent"}).
+    is_anonymous: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -169,6 +174,7 @@ async def get_room(
     for p in room.participants:
         display_name = ""
         kind = "user"
+        is_anonymous = False
         if p.user_id:
             user_result = await db.execute(select(User).where(User.id == p.user_id))
             user = user_result.scalar_one_or_none()
@@ -182,6 +188,7 @@ async def get_room(
                     display_name = user.email.split("@")[0]
                 else:
                     display_name = "Guest"
+                is_anonymous = bool(user.is_anonymous)
             kind = "user"
         elif p.agent_id:
             agent_result = await db.execute(select(Agent).where(Agent.id == p.agent_id))
@@ -197,6 +204,7 @@ async def get_room(
             role=p.role,
             display_name=display_name,
             kind=kind,
+            is_anonymous=is_anonymous,
         ))
 
     return RoomDetailOut(
