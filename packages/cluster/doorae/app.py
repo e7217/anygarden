@@ -26,7 +26,11 @@ from doorae.api.v1.invites import router as invites_router
 from doorae.api.v1.saved import router as saved_router
 from doorae.api.v1.search import router as search_router
 from doorae.api.v1.tasks import router as tasks_router
-from doorae.orchestration.rules import CooldownManager, TypingTracker
+from doorae.orchestration.rules import (
+    CooldownManager,
+    GuestRoomAggregateLimiter,
+    TypingTracker,
+)
 from doorae.scheduler.machine_bus import MachineBus
 from doorae.scheduler.lifecycle import AgentLifecycle
 from doorae.ws.manager import ConnectionManager
@@ -249,6 +253,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.connection_manager = ConnectionManager()
     if not getattr(app.state, "cooldown_manager", None):
         app.state.cooldown_manager = CooldownManager(capacity=5, refill_rate=1.0)
+    # Guests get a stricter bucket — §11.7 of the design doc. The two
+    # managers are intentionally separate instances so a single
+    # burst from a chatty registered user doesn't starve the guest
+    # bucket and vice versa.
+    if not getattr(app.state, "guest_cooldown_manager", None):
+        app.state.guest_cooldown_manager = CooldownManager(
+            capacity=3, refill_rate=0.5
+        )
+    # Room-wide cap on combined guest mentions — blunts LLM-cost
+    # amplification when an invite is shared widely. 20 agent-mention
+    # events per minute per room is the §11.7 starting point.
+    if not getattr(app.state, "guest_room_limiter", None):
+        app.state.guest_room_limiter = GuestRoomAggregateLimiter(
+            capacity=20, window_seconds=60.0
+        )
     if not getattr(app.state, "typing_tracker", None):
         app.state.typing_tracker = TypingTracker(ttl_seconds=5.0)
 
