@@ -94,7 +94,13 @@ export default function RoomHeader({
             <button
               type="button"
               onClick={onToggleParticipants}
-              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-[var(--color-background-muted)]"
+              // ``hover:bg-black/5 cursor-pointer`` matches the
+              // project-wide ghost-button convention recorded in
+              // docs/history/STATUS.md (PR #31/#32). Using the ghost
+              // rule keeps the participant toggle visually aligned
+              // with every other header control and gives it the
+              // expected pointer/highlight affordance.
+              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
               title="Show room participants"
               data-testid="room-header-participants-toggle"
             >

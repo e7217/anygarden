@@ -195,7 +195,10 @@ export default function GuestRoomPage() {
             <button
               type="button"
               onClick={() => setParticipantsOpen((v) => !v)}
-              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-[var(--color-background-muted)]"
+              // Ghost-button hover convention (see
+              // docs/history/STATUS.md — ``hover:bg-black/5
+              // cursor-pointer`` applied globally to ghost buttons).
+              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
               title="Show room participants"
               data-testid="guest-header-participants-toggle"
             >
