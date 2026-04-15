@@ -197,13 +197,18 @@ async def add_participant(
     await db.commit()
     await db.refresh(participant)
 
-    # When an agent is added, notify it through any of its existing
-    # WS connections so the agent SDK dynamically joins the new room.
-    # Without this, the agent would only see the room on its next
-    # (re)connection and miss messages in the meantime.
-    if body.agent_id:
-        manager = getattr(request.app.state, "connection_manager", None)
-        if manager is not None:
+    # Notify the newly added participant through any of their existing
+    # WS connections so the client can react immediately without polling.
+    #
+    # - Agents receive ``JoinRoomOut`` and the SDK auto-connects to the
+    #   new room (see doorae_agent/client.py:298-302). Without this they
+    #   would miss messages until their next full reconnect.
+    # - Users receive ``RoomMembershipChangedOut`` so the frontend
+    #   sidebar/room-list can refresh. Users don't auto-join WS; they
+    #   open it lazily when they navigate to the room.
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        if body.agent_id:
             from doorae.ws.protocol import JoinRoomOut
 
             other_pids = (
@@ -214,9 +219,27 @@ async def add_participant(
                     )
                 )
             ).scalars().all()
-            frame = JoinRoomOut(room_id=room_id, participant_id="")
+            join_frame = JoinRoomOut(room_id=room_id, participant_id="")
             for pid in other_pids:
-                await manager.send_to(pid, frame)
+                await manager.send_to(pid, join_frame)
+        elif body.user_id:
+            from doorae.ws.protocol import RoomMembershipChangedOut
+
+            other_pids = (
+                await db.execute(
+                    select(Participant.id).where(
+                        Participant.user_id == body.user_id,
+                        Participant.id != participant.id,
+                    )
+                )
+            ).scalars().all()
+            user_frame = RoomMembershipChangedOut(
+                action="added",
+                room_id=room_id,
+                user_id=body.user_id,
+            )
+            for pid in other_pids:
+                await manager.send_to(pid, user_frame)
 
     return participant
 
