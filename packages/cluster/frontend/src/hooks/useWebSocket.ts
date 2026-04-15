@@ -47,6 +47,15 @@ export function useWebSocket(roomId: string | null) {
           if (prev.some(m => m.seq === data.seq)) return prev;
           return [...prev, data];
         });
+      } else if (data.type === 'room_membership_changed') {
+        // Server pushes this when the user is added to (or removed
+        // from) any room — see ws/protocol.py::RoomMembershipChangedOut.
+        // The per-room useWebSocket hook can't directly touch the
+        // RoomsProvider, so we re-emit on the window and let the
+        // provider listen. Detail mirrors the server frame so future
+        // consumers (toasts, focus-the-new-room flows) can read it
+        // without parsing again.
+        window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         if (data.is_typing) {

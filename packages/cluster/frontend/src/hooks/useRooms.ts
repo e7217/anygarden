@@ -272,6 +272,20 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     projects.forEach(p => { void fetchRooms(p.id); });
   }, [projects, fetchRooms]);
 
+  // Server-pushed membership changes (see
+  // ws/protocol.py::RoomMembershipChangedOut) arrive on whichever
+  // per-room WS the user happens to have open. The room-level hook
+  // re-emits them as ``doorae:rooms:invalidate`` window events so
+  // we can refresh the tree from the provider regardless of which
+  // ChatPage instance received the frame. ``refetch`` is the right
+  // hammer here — DM additions, project additions, and per-project
+  // room additions all need a consistent view.
+  useEffect(() => {
+    const handler = () => { void refetch(); };
+    window.addEventListener('doorae:rooms:invalidate', handler);
+    return () => window.removeEventListener('doorae:rooms:invalidate', handler);
+  }, [refetch]);
+
   const value = useMemo<RoomsContextValue>(() => ({
     projects,
     rooms,
