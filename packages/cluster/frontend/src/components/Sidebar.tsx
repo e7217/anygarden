@@ -10,7 +10,18 @@ import {
 } from '@/components/ui/dialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Bot, Server, MessageSquare, X,
+  Pin, PinOff, GripVertical,
 } from 'lucide-react'
+import {
+  DndContext, closestCenter, KeyboardSensor, PointerSensor,
+  useSensor, useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  arrayMove, SortableContext, sortableKeyboardCoordinates,
+  verticalListSortingStrategy, useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 
 // Tree node for rendering the sidebar room list. The server
 // returns a flat list per project; we reshape it here so each
@@ -69,6 +80,24 @@ function buildRoomTree(rooms: Room[]): RoomTreeNode[] {
   return roots
 }
 
+// Split the flat room list into the sidebar's top "Pinned" section
+// and the default section (#47). Pinned covers top-level rooms only
+// — sub-rooms always render under their parent, preserving the
+// tree, even if the parent is pinned. Ordering within the pinned
+// section follows ``sort_order`` (sparse integer) ascending.
+function splitPinned(rooms: Room[]): { pinned: Room[]; rest: Room[] } {
+  const pinned: Room[] = []
+  const rest: Room[] = []
+  for (const r of rooms) {
+    if (r.pinned && !r.parent_room_id) pinned.push(r)
+    else rest.push(r)
+  }
+  pinned.sort(
+    (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+  )
+  return { pinned, rest }
+}
+
 interface SidebarProps {
   selectedRoom: string | null
   /** Mobile off-canvas open state. Desktop (md+) is always visible. */
@@ -78,9 +107,21 @@ interface SidebarProps {
 
 export default function Sidebar({ selectedRoom, open = false, onClose }: SidebarProps) {
   const { user, logout } = useAuth()
-  const { projects, rooms, agentDMs, createProject, createRoom } = useRooms()
+  const {
+    projects, rooms, agentDMs, createProject, createRoom, pinRoom,
+    reorderPinnedRooms,
+  } = useRooms()
   const navigate = useNavigate()
   const location = useLocation()
+
+  // Pointer needs a small drag-distance activation so a simple
+  // click on the room label still navigates — only a genuine drag
+  // (>= 6px) kicks the DnD session off. Keyboard sensor gives
+  // Space/Enter pick-up and arrow-key movement out of the box.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
     try {
@@ -116,13 +157,23 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
   // Pre-compute the tree for each project so the render loop
   // does not recompute on every draw. Keyed by project_id so
   // we get a stable reference per project for
-  // ``RoomTreeBranch``.
-  const projectTrees = useMemo(() => {
-    const out: Record<string, RoomTreeNode[]> = {}
+  // ``RoomTreeBranch``. Pinned top-level rooms are lifted into a
+  // separate section and skipped here so they don't double up.
+  const { pinnedRooms, projectTrees } = useMemo(() => {
+    const allPinned: Room[] = []
+    const trees: Record<string, RoomTreeNode[]> = {}
     for (const projectId of Object.keys(rooms)) {
-      out[projectId] = buildRoomTree(rooms[projectId] ?? [])
+      const list = rooms[projectId] ?? []
+      const { pinned, rest } = splitPinned(list)
+      allPinned.push(...pinned)
+      trees[projectId] = buildRoomTree(rest)
     }
-    return out
+    // Global pin order: preserve per-user sort_order across
+    // projects. Same sparse integer spacing as the server.
+    allPinned.sort(
+      (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+    )
+    return { pinnedRooms: allPinned, projectTrees: trees }
   }, [rooms])
 
   const handleCreateProject = async () => {
@@ -194,6 +245,51 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
       {/* Projects & Rooms */}
       <ScrollArea className="flex-1">
         <div className="px-2 py-2">
+          {/* Pinned section — top-level pinned rooms across all
+              projects, ordered by ``sort_order`` (#47). The
+              ``DndContext`` scope is intentionally local to the
+              pinned section so drags outside the section never
+              trigger reorder logic. */}
+          {pinnedRooms.length > 0 && (
+            <div className="mb-2">
+              <div className="flex items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)]">
+                <Pin className="h-3 w-3" />
+                Pinned
+              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event: DragEndEvent) => {
+                  const { active, over } = event
+                  if (!over || active.id === over.id) return
+                  const ids = pinnedRooms.map(r => r.id)
+                  const from = ids.indexOf(String(active.id))
+                  const to = ids.indexOf(String(over.id))
+                  if (from === -1 || to === -1) return
+                  const nextOrder = arrayMove(ids, from, to)
+                  void reorderPinnedRooms(nextOrder)
+                }}
+              >
+                <SortableContext
+                  items={pinnedRooms.map(r => r.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    {pinnedRooms.map(room => (
+                      <PinnedRoomItem
+                        key={room.id}
+                        room={room}
+                        selectedRoom={selectedRoom}
+                        onGo={go}
+                        onUnpin={() => { void pinRoom(room.id, false) }}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            </div>
+          )}
+
           {projects.map(project => (
             <div key={project.id} className="mb-1">
               <button
@@ -213,6 +309,7 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
                     nodes={projectTrees[project.id] ?? []}
                     selectedRoom={selectedRoom}
                     onGo={go}
+                    onPin={(roomId) => { void pinRoom(roomId, true) }}
                   />
 
                   <button
@@ -368,10 +465,12 @@ function RoomTreeBranch({
   nodes,
   selectedRoom,
   onGo,
+  onPin,
 }: {
   nodes: RoomTreeNode[]
   selectedRoom: string | null
   onGo: (path: string) => void
+  onPin: (roomId: string) => void
 }) {
   return (
     <>
@@ -381,6 +480,7 @@ function RoomTreeBranch({
           node={node}
           selectedRoom={selectedRoom}
           onGo={onGo}
+          onPin={onPin}
         />
       ))}
     </>
@@ -391,10 +491,12 @@ function RoomTreeNodeView({
   node,
   selectedRoom,
   onGo,
+  onPin,
 }: {
   node: RoomTreeNode
   selectedRoom: string | null
   onGo: (path: string) => void
+  onPin: (roomId: string) => void
 }) {
   // Cap the padding so that at depth >= 4 the label stays visible.
   // Deep threads are rare in practice and the user can still use
@@ -402,29 +504,128 @@ function RoomTreeNodeView({
   const indentPx = Math.min(node.depth, 4) * 12
 
   const isSelected = selectedRoom === node.room.id
+  // Pin action is only offered for top-level rooms — sub-rooms are
+  // contextually tied to their parent and shouldn't float out of
+  // the tree (#47 scope).
+  const canPin = node.depth === 0
 
   return (
     <>
-      <button
-        onClick={() => onGo(`/rooms/${node.room.id}`)}
-        style={{ paddingLeft: `${indentPx + 8}px` }}
-        className={`flex w-full items-center rounded-[var(--radius-sm)] py-1 pr-2 text-[14px] font-medium transition-colors mb-0.5 ${
+      <div
+        className={`group relative flex w-full items-center rounded-[var(--radius-sm)] mb-0.5 ${
           isSelected
-            ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-            : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+            ? 'bg-white shadow-whisper'
+            : 'hover:bg-black/5'
         }`}
-        data-testid={`sidebar-room-${node.room.id}`}
       >
-        <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-        <span className="truncate">{node.room.name}</span>
-      </button>
+        <button
+          onClick={() => onGo(`/rooms/${node.room.id}`)}
+          style={{ paddingLeft: `${indentPx + 8}px` }}
+          className={`flex min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+            isSelected
+              ? 'text-[var(--color-foreground)]'
+              : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
+          }`}
+          data-testid={`sidebar-room-${node.room.id}`}
+        >
+          <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+          <span className="truncate">{node.room.name}</span>
+        </button>
+        {canPin && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPin(node.room.id) }}
+            title="Pin to top"
+            aria-label={`Pin ${node.room.name}`}
+            data-testid={`sidebar-pin-${node.room.id}`}
+            className="mr-1 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
+          >
+            <Pin className="h-3 w-3" />
+          </button>
+        )}
+      </div>
       {node.children.length > 0 && (
         <RoomTreeBranch
           nodes={node.children}
           selectedRoom={selectedRoom}
           onGo={onGo}
+          onPin={onPin}
         />
       )}
     </>
+  )
+}
+
+function PinnedRoomItem({
+  room,
+  selectedRoom,
+  onGo,
+  onUnpin,
+}: {
+  room: Room
+  selectedRoom: string | null
+  onGo: (path: string) => void
+  onUnpin: () => void
+}) {
+  const isSelected = selectedRoom === room.id
+  // ``useSortable`` wires each item into the parent
+  // ``SortableContext``. ``attributes`` + ``listeners`` go on the
+  // drag handle so the row itself stays click-to-navigate; the
+  // handle is the only DnD trigger. ``transform`` and
+  // ``transition`` animate the reorder smoothly.
+  const {
+    attributes, listeners, setNodeRef, transform, transition, isDragging,
+  } = useSortable({ id: room.id })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`group relative flex w-full items-center rounded-[var(--radius-sm)] ${
+        isSelected
+          ? 'bg-white shadow-whisper'
+          : 'hover:bg-black/5'
+      }`}
+    >
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        title="Drag to reorder"
+        aria-label={`Reorder ${room.name}`}
+        data-testid={`sidebar-drag-${room.id}`}
+        className="cursor-grab touch-none rounded p-1 text-[var(--color-foreground-subtle)] opacity-0 group-hover:opacity-100 hover:bg-black/5 focus:opacity-100 active:cursor-grabbing"
+      >
+        <GripVertical className="h-3 w-3" />
+      </button>
+      <button
+        onClick={() => onGo(`/rooms/${room.id}`)}
+        className={`flex min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+          isSelected
+            ? 'text-[var(--color-foreground)]'
+            : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
+        }`}
+        data-testid={`sidebar-pinned-${room.id}`}
+      >
+        <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+        <span className="truncate">{room.name}</span>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onUnpin() }}
+        title="Unpin"
+        aria-label={`Unpin ${room.name}`}
+        data-testid={`sidebar-unpin-${room.id}`}
+        className="mr-1 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
+      >
+        <PinOff className="h-3 w-3" />
+      </button>
+    </div>
   )
 }
