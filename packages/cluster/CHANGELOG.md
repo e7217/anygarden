@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Features — sidebar
+
+- Drag-and-drop reorder for pinned rooms in sidebar
+  ([#47](https://github.com/e7217/doorae/issues/47))
+
+
 ## v0.2.0 (2026-04-15)
 
 ### Features — anonymous guest participation (RFC #22)

@@ -20,7 +20,12 @@ from doorae.dependencies import (
     get_db,
 )
 from doorae.rooms.membership import add_user_to_room, ensure_agent_in_room
-from doorae.rooms.service import archive_child_rooms, create_sub_room
+from doorae.rooms.service import (
+    archive_child_rooms,
+    create_sub_room,
+    reorder_pinned_rooms,
+    set_room_pinned,
+)
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
 
@@ -58,6 +63,12 @@ class RoomOut(BaseModel):
     parent_room_id: Optional[str] = None
     is_dm: bool
     representative_agent_id: Optional[str] = None
+    # Caller-specific sidebar pin state (#47). Populated by
+    # ``list_rooms`` for registered users; guests and agent callers
+    # always see ``pinned=False`` / ``sort_order=None`` because the
+    # sidebar doesn't apply to them.
+    pinned: bool = False
+    sort_order: Optional[int] = None
     model_config = {"from_attributes": True}
 
 
@@ -79,6 +90,21 @@ class ParticipantOut(BaseModel):
 
 class RoomDetailOut(RoomOut):
     participants: list[ParticipantOut] = []
+
+
+class PinRoomBody(BaseModel):
+    pinned: bool
+
+
+class PinOrderBody(BaseModel):
+    # Snapshot of the caller's pinned sidebar section in its new
+    # order. Idempotent: resending the same list is a no-op. Only
+    # room_ids that are currently pinned for the caller are renumbered.
+    room_ids: list[str]
+
+
+class PinOrderOut(BaseModel):
+    pinned_room_ids: list[str]
 
 
 # -- Endpoints ----------------------------------------------------------------
@@ -138,7 +164,45 @@ async def list_rooms(
         query = query.where(Room.is_dm == is_dm)
     query = query.order_by(Room.created_at)
     result = await db.execute(query)
-    return list(result.scalars().all())
+    rooms = list(result.scalars().all())
+
+    # Enrich with caller-specific pin state so the sidebar doesn't
+    # need a second round-trip on every load. Only meaningful for
+    # registered users — the other identity kinds keep the default
+    # ``pinned=False``.
+    pin_state: dict[str, tuple[bool, Optional[int]]] = {}
+    if identity.kind == "user" and rooms:
+        room_ids = [r.id for r in rooms]
+        pin_result = await db.execute(
+            select(
+                Participant.room_id,
+                Participant.pinned,
+                Participant.sort_order,
+            ).where(
+                Participant.user_id == identity.id,
+                Participant.room_id.in_(room_ids),
+            )
+        )
+        for row in pin_result.all():
+            pin_state[row[0]] = (bool(row[1]), row[2])
+
+    out: list[RoomOut] = []
+    for r in rooms:
+        pinned, sort_order = pin_state.get(r.id, (False, None))
+        out.append(
+            RoomOut(
+                id=r.id,
+                project_id=r.project_id,
+                name=r.name,
+                description=r.description,
+                parent_room_id=r.parent_room_id,
+                is_dm=r.is_dm,
+                representative_agent_id=r.representative_agent_id,
+                pinned=pinned,
+                sort_order=sort_order,
+            )
+        )
+    return out
 
 
 @router.get("/{room_id}", response_model=RoomDetailOut)
@@ -637,3 +701,93 @@ async def create_sub_room_endpoint(
         )
 
     return child
+
+
+async def _broadcast_pin_order_to_user(
+    request: Request,
+    *,
+    user_id: str,
+    pinned_room_ids: list[str],
+    db: AsyncSession,
+) -> None:
+    """Fan out a pin-order change frame to every live WS session of ``user_id``.
+
+    The ``ConnectionManager`` is keyed by ``participant_id`` rather
+    than ``user_id``, so we resolve the user's participant rows here
+    and call ``send_to`` per id. Silent when no manager is attached
+    (e.g. unit tests without a running WS dispatcher).
+    """
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is None:
+        return
+    result = await db.execute(
+        select(Participant.id).where(Participant.user_id == user_id)
+    )
+    participant_ids = [row[0] for row in result.all()]
+    if not participant_ids:
+        return
+    from doorae.ws.protocol import RoomPinOrderChangedOut
+    frame = RoomPinOrderChangedOut(
+        user_id=user_id, pinned_room_ids=pinned_room_ids
+    )
+    for pid in participant_ids:
+        await manager.send_to(pid, frame)
+
+
+# -- Sidebar pin / reorder ----------------------------------------------------
+#
+# Two endpoints cover the drag-and-drop reorder flow (#47):
+#
+# - ``PATCH /{room_id}/pin`` flips pin on/off for the caller. Pin on
+#   places the room at the tail of the pinned section. Pin off clears
+#   ``sort_order`` so the room rejoins the default alphabetical list.
+# - ``PUT /pin-order`` overwrites the caller's pinned section order
+#   in a single idempotent call. The frontend sends a full snapshot
+#   after each drop so replays and late retries stay safe.
+#
+# Both are guest-forbidden: a guest session is bound to a single
+# room, so sidebar pinning carries no meaning. Agent-only rooms are
+# rejected by the service layer because pin state is stored on a
+# ``Participant`` row keyed by ``user_id``.
+
+
+@router.patch("/{room_id}/pin", response_model=PinOrderOut)
+async def toggle_room_pin(
+    room_id: str,
+    body: PinRoomBody,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle sidebar pin for the caller's participation in ``room_id``."""
+    if identity.kind != "user":
+        raise HTTPException(status_code=403, detail="Only users can pin rooms")
+    pinned_ids = await set_room_pinned(
+        db, user_id=identity.id, room_id=room_id, pinned=body.pinned
+    )
+    await db.commit()
+    # Broadcast to caller's other sessions so multi-tab stays in sync.
+    await _broadcast_pin_order_to_user(
+        request, user_id=identity.id, pinned_room_ids=pinned_ids, db=db
+    )
+    return PinOrderOut(pinned_room_ids=pinned_ids)
+
+
+@router.put("/pin-order", response_model=PinOrderOut)
+async def set_pin_order(
+    body: PinOrderBody,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rewrite the caller's pinned-section order from a full snapshot."""
+    if identity.kind != "user":
+        raise HTTPException(status_code=403, detail="Only users can reorder pinned rooms")
+    pinned_ids = await reorder_pinned_rooms(
+        db, user_id=identity.id, room_ids=body.room_ids
+    )
+    await db.commit()
+    await _broadcast_pin_order_to_user(
+        request, user_id=identity.id, pinned_room_ids=pinned_ids, db=db
+    )
+    return PinOrderOut(pinned_room_ids=pinned_ids)

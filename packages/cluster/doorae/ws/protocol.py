@@ -110,6 +110,20 @@ class RoomMembershipChangedOut(BaseModel):
     user_id: str
 
 
+class RoomPinOrderChangedOut(BaseModel):
+    """Notify the caller's other sessions that pin state changed (#47).
+
+    Emitted only to the sessions of ``user_id`` — pinning is per-user
+    so no other listeners care. ``pinned_room_ids`` is the full new
+    order of the user's pinned sidebar section, letting the client
+    replace local state without a follow-up GET.
+    """
+
+    type: Literal["room_pin_order_changed"] = "room_pin_order_changed"
+    user_id: str
+    pinned_room_ids: list[str]
+
+
 class TypingOut(BaseModel):
     type: Literal["typing"] = "typing"
     room_id: str
@@ -134,6 +148,7 @@ OutgoingFrame = (
     | JoinRoomOut
     | RoomDeletedOut
     | RoomMembershipChangedOut
+    | RoomPinOrderChangedOut
     | TypingOut
     | WelcomeOut
     | ErrorOut

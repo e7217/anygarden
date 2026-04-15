@@ -26,6 +26,13 @@ export interface Room {
   parent_room_id?: string | null;
   representative_agent_id?: string | null;
   participants?: unknown[];
+  // Caller-specific sidebar pin state (#47). ``pinned`` promotes
+  // the room to the sidebar's top pinned section; ``sort_order``
+  // is a sparse integer used to order the pinned list. Server
+  // populates both for registered users; guest sessions always
+  // see ``pinned=false``.
+  pinned?: boolean;
+  sort_order?: number | null;
 }
 
 // Fetch state machine for the projects+rooms store.
@@ -73,6 +80,12 @@ interface RoomsContextValue {
     },
     projectId: string,
   ) => Promise<Room>;
+  /** Toggle sidebar pin state for a room (#47). Optimistic: local
+   *  state updates immediately; failure rolls back and rethrows. */
+  pinRoom: (roomId: string, pinned: boolean) => Promise<void>;
+  /** Overwrite the pinned section order with a full snapshot (#47).
+   *  Optimistic with rollback on failure. */
+  reorderPinnedRooms: (roomIds: string[]) => Promise<void>;
 }
 
 const RoomsContext = createContext<RoomsContextValue | null>(null);
@@ -258,6 +271,114 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     return await resp.json() as Room;
   }, [fetchRooms]);
 
+  // ---- Pin / reorder (#47) ----------------------------------
+  //
+  // Both operations are optimistic: we mutate the local store
+  // immediately so the sidebar responds within a frame, then send
+  // the API call and roll back on failure. The server also pushes
+  // ``room_pin_order_changed`` over WS so other tabs converge —
+  // here we trust our own local update and let the WS listener
+  // reconcile any race.
+
+  const applyRoomPatch = useCallback(
+    (roomId: string, patch: Partial<Room>) => {
+      setRooms(prev => {
+        const out: Record<string, Room[]> = { ...prev };
+        for (const [pid, list] of Object.entries(prev)) {
+          const idx = list.findIndex(r => r.id === roomId);
+          if (idx !== -1) {
+            const next = list.slice();
+            next[idx] = { ...next[idx], ...patch };
+            out[pid] = next;
+          }
+        }
+        return out;
+      });
+    },
+    [],
+  );
+
+  const pinRoom = useCallback(async (roomId: string, pinned: boolean) => {
+    // Snapshot the before-state so rollback restores the exact row.
+    let previous: { pinned?: boolean; sort_order?: number | null } | null = null;
+    for (const list of Object.values(rooms)) {
+      const hit = list.find(r => r.id === roomId);
+      if (hit) {
+        previous = { pinned: hit.pinned, sort_order: hit.sort_order };
+        break;
+      }
+    }
+    // Optimistic: pin=true goes to tail of the pinned section, pin=false clears.
+    const nextSortOrder = pinned
+      ? Math.max(
+          0,
+          ...Object.values(rooms)
+            .flat()
+            .filter(r => r.pinned)
+            .map(r => r.sort_order ?? 0),
+        ) + 1024
+      : null;
+    applyRoomPatch(roomId, { pinned, sort_order: nextSortOrder });
+
+    try {
+      const resp = await apiFetch(`/api/v1/rooms/${roomId}/pin`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pinned }),
+      });
+      if (!resp.ok) throw new Error(`PATCH /rooms/${roomId}/pin → ${resp.status}`);
+    } catch (e) {
+      if (previous) applyRoomPatch(roomId, previous);
+      throw e;
+    }
+  }, [rooms, applyRoomPatch]);
+
+  const reorderPinnedRooms = useCallback(async (roomIds: string[]) => {
+    // Snapshot sort_order for every affected room so rollback
+    // restores the exact pre-drag state.
+    const previous = new Map<string, number | null>();
+    for (const list of Object.values(rooms)) {
+      for (const r of list) {
+        if (r.pinned && roomIds.includes(r.id)) {
+          previous.set(r.id, r.sort_order ?? null);
+        }
+      }
+    }
+    // Optimistic: rewrite sort_order to match new order.
+    setRooms(prev => {
+      const out: Record<string, Room[]> = { ...prev };
+      for (const [pid, list] of Object.entries(prev)) {
+        out[pid] = list.map(r => {
+          const idx = roomIds.indexOf(r.id);
+          if (idx === -1 || !r.pinned) return r;
+          return { ...r, sort_order: (idx + 1) * 1024 };
+        });
+      }
+      return out;
+    });
+
+    try {
+      const resp = await apiFetch('/api/v1/rooms/pin-order', {
+        method: 'PUT',
+        body: JSON.stringify({ room_ids: roomIds }),
+      });
+      if (!resp.ok) throw new Error(`PUT /rooms/pin-order → ${resp.status}`);
+    } catch (e) {
+      // Roll back every snapshotted row.
+      setRooms(prev => {
+        const out: Record<string, Room[]> = { ...prev };
+        for (const [pid, list] of Object.entries(prev)) {
+          out[pid] = list.map(r =>
+            previous.has(r.id)
+              ? { ...r, sort_order: previous.get(r.id) ?? null }
+              : r,
+          );
+        }
+        return out;
+      });
+      throw e;
+    }
+  }, [rooms]);
+
   // ---- Boot cascade -----------------------------------------
   //
   // Initial mount runs ``refetch`` so ``status`` reaches
@@ -293,6 +414,43 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('doorae:rooms:invalidate', handler);
   }, [refetch]);
 
+  // Sidebar pin / reorder changes from another session of the same
+  // user (#47). ``useWebSocket`` forwards the server's
+  // ``room_pin_order_changed`` frame verbatim; we apply the new
+  // order directly to local state — no refetch needed because the
+  // frame carries the full pinned snapshot. Sparse integer spacing
+  // (1024) matches the server so later local reorders stay in sync.
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as {
+        pinned_room_ids?: string[];
+      } | undefined;
+      const pinnedIds = detail?.pinned_room_ids ?? [];
+      const pinnedSet = new Set(pinnedIds);
+      setRooms(prev => {
+        const out: Record<string, Room[]> = {};
+        for (const [pid, list] of Object.entries(prev)) {
+          out[pid] = list.map(r => {
+            if (pinnedSet.has(r.id)) {
+              const idx = pinnedIds.indexOf(r.id);
+              return { ...r, pinned: true, sort_order: (idx + 1) * 1024 };
+            }
+            // Rooms not in the snapshot are unpinned for this user.
+            if (r.pinned) return { ...r, pinned: false, sort_order: null };
+            return r;
+          });
+        }
+        return out;
+      });
+    };
+    window.addEventListener('doorae:rooms:pin-order', handler as EventListener);
+    return () => {
+      window.removeEventListener(
+        'doorae:rooms:pin-order', handler as EventListener,
+      );
+    };
+  }, []);
+
   const value = useMemo<RoomsContextValue>(() => ({
     projects,
     rooms,
@@ -305,7 +463,9 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     createProject,
     createRoom,
     createSubRoom,
-  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, createRoom, createSubRoom]);
+    pinRoom,
+    reorderPinnedRooms,
+  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms]);
 
   // JSX is deliberately avoided here to keep this file a ``.ts``
   // (not ``.tsx``) so the import shape of existing callers stays

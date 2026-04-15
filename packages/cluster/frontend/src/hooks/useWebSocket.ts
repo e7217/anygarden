@@ -56,6 +56,15 @@ export function useWebSocket(roomId: string | null) {
         // consumers (toasts, focus-the-new-room flows) can read it
         // without parsing again.
         window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
+      } else if (data.type === 'room_pin_order_changed') {
+        // Sidebar pin / reorder landed in another session of the
+        // same user (#47). We forward it to the RoomsProvider via
+        // a dedicated window event because the payload carries the
+        // exact new order — the provider can apply it directly
+        // without a refetch round-trip. Shape: { user_id, pinned_room_ids }.
+        window.dispatchEvent(
+          new CustomEvent('doorae:rooms:pin-order', { detail: data }),
+        )
       } else if (data.type === 'room_deleted') {
         // The whole room is gone. Bubble two events:
         //   1. ``doorae:rooms:invalidate`` — same listener
