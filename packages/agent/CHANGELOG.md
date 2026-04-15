@@ -1,6 +1,26 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-04-15)
+
+### Fixes — mention routing
+
+- Respect explicit @mention when routing human messages
+  ([#36](https://github.com/e7217/doorae/pull/36))
+  — multi-agent rooms no longer fan out every reply; the
+  unified ``should_respond`` gate consults the server-parsed
+  ``metadata.mentions`` list and stays silent when another
+  participant was addressed.
+- Route id-based @mention tokens to the intended target
+  ([#37](https://github.com/e7217/doorae/pull/37))
+  — frontend autocomplete emits ``<@user:<participant_id>>``;
+  the agent now matches that id against
+  ``_my_participant_ids`` (exact set membership, no substring
+  traps). Case-insensitive legacy-name match retained; content
+  scan fallback tightened with a ``(?![\w:])`` lookahead so
+  an agent literally named ``user`` is no longer false-matched
+  by the id-token substring.
+
 ## v0.1.0 (2026-04-14)
 
 ### Chores
