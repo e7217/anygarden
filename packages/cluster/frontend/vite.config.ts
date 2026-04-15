@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -20,5 +21,12 @@ export default defineConfig({
       '/api': { target: `http://localhost:${apiPort}`, changeOrigin: true },
       '/ws': { target: `ws://localhost:${apiPort}`, ws: true },
     },
+  },
+  test: {
+    // Pure-function unit tests under src/. Node environment by default;
+    // future suites needing DOM can opt in per-file via `// @vitest-environment jsdom`.
+    environment: 'node',
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    globals: false,
   },
 })
