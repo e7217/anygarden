@@ -174,6 +174,7 @@ async def get_room(
 async def add_participant(
     room_id: str,
     body: ParticipantAdd,
+    request: Request,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -195,6 +196,28 @@ async def add_participant(
     db.add(participant)
     await db.commit()
     await db.refresh(participant)
+
+    # When an agent is added, notify it through any of its existing
+    # WS connections so the agent SDK dynamically joins the new room.
+    # Without this, the agent would only see the room on its next
+    # (re)connection and miss messages in the meantime.
+    if body.agent_id:
+        manager = getattr(request.app.state, "connection_manager", None)
+        if manager is not None:
+            from doorae.ws.protocol import JoinRoomOut
+
+            other_pids = (
+                await db.execute(
+                    select(Participant.id).where(
+                        Participant.agent_id == body.agent_id,
+                        Participant.id != participant.id,
+                    )
+                )
+            ).scalars().all()
+            frame = JoinRoomOut(room_id=room_id, participant_id="")
+            for pid in other_pids:
+                await manager.send_to(pid, frame)
+
     return participant
 
 
