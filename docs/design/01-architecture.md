@@ -361,77 +361,74 @@ class Message(Base):
 
 `doorae/ws/protocol.py`의 Pydantic v2 모델로 정의한다. JSON 텍스트 프레임만 사용 (바이너리 없음).
 
+> 이 표는 `packages/cluster/doorae/ws/protocol.py`의 실제 모델과 1:1 매핑된다. 추가/변경 시 양쪽을 함께 갱신할 것. 룸 멤버 인증/구독은 별도 REST가 아니라 WS 연결 시점의 `Sec-WebSocket-Protocol: doorae.v1, bearer.<token>` 서브프로토콜과 `?since_seq=...` 쿼리로 처리된다 (`doorae/ws/handler.py`).
+
 ### 클라이언트 → 서버 (C2S)
 
-| 프레임 `type` | 설명 | 예시 |
-|---|---|---|
-| `send_message` | Room에 메시지 게시 | `{"type":"send_message","room_id":"<uuid>","content":"hi"}` |
-| `join_room` | 새 Room 구독 (이미 참여자여야 함) | `{"type":"join_room","room_id":"<uuid>","since_seq":4212}` |
-| `leave_room` | Room 구독 해제 | `{"type":"leave_room","room_id":"<uuid>"}` |
-| `create_sub_room` | 서브 채널 생성 + 자동 참여 | `{"type":"create_sub_room","parent_room_id":"...","participants":["agent_a","agent_b"],"name":"..."}` |
-| `typing` | 타이핑 표시 브로드캐스트 | `{"type":"typing","room_id":"...","is_typing":true}` |
+| 프레임 `type` | 모델 | 설명 | 예시 |
+|---|---|---|---|
+| `send` | `SendFrame` | 현재 구독 중인 Room에 메시지 게시. `metadata`는 옵션 | `{"type":"send","content":"hi"}` |
+| `typing` | `TypingFrame` | 타이핑 표시 토글 (브로드캐스트) | `{"type":"typing","is_typing":true}` |
+| `create_room` | `CreateRoomFrame` | 새 Room 생성 (`is_dm` 옵션) | `{"type":"create_room","project_id":"...","name":"..."}` |
+| `join_room` | `JoinRoomFrame` | 새 Room 구독 (이미 참여자여야 함). 추가 구독은 별도 WS를 새로 여는 방식이 표준이며, 이 프레임은 보조 경로 | `{"type":"join_room","room_id":"<uuid>"}` |
+
+서브룸 생성, 참가자 추가 등 룸 멤버십 변경은 WS가 아니라 REST(`POST /api/v1/rooms/{room_id}/sub-rooms`, `POST /api/v1/rooms/{room_id}/participants`)로 처리한다. 그 결과 발생하는 알림은 아래 S2C `join_room` / `room_membership_changed`로 푸시된다.
 
 ### 서버 → 클라이언트 (S2C)
 
-| 프레임 `type` | 설명 |
-|---|---|
-| `welcome` | 연결 직후 서버가 보냄 (`protocol_version`, `server_id`) |
-| `message` | 새 메시지 도착 (`seq` 포함) |
-| `message_ack` | 내가 보낸 메시지의 확인 (`client_msg_id` → `seq`) |
-| `participant_joined` | 누군가 Room에 들어옴 |
-| `participant_left` | 누군가 Room을 떠남 |
-| `room_created` | 서브 채널 생성 완료 (생성자에게) |
-| `typing` | 다른 참여자가 타이핑 중 |
-| `rate_limited` | 쿨다운 초과 (`retry_after` 포함) |
-| `error` | 에러 (`code`, `message`) |
-| `resync_required` | 재연결 시 놓친 메시지가 500개 초과 |
+| 프레임 `type` | 모델 | 설명 |
+|---|---|---|
+| `welcome` | `WelcomeOut` | 연결 직후 송신. `participant_id`와 에이전트가 아직 미연결 상태인 `pending_rooms` 목록을 포함 |
+| `message` | `MessageOut` | 새 메시지 도착. `seq` 단조 증가, 재연결 시 `?since_seq=`로 보충 재생 |
+| `typing` | `TypingOut` | 다른 참여자의 타이핑 상태 |
+| `room_created` | `RoomCreatedOut` | (예약) Room 생성 완료 알림 |
+| `join_room` | `JoinRoomOut` | 에이전트가 새 Room에 동적으로 합류해야 함을 알림. 에이전트 SDK는 이 프레임을 받으면 자동으로 해당 Room WS를 연다 |
+| `room_membership_changed` | `RoomMembershipChangedOut` | 사용자에게 멤버십 변경(`added` / `removed`)을 알림. 프론트엔드는 사이드바를 즉시 갱신 |
+| `error` | `ErrorOut` | 프레임 파싱 실패, 권한 없음, rate limit 등 일반 에러 (`detail` 문자열) |
 
-**Pydantic 모델 예시**:
+**Pydantic 모델 (요약, 실제 정의는 `protocol.py`)**:
 
 ```python
-# doorae/ws/protocol.py
-from __future__ import annotations
-from typing import Literal, Annotated, Union
-from uuid import UUID
-from pydantic import BaseModel, Field
-
-class SendMessageFrame(BaseModel):
-    type: Literal["send_message"]
-    room_id: UUID
-    content: str = Field(min_length=1, max_length=10_000)
-    client_msg_id: str | None = None  # idempotency
-    metadata: dict = Field(default_factory=dict)
+# packages/cluster/doorae/ws/protocol.py
+class SendFrame(BaseModel):
+    type: Literal["send"] = "send"
+    content: str
+    metadata: dict[str, Any] | None = None
 
 class JoinRoomFrame(BaseModel):
-    type: Literal["join_room"]
-    room_id: UUID
-    since_seq: int = 0
+    type: Literal["join_room"] = "join_room"
+    room_id: str
 
-class CreateSubRoomFrame(BaseModel):
-    type: Literal["create_sub_room"]
-    parent_room_id: UUID
-    name: str
-    participants: list[UUID]
-    purpose: str | None = None
+IncomingFrame = SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame
 
-C2SFrame = Annotated[
-    Union[SendMessageFrame, JoinRoomFrame, CreateSubRoomFrame, ...],
-    Field(discriminator="type"),
-]
-
-class MessageFrame(BaseModel):
+class MessageOut(BaseModel):
     type: Literal["message"] = "message"
-    room_id: UUID
-    seq: int
-    sender_id: UUID
-    sender_kind: Literal["user", "agent"]
-    sender_name: str
+    id: str = ""
+    room_id: str
+    participant_id: str | None  # FK SET NULL 시 None
     content: str
-    metadata: dict = Field(default_factory=dict)
-    created_at: str  # ISO 8601
+    seq: int
+    created_at: datetime
+    metadata: dict[str, Any] | None = None
+
+class JoinRoomOut(BaseModel):
+    type: Literal["join_room"] = "join_room"
+    room_id: str
+    participant_id: str
+
+class RoomMembershipChangedOut(BaseModel):
+    type: Literal["room_membership_changed"] = "room_membership_changed"
+    action: Literal["added", "removed"]
+    room_id: str
+    user_id: str
+
+OutgoingFrame = (
+    MessageOut | RoomCreatedOut | JoinRoomOut
+    | RoomMembershipChangedOut | TypingOut | WelcomeOut | ErrorOut
+)
 ```
 
-Pydantic v2의 **discriminated union**으로 `type` 필드 기반 라우팅이 자동화된다. 타입 안정성이 서버 핸들러까지 그대로 전달된다.
+`parse_incoming(data)`가 `type` 필드로 디스패치하고, 매칭되지 않으면 `ValueError` → `ErrorOut("Bad frame: ...")`로 응답한다.
 
 ---
 
