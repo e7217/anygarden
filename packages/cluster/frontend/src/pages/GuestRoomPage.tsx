@@ -4,11 +4,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
+import ParticipantListPopover from '@/components/ParticipantListPopover'
 import { apiFetch } from '@/lib/api'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
-import { Hash, LogOut } from 'lucide-react'
+import { Hash, LogOut, Users } from 'lucide-react'
 
 /**
  * ``/g/:roomId``
@@ -32,6 +33,7 @@ export default function GuestRoomPage() {
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
   const [roomName, setRoomName] = useState<string>('')
   const [initError, setInitError] = useState<string | null>(null)
+  const [participantsOpen, setParticipantsOpen] = useState(false)
 
   const isGuest = localStorage.getItem('doorae_is_guest') === '1'
   const boundRoomId = localStorage.getItem('doorae_guest_room_id')
@@ -95,6 +97,7 @@ export default function GuestRoomPage() {
             user_id: p.user_id,
             agent_id: p.agent_id,
             role: p.role,
+            is_anonymous: Boolean(p.is_anonymous),
           }
           // Guest self-participant match is by display_name +
           // user_id-anchored role since we don't carry user_id from
@@ -174,26 +177,49 @@ export default function GuestRoomPage() {
   return (
     <div className="flex min-h-screen flex-col bg-[var(--color-background)]">
       {/* Minimal top bar. No sidebar toggle, no admin widgets. */}
-      <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
-        <div className="flex min-w-0 items-center gap-2">
-          <Hash className="h-5 w-5 text-[var(--color-foreground-muted)]" />
-          <div className="truncate text-sm font-medium">{roomName || 'Room'}</div>
-          <Badge variant="outline" className="ml-2">
-            Guest · {displayName}
-          </Badge>
+      <div className="relative">
+        <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
+          <div className="flex min-w-0 items-center gap-2">
+            <Hash className="h-5 w-5 text-[var(--color-foreground-muted)]" />
+            <div className="truncate text-sm font-medium">{roomName || 'Room'}</div>
+            <Badge variant="outline" className="ml-2">
+              Guest · {displayName}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Participant count + popover toggle. §11.9 doesn't
+                spell this out explicitly but hiding the roster from
+                guests felt strictly worse than letting them see who
+                they're talking to — the server returns the same
+                room detail either way. */}
+            <button
+              type="button"
+              onClick={() => setParticipantsOpen((v) => !v)}
+              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-[var(--color-background-muted)]"
+              title="Show room participants"
+              data-testid="guest-header-participants-toggle"
+            >
+              <Users className="h-4 w-4" />
+              <span>{Object.keys(participants).length}</span>
+            </button>
+            <Badge variant={connected ? 'default' : 'destructive'}>
+              <span className="hidden sm:inline">
+                {connected ? 'Connected' : 'Disconnected'}
+              </span>
+              <span className="sm:hidden">{connected ? '●' : '○'}</span>
+            </Badge>
+            <Button variant="ghost" size="sm" onClick={handleLogout} title="Leave room">
+              <LogOut className="mr-1 h-4 w-4" />
+              <span className="hidden sm:inline">Leave</span>
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge variant={connected ? 'default' : 'destructive'}>
-            <span className="hidden sm:inline">
-              {connected ? 'Connected' : 'Disconnected'}
-            </span>
-            <span className="sm:hidden">{connected ? '●' : '○'}</span>
-          </Badge>
-          <Button variant="ghost" size="sm" onClick={handleLogout} title="Leave room">
-            <LogOut className="mr-1 h-4 w-4" />
-            <span className="hidden sm:inline">Leave</span>
-          </Button>
-        </div>
+        <ParticipantListPopover
+          participants={participants}
+          open={participantsOpen}
+          onClose={() => setParticipantsOpen(false)}
+          myParticipantId={myParticipantId}
+        />
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">

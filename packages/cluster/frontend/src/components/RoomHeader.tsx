@@ -28,6 +28,7 @@ interface RoomHeaderProps {
   onManageInvites?: () => void
   onStopAllAgents?: () => void
   onOpenSidebar?: () => void
+  onToggleParticipants?: () => void
 }
 
 export default function RoomHeader({
@@ -44,6 +45,7 @@ export default function RoomHeader({
   onManageInvites,
   onStopAllAgents,
   onOpenSidebar,
+  onToggleParticipants,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
   const hasParent = parentBreadcrumb && parentBreadcrumb.length > 0
@@ -83,10 +85,28 @@ export default function RoomHeader({
       </div>
       <div className="flex shrink-0 items-center gap-2 md:gap-3">
         {participantCount !== undefined && (
-          <div className="text-caption hidden items-center gap-1 sm:flex">
-            <Users className="h-4 w-4" />
-            <span>{participantCount}</span>
-          </div>
+          onToggleParticipants ? (
+            // Click toggles the ParticipantListPopover that ChatPage /
+            // GuestRoomPage mount next to the header. Visible on
+            // mobile too — the participant list is the whole point
+            // of this button and hiding it behind ``sm:`` made the
+            // feature unreachable on phones.
+            <button
+              type="button"
+              onClick={onToggleParticipants}
+              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-[var(--color-background-muted)]"
+              title="Show room participants"
+              data-testid="room-header-participants-toggle"
+            >
+              <Users className="h-4 w-4" />
+              <span>{participantCount}</span>
+            </button>
+          ) : (
+            <div className="text-caption flex items-center gap-1">
+              <Users className="h-4 w-4" />
+              <span>{participantCount}</span>
+            </div>
+          )
         )}
         {onStopAllAgents && (
           <Button
