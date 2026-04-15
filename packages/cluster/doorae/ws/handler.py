@@ -15,7 +15,12 @@ from doorae.config import DooraeSettings
 from doorae.db.models import ActivityLog, Agent, Participant, Room
 from doorae.db.repository import append_message, replay_since_seq
 from doorae.ws.manager import ConnectionManager
-from doorae.orchestration.rules import CooldownManager, TypingTracker, parse_mentions
+from doorae.orchestration.rules import (
+    CooldownManager,
+    GuestRoomAggregateLimiter,
+    TypingTracker,
+    parse_mentions,
+)
 from doorae.ws.protocol import (
     ErrorOut,
     MessageOut,
@@ -55,6 +60,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # Get manager and orchestration objects from app.state (not module globals)
     manager: ConnectionManager = app.state.connection_manager
     cooldown_mgr: CooldownManager = app.state.cooldown_manager
+    # Guests use a separate, stricter cooldown bucket (§11.7). A
+    # missing guest manager in test setups is tolerated — we fall
+    # back to the shared one so legacy tests don't break.
+    guest_cooldown_mgr: CooldownManager = getattr(
+        app.state, "guest_cooldown_manager", cooldown_mgr
+    )
+    guest_room_limiter: GuestRoomAggregateLimiter | None = getattr(
+        app.state, "guest_room_limiter", None
+    )
     typing_tracker: TypingTracker = app.state.typing_tracker
 
     # -- Authentication via Sec-WebSocket-Protocol --
@@ -156,10 +170,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 continue
 
             if isinstance(frame_in, SendFrame):
-                # Apply cooldown check
-                if not cooldown_mgr.check_cooldown(participant.id):
+                is_guest = identity is not None and identity.kind == "guest"
+
+                # Apply cooldown check. Guests run on a stricter
+                # bucket so a shared invite with many people can't
+                # drown out real users — §11.7. Error text is shared
+                # with the registered-user path so it can't be used
+                # as a guest/user oracle over the WS channel.
+                active_cooldown = (
+                    guest_cooldown_mgr if is_guest else cooldown_mgr
+                )
+                if not active_cooldown.check_cooldown(participant.id):
                     await websocket.send_text(
-                        ErrorOut(detail="Rate limited — please wait").model_dump_json()
+                        ErrorOut(
+                            detail="Rate limited — please wait"
+                        ).model_dump_json()
                     )
                     continue
 
@@ -168,12 +193,62 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
                 # Parse mentions and attach to metadata
                 mentions = parse_mentions(frame_in.content)
+                if is_guest:
+                    # §11.6 — guest mentions are an *allowlist* of
+                    # variants that cannot route across the guest's
+                    # single-room boundary. ``user`` (incl.
+                    # agents-as-users) and ``legacy`` name-style are
+                    # kept; ``room`` is the documented cross-room
+                    # trigger and is stripped. Using an allowlist
+                    # (not ``type != "room"``) means future mention
+                    # variants default to denied until we decide.
+                    _guest_allowed_mentions = {"user", "legacy"}
+                    mentions = [
+                        m
+                        for m in mentions
+                        if m.get("type") in _guest_allowed_mentions
+                    ]
+
+                    # §11.7 room-aggregate cap on guest mentions.
+                    # ``guest_room_limiter`` is populated in the
+                    # lifespan; an absent limiter is an app-wiring
+                    # bug, so we fail closed rather than silently
+                    # skipping the cap.
+                    if mentions:
+                        if guest_room_limiter is None:
+                            logger.error(
+                                "ws.guest_room_limiter_missing", room_id=room_id
+                            )
+                            await websocket.send_text(
+                                ErrorOut(
+                                    detail="Server misconfiguration"
+                                ).model_dump_json()
+                            )
+                            continue
+                        if not guest_room_limiter.check(room_id):
+                            await websocket.send_text(
+                                ErrorOut(
+                                    detail="Rate limited (room aggregate)"
+                                ).model_dump_json()
+                            )
+                            continue
+
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
                 if mentions:
                     metadata["mentions"] = mentions
 
-                # Room mention → representative agent routing
-                room_mentions = [m for m in mentions if m.get("type") == "room"]
+                # Room mention → representative agent routing.
+                # Guests can't reach this block — their mentions had
+                # ``type == "room"`` filtered out above — but the
+                # explicit ``not is_guest`` check is defence in depth
+                # in case the guest filter ever loosens: membership
+                # changes are admin-only and the auto-join below
+                # creates a Participant row.
+                room_mentions = (
+                    [m for m in mentions if m.get("type") == "room"]
+                    if not is_guest
+                    else []
+                )
                 if room_mentions:
                     target_room_id = room_mentions[0]["id"]
                     async with session_factory() as rq_db:

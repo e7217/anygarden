@@ -60,6 +60,42 @@ class CooldownManager:
         return self._buckets[participant_id].try_consume()
 
 
+class GuestRoomAggregateLimiter:
+    """Per-room cap on combined guest mentions per time window.
+
+    Design doc §11.7 calls for a room-wide cap so a single invite
+    shared with many people cannot fan-out into an LLM-cost spike
+    via repeated agent mentions. One shared :class:`TokenBucket` per
+    room_id, consumed once for every guest mention event.
+    """
+
+    def __init__(self, capacity: int = 20, window_seconds: float = 60.0) -> None:
+        # ``capacity`` bursts allowed in ``window_seconds`` on average
+        # — translated to a refill rate so the bucket smooths over the
+        # whole window rather than clipping at second 0.
+        self._capacity = capacity
+        self._refill_rate = capacity / window_seconds
+        self._buckets: dict[str, TokenBucket] = {}
+
+    def check(self, room_id: str) -> bool:
+        """Return ``True`` if the guest mention may proceed in *room_id*.
+
+        ``setdefault`` keeps the lazy-populate atomic in a single
+        dict op, so two concurrent requests for the same room won't
+        each install a fresh (full) bucket and bypass the cap.
+        ``TokenBucket`` itself is not lock-free — under async
+        scheduling two coroutines may both pass ``try_consume``
+        inside a single event-loop tick, overshooting capacity by at
+        most 1. That ±1 slop is inherited from ``CooldownManager``
+        and acceptable for a cost-smoothing guard.
+        """
+        bucket = self._buckets.setdefault(
+            room_id,
+            TokenBucket(capacity=self._capacity, refill_rate=self._refill_rate),
+        )
+        return bucket.try_consume()
+
+
 # ── Mention Parsing ──────────────────────────────────────────────────
 
 # ID-based mention tokens: <@user:id> and <#room:id>
