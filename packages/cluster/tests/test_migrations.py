@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "012"
+                assert version == "013"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -70,6 +70,83 @@ class TestMigrations:
                 }
                 missing = expected - tables
                 assert not missing, f"Missing tables after upgrade: {missing}"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+    def test_users_guest_columns_and_partial_unique_after_013(self) -> None:
+        """Revision 013 must leave ``users`` with:
+        - nullable email / password_hash
+        - is_anonymous NOT NULL DEFAULT 0
+        - display_name VARCHAR(64) nullable
+        - a partial unique index ``ux_users_email_not_null`` that
+          ignores NULL values (so multiple guest rows can coexist).
+        """
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")  # sync driver for reads
+            with engine.begin() as conn:
+                schema = conn.execute(
+                    text(
+                        "SELECT sql FROM sqlite_master "
+                        "WHERE type='table' AND name='users'"
+                    )
+                ).scalar_one()
+                # Non-strict assertions: the DDL string format varies
+                # slightly between SQLAlchemy versions but these
+                # substrings are stable.
+                assert "is_anonymous" in schema
+                assert "display_name VARCHAR(64)" in schema
+                # email/password_hash are no longer NOT NULL
+                assert "email VARCHAR(255) NOT NULL" not in schema
+                assert "password_hash VARCHAR(512) NOT NULL" not in schema
+
+                # Partial unique index exists and carries the WHERE clause
+                index_sql = conn.execute(
+                    text(
+                        "SELECT sql FROM sqlite_master "
+                        "WHERE type='index' AND name='ux_users_email_not_null'"
+                    )
+                ).scalar_one()
+                assert "email IS NOT NULL" in index_sql
+                assert "UNIQUE" in index_sql.upper()
+
+                # Round-trip: two NULL-email rows coexist, duplicate real
+                # emails still fail.
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, is_anonymous, created_at) "
+                        "VALUES ('g1', 1, '2026-01-01')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, is_anonymous, created_at) "
+                        "VALUES ('g2', 1, '2026-01-01')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, email, password_hash, "
+                        "is_anonymous, created_at) "
+                        "VALUES ('u1', 'a@x', 'h', 0, '2026-01-01')"
+                    )
+                )
+                with pytest.raises(Exception):
+                    conn.execute(
+                        text(
+                            "INSERT INTO users (id, email, password_hash, "
+                            "is_anonymous, created_at) "
+                            "VALUES ('u2', 'a@x', 'h', 0, '2026-01-01')"
+                        )
+                    )
             engine.dispose()
         finally:
             try:
@@ -164,7 +241,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "012"
+                assert version == "013"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -204,7 +281,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "012"
+                assert version == "013"
             sync_engine.dispose()
         finally:
             try:
@@ -238,7 +315,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "012"
+            assert head == "013"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -340,7 +417,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "012"
+                assert version == "013"
             sync_engine.dispose()
         finally:
             try:

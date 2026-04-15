@@ -169,6 +169,40 @@ class TestRoomCRUD:
             assert len(data["participants"]) >= 1
 
     @pytest.mark.asyncio
+    async def test_get_room_detail_renders_guest_display_name(self, room_env) -> None:
+        """Guests have no email; the detail endpoint must fall back to
+        display_name instead of crashing on ``None.split('@')``."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        sf = app.state.session_factory
+        async with sf() as db:
+            from doorae.db.models import Participant as P
+            from doorae.db.models import User as U
+
+            guest = U(
+                email=None,
+                password_hash=None,
+                is_anonymous=True,
+                display_name="Visitor",
+            )
+            db.add(guest)
+            await db.flush()
+            db.add(P(room_id=room.id, user_id=guest.id, role="member"))
+            await db.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            names = [p["display_name"] for p in resp.json()["participants"]]
+            assert "Visitor" in names
+
+    @pytest.mark.asyncio
     async def test_add_participant(self, room_env) -> None:
         app = room_env["app"]
         room = room_env["room"]

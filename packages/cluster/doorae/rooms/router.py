@@ -141,7 +141,15 @@ async def get_room(
             user_result = await db.execute(select(User).where(User.id == p.user_id))
             user = user_result.scalar_one_or_none()
             if user:
-                display_name = user.email.split("@")[0]
+                # Guests have no email; prefer their supplied display_name.
+                # Registered users fall back to the local-part of their email
+                # to preserve the current behaviour.
+                if user.display_name:
+                    display_name = user.display_name
+                elif user.email:
+                    display_name = user.email.split("@")[0]
+                else:
+                    display_name = "Guest"
             kind = "user"
         elif p.agent_id:
             agent_result = await db.execute(select(Agent).where(Agent.id == p.agent_id))

@@ -113,7 +113,17 @@ async def list_saved_messages(
             elif p and p.user_id:
                 from doorae.db.models import User
                 user = (await db.execute(select(User).where(User.id == p.user_id))).scalar_one_or_none()
-                display_name = user.email.split("@")[0] if user else ""
+                # Guests have no email; use the display_name they supplied
+                # at invite-acceptance time. Registered users keep their
+                # historical email local-part rendering.
+                if user is None:
+                    display_name = ""
+                elif user.display_name:
+                    display_name = user.display_name
+                elif user.email:
+                    display_name = user.email.split("@")[0]
+                else:
+                    display_name = "Guest"
 
         results.append(SavedMessageOut(
             id=saved.id,
