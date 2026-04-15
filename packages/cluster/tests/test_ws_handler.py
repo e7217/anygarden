@@ -508,6 +508,16 @@ class TestRoomQueryMetadata:
                 assert "room_query" in meta
                 assert meta["room_query"]["target_room_id"] == target.id
                 assert meta["room_query"]["source_room_id"] == source.id
+                # Issue #55: structured UX needs query_id (UUID) +
+                # role marker + the originating user's participant_id
+                # so the source-room banner can pair the question with
+                # the eventual ``room_query_result`` broadcast.
+                assert meta["room_query"]["role"] == "question"
+                assert isinstance(meta["room_query"]["query_id"], str)
+                assert len(meta["room_query"]["query_id"]) >= 16
+                assert meta["room_query"]["source_participant_id"] == msg.get(
+                    "participant_id"
+                )
 
     @pytest.mark.asyncio
     async def test_agent_sender_does_not_trigger_room_query(self, rq_env) -> None:

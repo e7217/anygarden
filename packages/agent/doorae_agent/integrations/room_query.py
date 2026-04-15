@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -38,6 +38,15 @@ class RoomQuery:
     target_room_id: str
     source_room_id: str
     content: str
+    # Issue #55: pair the question with its eventual result so the
+    # source-room banner can transition pending → completed/timeout/
+    # solo without a new WS event type. ``query_id`` is empty for
+    # legacy in-flight messages from before the upgrade landed.
+    query_id: str = ""
+    # The original human author's participant_id in the source room,
+    # propagated so the target-room forward can render the
+    # ``↪ #room · @user`` badge. ``None`` for legacy messages.
+    source_participant_id: str | None = None
 
 
 def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
@@ -50,6 +59,8 @@ def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
         target_room_id=rq["target_room_id"],
         source_room_id=rq["source_room_id"],
         content=msg.get("content", ""),
+        query_id=rq.get("query_id", ""),
+        source_participant_id=rq.get("source_participant_id"),
     )
 
 
@@ -86,8 +97,22 @@ async def execute_room_query(
     expected_count = len(agent_participants)
 
     if expected_count == 0:
-        # Representative is alone — respond directly via adapter
+        # Issue #55: pre-#55 the representative just logged and
+        # returned, leaving the source-room banner pending forever.
+        # We now emit a result message tagged ``status="solo"`` so
+        # the chip closes and the result card can render an
+        # explanatory header instead of a missing-response count.
         logger.info("room_query.solo", target=query.target_room_id)
+        await _deliver_result(
+            client,
+            source_room_id=query.source_room_id,
+            target_room_id=query.target_room_id,
+            query_id=query.query_id,
+            question=query.content,
+            responses=[],
+            expected_count=0,
+            status="solo",
+        )
         return
 
     # Send question to target room. Strip the routing token so the
@@ -98,6 +123,13 @@ async def execute_room_query(
     await client.send(
         query.target_room_id,
         f"[ROOM_QUERY] {forwarded}",
+        metadata={
+            "room_query_forward": {
+                "source_room_id": query.source_room_id,
+                "source_participant_id": query.source_participant_id,
+                "query_id": query.query_id,
+            }
+        },
     )
 
     # Register multi-reply callback
@@ -105,8 +137,64 @@ async def execute_room_query(
         client,
         source_room_id=query.source_room_id,
         target_room_id=query.target_room_id,
+        query_id=query.query_id,
         expected_count=expected_count,
         question=query.content,
+    )
+
+
+async def _deliver_result(
+    client: ChatClient,
+    *,
+    source_room_id: str,
+    target_room_id: str,
+    query_id: str,
+    question: str,
+    responses: list[dict[str, str]],
+    expected_count: int,
+    status: str,
+) -> None:
+    """Build the ``[취합 결과]`` body + structured metadata and
+    broadcast it back to the source room.
+
+    Centralised so the solo / completed / timeout paths all produce
+    the same on-the-wire shape — only the ``status`` tag and
+    ``responses`` payload differ. The body prefix stays
+    ``[취합 결과]`` to keep ``should_respond``'s startswith path
+    intact (plan §6.1)."""
+    total = len(responses)
+    missing = max(expected_count - total, 0)
+
+    if status == "solo":
+        header = "[취합 결과] (대상 방에 응답할 에이전트가 없음)"
+        body = f"{header}\n\n질문: {question}"
+    else:
+        header = f"[취합 결과] ({total}/{expected_count}명 응답)"
+        if missing > 0:
+            header += f" — {missing}명 미응답"
+        parts = [f"응답 {i}: {r['content']}" for i, r in enumerate(responses, 1)]
+        summary = "\n".join(parts)
+        body = f"{header}\n\n질문: {question}\n\n{summary}"
+
+    await client.send(
+        source_room_id,
+        body,
+        metadata={
+            "room_query_result": {
+                "query_id": query_id,
+                "target_room_id": target_room_id,
+                "responded": total,
+                "expected": expected_count,
+                "status": status,
+                "responses": [
+                    {
+                        "participant_id": r["participant_id"],
+                        "content": r["content"],
+                    }
+                    for r in responses
+                ],
+            }
+        },
     )
 
 
@@ -114,6 +202,7 @@ def _register_multi_reply_callback(
     client: ChatClient,
     source_room_id: str,
     target_room_id: str,
+    query_id: str,
     expected_count: int,
     question: str,
 ) -> None:
@@ -151,29 +240,19 @@ def _register_multi_reply_callback(
 
         if len(responses) >= expected_count:
             done = True
-            await _synthesize_and_deliver()
+            await _deliver_result(
+                client,
+                source_room_id=source_room_id,
+                target_room_id=target_room_id,
+                query_id=query_id,
+                question=question,
+                responses=responses,
+                expected_count=expected_count,
+                status="completed",
+            )
+            _detach_handler()
 
-    async def _synthesize_and_deliver() -> None:
-        """Synthesize collected responses and send to source room."""
-        # Build summary from collected responses
-        parts = []
-        for i, r in enumerate(responses, 1):
-            parts.append(f"응답 {i}: {r['content']}")
-
-        summary = "\n".join(parts)
-        total = len(responses)
-        missing = expected_count - total
-
-        header = f"[취합 결과] ({total}/{expected_count}명 응답)"
-        if missing > 0:
-            header += f" — {missing}명 미응답"
-
-        await client.send(
-            source_room_id,
-            f"{header}\n\n질문: {question}\n\n{summary}",
-        )
-
-        # Cleanup handler
+    def _detach_handler() -> None:
         try:
             client._message_handlers.remove(_on_reply)
         except ValueError:
@@ -184,12 +263,24 @@ def _register_multi_reply_callback(
     # Safety timeout
     async def _cleanup() -> None:
         await asyncio.sleep(COLLECT_TIMEOUT)
+        nonlocal done
         if not done:
+            done = True
             logger.warning(
                 "room_query.timeout",
                 collected=len(responses),
                 expected=expected_count,
             )
-            await _synthesize_and_deliver()
+            await _deliver_result(
+                client,
+                source_room_id=source_room_id,
+                target_room_id=target_room_id,
+                query_id=query_id,
+                question=question,
+                responses=responses,
+                expected_count=expected_count,
+                status="timeout",
+            )
+            _detach_handler()
 
     asyncio.get_event_loop().create_task(_cleanup())
