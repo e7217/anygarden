@@ -40,6 +40,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Plus, Trash2, FileText } from 'lucide-react'
+import PresenceDot from '@/components/PresenceDot'
+import { deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile } from '@/hooks/useAgents'
 
 // Allowed top-level prefixes from the server-side whitelist.
@@ -337,7 +339,12 @@ export default function AgentEditDialog({
           <DialogTitle>
             Edit manifest
             {agent ? (
-              <span className="ml-2 text-sm font-normal text-[var(--color-foreground-muted)]">
+              <span className="ml-2 inline-flex items-center gap-1.5 text-sm font-normal text-[var(--color-foreground-muted)]">
+                <PresenceDot
+                  variant="agent"
+                  online={deriveAgentOnline(agent.actual_state)}
+                  agentState={agent.actual_state}
+                />
                 {agent.name} ({agent.engine})
               </span>
             ) : null}

@@ -6,6 +6,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog'
 import { Bot, Plus, Minus, Loader2 } from 'lucide-react'
+import PresenceDot from '@/components/PresenceDot'
+import { deriveAgentOnline } from '@/lib/agent-liveness'
 
 interface ManageRoomAgentsDialogProps {
   open: boolean
@@ -108,6 +110,11 @@ export default function ManageRoomAgentsDialog({
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                        <PresenceDot
+                          variant="agent"
+                          online={deriveAgentOnline(agent.actual_state)}
+                          agentState={agent.actual_state}
+                        />
                         <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                         <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
                         <Badge variant="outline" className={stateBadgeClass(agent.actual_state)}>
@@ -152,6 +159,11 @@ export default function ManageRoomAgentsDialog({
                     >
                       <div className="flex items-center gap-2 min-w-0">
                         <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                        <PresenceDot
+                          variant="agent"
+                          online={deriveAgentOnline(agent.actual_state)}
+                          agentState={agent.actual_state}
+                        />
                         <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                         <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
                         <Badge variant="outline" className={stateBadgeClass(agent.actual_state)}>
