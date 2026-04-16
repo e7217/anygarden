@@ -3,10 +3,90 @@
 
 ## Unreleased
 
+
+## v0.3.0 (2026-04-16)
+
+### Features — room-query UX (#55)
+
+- Structured room-query UX with banner chips and result cards
+  ([#55](https://github.com/e7217/doorae/issues/55),
+  [#59](https://github.com/e7217/doorae/pull/59))
+  — source-room banner transitions pending → completed/timeout
+  by `query_id`; target-room forward bubble gets a source badge;
+  original room renders a collapsible result card per agent
+  response. Server stamps `room_query` / `room_query_forward` /
+  `room_query_result` metadata; no new WS frame types.
+
+### Features — presence (#54)
+
+- Unify agent liveness via `PresenceService` + UI indicator
+  ([#54](https://github.com/e7217/doorae/issues/54),
+  [#60](https://github.com/e7217/doorae/pull/60))
+  — single read-through service for "is this participant
+  responsive right now?" backed by `ConnectionManager` (truth)
+  with `Agent.last_heartbeat_at` fallback. `GET /rooms/{id}`
+  exposes `online` + `last_seen_at`; WS broadcasts
+  `presence_update` frames. `[ROOM_QUERY]` `expected_count` now
+  excludes offline agents so stale participants don't force a
+  timeout.
+
 ### Features — sidebar
 
 - Drag-and-drop reorder for pinned rooms in sidebar
-  ([#47](https://github.com/e7217/doorae/issues/47))
+  ([#47](https://github.com/e7217/doorae/issues/47),
+  [#51](https://github.com/e7217/doorae/pull/51))
+- Hover `...` menu for rename + delete room
+  ([#46](https://github.com/e7217/doorae/pull/46),
+  [#48](https://github.com/e7217/doorae/pull/48))
+
+### Features — rooms
+
+- Delete-room UI + tighten authz + WS broadcast
+  ([#45](https://github.com/e7217/doorae/pull/45))
+  — owner/admin-only DELETE endpoint, cascade cleanup,
+  `room_deleted` WS frame so other sessions drop the room
+  without a refetch round-trip.
+
+### Fixes — room routing
+
+- Route direct-typed `#RoomName` mentions to the target room
+  ([#53](https://github.com/e7217/doorae/issues/53),
+  [#57](https://github.com/e7217/doorae/pull/57))
+  — frontend now converts plain `#Name` text to the
+  `<#room:id>` token before sending when the name matches
+  exactly one known room, so typed mentions route the same as
+  autocomplete-selected ones. Duplicate-name / unknown-name
+  fallbacks preserved.
+- Unify participant membership + `JoinRoomOut` broadcast
+  ([#50](https://github.com/e7217/doorae/issues/50),
+  [#52](https://github.com/e7217/doorae/pull/52))
+  — the auto-join of a representative agent now emits a
+  `JoinRoomOut` frame on every relevant WS session so the SDK
+  subscribes to the new room in time for the upcoming broadcast
+  (race that previously caused `(1/N)` miscounts in
+  `[ROOM_QUERY]`).
+- Break the `[ROOM_QUERY]` forwarding loop
+  ([#42](https://github.com/e7217/doorae/pull/42))
+  — the server no longer re-attaches `room_query` metadata to
+  agent-originated forwards; combined with the SDK's
+  `<#room:…>` strip, the ad-infinitum recipient-forwards-again
+  loop is closed at the source.
+- Unify REST `metadata` field + prevent duplicate
+  `room_query_forward` ([#61](https://github.com/e7217/doorae/pull/61),
+  [#62](https://github.com/e7217/doorae/pull/62))
+  — REST `MessageOut` now returns `metadata` (was
+  `extra_metadata`) so history-loaded messages render the
+  forward / result cards identically to WS-arrived ones.
+  Target-room forwards are now emitted by the target room's
+  representative only, not every agent that saw the question.
+- Add `min-h-0` to ChatArea wrapper to restore inner scroll
+  ([#63](https://github.com/e7217/doorae/pull/63),
+  [#64](https://github.com/e7217/doorae/pull/64))
+
+### Features — admin
+
+- Allow admins to remove room participants
+  ([#40](https://github.com/e7217/doorae/pull/40))
 
 
 ## v0.2.0 (2026-04-15)
