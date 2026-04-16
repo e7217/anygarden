@@ -17,3 +17,10 @@
 .topology-root .react-flow__edge.is-dimmed {
   opacity: 0.18;
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-root .react-flow__node,
+  .topology-root .react-flow__edge {
+    transition: none;
+  }
+}
