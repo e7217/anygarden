@@ -1,6 +1,13 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-04-16)
+
+No code changes this cycle — version bumped to keep the three
+monorepo packages aligned, per the "they all go together"
+release cadence established in v0.2.0.
+
+
 ## v0.2.0 (2026-04-15)
 
 ### Features
