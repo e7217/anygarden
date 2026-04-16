@@ -20,6 +20,7 @@ from doorae.ws.handler import router as ws_router
 from doorae.ws.machine_handler import router as machine_ws_router
 from doorae.api.v1.machines import router as machines_api_router
 from doorae.api.v1.agents import router as agents_api_router
+from doorae.api.v1.graph import router as graph_router
 from doorae.api.v1.projects import router as projects_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
@@ -334,6 +335,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(messages_router)
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
+    app.include_router(graph_router)
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(invites_router)
