@@ -4,6 +4,25 @@
 ## Unreleased
 
 
+## v0.3.2 (2026-04-17)
+
+### Fixes — single-session WS
+
+- Enforce single connection per `participant_id`
+  ([#79](https://github.com/e7217/doorae/issues/79),
+  [#80](https://github.com/e7217/doorae/pull/80))
+  — when two clients shared an agent token (e.g.
+  `doorae-machine` reconcile racing a manual launch) both
+  sockets stayed in `_rooms[room_id]` and every broadcast
+  doubled up: duplicate `[ROOM_QUERY]` forwards, duplicate
+  DM/mention replies, double LLM cost. The
+  `representative_agent_id` guard from #61 only handled
+  *different* agents, not multi-instance of the same one.
+  `ConnectionManager.subscribe()` now evicts the prior
+  subscription and closes the old socket with WS code `4040`
+  ("superseded") before installing the new one.
+
+
 ## v0.3.1 (2026-04-16)
 
 ### Fixes — room-query banner
