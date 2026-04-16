@@ -67,11 +67,40 @@ class ConnectionManager:
     async def subscribe(
         self, room_id: str, participant_id: str, ws: WebSocket
     ) -> None:
-        """Register *ws* as listening on *room_id*."""
+        """Register *ws* as listening on *room_id*.
+
+        Issue #79 — single-session policy. If *participant_id* already
+        has an active subscription, the older socket is evicted and
+        closed with code 4040 ("superseded"). Without this guard two
+        clients sharing an agent token (e.g. ``doorae-machine`` reconcile
+        racing a manual launch) would both stay in ``_rooms[room_id]``
+        and every broadcast would fan out to both — doubling LLM calls,
+        ``[ROOM_QUERY]`` forwards, and direct replies.
+        """
         sub = _Subscription(room_id=room_id, participant_id=participant_id, ws=ws)
+        superseded: _Subscription | None = None
         async with self._lock:
+            old = self._by_participant.get(participant_id)
+            if old is not None:
+                superseded = old
+                old_subs = self._rooms.get(old.room_id, [])
+                self._rooms[old.room_id] = [
+                    s for s in old_subs if s.participant_id != participant_id
+                ]
+                if not self._rooms[old.room_id]:
+                    del self._rooms[old.room_id]
             self._rooms.setdefault(room_id, []).append(sub)
             self._by_participant[participant_id] = sub
+
+        # Close the superseded socket OUTSIDE the lock — ws.close awaits
+        # the underlying ASGI send and we must not block other ops.
+        # Best-effort: a socket that's already half-dead can throw on
+        # close; we just need it to stop receiving frames.
+        if superseded is not None:
+            try:
+                await superseded.ws.close(code=4040, reason="superseded")
+            except Exception:
+                pass
 
         # Publish AFTER releasing the lock so the broadcast path's own
         # lock acquisition doesn't deadlock with ours.
