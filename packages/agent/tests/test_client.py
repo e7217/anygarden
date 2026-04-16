@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_agent.client import ChatClient
+from doorae_agent.client import ChatClient, _is_task_init_content
 
 
 class TestChatClientInit:
@@ -138,3 +138,321 @@ class TestChatClientSend:
         assert sent["content"] == "hello world"
         assert sent["metadata"]["key"] == "val"
         assert "_nonce" in sent["metadata"]  # Self-echo filter nonce
+
+
+class TestIsTaskInitContent:
+    """Issue #67 — ``_is_task_init_content`` identifies task boundaries
+    that should reset the agent-only turn counter."""
+
+    def test_room_query_prefix(self) -> None:
+        assert _is_task_init_content("[ROOM_QUERY] what's the plan?") is True
+
+    def test_delegated_prefix(self) -> None:
+        assert _is_task_init_content("[DELEGATED] please summarise") is True
+
+    def test_regular_content(self) -> None:
+        assert _is_task_init_content("hello, team") is False
+
+    def test_empty_string(self) -> None:
+        assert _is_task_init_content("") is False
+
+    def test_prefix_not_at_start(self) -> None:
+        assert _is_task_init_content("fyi [ROOM_QUERY] embedded") is False
+
+
+class TestAgentTurnCounter:
+    """Issue #67 — in agent-only rooms (no human participant) the
+    representative agent emits ``[ROOM_QUERY]``/``[DELEGATED]`` frames
+    that echo back through hard/soft filters. These frames are task
+    boundaries and MUST reset the counter, otherwise consecutive
+    task rounds accumulate and later agent replies get dropped at
+    ``max_agent_turns``.
+
+    Each test drives ``_process_frame`` directly and asserts the
+    observable counter state plus (for regression) handler invocation.
+    """
+
+    def _make_client(self) -> ChatClient:
+        client = ChatClient("ws://x", token="t")
+        client._my_participant_ids.add("self-pid")
+        return client
+
+    @pytest.mark.asyncio
+    async def test_self_regular_message_increments(self) -> None:
+        """Self-emitted regular message bumps the counter (keeps the
+        bound on total agent-only exchanges)."""
+        client = self._make_client()
+        client._agent_turn_count["room-a"] = 2
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "self-pid",
+                "content": "hello room",
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 3
+
+    @pytest.mark.asyncio
+    async def test_self_room_query_resets_counter(self) -> None:
+        """Core regression: self-emitted ``[ROOM_QUERY]`` is a task
+        boundary and must reset the counter to 0 (not +1)."""
+        client = self._make_client()
+        client._agent_turn_count["room-a"] = 5
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] forwarded question",
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 0
+
+    @pytest.mark.asyncio
+    async def test_self_delegated_resets_counter(self) -> None:
+        """Self-emitted ``[DELEGATED]`` is also a task boundary."""
+        client = self._make_client()
+        client._agent_turn_count["room-a"] = 4
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "self-pid",
+                "content": "[DELEGATED] do this subtask",
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 0
+
+    @pytest.mark.asyncio
+    async def test_nonce_echo_regular_increments(self) -> None:
+        """Nonce-echo (soft filter) of a regular message bumps count."""
+        client = self._make_client()
+        # Use a fresh participant id for the sender so the hard filter
+        # does NOT catch it; rely on nonce echo detection.
+        client._sent_nonces.add("nonce-1")
+        client._agent_turn_count["room-a"] = 1
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-pid",
+                "content": "regular content",
+                "metadata": {"_nonce": "nonce-1"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 2
+        # nonce consumed
+        assert "nonce-1" not in client._sent_nonces
+
+    @pytest.mark.asyncio
+    async def test_nonce_echo_room_query_resets(self) -> None:
+        """Nonce-echo of ``[ROOM_QUERY]`` must reset counter."""
+        client = self._make_client()
+        client._sent_nonces.add("nonce-2")
+        client._agent_turn_count["room-a"] = 5
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-pid",
+                "content": "[ROOM_QUERY] ask other room",
+                "metadata": {"_nonce": "nonce-2"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 0
+        assert "nonce-2" not in client._sent_nonces
+
+    @pytest.mark.asyncio
+    async def test_other_agent_regular_increments(self) -> None:
+        """Another agent's message (nonce but not ours) → count +1,
+        handler invoked."""
+        client = self._make_client()
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        client._agent_turn_count["room-a"] = 1
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-agent-pid",
+                "content": "agent reply",
+                "metadata": {"_nonce": "foreign-nonce"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 2
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_other_agent_exceeds_limit_is_dropped(self) -> None:
+        """When counter exceeds ``max_agent_turns`` the handler is
+        skipped (infinite agent-to-agent loop guard)."""
+        client = self._make_client()
+        client.max_agent_turns = 3
+        client._agent_turn_count["room-a"] = 3  # already at limit
+
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-agent-pid",
+                "content": "agent reply",
+                "metadata": {"_nonce": "foreign-nonce"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 4
+        assert calls == []  # dropped
+
+    @pytest.mark.asyncio
+    async def test_human_message_resets(self) -> None:
+        """Human message (no nonce, not self) resets counter."""
+        client = self._make_client()
+        client._agent_turn_count["room-a"] = 5
+
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "human-pid",
+                "content": "question from human",
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 0
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_other_agent_room_query_resets(self) -> None:
+        """Main-path regression: another agent's ``[ROOM_QUERY]``
+        resets the counter so the handler can process the task."""
+        client = self._make_client()
+        client._agent_turn_count["room-a"] = 5
+
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-agent-pid",
+                "content": "[ROOM_QUERY] task from peer",
+                "metadata": {"_nonce": "foreign-nonce"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 0
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_agent_only_room_query_fanout_regression(self) -> None:
+        """Reproduces issue #67 trace:
+
+        agent-only room, representative agent (``self-pid``) drives
+        three ``[ROOM_QUERY]`` rounds. Between each round one other
+        agent replies. Without the fix the counter grows 1→2→…→6 and
+        the last agent replies are dropped.
+        """
+        client = self._make_client()
+        client.max_agent_turns = 3  # tighter bound to force regression
+
+        handler_calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            handler_calls.append(msg)
+
+        frames = [
+            # round 1: self emits [ROOM_QUERY]
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] q1",
+            },
+            # round 1 reply: other agent
+            {
+                "type": "message",
+                "seq": 2,
+                "participant_id": "other-pid",
+                "content": "reply 1",
+                "metadata": {"_nonce": "f1"},
+            },
+            # round 2
+            {
+                "type": "message",
+                "seq": 3,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] q2",
+            },
+            {
+                "type": "message",
+                "seq": 4,
+                "participant_id": "other-pid",
+                "content": "reply 2",
+                "metadata": {"_nonce": "f2"},
+            },
+            # round 3
+            {
+                "type": "message",
+                "seq": 5,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] q3",
+            },
+            {
+                "type": "message",
+                "seq": 6,
+                "participant_id": "other-pid",
+                "content": "reply 3",
+                "metadata": {"_nonce": "f3"},
+            },
+            # round 4
+            {
+                "type": "message",
+                "seq": 7,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] q4",
+            },
+            {
+                "type": "message",
+                "seq": 8,
+                "participant_id": "other-pid",
+                "content": "reply 4",
+                "metadata": {"_nonce": "f4"},
+            },
+        ]
+
+        for f in frames:
+            await client._process_frame("room-a", f)
+
+        # All four "reply N" frames from other agents must reach the
+        # handler — none dropped by the turn limit because [ROOM_QUERY]
+        # resets the counter each round.
+        reply_contents = [c["content"] for c in handler_calls]
+        assert reply_contents == ["reply 1", "reply 2", "reply 3", "reply 4"]
