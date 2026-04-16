@@ -16,7 +16,11 @@
   width: 140px;
   height: 44px;
   border-radius: 12px;
-  padding: 0 10px;
+  /* 12px horizontal padding follows the 8px base spacing grid
+     (DESIGN.md §6) with a +4 offset to leave breathing room
+     between the glyph and the left edge without starving the
+     flex label of width. */
+  padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 8px;

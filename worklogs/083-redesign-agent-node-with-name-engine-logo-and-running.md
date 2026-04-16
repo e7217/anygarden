@@ -50,3 +50,19 @@ Assumption worth revisiting: if the backend starts emitting engine strings that 
 - `npm run build` passes. TopologyPage chunk: 355.47 KB raw / 111.73 KB gzip (includes the new @lobehub/icons sub-path imports).
 - Six new unit tests pass; full frontend suite (78 tests) stays green.
 - Closes #83. #82 (hover flicker) and #84 (active-room highlighting) remain as separate follow-ups — the pulse was designed not to collide with #82's planned opacity dimming.
+
+## Codex review follow-up
+
+Observation (post-review): Codex flagged three blockers / high-priority items:
+
+1. **Engine coverage was too narrow.** The original `EngineGlyph` only routed `claude`/`codex`/`gemini`, yet the backend (`doorae_agent.integrations.ENGINES`) emits seven IDs: `claude-code`, `codex`, `gemini-cli`, `openhands`, `deep-agents`, `openai`, `anthropic`. Silent `Bot` fallback for `openhands`, `openai`, `anthropic` regressed brand recognition.
+2. **Accessibility redundancy.** The decorative glyph and state dot were not marked `aria-hidden`, and the unused `aria-label="unknown engine"` on the fallback `Bot` duplicated info already on the outer wrapper's `aria-label`.
+3. **Padding broke the 8px grid** (`padding: 0 10px`) and tests only exercised `EngineGlyph` branches, never `AgentNode` itself.
+
+Action: expanded mapping to cover all seven backend engine IDs (Claude family → `Claude.Color`; OpenAI family → `Codex` mono; Gemini family → `Gemini.Color`; OpenHands → `OpenHands.Color`; `deep-agents` and unknowns → lucide `Bot`). Verified icon availability in `node_modules/@lobehub/icons/es/` (`Claude`, `Codex`, `Gemini`, `OpenAI`, `Anthropic`, `OpenHands` all present; no dedicated DeepAgents mark, hence the `Bot` fallback). Added `aria-hidden="true"` to glyph + dot, centralized semantics on the outer `aria-label` (`Agent {label}, engine {engine|unknown}, state {state}`). Bumped padding to `0 12px` (8px grid + 4px offset, documented inline). Added six `AgentNode`-level unit tests: running/idle class toggle, aria-label content, long-label smoke test, aria-hidden coverage, empty-engine fallback. Mocked `@xyflow/react` so `AgentNode` renders without a `ReactFlowProvider`.
+
+Result: `npm test` 88/88 pass (was 78; +10). `npm run build` passes; TopologyPage chunk grew from 355 KB → 378 KB raw due to three additional `@lobehub/icons` sub-path imports — acceptable because the engine brand signal is now complete.
+
+Scope-excluded (follow-ups not in this fixup):
+- Pulse pseudo-element + `transform` optimization deferred — current `box-shadow` approach still respects DESIGN.md's sub-0.05 opacity shadow rule (alpha 0.35 is on the *animated* ring, not the static card shadow).
+- Manual ESM runtime verification of `@lobehub/icons/es/*` sub-paths covered by `npm run build` + `npm test` passing.
