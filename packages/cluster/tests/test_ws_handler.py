@@ -476,6 +476,69 @@ class TestPresenceBroadcast:
                 assert off["participant_id"] == other_part.id
 
 
+class TestWelcomeAgentId:
+    """Issue #61 — WelcomeOut must include agent_id for agent connections
+    so the agent SDK can gate room_query forwarding to the representative."""
+
+    @pytest.mark.asyncio
+    async def test_welcome_user_has_null_agent_id(self, ws_env) -> None:
+        """Regular user connections have no agent_id."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                # agent_id must be present as None for users (key exists
+                # so clients can unconditionally read it).
+                assert welcome.get("agent_id") is None
+
+    @pytest.mark.asyncio
+    async def test_welcome_agent_includes_agent_id(self, ws_env) -> None:
+        """Agent connections receive their agent_id in the welcome frame."""
+        from starlette.testclient import TestClient
+
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+
+        # Seed an agent + participant + token reusing ws_env's DB.
+        async with sf() as db:
+            agent = Agent(name="welcome-bot", engine="codex", actual_state="running")
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+            await db.commit()
+            await db.refresh(agent)
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                assert welcome.get("agent_id") == agent.id
+
+
 class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
 
@@ -582,6 +645,12 @@ class TestRoomQueryMetadata:
                 assert meta["room_query"]["source_participant_id"] == msg.get(
                     "participant_id"
                 )
+                # Issue #61 — representative_agent_id must be included so
+                # only the designated agent forwards [ROOM_QUERY]. Without
+                # it every agent in the source room fans out the forward.
+                assert meta["room_query"]["representative_agent_id"] == rq_env[
+                    "agent"
+                ].id
 
     @pytest.mark.asyncio
     async def test_agent_sender_does_not_trigger_room_query(self, rq_env) -> None:

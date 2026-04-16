@@ -80,6 +80,41 @@ class TestChatClientSinceSeq:
         assert client._last_seq["room-1"] == 42
 
 
+class TestChatClientWelcomeParsing:
+    """Issue #61 — ChatClient must parse ``agent_id`` from the welcome
+    frame so ``should_respond`` can gate ``room_query`` forwarding to
+    the representative agent only."""
+
+    def test_init_has_none_agent_id(self) -> None:
+        client = ChatClient("ws://localhost:8000", token="t")
+        assert client._agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_welcome_stores_agent_id(self) -> None:
+        """A welcome frame with ``agent_id`` populates ``_agent_id``."""
+        client = ChatClient("ws://localhost:8000", token="t")
+        await client._process_frame(
+            "room-1",
+            {
+                "type": "welcome",
+                "participant_id": "pid-1",
+                "agent_id": "agent-abc",
+            },
+        )
+        assert client._agent_id == "agent-abc"
+        assert "pid-1" in client._my_participant_ids
+
+    @pytest.mark.asyncio
+    async def test_welcome_without_agent_id_leaves_none(self) -> None:
+        """User / guest welcome frames omit ``agent_id`` — leave as None."""
+        client = ChatClient("ws://localhost:8000", token="t")
+        await client._process_frame(
+            "room-1",
+            {"type": "welcome", "participant_id": "pid-1"},
+        )
+        assert client._agent_id is None
+
+
 class TestChatClientSend:
     @pytest.mark.asyncio
     async def test_send_raises_when_not_connected(self) -> None:

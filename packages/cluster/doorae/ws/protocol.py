@@ -151,6 +151,15 @@ class WelcomeOut(BaseModel):
     type: Literal["welcome"] = "welcome"
     participant_id: str
     pending_rooms: list[str] = []
+    # Issue #61 — ``agent_id`` is present only on agent connections.
+    # The agent SDK uses it to gate ``room_query`` forwarding to the
+    # representative agent: the server broadcasts ``room_query``
+    # metadata (incl. ``representative_agent_id``) to the whole room
+    # and each agent checks ``agent_id == representative_agent_id``
+    # before forwarding. Without this gate every agent in the source
+    # room re-forwards the ``[ROOM_QUERY]`` message. ``None`` for user
+    # and guest connections.
+    agent_id: Optional[str] = None
 
 
 class ErrorOut(BaseModel):

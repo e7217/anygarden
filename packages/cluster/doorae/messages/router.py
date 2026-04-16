@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity, require_room_member
@@ -25,8 +25,18 @@ class MessageOut(BaseModel):
     content: str
     seq: int
     created_at: datetime
-    extra_metadata: Optional[dict[str, Any]] = None
-    model_config = {"from_attributes": True}
+    # Issue #61 — DB column is ``extra_metadata`` but the frontend and
+    # WS payload both expose this as ``metadata``. ``serialization_alias``
+    # makes the JSON key ``metadata`` on the wire while keeping
+    # ``extra_metadata`` as the Python attribute name (required for
+    # ``from_attributes=True`` to map the ORM column). Without this
+    # alias, page refresh would serve history with ``extra_metadata`` and
+    # the frontend's ``room_query``/``room_query_forward`` cards would
+    # silently fall back to plain bubbles.
+    extra_metadata: Optional[dict[str, Any]] = Field(
+        default=None, serialization_alias="metadata"
+    )
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 @router.get("/{room_id}/messages", response_model=list[MessageOut])
