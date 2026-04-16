@@ -88,6 +88,7 @@ function registerReplyCallback(
 ): void {
   const myPids = client.myParticipantIds;
   let fired = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
   const handler: MessageHandler = async (m: MessageOut) => {
     if (fired) return;
@@ -95,6 +96,10 @@ function registerReplyCallback(
     const sender = m.participant_id;
     if (sender && myPids.has(sender)) return;
     fired = true;
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = undefined;
+    }
     const content = m.content ?? "";
     log.info(
       { sub_room: ctx.subRoomName, content_len: content.length },
@@ -109,9 +114,12 @@ function registerReplyCallback(
 
   client.onMessage(handler);
 
-  // Safety timeout: remove handler + notify if nothing arrived.
-  setTimeout(() => {
+  // Safety timeout: remove handler + notify if nothing arrived. The
+  // handle is cleared by the `fired` branch above so a replied-to
+  // delegation doesn't keep the Node event loop open for 5 minutes.
+  timeoutHandle = setTimeout(() => {
     if (fired) return;
+    timeoutHandle = undefined;
     log.warn({ sub_room: ctx.subRoomName }, "delegate.reply_timeout");
     // Best effort — swallow errors so a failing timeout notification
     // doesn't bubble up into the runtime.

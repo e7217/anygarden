@@ -222,6 +222,7 @@ function registerMultiReplyCallback(client: ChatClient, ctx: CallbackCtx): void 
   const myPids = client.myParticipantIds;
   const responses: Array<{ participant_id: string; content: string }> = [];
   let done = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
   const handler: MessageHandler = async (m: MessageOut) => {
     if (done) return;
@@ -244,6 +245,10 @@ function registerMultiReplyCallback(client: ChatClient, ctx: CallbackCtx): void 
 
     if (responses.length >= ctx.expectedCount) {
       done = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = undefined;
+      }
       await deliverResult(client, {
         sourceRoomId: ctx.sourceRoomId,
         targetRoomId: ctx.targetRoomId,
@@ -260,10 +265,12 @@ function registerMultiReplyCallback(client: ChatClient, ctx: CallbackCtx): void 
 
   client.onMessage(handler);
 
-  // Safety timeout.
-  setTimeout(async () => {
+  // Safety timeout — retained in `timeoutHandle` so the `completed`
+  // branch above can cancel it and release the Node event loop early.
+  timeoutHandle = setTimeout(async () => {
     if (done) return;
     done = true;
+    timeoutHandle = undefined;
     log.warn(
       { collected: responses.length, expected: ctx.expectedCount },
       "room_query.timeout",
