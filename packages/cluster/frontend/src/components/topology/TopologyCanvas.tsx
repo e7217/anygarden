@@ -15,6 +15,7 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import './topology.css'
 import { useNavigate } from 'react-router-dom'
 import { Map, Maximize2 } from 'lucide-react'
 import { MachineNode } from './nodes/MachineNode'
@@ -35,8 +36,6 @@ const nodeTypes: NodeTypes = {
 const edgeTypes: EdgeTypes = {
   relation: RelationEdge,
 }
-
-const DIMMED_OPACITY = 0.18
 
 interface CanvasProps {
   nodes: Node[]
@@ -73,26 +72,26 @@ function CanvasInner({ nodes, edges, onSelect, selectedId }: CanvasProps) {
     return { neighborNodes: n, neighborEdges: e }
   }, [hoverId, nodes, edges])
 
+  // Dim via CSS class + preserve object identity for unchanged items.
+  // React Flow treats Node/Edge objects by reference internally; keeping
+  // the same reference when nothing changed skips per-item diff work and
+  // avoids re-rendering memoised node components on every hover move.
   const displayNodes = useMemo<Node[]>(() => {
-    if (!hoverId) return nodes
-    return nodes.map(n => ({
-      ...n,
-      style: {
-        ...(n.style ?? {}),
-        opacity: neighborNodes.has(n.id) ? 1 : DIMMED_OPACITY,
-      },
-    }))
+    return nodes.map(n => {
+      const nextClass =
+        hoverId !== null && !neighborNodes.has(n.id) ? 'is-dimmed' : undefined
+      if (n.className === nextClass) return n
+      return { ...n, className: nextClass }
+    })
   }, [nodes, hoverId, neighborNodes])
 
   const displayEdges = useMemo<Edge[]>(() => {
-    if (!hoverId) return edges
-    return edges.map(e => ({
-      ...e,
-      style: {
-        ...(e.style ?? {}),
-        opacity: neighborEdges.has(e.id) ? 1 : DIMMED_OPACITY,
-      },
-    }))
+    return edges.map(e => {
+      const nextClass =
+        hoverId !== null && !neighborEdges.has(e.id) ? 'is-dimmed' : undefined
+      if (e.className === nextClass) return e
+      return { ...e, className: nextClass }
+    })
   }, [edges, hoverId, neighborEdges])
 
   const onMouseEnter: NodeMouseHandler = useCallback((_e, node) => setHoverId(node.id), [])
@@ -123,13 +122,21 @@ function CanvasInner({ nodes, edges, onSelect, selectedId }: CanvasProps) {
     [onSelect],
   )
 
+  // Only replace the nodes whose selected flag actually flipped so the
+  // rest keep their references from `displayNodes` and skip re-render.
   const withSelected = useMemo<Node[]>(
-    () => displayNodes.map(n => ({ ...n, selected: n.id === selectedId })),
+    () =>
+      displayNodes.map(n => {
+        const nextSelected = n.id === selectedId
+        if ((n.selected ?? false) === nextSelected) return n
+        return { ...n, selected: nextSelected }
+      }),
     [displayNodes, selectedId],
   )
 
   return (
     <div
+      className="topology-root"
       style={{ width: '100%', height: '100%', position: 'relative' }}
       role="application"
       onKeyDown={onKeyDown}

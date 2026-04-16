@@ -1,0 +1,26 @@
+/*
+ * Topology graph — hover dimming via CSS class toggle.
+ *
+ * Applying opacity through a React Flow node/edge `style` prop forces
+ * every item to be reference-replaced on hover, triggering internal
+ * diff + memo invalidation and a perceptible flicker. Moving the dim
+ * behaviour to a CSS class lets React Flow keep stable references and
+ * lets the browser transition opacity smoothly.
+ */
+
+.topology-root .react-flow__node,
+.topology-root .react-flow__edge {
+  transition: opacity 180ms ease-out;
+}
+
+.topology-root .react-flow__node.is-dimmed,
+.topology-root .react-flow__edge.is-dimmed {
+  opacity: 0.18;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-root .react-flow__node,
+  .topology-root .react-flow__edge {
+    transition: none;
+  }
+}
