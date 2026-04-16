@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
 import RoomEditDialog from '@/components/RoomEditDialog'
+import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Bot, Server, MessageSquare, X,
@@ -137,7 +138,7 @@ interface SidebarProps {
 export default function Sidebar({ selectedRoom, open = false, onClose }: SidebarProps) {
   const { user, logout } = useAuth()
   const {
-    projects, rooms, agentDMs, createProject, createRoom, fetchRooms,
+    projects, rooms, agentDMs, createProject, deleteProject, createRoom, fetchRooms,
     pinRoom, reorderPinnedRooms,
   } = useRooms()
   const navigate = useNavigate()
@@ -180,6 +181,13 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
   const [roomProjectId, setRoomProjectId] = useState('')
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
   const [roomDialogOpen, setRoomDialogOpen] = useState(false)
+  // Delete-project confirmation target. ``null`` means the dialog
+  // is closed. When set, the dialog shows the cascade warning if
+  // the project has any rooms (``rooms[id].length > 0``) and a
+  // plain confirmation otherwise.
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<
+    { id: string; name: string } | null
+  >(null)
 
   const toggleProject = (id: string) => {
     setExpandedProjects(prev => {
@@ -266,6 +274,33 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
       setProjectDialogOpen(false)
     } catch { /* ignore */ }
   }
+
+  // Called from the confirm dialog once the user accepts the
+  // cascade warning. Snapshot the affected room ids BEFORE the
+  // delete so the post-delete navigate check still works — the
+  // optimistic local-state drop in ``deleteProject`` clears
+  // ``rooms[projectId]`` immediately.
+  const handleDeleteProject = useCallback(async (projectId: string) => {
+    const affected = new Set((rooms[projectId] ?? []).map(r => r.id))
+    try {
+      await deleteProject(projectId)
+      setDeleteProjectTarget(null)
+      // If the user was viewing a room inside the deleted project,
+      // route them to the home screen — staying on a now-gone room
+      // would render a permanent 404 shell.
+      if (selectedRoom && affected.has(selectedRoom)) navigate('/')
+      // Drop the project from the expanded set so re-creating a
+      // project with the same id later doesn't inherit a stale flag.
+      setExpandedProjects(prev => {
+        if (!prev.has(projectId)) return prev
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
+  }, [deleteProject, navigate, rooms, selectedRoom])
 
   const handleCreateRoom = async () => {
     if (!newRoomName.trim() || !roomProjectId) return
@@ -374,16 +409,28 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
 
           {projects.map(project => (
             <div key={project.id} className="mb-1">
-              <button
-                onClick={() => toggleProject(project.id)}
-                className="text-nav flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[var(--color-foreground)] hover:bg-black/5 transition-colors"
-              >
-                {expandedProjects.has(project.id)
-                  ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                  : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                }
-                <span className="truncate">{project.name}</span>
-              </button>
+              {/* Project header row: the expand/collapse <button>
+                  and the overflow-menu trigger live side-by-side
+                  inside a ``group`` container so the menu fades
+                  in on hover without nesting interactive elements
+                  (which would be invalid HTML). ``relative`` anchors
+                  the menu's absolute-positioned popover. */}
+              <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-black/5 transition-colors">
+                <button
+                  onClick={() => toggleProject(project.id)}
+                  className="text-nav flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
+                >
+                  {expandedProjects.has(project.id)
+                    ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                    : <ChevronRight className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                  }
+                  <span className="truncate">{project.name}</span>
+                </button>
+                <SidebarProjectMenu
+                  projectId={project.id}
+                  onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
+                />
+              </div>
 
               {expandedProjects.has(project.id) && (
                 <div className="ml-3 mt-0.5 flex flex-col gap-0.5">
@@ -483,6 +530,53 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
           <DialogFooter>
             <Button onClick={handleCreateRoom} disabled={!newRoomName.trim()}>
               Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete project confirmation dialog. Message branches on
+          whether the project has any rooms — a plain confirmation
+          for empty projects, a cascade warning (with the exact
+          room count) when rooms would be removed alongside it. */}
+      <Dialog
+        open={deleteProjectTarget !== null}
+        onOpenChange={(o) => { if (!o) setDeleteProjectTarget(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete project</DialogTitle>
+          </DialogHeader>
+          {deleteProjectTarget && (() => {
+            const roomCount = (rooms[deleteProjectTarget.id] ?? []).length
+            return (
+              <div className="space-y-2 py-2 text-sm text-[var(--color-foreground)]">
+                {roomCount === 0 ? (
+                  <p>
+                    프로젝트 <strong>&ldquo;{deleteProjectTarget.name}&rdquo;</strong>를 삭제하시겠습니까?
+                  </p>
+                ) : (
+                  <p>
+                    프로젝트 <strong>&ldquo;{deleteProjectTarget.name}&rdquo;</strong>와
+                    {' '}하위 room <strong>{roomCount}개</strong>가 모두 삭제됩니다.
+                  </p>
+                )}
+                <p className="text-[var(--color-foreground-muted)]">이 작업은 되돌릴 수 없습니다.</p>
+              </div>
+            )
+          })()}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeleteProjectTarget(null)}>
+              취소
+            </Button>
+            <Button
+              variant="destructive"
+              data-testid="sidebar-project-delete-confirm"
+              onClick={() => {
+                if (deleteProjectTarget) void handleDeleteProject(deleteProjectTarget.id)
+              }}
+            >
+              삭제
             </Button>
           </DialogFooter>
         </DialogContent>
