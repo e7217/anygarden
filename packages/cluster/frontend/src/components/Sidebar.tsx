@@ -1,14 +1,17 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { apiFetch } from '@/lib/api'
+import { deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
+import PresenceDot from '@/components/PresenceDot'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import {
@@ -81,6 +84,29 @@ function buildRoomTree(rooms: Room[]): RoomTreeNode[] {
   for (const root of roots) assignDepth(root, 0)
 
   return roots
+}
+
+/**
+ * Resolve the Agent backing a given DM room (#71).
+ *
+ * The DM-room tuple from ``useRooms().agentDMs`` doesn't include
+ * the agent's lifecycle state — it comes from
+ * ``useAgents()`` (admin-gated). We bridge the two by:
+ *   1. ``representative_agent_id`` (authoritative; server sets
+ *      this on DM creation).
+ *   2. Fallback to name match stripping the ``"DM: "`` prefix —
+ *      covers older DMs where the representative agent wasn't
+ *      persisted. Brittle if the admin renames an agent, but
+ *      falls through to "offline" which is the safe default.
+ */
+function findAgentForDM(dm: Room, agents: Agent[]): Agent | undefined {
+  if (dm.representative_agent_id) {
+    const byId = agents.find(a => a.id === dm.representative_agent_id)
+    if (byId) return byId
+  }
+  const target = dm.name.replace(/^DM:\s*/, '').trim()
+  if (!target) return undefined
+  return agents.find(a => a.name === target)
 }
 
 // Split the flat room list into the sidebar's top "Pinned" section
@@ -462,7 +488,12 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
         </DialogContent>
       </Dialog>
 
-      {/* Agents DM section */}
+      {/* Agents DM section.
+          Admin users see presence dots next to each DM (driven by
+          ``useAgents()`` — an admin-gated endpoint). Non-admins
+          get the same DM list without dots, to avoid a 403 on the
+          agents fetch and to avoid a misleading "offline
+          everywhere" dot for guest sessions. See #71. */}
       {agentDMs.length > 0 && (
         <div className="border-t border-[var(--color-border)] px-2 py-2">
           <button
@@ -475,23 +506,31 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
             Agents
           </button>
           {agentsExpanded && (
-            <div className="flex flex-col gap-0.5">
-              {agentDMs.map(dm => (
-                <button
-                  key={dm.id}
-                  onClick={() => go(`/rooms/${dm.id}`)}
-                  data-testid={`sidebar-dm-${dm.id}`}
-                  className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                    selectedRoom === dm.id
-                      ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                      : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-                  }`}
-                >
-                  <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-                  {dm.name.replace(/^DM:\s*/, '')}
-                </button>
-              ))}
-            </div>
+            isAdmin ? (
+              <AgentDMListAdmin
+                dms={agentDMs}
+                selectedRoom={selectedRoom}
+                onGo={go}
+              />
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {agentDMs.map(dm => (
+                  <button
+                    key={dm.id}
+                    onClick={() => go(`/rooms/${dm.id}`)}
+                    data-testid={`sidebar-dm-${dm.id}`}
+                    className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                      selectedRoom === dm.id
+                        ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                        : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                    }`}
+                  >
+                    <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+                    {dm.name.replace(/^DM:\s*/, '')}
+                  </button>
+                ))}
+              </div>
+            )
           )}
         </div>
       )}
@@ -636,6 +675,54 @@ function RoomTreeNodeView({
         />
       )}
     </>
+  )
+}
+
+/**
+ * Admin-only DM list variant (#71).
+ *
+ * Broken out so ``useAgents()`` — which hits an admin-gated
+ * endpoint — only mounts for admins. The parent Sidebar conditionally
+ * renders this vs the plain DM list based on ``user.is_admin``.
+ */
+function AgentDMListAdmin({
+  dms,
+  selectedRoom,
+  onGo,
+}: {
+  dms: Room[]
+  selectedRoom: string | null
+  onGo: (path: string) => void
+}) {
+  const { agents } = useAgents()
+  return (
+    <div className="flex flex-col gap-0.5">
+      {dms.map(dm => {
+        const agent = findAgentForDM(dm, agents)
+        const online = deriveAgentOnline(agent?.actual_state)
+        return (
+          <button
+            key={dm.id}
+            onClick={() => onGo(`/rooms/${dm.id}`)}
+            data-testid={`sidebar-dm-${dm.id}`}
+            className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+              selectedRoom === dm.id
+                ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+            }`}
+          >
+            <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+            <PresenceDot
+              variant="agent"
+              online={online}
+              agentState={agent?.actual_state}
+              className="mr-1.5"
+            />
+            {dm.name.replace(/^DM:\s*/, '')}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

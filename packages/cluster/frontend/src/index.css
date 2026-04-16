@@ -30,6 +30,16 @@
   --color-success-soft: #2a9d99;                     /* teal */
   --color-warning: #dd5b00;
   --color-danger: #dd5b00;
+
+  /* -- Color: status (#71) --
+     Status colors convey liveness/health state for stateful
+     resources (agents, machines, participants) and live OUTSIDE
+     the single-accent interactive palette: the Notion Blue
+     ``--color-brand`` family stays reserved for clickable intent.
+     ``--color-status-online`` is a muted sage — saturated enough
+     to pop against warm neutrals, desaturated enough not to fight
+     the accent. See DESIGN.md §2 "Status colors". */
+  --color-status-online: #5b9e6d;
   --color-accent-pink: #ff64c8;
   --color-accent-purple: #391c57;
   --color-accent-brown: #523410;

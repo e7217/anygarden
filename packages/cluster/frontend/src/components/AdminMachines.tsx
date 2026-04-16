@@ -19,6 +19,8 @@ import { apiFetch } from '@/lib/api'
 import AgentEditDialog from '@/components/AgentEditDialog'
 import AgentRoomsDialog from '@/components/AgentRoomsDialog'
 import AgentHistoryDialog from '@/components/AgentHistoryDialog'
+import PresenceDot from '@/components/PresenceDot'
+import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
 import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -486,8 +488,13 @@ export default function AdminMachines() {
                   // underlying actual_state in the DB; once the
                   // machine reconnects the daemon's reports will
                   // reconcile state naturally.
+                  //
+                  // #71: delegated to the shared ``agent-liveness``
+                  // helpers so the sidebar, dialogs, and this page
+                  // all derive liveness the same way.
                   const isMachineOffline = selectedMachine.status === 'offline'
-                  const displayState = isMachineOffline ? 'unreachable' : agent.actual_state
+                  const online = deriveAgentOnline(agent.actual_state, { machineOffline: isMachineOffline })
+                  const displayState = agentStatusLabel(agent.actual_state, { machineOffline: isMachineOffline })
                   const isStopped = agent.actual_state === 'stopped' || agent.actual_state === 'idle' || agent.actual_state === 'crashed'
                   const isRunning = agent.actual_state === 'running' || agent.actual_state === 'starting'
                   return (
@@ -496,7 +503,11 @@ export default function AdminMachines() {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
                           <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
-                            <span className={`inline-block h-1.5 w-1.5 rounded-full ${isMachineOffline ? 'bg-[var(--color-foreground-subtle)]' : statusDot(agent.actual_state)}`} />
+                            <PresenceDot
+                              variant="agent"
+                              online={online}
+                              agentState={displayState}
+                            />
                             {displayState}
                           </span>
                         </div>

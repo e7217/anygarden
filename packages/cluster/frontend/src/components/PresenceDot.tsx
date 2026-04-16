@@ -1,24 +1,44 @@
 /**
- * PresenceDot — tiny liveness indicator (#54).
+ * PresenceDot — tiny liveness indicator (#54, #71).
  *
- * A 6px circle next to a participant's name:
- *   - ``online=true``  → Notion blue accent (the system's "alive"
- *                        semantic; green reads too aggressively in
- *                        the warm-neutral palette we use elsewhere
- *                        — see DESIGN.md §2).
+ * A 6px circle next to a participant's / agent's name:
+ *   - ``online=true``  → muted sage green
+ *     (``--color-status-online``). As of #71 we moved off the
+ *     Notion Blue accent because blue was overloading the single
+ *     accent semantic (interactive intent); sage keeps ``alive''
+ *     semantically distinct without fighting the warm-neutral
+ *     palette. Green too-saturated reads aggressive in this
+ *     palette — the 0.56 luminance sage is deliberate.
  *   - ``online=false`` → warm neutral gray, same family as the
- *                        ``--color-border`` whisper.
+ *     ``--color-border`` whisper.
  *
- * The ``title`` attribute carries a human-readable last-seen label so
- * hovering the dot shows "방금 전" / "12분 전" / the raw ISO stamp as
- * a fallback. Using the native ``title`` keeps us clear of a new
- * radix-tooltip dependency for a single place.
+ * ``variant`` switches the offline tooltip voice:
+ *   - ``'user'``  (default) — uses the participant presence
+ *     semantic: "오프라인 · 마지막 응답 ${formatAgo(lastSeenAt)}".
+ *   - ``'agent'`` — renders the agent lifecycle state verbatim
+ *     (``stopped`` / ``crashed`` / ``unreachable`` / etc). Callers
+ *     pass the raw ``actual_state`` via ``agentState``; the helper
+ *     in ``lib/agent-liveness.ts`` prepares it (including the
+ *     ``machine_offline → 'unreachable'`` mapping).
+ *
+ * The ``title`` attribute carries the human-readable label so
+ * hovering the dot shows the appropriate detail. Using the native
+ * ``title`` keeps us clear of a new radix-tooltip dependency for
+ * a single place.
  */
 export interface PresenceDotProps {
   online: boolean
   lastSeenAt?: string | null
   size?: number
   className?: string
+  /** Offline-tooltip voice. Defaults to ``'user'`` (last-seen
+   *  timestamp). Pass ``'agent'`` at agent-row call sites so the
+   *  tooltip surfaces the lifecycle state instead. */
+  variant?: 'user' | 'agent'
+  /** Raw agent state ("running"/"stopped"/"crashed"/... or
+   *  "unreachable" when the hosting machine is offline). Only
+   *  read when ``variant === 'agent'``. */
+  agentState?: string
 }
 
 function formatAgo(iso: string | null | undefined): string {
@@ -32,22 +52,39 @@ function formatAgo(iso: string | null | undefined): string {
   return `${Math.floor(seconds / 86400)}일 전`
 }
 
+function buildTitle(
+  online: boolean,
+  variant: 'user' | 'agent',
+  lastSeenAt: string | null | undefined,
+  agentState: string | undefined,
+): string {
+  if (online) return '온라인'
+  if (variant === 'agent') {
+    // Agent variant — surface the lifecycle verbatim. Falls back
+    // to a neutral offline label when the caller didn't pass
+    // ``agentState`` (e.g. we don't know which agent powers this
+    // DM).
+    return agentState ? `오프라인 · ${agentState}` : '오프라인'
+  }
+  // User variant — "마지막 응답" phrasing for the WS presence path.
+  return `오프라인 · 마지막 응답 ${formatAgo(lastSeenAt)}`
+}
+
 export default function PresenceDot({
   online,
   lastSeenAt,
   size = 6,
   className = '',
+  variant = 'user',
+  agentState,
 }: PresenceDotProps) {
-  const title = online
-    ? '온라인'
-    : `오프라인 · 마지막 응답 ${formatAgo(lastSeenAt)}`
+  const title = buildTitle(online, variant, lastSeenAt, agentState)
 
-  // Notion-blue accent for online, warm neutral for offline.
-  // ``--color-brand`` is the project's single accent token
-  // (DESIGN.md §2); falling back via the CSS var keeps PresenceDot
-  // theme-agnostic.
+  // Sage green for online (``--color-status-online``, #71), warm
+  // neutral gray for offline. Falling back via CSS var keeps
+  // PresenceDot theme-agnostic.
   const bg = online
-    ? 'var(--color-brand, #0075de)'
+    ? 'var(--color-status-online, #5b9e6d)'
     : 'rgba(0, 0, 0, 0.25)'
 
   return (
