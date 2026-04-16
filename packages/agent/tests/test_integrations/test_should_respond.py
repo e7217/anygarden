@@ -5,10 +5,15 @@ from unittest.mock import MagicMock
 from doorae_agent.integrations.base import should_respond
 
 
-def _make_client(agent_name: str = "테스트에이전트", my_pids: set | None = None):
+def _make_client(
+    agent_name: str = "테스트에이전트",
+    my_pids: set | None = None,
+    agent_id: str | None = None,
+):
     client = MagicMock()
     client._agent_name = agent_name
     client._my_participant_ids = my_pids or {"my-pid-123"}
+    client._agent_id = agent_id
     return client
 
 
@@ -225,7 +230,8 @@ class TestShouldRespond:
         assert should_respond(msg, client) is True
 
     def test_room_query_metadata_responds(self):
-        """room_query metadata triggers response even from agent sender."""
+        """Legacy room_query metadata (no representative_agent_id) triggers
+        response for backward compat — pre-#61 servers omit the field."""
         client = _make_client()
         msg = {
             "participant_id": "other-agent",
@@ -233,6 +239,61 @@ class TestShouldRespond:
             "metadata": {
                 "_nonce": "x",
                 "room_query": {"target_room_id": "xyz", "source_room_id": "abc"},
+            },
+        }
+        assert should_respond(msg, client) is True
+
+    def test_room_query_representative_matches_responds(self):
+        """Issue #61 — only the representative agent forwards.
+        When ``representative_agent_id`` matches this client's
+        ``_agent_id``, respond (representative does the forward)."""
+        client = _make_client(agent_id="agent-rep-123")
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<#room:xyz> 의견?",
+            "metadata": {
+                "room_query": {
+                    "target_room_id": "xyz",
+                    "source_room_id": "abc",
+                    "representative_agent_id": "agent-rep-123",
+                },
+            },
+        }
+        assert should_respond(msg, client) is True
+
+    def test_room_query_representative_mismatch_skips(self):
+        """Issue #61 — non-representative agent must NOT forward.
+        Without this gate N agents in the source room each send a
+        duplicate [ROOM_QUERY] to the target room."""
+        client = _make_client(agent_id="agent-other-456")
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<#room:xyz> 의견?",
+            "metadata": {
+                "room_query": {
+                    "target_room_id": "xyz",
+                    "source_room_id": "abc",
+                    "representative_agent_id": "agent-rep-123",
+                },
+            },
+        }
+        assert should_respond(msg, client) is False
+
+    def test_room_query_legacy_client_no_agent_id_responds(self):
+        """Pre-#61 clients (``_agent_id=None``) have no way to
+        evaluate the gate — fall back to the legacy behaviour of
+        always forwarding so the deploy transition doesn't drop
+        queries entirely."""
+        client = _make_client(agent_id=None)
+        msg = {
+            "participant_id": "human-pid",
+            "content": "<#room:xyz> 의견?",
+            "metadata": {
+                "room_query": {
+                    "target_room_id": "xyz",
+                    "source_room_id": "abc",
+                    "representative_agent_id": "agent-rep-123",
+                },
             },
         }
         assert should_respond(msg, client) is True

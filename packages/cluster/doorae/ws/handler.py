@@ -138,6 +138,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     welcome = WelcomeOut(
         participant_id=participant.id,
         pending_rooms=pending_rooms,
+        # Issue #61 — tell the agent SDK which agent identity this
+        # connection is bound to so it can gate ``room_query``
+        # forwarding to the representative agent only.
+        agent_id=identity.id if identity and identity.kind == "agent" else None,
     )
     await websocket.send_text(welcome.model_dump_json())
 
@@ -362,6 +366,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     "role": "question",
                                     "query_id": str(uuid4()),
                                     "source_participant_id": participant.id,
+                                    # Issue #61 — identify which agent
+                                    # is responsible for forwarding the
+                                    # [ROOM_QUERY]. When multiple agents
+                                    # are in the source room they all
+                                    # receive this broadcast; only the
+                                    # matching ``representative_agent_id``
+                                    # should call forward, otherwise the
+                                    # target room receives N duplicates.
+                                    "representative_agent_id": rep_agent_id,
                                 }
 
                 async with session_factory() as db:

@@ -63,6 +63,17 @@ class ChatClient:
         # reconnect or when a duplicate process shares our token).
         self._my_participant_ids: set[str] = set()
 
+        # Issue #61 — the agent identity this client is bound to.
+        # Populated from the welcome frame (server sends ``agent_id``
+        # only for agent-authenticated connections). ``None`` when the
+        # connection is authenticated as a user/guest, or when the
+        # server is running a pre-#61 build that doesn't send the
+        # field. ``should_respond`` uses this to gate ``room_query``
+        # forwarding: only the representative agent should forward the
+        # [ROOM_QUERY], otherwise N agents in the source room send N
+        # duplicates to the target room.
+        self._agent_id: str | None = None
+
         # Per-room agent-only consecutive message counter.
         # Counts how many messages in a row came from agents (non-human)
         # without a human message in between.  When the count exceeds
@@ -289,6 +300,14 @@ class ChatClient:
             if pid:
                 self._my_participant_ids.add(pid)
                 logger.info("ws.welcome", room_id=room_id, participant_id=pid)
+            # Issue #61 — cache the agent identity the server assigned
+            # to this connection so ``should_respond`` can gate
+            # ``room_query`` forwarding. Only overwrite if the server
+            # sent a value: an agent reconnecting through a room that
+            # another session already populated must not clear it.
+            aid = data.get("agent_id")
+            if aid:
+                self._agent_id = aid
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:

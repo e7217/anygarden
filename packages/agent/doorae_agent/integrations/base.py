@@ -76,8 +76,21 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
     if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
         return True
 
-    # 2b. room_query metadata → representative agent should respond
-    if metadata.get("room_query"):
+    # 2b. room_query metadata → only the representative agent forwards.
+    # Issue #61 — the server now tags the broadcast with
+    # ``representative_agent_id``. Non-representative agents in the
+    # same source room MUST stay out, otherwise each fans out a
+    # duplicate ``[ROOM_QUERY]`` to the target room. The legacy
+    # fallback (``True``) covers two transition cases:
+    # 1. Pre-#61 servers don't set ``representative_agent_id``.
+    # 2. Pre-#61 clients don't populate ``_agent_id``.
+    # Both can be removed once the whole fleet is on ≥#61.
+    room_query = metadata.get("room_query")
+    if room_query:
+        rep_id = room_query.get("representative_agent_id")
+        my_agent_id = getattr(client, "_agent_id", None)
+        if rep_id and my_agent_id:
+            return my_agent_id == rep_id
         return True
 
     agent_name = client._agent_name
