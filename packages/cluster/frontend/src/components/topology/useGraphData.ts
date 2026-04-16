@@ -36,6 +36,12 @@ export function useGraphData(
   const [error, setError] = useState<Error | null>(null)
   const etagRef = useRef<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // Mirror of ``loading`` that timer callbacks can read synchronously
+  // without re-subscribing. Keeps the polling effect from racing an
+  // in-flight request: if a fetch is still outstanding when the next
+  // tick fires, we skip it rather than aborting and restarting (which
+  // would livelock on networks slower than ``pollInterval``).
+  const loadingRef = useRef<boolean>(true)
   // Bumping ``trigger`` schedules a refetch without rearming the initial
   // effect dependency graph — keeps the hook stable under React 18
   // double-invoke in dev mode.
@@ -51,6 +57,7 @@ export function useGraphData(
     abortRef.current = controller
 
     setLoading(true)
+    loadingRef.current = true
     setError(null)
 
     const token = localStorage.getItem('doorae_token')
@@ -87,6 +94,7 @@ export function useGraphData(
       .finally(() => {
         if (controller.signal.aborted) return
         setLoading(false)
+        loadingRef.current = false
       })
 
     return () => {
@@ -117,6 +125,13 @@ export function useGraphData(
         ) {
           return
         }
+        // Livelock guard: if a previous fetch is still in flight,
+        // bumping ``trigger`` would abort it via the main effect and
+        // restart from scratch. On networks slower than
+        // ``pollInterval`` that yields a stream of aborted requests
+        // that never settle. Skipping the tick lets the outstanding
+        // request finish and the next tick picks up a fresh fetch.
+        if (loadingRef.current) return
         refresh()
       }, pollInterval)
     }
@@ -139,6 +154,11 @@ export function useGraphData(
       if (document.visibilityState === 'hidden') {
         stop()
       } else {
+        // Refresh immediately on tab return so the user sees fresh
+        // data without waiting up to ``pollInterval`` for the next
+        // tick. Restart the interval afterwards so subsequent ticks
+        // stay on schedule.
+        refresh()
         start()
       }
     }

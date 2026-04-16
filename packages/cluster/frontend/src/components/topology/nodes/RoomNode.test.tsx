@@ -80,4 +80,19 @@ describe('RoomNode typing pulse (#84)', () => {
     expect(pill).toBeTruthy()
     expect(pill?.classList.contains('room-node--active')).toBe(true)
   })
+
+  it('announces typing state via aria-label when is_typing is true', () => {
+    // Codex review follow-up: the visual pulse shouldn't be the only
+    // channel carrying the active-typing signal. Assistive tech users
+    // need the state spelled out in the accessible name.
+    const { container } = renderNode({
+      label: 'general',
+      is_dm: false,
+      participant_count: 3,
+      is_typing: true,
+    })
+    const pill = container.querySelector('.room-node')
+    expect(pill?.getAttribute('aria-label')).toContain('typing active')
+    expect(pill?.getAttribute('title')).toContain('typing')
+  })
 })

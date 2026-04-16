@@ -32,6 +32,16 @@ function RoomNodeInner({ data, selected }: NodeProps) {
   const prefix = isDm ? '@' : '#'
   const outline = selected ? `1px solid ${ACCENT}` : BORDER
   const className = isTyping ? 'room-node room-node--active' : 'room-node'
+  // Surface the active-typing state to assistive tech and hover tooltips
+  // so the visual pulse (``.room-node--active``) isn't the only channel
+  // carrying that signal. English to stay consistent with the rest of
+  // the topology labels.
+  const ariaLabel = isTyping
+    ? `Room ${prefix}${label}, ${participantCount} participants, typing active`
+    : `Room ${prefix}${label}, ${participantCount} participants`
+  const titleText = isTyping
+    ? `${prefix}${label} · ${participantCount} · typing`
+    : `${prefix}${label} · ${participantCount}`
 
   return (
     <div
@@ -52,8 +62,8 @@ function RoomNodeInner({ data, selected }: NodeProps) {
         letterSpacing: '-0.05px',
         maxWidth: 220,
       }}
-      aria-label={`Room ${prefix}${label}, ${participantCount} participants`}
-      title={`${prefix}${label} · ${participantCount}`}
+      aria-label={ariaLabel}
+      title={titleText}
     >
       <Handle
         type="target"
