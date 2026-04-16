@@ -11,7 +11,7 @@ import type { GraphEdge, GraphNode, NodeKind } from './types'
 const NODE_SIZE: Record<NodeKind, { width: number; height: number }> = {
   user: { width: 56, height: 56 },
   machine: { width: 136, height: 56 },
-  agent: { width: 64, height: 64 },
+  agent: { width: 140, height: 44 },
   room: { width: 160, height: 32 },
   project: { width: 320, height: 160 },
 }
