@@ -28,6 +28,7 @@ from doorae.db.models import (
     RoomInviteLink,
     User,
 )
+from doorae.orchestration.rules import TypingTracker
 
 
 @pytest_asyncio.fixture()
@@ -179,6 +180,11 @@ async def graph_env():
     app = create_app(config)
     app.state.engine = engine
     app.state.session_factory = factory
+    # The lifespan is skipped under ASGITransport in this fixture, so
+    # wire the singletons the endpoint reads at request time. This
+    # mirrors the production lifespan but stays test-local and
+    # deterministic.
+    app.state.typing_tracker = TypingTracker(ttl_seconds=5.0)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -190,6 +196,7 @@ async def graph_env():
             "guest_token": guest_token,
             "ids": ids,
             "factory": factory,
+            "typing_tracker": app.state.typing_tracker,
         }
 
     await engine.dispose()
@@ -433,6 +440,109 @@ class TestEtag:
         cache_ctl = resp.headers.get("cache-control", "")
         assert "private" in cache_ctl
         assert "max-age" in cache_ctl
+
+
+class TestRoomTypingFlag:
+    """Room nodes carry a live ``is_typing`` flag from ``app.state.typing_tracker``.
+
+    The /topology page subscribes to this on a 5s poll to pulse rooms
+    with active typers (#84). Verifies:
+      * default state -> ``is_typing`` is ``False`` for every room
+      * setting typing on a room flips that single room's flag and
+        nothing else
+      * the change participates in ETag generation, so the polling
+        client revalidates (no 304 short-circuit) when typing toggles
+    """
+
+    @pytest.mark.asyncio
+    async def test_is_typing_false_when_no_one_typing(self, graph_env) -> None:
+        client = graph_env["client"]
+        ids = graph_env["ids"]
+        resp = await client.get(
+            "/api/v1/graph?scope=global",
+            headers=_auth(graph_env["admin_token"]),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        rooms_by_id = {n["id"]: n for n in body["nodes"] if n["kind"] == "room"}
+        # Every visible room must carry the flag and it must be False.
+        assert rooms_by_id, "expected at least one room node in seed"
+        for rid_key in ("r1", "r2", "r3", "r4"):
+            room = rooms_by_id.get(f"r_{ids[rid_key]}")
+            assert room is not None, f"room {rid_key} missing from graph"
+            assert "is_typing" in room["data"], (
+                f"is_typing field missing for {rid_key}"
+            )
+            assert room["data"]["is_typing"] is False
+
+    @pytest.mark.asyncio
+    async def test_is_typing_true_when_tracker_has_active_entry(
+        self, graph_env
+    ) -> None:
+        client = graph_env["client"]
+        ids = graph_env["ids"]
+        # Reach into the same app state the endpoint reads.
+        tracker = graph_env["typing_tracker"]
+        tracker.set_typing(ids["r1"], "alice-participant", True)
+
+        resp = await client.get(
+            "/api/v1/graph?scope=global",
+            headers=_auth(graph_env["admin_token"]),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        rooms_by_id = {n["id"]: n for n in body["nodes"] if n["kind"] == "room"}
+
+        r1 = rooms_by_id[f"r_{ids['r1']}"]
+        assert r1["data"]["is_typing"] is True, (
+            "r1 should reflect the active typing entry"
+        )
+        # Other rooms must not light up.
+        for rid_key in ("r2", "r3", "r4"):
+            other = rooms_by_id[f"r_{ids[rid_key]}"]
+            assert other["data"]["is_typing"] is False, (
+                f"{rid_key} unexpectedly marked as typing"
+            )
+
+        # Cleanup so the cross-test ordering stays predictable even if
+        # later tests reuse the fixture-scoped tracker.
+        tracker.set_typing(ids["r1"], "alice-participant", False)
+
+    @pytest.mark.asyncio
+    async def test_typing_change_invalidates_etag(self, graph_env) -> None:
+        """ETag must shift when typing state toggles; otherwise the
+        client-side polling loop would 304 forever and the pulse
+        would never appear or vanish."""
+        client = graph_env["client"]
+        ids = graph_env["ids"]
+        tracker = graph_env["typing_tracker"]
+
+        # Ensure clean baseline.
+        tracker.set_typing(ids["r1"], "alice-participant", False)
+        resp1 = await client.get(
+            "/api/v1/graph?scope=global",
+            headers=_auth(graph_env["admin_token"]),
+        )
+        assert resp1.status_code == 200
+        etag_off = resp1.headers.get("etag")
+        assert etag_off
+
+        tracker.set_typing(ids["r1"], "alice-participant", True)
+        resp2 = await client.get(
+            "/api/v1/graph?scope=global",
+            headers=_auth(graph_env["admin_token"]),
+        )
+        assert resp2.status_code == 200
+        etag_on = resp2.headers.get("etag")
+        assert etag_on
+
+        assert etag_on != etag_off, (
+            "ETag must change when is_typing flips; otherwise the "
+            "polling client will 304 and never re-render the pulse"
+        )
+
+        # Cleanup.
+        tracker.set_typing(ids["r1"], "alice-participant", False)
 
 
 class TestNPlusOneGuard:

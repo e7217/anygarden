@@ -131,7 +131,11 @@ export default function TopologyPage() {
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER)
   const { user } = useAuth()
 
-  const { data, loading, error, refresh } = useGraphData('auto')
+  // Poll every 5s so the Room "is_typing" pulse (#84) stays within the
+  // server's ``Cache-Control: max-age=5`` envelope. ETag short-circuits
+  // unchanged responses to 304 — this is a cheap heartbeat, not a full
+  // refetch loop. Polling auto-pauses when the tab is hidden.
+  const { data, loading, error, refresh } = useGraphData('auto', 5000)
 
   // Server-side graph → filtered client view.
   const { nodesIn, edgesIn, counts, knownEngines, knownStates } = useMemo(() => {

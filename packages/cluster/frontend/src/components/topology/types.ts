@@ -44,6 +44,15 @@ export interface RoomNodeData {
   parent_room_id: string | null
   participant_count: number
   representative_agent_id: string | null
+  /**
+   * Whether at least one participant is currently typing in the room.
+   *
+   * Backed by ``app.state.typing_tracker`` on the server (TTL 5s, see
+   * #84). Optional for forward/backward compatibility — older payloads
+   * cached in the SWR-lite layer simply have no flag and the room
+   * renders without the active-pulse class.
+   */
+  is_typing?: boolean
 }
 
 export interface ProjectNodeData {

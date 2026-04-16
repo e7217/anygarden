@@ -118,7 +118,33 @@ def _resolve_scope(identity: Identity, requested: ScopeKind) -> Literal["persona
 # ── Graph builders ──────────────────────────────────────────────────
 
 
-async def _build_global_graph(db: AsyncSession) -> tuple[list[NodeOut], list[EdgeOut]]:
+def _is_typing_for(typing_tracker: object | None, room_id: str) -> bool:
+    """Return True iff at least one participant is currently typing in
+    *room_id*.
+
+    Defensive against missing ``app.state.typing_tracker`` (e.g. in
+    test apps that haven't run the lifespan startup yet) — callers
+    pass whatever ``getattr(app.state, "typing_tracker", None)``
+    yielded, and we degrade silently to ``False``. ``TypingTracker``'s
+    own ``get_typing`` already filters stale TTL entries, so we don't
+    need to re-validate them here (see
+    ``doorae.orchestration.rules.TypingTracker.get_typing``).
+    """
+    if typing_tracker is None:
+        return False
+    get = getattr(typing_tracker, "get_typing", None)
+    if get is None:
+        return False
+    try:
+        active = get(room_id)
+    except Exception:  # pragma: no cover — defensive
+        return False
+    return bool(active)
+
+
+async def _build_global_graph(
+    db: AsyncSession, typing_tracker: object | None = None
+) -> tuple[list[NodeOut], list[EdgeOut]]:
     """Fetch the full graph. All rows, bulk SELECTs, no per-entity round-trips."""
     users = (await db.execute(select(User))).scalars().all()
     machines = (await db.execute(select(Machine))).scalars().all()
@@ -212,6 +238,7 @@ async def _build_global_graph(db: AsyncSession) -> tuple[list[NodeOut], list[Edg
                     "parent_room_id": r.parent_room_id,
                     "participant_count": participant_count_by_room.get(r.id, 0),
                     "representative_agent_id": r.representative_agent_id,
+                    "is_typing": _is_typing_for(typing_tracker, r.id),
                 },
             )
         )
@@ -239,7 +266,7 @@ async def _build_global_graph(db: AsyncSession) -> tuple[list[NodeOut], list[Edg
 
 
 async def _build_personal_graph(
-    db: AsyncSession, user_id: str
+    db: AsyncSession, user_id: str, typing_tracker: object | None = None
 ) -> tuple[list[NodeOut], list[EdgeOut]]:
     """Return the slice visible to the given user.
 
@@ -431,6 +458,7 @@ async def _build_personal_graph(
                     "parent_room_id": safe_parent,
                     "participant_count": participant_count_by_room.get(r.id, 0),
                     "representative_agent_id": safe_rep,
+                    "is_typing": _is_typing_for(typing_tracker, r.id),
                 },
             )
         )
@@ -636,11 +664,15 @@ async def get_graph(
         raise HTTPException(status_code=403, detail="User authentication required")
 
     resolved = _resolve_scope(identity, scope)
+    # ``typing_tracker`` is attached during app startup
+    # (``doorae.app.create_app``); guard against missing state for test
+    # apps that bypass the lifespan.
+    typing_tracker = getattr(request.app.state, "typing_tracker", None)
 
     if resolved == "global":
-        nodes, edges = await _build_global_graph(db)
+        nodes, edges = await _build_global_graph(db, typing_tracker)
     else:
-        nodes, edges = await _build_personal_graph(db, identity.id)
+        nodes, edges = await _build_personal_graph(db, identity.id, typing_tracker)
 
     graph = GraphOut(
         generated_at=datetime.now(timezone.utc).isoformat(),
