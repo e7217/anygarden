@@ -101,3 +101,84 @@ async def test_create_project_unauthenticated(projects_env: AsyncClient):
         json={"name": "No Auth"},
     )
     assert resp.status_code == 401
+
+
+# ── Delete project ───────────────────────────────────────────────────
+
+
+async def test_delete_empty_project(projects_env: AsyncClient):
+    """A project with no rooms is removed by DELETE and disappears
+    from the list endpoint."""
+    token = await _register_and_get_token(projects_env)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = await projects_env.post(
+        "/api/v1/projects",
+        json={"name": "Empty"},
+        headers=headers,
+    )
+    project_id = resp.json()["id"]
+
+    resp = await projects_env.delete(
+        f"/api/v1/projects/{project_id}",
+        headers=headers,
+    )
+    assert resp.status_code == 204
+
+    resp = await projects_env.get("/api/v1/projects", headers=headers)
+    assert resp.status_code == 200
+    assert all(p["id"] != project_id for p in resp.json())
+
+
+async def test_delete_project_with_rooms_cascades(projects_env: AsyncClient):
+    """Deleting a project also removes its rooms via the
+    ``ON DELETE CASCADE`` FK. GET on each room id returns 404."""
+    token = await _register_and_get_token(projects_env)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = await projects_env.post(
+        "/api/v1/projects",
+        json={"name": "With rooms"},
+        headers=headers,
+    )
+    project_id = resp.json()["id"]
+
+    room_ids: list[str] = []
+    for name in ("r1", "r2"):
+        rr = await projects_env.post(
+            "/api/v1/rooms",
+            json={"project_id": project_id, "name": name},
+            headers=headers,
+        )
+        assert rr.status_code == 201
+        room_ids.append(rr.json()["id"])
+
+    resp = await projects_env.delete(
+        f"/api/v1/projects/{project_id}",
+        headers=headers,
+    )
+    assert resp.status_code == 204
+
+    # Each room should be gone.
+    for rid in room_ids:
+        got = await projects_env.get(
+            f"/api/v1/rooms/{rid}",
+            headers=headers,
+        )
+        assert got.status_code == 404, f"room {rid} still present"
+
+
+async def test_delete_project_not_found(projects_env: AsyncClient):
+    token = await _register_and_get_token(projects_env)
+    resp = await projects_env.delete(
+        "/api/v1/projects/00000000-0000-0000-0000-000000000000",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_delete_project_unauthenticated(projects_env: AsyncClient):
+    resp = await projects_env.delete(
+        "/api/v1/projects/00000000-0000-0000-0000-000000000000",
+    )
+    assert resp.status_code == 401

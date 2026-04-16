@@ -44,7 +44,16 @@ class Project(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
-    rooms: Mapped[list["Room"]] = relationship("Room", back_populates="project")
+    # ``passive_deletes=True`` defers child cleanup to the FK's
+    # ``ON DELETE CASCADE`` — without it, SA tries to UPDATE
+    # rooms.project_id to NULL before the cascade fires, which
+    # violates NOT NULL. Same rationale as ``Room.participants``.
+    rooms: Mapped[list["Room"]] = relationship(
+        "Room",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Room(Base):

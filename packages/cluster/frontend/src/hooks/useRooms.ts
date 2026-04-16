@@ -69,6 +69,11 @@ interface RoomsContextValue {
    *  Agent room picker, or the Sub-room invitee list). */
   refetch: () => Promise<void>;
   createProject: (name: string) => Promise<Project>;
+  /** Delete a project and every room it contains. The server
+   *  cascades the DB delete and broadcasts ``RoomDeletedOut`` per
+   *  child room; this local-state drop keeps the acting session's
+   *  sidebar snappy without waiting on the WS round-trip. */
+  deleteProject: (projectId: string) => Promise<void>;
   createRoom: (projectId: string, name: string) => Promise<Room>;
   createSubRoom: (
     parentRoomId: string,
@@ -233,6 +238,30 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     if (resp.ok) { await fetchProjects(); return await resp.json(); }
     throw new Error('Failed to create project');
   }, [fetchProjects]);
+
+  const deleteProject = useCallback(async (projectId: string) => {
+    const resp = await apiFetch(`/api/v1/projects/${projectId}`, {
+      method: 'DELETE',
+    });
+    if (resp.status !== 204) {
+      let detail = `Failed to delete project (${resp.status})`;
+      try {
+        const body = await resp.json();
+        if (body && typeof body.detail === 'string') detail = body.detail;
+      } catch { /* ignore body parse */ }
+      throw new Error(detail);
+    }
+    // Drop the project and its rooms bucket from local state so the
+    // sidebar updates within a frame. The per-room
+    // ``room_deleted`` WS broadcasts will still arrive and be
+    // harmlessly reconciled by the listener in ``useWebSocket``.
+    setProjects(prev => prev.filter(p => p.id !== projectId));
+    setRooms(prev => {
+      const next = { ...prev };
+      delete next[projectId];
+      return next;
+    });
+  }, []);
 
   const createRoom = useCallback(async (projectId: string, name: string) => {
     const resp = await apiFetch('/api/v1/rooms', {
@@ -461,11 +490,12 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     fetchAgentDMs,
     refetch,
     createProject,
+    deleteProject,
     createRoom,
     createSubRoom,
     pinRoom,
     reorderPinnedRooms,
-  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms]);
+  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms]);
 
   // JSX is deliberately avoided here to keep this file a ``.ts``
   // (not ``.tsx``) so the import shape of existing callers stays
