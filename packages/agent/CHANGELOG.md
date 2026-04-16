@@ -1,6 +1,24 @@
 # CHANGELOG
 
 
+## v0.3.1 (2026-04-16)
+
+### Fixes — agent turn counter
+
+- Reset `_agent_turn_count` on self-emitted `[ROOM_QUERY]` /
+  `[DELEGATED]` frames in agent-only rooms
+  ([#67](https://github.com/e7217/doorae/issues/67),
+  [#69](https://github.com/e7217/doorae/pull/69))
+  — the hard/soft filter branches in
+  `ChatClient._process_frame` previously incremented the turn
+  counter and early-returned for self-sent / nonce-echo
+  frames, so a representative's own forwards never reached the
+  main-path reset. In human-less rooms the counter accumulated
+  across task rounds and later agent replies were dropped at
+  `max_agent_turns`. The reset now fires from both branches
+  before the early-return.
+
+
 ## v0.3.0 (2026-04-16)
 
 ### Features — room-query forward & result metadata (#55)

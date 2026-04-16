@@ -4,6 +4,22 @@
 ## Unreleased
 
 
+## v0.3.1 (2026-04-16)
+
+### Fixes — room-query banner
+
+- Drop orphan pending `room_query` chips after a 7-minute TTL
+  ([#66](https://github.com/e7217/doorae/issues/66),
+  [#68](https://github.com/e7217/doorae/pull/68))
+  — when a representative agent dies before `COLLECT_TIMEOUT`
+  elapses, no `room_query_result` is ever emitted and the
+  pending banner chip would otherwise become a permanent ghost
+  (React-local `dismissedIds` doesn't survive refresh). The
+  derivation is now factored into `src/lib/pending-queries.ts`
+  with unit tests; stale pendings older than the TTL are
+  filtered out in `buildPendingQueries`.
+
+
 ## v0.3.0 (2026-04-16)
 
 ### Features — room-query UX (#55)
