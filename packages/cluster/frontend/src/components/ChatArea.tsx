@@ -227,7 +227,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
   }
 
   return (
-    <div className="flex flex-1 flex-col bg-white">
+    <div className="flex flex-1 flex-col bg-white min-h-0">
       <RoomQueryBanner
         queries={pendingQueries}
         onDismiss={handleDismiss}
