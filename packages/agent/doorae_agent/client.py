@@ -21,6 +21,27 @@ logger = structlog.get_logger(__name__)
 MessageHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
 
+def _is_task_init_content(content: str) -> bool:
+    """Return True when ``content`` starts a new task and should reset
+    the per-room agent-only turn counter.
+
+    Issue #67 — agent-only rooms accumulate the counter across task
+    boundaries because the hard/soft filter paths (for self-sent and
+    nonce-echo messages) only know how to ``+1`` and early return.
+    A representative agent that emits consecutive ``[ROOM_QUERY]``
+    rounds therefore drives the counter past ``max_agent_turns`` and
+    later replies are dropped.
+
+    The two recognised task-init prefixes are:
+
+    - ``[ROOM_QUERY]`` — the representative agent forwards a room
+      query to another room. Each forward is an independent task.
+    - ``[DELEGATED]``  — a user/agent delegates a subtask to another
+      agent. Each delegation is an independent task.
+    """
+    return content.startswith("[ROOM_QUERY]") or content.startswith("[DELEGATED]")
+
+
 class ChatClient:
     """Async WebSocket client for Doorae chat rooms.
 
@@ -243,11 +264,19 @@ class ChatClient:
             # Hard filter: skip messages sent by our own participant.
             sender = data.get("participant_id")
             if sender and sender in self._my_participant_ids:
-                # Still count our own messages toward the turn counter
-                # so the limit applies to the total agent-only exchange.
-                self._agent_turn_count[room_id] = (
-                    self._agent_turn_count.get(room_id, 0) + 1
-                )
+                # Issue #67 — a self-emitted ``[ROOM_QUERY]``/
+                # ``[DELEGATED]`` is a task boundary even though the
+                # frame is our own echo. Reset so agent-only rooms
+                # don't inherit the previous exchange's count on the
+                # next task round.  Regular self-messages still count
+                # toward the limit to bound total agent-only traffic.
+                content = data.get("content", "")
+                if _is_task_init_content(content):
+                    self._agent_turn_count[room_id] = 0
+                else:
+                    self._agent_turn_count[room_id] = (
+                        self._agent_turn_count.get(room_id, 0) + 1
+                    )
                 return
 
             # Soft filter: skip our own echoes via nonce
@@ -255,9 +284,16 @@ class ChatClient:
             nonce = msg_meta.get("_nonce")
             if nonce and nonce in self._sent_nonces:
                 self._sent_nonces.discard(nonce)
-                self._agent_turn_count[room_id] = (
-                    self._agent_turn_count.get(room_id, 0) + 1
-                )
+                # Issue #67 — same task-boundary semantics apply when
+                # the echo arrives via the nonce path (e.g. the hard
+                # filter missed it because participant_id changed).
+                content = data.get("content", "")
+                if _is_task_init_content(content):
+                    self._agent_turn_count[room_id] = 0
+                else:
+                    self._agent_turn_count[room_id] = (
+                        self._agent_turn_count.get(room_id, 0) + 1
+                    )
                 return
 
             # Turn counter: track consecutive agent-only messages.
@@ -272,7 +308,7 @@ class ChatClient:
             # initiations — always reset the counter so the handler
             # processes the task even if the previous agent-only
             # exchange hit the limit.
-            if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
+            if _is_task_init_content(content):
                 self._agent_turn_count[room_id] = 0
             elif sender_has_nonce:
                 # From another agent — increment
