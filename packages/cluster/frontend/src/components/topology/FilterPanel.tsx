@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { NodeKind } from './types'
-import { TEXT_MUTED, TEXT_PRIMARY } from './constants'
+import { BORDER, TEXT_MUTED, TEXT_PRIMARY } from './constants'
 
 export interface FilterState {
   kinds: Record<NodeKind, boolean>
@@ -81,7 +81,7 @@ export default function FilterPanel({
           style={{
             width: '100%',
             padding: '6px 10px',
-            border: '1px solid #dddddd',
+            border: BORDER,
             borderRadius: 4,
             fontSize: 13,
             color: TEXT_PRIMARY,

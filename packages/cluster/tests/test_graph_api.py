@@ -355,6 +355,55 @@ class TestPersonalScopeLeakPrevention:
             assert f"_{ids['m_bob']}" not in e["source"]
             assert f"_{ids['m_bob']}" not in e["target"]
 
+    @pytest.mark.asyncio
+    async def test_alice_sees_foreign_agent_in_her_room_with_nulled_placement(
+        self, graph_env
+    ) -> None:
+        """When a foreign-owned agent co-participates in a user's room
+        the agent node is visible (alice needs to know who is in her
+        room) but the agent's placement machine id MUST be nulled —
+        otherwise the foreign owner (bob) leaks through the backdoor.
+        """
+        ids = graph_env["ids"]
+        factory = graph_env["factory"]
+        # Join bob's agent a2 into alice's room r1.
+        async with factory() as db:
+            db.add(
+                Participant(room_id=ids["r1"], agent_id=ids["a2"], role="member")
+            )
+            await db.commit()
+
+        client = graph_env["client"]
+        resp = await client.get(
+            "/api/v1/graph?scope=personal",
+            headers=_auth(graph_env["alice_token"]),
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        nodes_by_id = {n["id"]: n for n in body["nodes"]}
+
+        # a2 IS visible (alice must see who is in her room)
+        a2_node = nodes_by_id.get(f"a_{ids['a2']}")
+        assert a2_node is not None, (
+            "foreign agent co-participating in alice's room must be visible"
+        )
+        # But its placement machine MUST be hidden.
+        placed_on = a2_node["data"].get("placed_on_machine_id")
+        assert placed_on in (None, ""), (
+            f"a2.placed_on_machine_id leaked bob's machine as {placed_on!r}"
+        )
+
+        # m_bob and bob still must not appear as nodes.
+        assert f"m_{ids['m_bob']}" not in nodes_by_id
+        assert f"u_{ids['bob_id']}" not in nodes_by_id
+
+        # No edges touching m_bob or bob ids.
+        for e in body["edges"]:
+            assert f"_{ids['m_bob']}" not in e["source"]
+            assert f"_{ids['m_bob']}" not in e["target"]
+            assert f"_{ids['bob_id']}" not in e["source"]
+            assert f"_{ids['bob_id']}" not in e["target"]
+
 
 class TestEtag:
     @pytest.mark.asyncio

@@ -5,8 +5,9 @@ relationship graph. Admins see the whole cluster (``scope=global``);
 regular users see only the slice they own or participate in
 (``scope=personal``).
 
-The payload is built in a single transaction with ``selectinload`` to
-avoid N+1 fetches, ETag-hashed so unchanged graphs short-circuit to
+The payload is built in a single transaction with a bounded number
+of column-scoped SELECTs (enforced by an N+1 budget test) to avoid
+per-row fetches, ETag-hashed so unchanged graphs short-circuit to
 ``304`` on re-fetch, and capped by a ``private, max-age=5`` cache
 directive so browsers don't thrash the endpoint during rapid
 navigation.
