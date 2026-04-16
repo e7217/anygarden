@@ -1,0 +1,42 @@
+/**
+ * RoomNode — typing-active pulse (#84).
+ *
+ * The room pill's structural style stays inline in RoomNode.tsx
+ * (border, padding, pill radius are state-dependent on ``selected``);
+ * only the active-pulse layer lives here so it's cacheable and shared
+ * across re-renders.
+ *
+ * The pulse uses ``box-shadow`` — paint-only, GPU-friendly, and never
+ * touches ``opacity`` so it composes with #82's hover-dim effect on
+ * the canvas wrapper without conflict (matches the AgentNode pulse
+ * pattern from #83).
+ *
+ * Color: the single Notion Blue accent at low alpha (DESIGN.md §2).
+ * Reduced-motion users get a static 2px ring so the signal is still
+ * legible without animation.
+ */
+
+.room-node {
+  transition: box-shadow 200ms;
+}
+
+@keyframes topology-room-typing {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 117, 222, 0.35), 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(0, 117, 222, 0), 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+}
+
+.room-node--active {
+  animation: topology-room-typing 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room-node--active {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(0, 117, 222, 0.35), 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+}
