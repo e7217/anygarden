@@ -194,6 +194,142 @@ class TestSpawn:
         assert result.success is True
         assert captured_env.get("DOORAE_TOKEN") == "secret-token-xyz"
 
+    async def test_spawn_typescript_runtime_uses_doorae_agent_ts_when_on_path(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Issue #73 — ``runtime='typescript'`` resolves to the
+        ``doorae-agent-ts`` binary when present on PATH. The ``which``
+        call must target the TS binary name, not the Python one.
+        """
+        captured_cmd: list[str] = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmd.extend(args)
+            proc = MagicMock()
+            proc.pid = 71
+            proc.wait = AsyncMock(return_value=0)
+            proc.stderr = None
+            return proc
+
+        def fake_which(name: str):
+            if name == "doorae-agent-ts":
+                return "/usr/local/bin/doorae-agent-ts"
+            return None
+
+        spawn_msg.runtime = "typescript"
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch("doorae_machine.spawner.shutil.which", side_effect=fake_which):
+            result = await spawner.spawn(spawn_msg)
+
+        assert result.success is True
+        assert captured_cmd[0] == "/usr/local/bin/doorae-agent-ts"
+        # Same --engine/--name/--server contract as the Python arm.
+        assert "--engine" in captured_cmd
+        assert "--server" in captured_cmd
+
+    async def test_spawn_typescript_runtime_falls_back_to_npx(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Issue #73 — when ``doorae-agent-ts`` is not installed,
+        spawner falls back to ``npx -y @doorae/agent-ts``. This is the
+        "no local install" path on fresh machines."""
+        captured_cmd: list[str] = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmd.extend(args)
+            proc = MagicMock()
+            proc.pid = 72
+            proc.wait = AsyncMock(return_value=0)
+            proc.stderr = None
+            return proc
+
+        spawn_msg.runtime = "typescript"
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value=None,  # Nothing installed
+        ):
+            result = await spawner.spawn(spawn_msg)
+
+        assert result.success is True
+        assert captured_cmd[0] == "npx"
+        assert captured_cmd[1] == "-y"
+        assert captured_cmd[2] == "@doorae/agent-ts"
+
+    async def test_spawn_typescript_runtime_logs_binary_resolution(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Issue #73 — the ``agent_binary_resolved`` log line is
+        emitted with ``runtime='typescript'`` + source=path|npx so
+        operators can tell which runtime and which binary ran."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 73
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+
+        spawn_msg.runtime = "typescript"
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent-ts",
+        ), patch("doorae_machine.spawner.log") as mock_log:
+            await spawner.spawn(spawn_msg)
+            calls = [
+                c
+                for c in mock_log.info.call_args_list
+                if c.args and c.args[0] == "agent_binary_resolved"
+            ]
+            assert len(calls) == 1
+            assert calls[0].kwargs["runtime"] == "typescript"
+            assert calls[0].kwargs["source"] == "path"
+            assert calls[0].kwargs["path"] == "/usr/local/bin/doorae-agent-ts"
+
+    async def test_spawn_python_runtime_still_default(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Issue #73 regression guard — a manifest with ``runtime``
+        unset (or explicitly ``"python"``) must still pick the Python
+        binary. No TS binary lookup happens on the default path."""
+        captured_cmd: list[str] = []
+        which_calls: list[str] = []
+
+        async def capture_exec(*args, **kwargs):
+            captured_cmd.extend(args)
+            proc = MagicMock()
+            proc.pid = 74
+            proc.wait = AsyncMock(return_value=0)
+            proc.stderr = None
+            return proc
+
+        def fake_which(name: str):
+            which_calls.append(name)
+            if name == "doorae-agent":
+                return "/usr/local/bin/doorae-agent"
+            return None
+
+        # Leave ``spawn_msg.runtime`` at its default.
+        assert spawn_msg.runtime == "python"
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch("doorae_machine.spawner.shutil.which", side_effect=fake_which):
+            result = await spawner.spawn(spawn_msg)
+
+        assert result.success is True
+        assert captured_cmd[0] == "/usr/local/bin/doorae-agent"
+        # The Python path must not probe for the TS binary.
+        assert "doorae-agent-ts" not in which_calls
+
     async def test_spawn_profile_chmod(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """Profile temp file should be created with chmod 600."""
         chmod_calls = []

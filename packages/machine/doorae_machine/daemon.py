@@ -325,6 +325,10 @@ class MachineDaemon:
             reasoning_effort=manifest.reasoning_effort,
             model=manifest.model,
             sub_rooms=list(manifest.sub_rooms),
+            # Issue #73 — runtime passes through from the server frame.
+            # ``getattr`` keeps compatibility with in-memory manifest
+            # objects from earlier schema revisions in tests.
+            runtime=getattr(manifest, "runtime", "python") or "python",
         )
 
         result = await self._spawner.spawn(spawn_manifest)

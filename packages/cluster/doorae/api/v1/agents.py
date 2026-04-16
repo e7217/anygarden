@@ -38,6 +38,11 @@ class AgentCreate(BaseModel):
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
     restart_policy: str = "restart_anywhere"
+    # Issue #73 — runtime selector (``python`` default, ``typescript``
+    # for the new doorae-agent-ts path). Accepting it here lets admins
+    # pin a specific runtime when they know the engine has a TS-native
+    # SDK they want to exercise (e.g. Claude Code v2).
+    runtime: str = "python"
 
 
 class AgentUpdate(BaseModel):
@@ -63,6 +68,11 @@ class AgentUpdate(BaseModel):
     reasoning_effort_set: bool = False
     model: Optional[str] = None
     model_set: bool = False
+    # Issue #73 — runtime is editable post-creation. A real change
+    # requires a restart (bump_generation → machine respawns with
+    # the new runtime) which ``update_agent`` already triggers.
+    runtime: Optional[str] = None
+    runtime_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -82,6 +92,9 @@ class AgentOut(BaseModel):
     # failed.
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    # Issue #73 — exposed read-only so the admin UI can render a
+    # badge next to the engine picker without re-querying.
+    runtime: str = "python"
     last_crash_reason: Optional[str] = None
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
@@ -155,6 +168,7 @@ async def create_agent(
         reasoning_effort=body.reasoning_effort,
         model=body.model,
         restart_policy=body.restart_policy,
+        runtime=body.runtime,
     )
     db.add(agent)
     await db.flush()
@@ -230,6 +244,11 @@ async def update_agent(
         changed = True
     if body.model_set:
         agent.model = body.model
+        changed = True
+    if body.runtime_set and body.runtime is not None:
+        # Issue #73 — runtime change needs a respawn to take effect,
+        # which ``bump_generation`` below will trigger.
+        agent.runtime = body.runtime
         changed = True
 
     await db.commit()

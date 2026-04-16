@@ -50,6 +50,12 @@ class SyncDesiredStateFrame(BaseModel):
     # Each entry: {"name": "...", "description": "..." or null}
     sub_rooms: list[dict[str, str | None]] = Field(default_factory=list)
 
+    # Issue #73 — which runtime hosts this agent on the machine.
+    # ``"python"`` spawns doorae-agent; ``"typescript"`` spawns
+    # doorae-agent-ts. Defaults to ``"python"`` so pre-#73 servers
+    # stay compatible without re-emitting the field.
+    runtime: str = "python"
+
     # Restart policy
     restart_policy: Literal[
         "stop", "restart_on_same_machine", "restart_anywhere"
