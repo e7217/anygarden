@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
-import RoomQueryBanner, { type PendingQuery } from '@/components/RoomQueryBanner'
+import RoomQueryBanner from '@/components/RoomQueryBanner'
 import { MessageSquare } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import { useRooms } from '@/hooks/useRooms'
-import { parseQuestion, parseResult } from '@/lib/room-query'
+import { buildPendingQueries } from '@/lib/pending-queries'
 
 const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
@@ -28,76 +28,6 @@ interface ChatAreaProps {
   participants: Record<string, Participant>
   myParticipantId: string | null
   typingUsers?: Set<string>
-}
-
-/** Per-query aggregation derived from the message stream. Pure
- * function — the banner state rebuilds from ``messages`` on every
- * render, which is O(N) but bounded by the 100-message history
- * window the server ships. This also gives us automatic
- * reconnect-restore for free: if the user reloads the page, the
- * history fetch seeds the same view.
- *
- * ``dismissed`` ids come from the banner state so user-acknowledged
- * timeouts / solos stay hidden. */
-function buildPendingQueries(
-  messages: ChatMessage[],
-  currentRoomId: string,
-  dismissedIds: Set<string>,
-  roomNameLookup: (id: string) => string | undefined,
-): PendingQuery[] {
-  // question side seeds a pending entry; a later result upgrades
-  // status/counts and records the result_message_id so the
-  // completed chip knows where to scroll.
-  const byQuery = new Map<string, PendingQuery>()
-  for (const msg of messages) {
-    // Only show chips in the *source* room — the room where the
-    // user asked the question. The target room's forward bubble
-    // is not a banner concern.
-    if (msg.room_id !== currentRoomId) continue
-
-    const q = parseQuestion(msg)
-    if (q) {
-      const existing = byQuery.get(q.query_id)
-      if (!existing) {
-        byQuery.set(q.query_id, {
-          query_id: q.query_id,
-          target_room_id: q.target_room_id,
-          target_room_name:
-            roomNameLookup(q.target_room_id) ?? `${q.target_room_id.slice(-6)}`,
-          status: 'pending',
-          responded: 0,
-          expected: 0,
-        })
-      }
-      continue
-    }
-
-    const r = parseResult(msg)
-    if (r) {
-      const existing = byQuery.get(r.query_id)
-      const merged: PendingQuery = {
-        query_id: r.query_id,
-        target_room_id: r.target_room_id,
-        target_room_name:
-          existing?.target_room_name ??
-          roomNameLookup(r.target_room_id) ??
-          `${r.target_room_id.slice(-6)}`,
-        status: r.status,
-        responded: r.responded,
-        expected: r.expected,
-        result_message_id: msg.id,
-      }
-      byQuery.set(r.query_id, merged)
-    }
-  }
-  // Drop dismissed entries so user-acknowledged chips stay gone
-  // across re-renders.
-  const out: PendingQuery[] = []
-  for (const entry of byQuery.values()) {
-    if (dismissedIds.has(entry.query_id)) continue
-    out.push(entry)
-  }
-  return out
 }
 
 export default function ChatArea({ messages, participants, myParticipantId, typingUsers }: ChatAreaProps) {
@@ -136,8 +66,23 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
   // than threading a new prop through every call site.
   const currentRoomId = messages.length > 0 ? messages[messages.length - 1].room_id : ''
 
+  // ``new Date()`` is produced inside the factory so a fresh now is
+  // read every time ``messages``/``currentRoomId``/``dismissedIds``/
+  // ``resolveRoomName`` change. We deliberately do NOT list
+  // ``Date.now()`` or ``new Date()`` as a dep — that would create a
+  // fresh reference on every render and make this useMemo useless
+  // (or, worse, loop if something else depended on its output). TTL
+  // accuracy relies on re-renders from new messages, typing events,
+  // presence updates, etc., which happen often enough in practice.
   const pendingQueries = useMemo(
-    () => buildPendingQueries(messages, currentRoomId, dismissedIds, resolveRoomName),
+    () =>
+      buildPendingQueries(
+        messages,
+        currentRoomId,
+        dismissedIds,
+        resolveRoomName,
+        new Date(),
+      ),
     [messages, currentRoomId, dismissedIds, resolveRoomName],
   )
 
