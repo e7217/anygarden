@@ -1,6 +1,12 @@
 # CHANGELOG
 
 
+## v0.3.2 (2026-04-17)
+
+No code changes this cycle — version bumped to keep the three
+monorepo packages aligned.
+
+
 ## v0.3.1 (2026-04-16)
 
 ### Fixes — agent turn counter
