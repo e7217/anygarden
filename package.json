@@ -1,0 +1,16 @@
+{
+  "name": "doorae-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/cluster/frontend",
+    "packages/agent-ts"
+  ],
+  "scripts": {
+    "test:ts": "npm -w @doorae/agent-ts test",
+    "build:ts": "npm -w @doorae/agent-ts run build",
+    "lint:ts": "npm -w @doorae/agent-ts run lint"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

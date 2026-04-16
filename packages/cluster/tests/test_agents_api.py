@@ -109,6 +109,48 @@ class TestAgentsAPI:
         assert data["engine"] == "echo"
         # DM room auto-created → agent starts immediately
         assert data["desired_state"] == "running"
+        # Issue #73 — runtime defaults to "python" for unqualified creates.
+        assert data["runtime"] == "python"
+
+    @pytest.mark.asyncio
+    async def test_create_agent_with_typescript_runtime(self, agents_env) -> None:
+        """Issue #73 — ``runtime='typescript'`` persists to the DB and
+        echoes back in the response so the admin UI can render the
+        runtime badge without a second GET."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        resp = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "ts-agent",
+                "runtime": "typescript",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["runtime"] == "typescript"
+
+    @pytest.mark.asyncio
+    async def test_update_agent_runtime(self, agents_env) -> None:
+        """Issue #73 — runtime is editable via PUT with the
+        ``runtime_set`` flag. Bumps generation so the machine respawns
+        with the new runtime."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        create = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "mutable"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        agent_id = create.json()["id"]
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"runtime": "typescript", "runtime_set": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["runtime"] == "typescript"
 
     @pytest.mark.asyncio
     async def test_list_agents(self, agents_env) -> None:

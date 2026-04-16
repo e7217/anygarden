@@ -164,6 +164,15 @@ class Agent(Base):
     generation: Mapped[int] = mapped_column(Integer, default=0)
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)
     restart_window_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    # Issue #73 — which runtime (machine-side process) hosts this
+    # agent. ``"python"`` spawns ``doorae-agent``; ``"typescript"``
+    # spawns ``doorae-agent-ts``. Defaults to ``"python"`` so rows
+    # created before the schema migration continue to use the Python
+    # runtime. ``server_default`` is the load-bearing piece — without
+    # it the SQLite batch migration refuses to add a NOT NULL column.
+    runtime: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="python", server_default="python"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")

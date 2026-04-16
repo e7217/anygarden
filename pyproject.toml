@@ -9,6 +9,11 @@ requires-python = ">=3.12"
 
 [tool.uv.workspace]
 members = ["packages/*"]
+# Issue #73 — agent-ts is an npm-managed TypeScript package; it has
+# no pyproject.toml. Exclude it from the uv workspace scan so the
+# Python tooling doesn't fail the "member is missing pyproject.toml"
+# precondition.
+exclude = ["packages/agent-ts"]
 
 [tool.uv.sources]
 doorae-agent = { workspace = true }

@@ -49,6 +49,14 @@ class SpawnManifest:
     reasoning_effort: str | None = None
     model: str | None = None
     sub_rooms: list[dict] = field(default_factory=list)
+    # Issue #73 — which runtime process should host this agent.
+    # ``"python"`` (default) spawns the existing Python ``doorae-agent``
+    # binary; ``"typescript"`` spawns the Node ``doorae-agent-ts``
+    # binary (falls back to ``npx -y @doorae/agent-ts`` when the local
+    # bin isn't on PATH). Existing callers that don't set this field
+    # continue to get the Python runtime — the dataclass default
+    # guarantees backward compatibility.
+    runtime: str = "python"
 
 
 @dataclass
@@ -522,41 +530,83 @@ class Spawner:
         # didn't provide one (older versions).
         agent_server = self._agent_server_url or msg.server_url
 
-        # Build command — prefer local doorae-agent, fall back to uvx.
-        # Log which source was picked so operators can later answer the
-        # "which doorae-agent actually ran?" question without rebuilding
+        # Build command. Branch on ``msg.runtime``:
+        #   "python"     → local doorae-agent (PyPI) with uvx fallback.
+        #   "typescript" → local doorae-agent-ts (npm) with
+        #                   ``npx -y @doorae/agent-ts`` fallback.
+        #
+        # Log which source was picked so operators can later answer
+        # the "which binary actually ran?" question without rebuilding
         # the environment. Two different spawns on the same machine
-        # can end up with different binaries (PATH shadowing, uvx
+        # can end up with different binaries (PATH shadowing, uvx/npx
         # cache drift) and the log is our only forensic trail.
-        doorae_agent = shutil.which("doorae-agent")
-        if doorae_agent:
-            cmd = [
-                doorae_agent,
-                "--engine", msg.engine,
-                "--name", msg.name or f"agent-{agent_id[:8]}",
-                "--server", agent_server,
-            ]
-            log.info(
-                "agent_binary_resolved",
-                agent_id=agent_id,
-                source="path",
-                path=doorae_agent,
-            )
+        runtime = msg.runtime or "python"
+        if runtime == "typescript":
+            agent_name = msg.name or f"agent-{agent_id[:8]}"
+            doorae_agent_ts = shutil.which("doorae-agent-ts")
+            if doorae_agent_ts:
+                cmd = [
+                    doorae_agent_ts,
+                    "--engine", msg.engine,
+                    "--name", agent_name,
+                    "--server", agent_server,
+                ]
+                log.info(
+                    "agent_binary_resolved",
+                    agent_id=agent_id,
+                    runtime="typescript",
+                    source="path",
+                    path=doorae_agent_ts,
+                )
+            else:
+                cmd = [
+                    "npx",
+                    "-y",
+                    "@doorae/agent-ts",
+                    "--engine", msg.engine,
+                    "--name", agent_name,
+                    "--server", agent_server,
+                ]
+                log.info(
+                    "agent_binary_resolved",
+                    agent_id=agent_id,
+                    runtime="typescript",
+                    source="npx",
+                    path=None,
+                )
         else:
-            # doorae-agent not in PATH — use uvx to fetch from PyPI
-            cmd = [
-                "uvx",
-                "doorae-agent",
-                "--engine", msg.engine,
-                "--name", msg.name or f"agent-{agent_id[:8]}",
-                "--server", agent_server,
-            ]
-            log.info(
-                "agent_binary_resolved",
-                agent_id=agent_id,
-                source="uvx",
-                path=None,
-            )
+            # Default Python runtime — unchanged from pre-#73 behaviour.
+            doorae_agent = shutil.which("doorae-agent")
+            if doorae_agent:
+                cmd = [
+                    doorae_agent,
+                    "--engine", msg.engine,
+                    "--name", msg.name or f"agent-{agent_id[:8]}",
+                    "--server", agent_server,
+                ]
+                log.info(
+                    "agent_binary_resolved",
+                    agent_id=agent_id,
+                    runtime="python",
+                    source="path",
+                    path=doorae_agent,
+                )
+            else:
+                # doorae-agent not in PATH — use uvx to fetch from PyPI
+                cmd = [
+                    "uvx",
+                    "doorae-agent",
+                    "--engine", msg.engine,
+                    "--name", msg.name or f"agent-{agent_id[:8]}",
+                    "--server", agent_server,
+                ]
+                log.info(
+                    "agent_binary_resolved",
+                    agent_id=agent_id,
+                    runtime="python",
+                    source="uvx",
+                    path=None,
+                )
         if msg.profile_yaml.strip():
             cmd.extend(["--profile", str(profile_path)])
         for room in msg.rooms:

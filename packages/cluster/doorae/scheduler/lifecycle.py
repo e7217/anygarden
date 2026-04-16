@@ -364,4 +364,9 @@ class AgentLifecycle:
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,
             "restart_window_seconds": agent.restart_window_seconds,
+            # Issue #73 — forward the runtime selector to the machine
+            # daemon so it spawns via the right binary path. Pre-#73
+            # machines ignore the unknown key and fall back to the
+            # SpawnManifest default of ``"python"``.
+            "runtime": getattr(agent, "runtime", "python") or "python",
         }
