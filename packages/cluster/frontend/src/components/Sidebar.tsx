@@ -16,7 +16,7 @@ import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Bot, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical,
+  Pin, PinOff, GripVertical, Share2,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -552,6 +552,17 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
             >
               <Server className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
               Machines
+            </button>
+            <button
+              onClick={() => go('/topology')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname === '/topology'
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <Share2 className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              Topology
             </button>
           </div>
         </div>
