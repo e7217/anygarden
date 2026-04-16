@@ -150,7 +150,6 @@ function CanvasInner({ nodes, edges, onSelect, selectedId }: CanvasProps) {
         fitView
         minZoom={0.3}
         maxZoom={2}
-        onlyRenderVisibleElements
         proOptions={{ hideAttribution: true }}
         onNodeMouseEnter={onMouseEnter}
         onNodeMouseLeave={onMouseLeave}
