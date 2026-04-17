@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { buildPendingQueries, PENDING_TTL_MS } from './pending-queries'
+import {
+  buildPendingQueries,
+  PENDING_TTL_MS,
+  seedTerminalDismissals,
+} from './pending-queries'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 
 /** Factory mirroring room-query.test.ts ``msg()`` pattern. */
@@ -244,5 +248,50 @@ describe('buildPendingQueries', () => {
     ]
     const out = buildPendingQueries(msgs, 'room-a', new Set(), lookup, now)
     expect(out).toEqual([])
+  })
+})
+
+// Issue #94 — terminal chips seeded from history should never re-surface
+// when the user (re-)enters a room. ``seedTerminalDismissals`` captures
+// every completed/timeout/solo ``query_id`` found in the current room's
+// snapshot so ChatArea can initialize ``dismissedIds`` with it.
+describe('seedTerminalDismissals', () => {
+  const now = new Date('2026-04-17T05:12:00Z').toISOString()
+
+  it('returns empty set when messages are empty', () => {
+    expect(seedTerminalDismissals([], 'room-a').size).toBe(0)
+  })
+
+  it('seeds completed, timeout, and solo query_ids from the current room', () => {
+    const msgs = [
+      result({ query_id: 'qc', target_room_id: 't1', status: 'completed', created_at: now }),
+      result({ query_id: 'qt', target_room_id: 't1', status: 'timeout', created_at: now }),
+      result({ query_id: 'qs', target_room_id: 't1', status: 'solo', created_at: now }),
+    ]
+    const seed = seedTerminalDismissals(msgs, 'room-a')
+    expect(seed.size).toBe(3)
+    expect(seed.has('qc')).toBe(true)
+    expect(seed.has('qt')).toBe(true)
+    expect(seed.has('qs')).toBe(true)
+  })
+
+  it('ignores results from other rooms', () => {
+    const msgs = [
+      result({
+        query_id: 'qx',
+        target_room_id: 't1',
+        status: 'completed',
+        room_id: 'room-other',
+        created_at: now,
+      }),
+    ]
+    expect(seedTerminalDismissals(msgs, 'room-a').size).toBe(0)
+  })
+
+  it('ignores questions (only terminal results seed dismissals)', () => {
+    const msgs = [
+      question({ query_id: 'qp', target_room_id: 't1', created_at: now }),
+    ]
+    expect(seedTerminalDismissals(msgs, 'room-a').size).toBe(0)
   })
 })

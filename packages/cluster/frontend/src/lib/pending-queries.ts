@@ -133,3 +133,22 @@ export function buildPendingQueries(
   }
   return out
 }
+
+/** Issue #94 — collect ``query_id``s of every terminal
+ * (``completed``/``timeout``/``solo``) result present in ``messages``
+ * for ``currentRoomId``. ChatArea uses this as the initial
+ * ``dismissedIds`` on room entry so historical chips don't re-surface
+ * every time the user opens an old conversation. New results arriving
+ * after entry are *not* seeded — they still render as fresh chips. */
+export function seedTerminalDismissals(
+  messages: ChatMessage[],
+  currentRoomId: string,
+): Set<string> {
+  const seed = new Set<string>()
+  for (const m of messages) {
+    if (m.room_id !== currentRoomId) continue
+    const r = parseResult(m)
+    if (r) seed.add(r.query_id)
+  }
+  return seed
+}
