@@ -112,25 +112,38 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
   }
 
   if (query.status === 'completed') {
-    // Clickable chip — scroll-to triggers IntersectionObserver in
-    // ChatArea which eventually dismisses it. We don't dismiss
-    // here directly so the chip stays visible during the scroll
-    // animation (otherwise it'd vanish before the user's eye
-    // catches the result).
+    // Two sibling buttons inside a non-interactive span so we don't
+    // nest <button> inside <button>. The main button scrolls to the
+    // result card (ChatArea's IntersectionObserver eventually
+    // auto-dismisses), the ``×`` lets the user dismiss manually —
+    // important for users who never scroll to the result (#94).
     return (
-      <button
-        type="button"
-        onClick={() => onScrollTo(query.query_id)}
-        className={`${base} cursor-pointer border-[var(--color-brand)]/30 bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] hover:bg-[var(--color-brand-tint-bg)] hover:ring-1 hover:ring-[var(--color-brand)]/40 focus:outline-none focus:ring-2 focus:ring-[var(--color-ring)]`}
+      <span
+        className={`${base} border-[var(--color-brand)]/30 bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] pr-1`}
         data-testid={`room-query-chip-${query.query_id}`}
         data-status="completed"
       >
-        <Check className="h-3 w-3" aria-hidden="true" />
-        <span>#{query.target_room_name}</span>
-        <span>
-          {query.responded}/{query.expected}
-        </span>
-      </button>
+        <button
+          type="button"
+          onClick={() => onScrollTo(query.query_id)}
+          className="inline-flex items-center gap-1.5 -my-1 -ml-2.5 py-1 pl-2.5 pr-1 rounded-l-full cursor-pointer hover:bg-[var(--color-brand)]/10 focus:outline-none focus:ring-2 focus:ring-[var(--color-ring)]"
+          aria-label={`결과로 이동: #${query.target_room_name}`}
+        >
+          <Check className="h-3 w-3" aria-hidden="true" />
+          <span>#{query.target_room_name}</span>
+          <span>
+            {query.responded}/{query.expected}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onDismiss(query.query_id)}
+          className="ml-0.5 rounded p-0.5 hover:bg-black/5 focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
+          aria-label="알림 닫기"
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+        </button>
+      </span>
     )
   }
 

@@ -127,3 +127,77 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.getByText('just a hello')).toBeInTheDocument()
   })
 })
+
+// Issue #94 — the origin question bubble must visibly indicate that a
+// room_query is still in flight so the user can tie the banner's
+// pending chip back to their own message.
+describe('MessageBubble — question pending badge', () => {
+  function questionMsg(content = '배포 언제?'): ChatMessage {
+    return baseMsg({
+      id: 'mq',
+      room_id: 'room-src',
+      participant_id: 'user-alice',
+      content,
+      metadata: {
+        room_query: {
+          role: 'question',
+          query_id: 'q1',
+          target_room_id: 'room-b',
+          source_room_id: 'room-src',
+          source_participant_id: 'user-alice',
+        },
+      },
+    })
+  }
+
+  it('shows pending badge when query_id is in pendingQueryIds', () => {
+    render(
+      <MessageBubble
+        message={questionMsg()}
+        participants={participants}
+        isMine={true}
+        pendingQueryIds={new Set(['q1'])}
+      />,
+    )
+    expect(screen.getByTestId('question-pending-badge')).toBeInTheDocument()
+    expect(screen.getByTestId('question-pending-badge')).toHaveTextContent(
+      '응답 대기 중',
+    )
+  })
+
+  it('does not show badge when pendingQueryIds omits the query_id', () => {
+    render(
+      <MessageBubble
+        message={questionMsg()}
+        participants={participants}
+        isMine={true}
+        pendingQueryIds={new Set(['other'])}
+      />,
+    )
+    expect(screen.queryByTestId('question-pending-badge')).toBeNull()
+  })
+
+  it('does not show badge when pendingQueryIds prop is omitted', () => {
+    render(
+      <MessageBubble
+        message={questionMsg()}
+        participants={participants}
+        isMine={true}
+      />,
+    )
+    expect(screen.queryByTestId('question-pending-badge')).toBeNull()
+  })
+
+  it('does not show badge for a non-question message even with matching id', () => {
+    const msg = baseMsg({ content: 'plain reply' })
+    render(
+      <MessageBubble
+        message={msg}
+        participants={participants}
+        isMine={false}
+        pendingQueryIds={new Set(['q1'])}
+      />,
+    )
+    expect(screen.queryByTestId('question-pending-badge')).toBeNull()
+  })
+})

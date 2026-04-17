@@ -2,26 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
+import BrailleSpinner from '@/components/BrailleSpinner'
 import { MessageSquare } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import { useRooms } from '@/hooks/useRooms'
-import { buildPendingQueries } from '@/lib/pending-queries'
-
-const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-
-function BrailleSpinner() {
-  const [frame, setFrame] = useState(0)
-  useEffect(() => {
-    const id = setInterval(() => setFrame(f => (f + 1) % BRAILLE_FRAMES.length), 80)
-    return () => clearInterval(id)
-  }, [])
-  return (
-    <span className="text-sm text-[var(--color-foreground-muted)]">
-      {BRAILLE_FRAMES[frame]}
-    </span>
-  )
-}
+import {
+  buildPendingQueries,
+  seedTerminalDismissals,
+} from '@/lib/pending-queries'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -86,12 +75,35 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
     [messages, currentRoomId, dismissedIds, resolveRoomName],
   )
 
-  // Reset dismissed set when we switch rooms so the new room's
-  // banner starts clean (dismissing in room A should not suppress
-  // an unrelated timeout in room B).
+  // Surfacing query_ids of currently-pending questions so
+  // ``MessageBubble`` can render a "응답 대기 중" badge next to the
+  // originating question (#94).
+  const pendingQueryIds = useMemo(
+    () =>
+      new Set(
+        pendingQueries.filter(q => q.status === 'pending').map(q => q.query_id),
+      ),
+    [pendingQueries],
+  )
+
+  // Seed dismissedIds on room (re-)entry with the terminal chips
+  // already present in history. Without this, switching into an old
+  // room re-surfaces every timeout/completed/solo chip the user has
+  // already seen (#94). ``seededRoomRef`` fires the seed exactly once
+  // per room: first we clear so an empty-history render is safe, and
+  // the first non-empty ``messages`` snapshot supplies the seed. Later
+  // results arriving while the user stays in the room are NOT seeded
+  // — they still render as fresh chips.
+  const seededRoomRef = useRef<string | null>(null)
   useEffect(() => {
-    setDismissedIds(new Set())
-  }, [currentRoomId])
+    if (seededRoomRef.current === currentRoomId) return
+    if (messages.length === 0) {
+      setDismissedIds(new Set())
+      return
+    }
+    setDismissedIds(seedTerminalDismissals(messages, currentRoomId))
+    seededRoomRef.current = currentRoomId
+  }, [currentRoomId, messages])
 
   // Auto-dismiss completed chips once their result bubble scrolls
   // into view. Timeout / solo chips are NOT auto-dismissed — the
@@ -186,6 +198,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
                 message={msg}
                 participants={participants}
                 isMine={msg.participant_id === myParticipantId}
+                pendingQueryIds={pendingQueryIds}
               />
             </div>
           ))}

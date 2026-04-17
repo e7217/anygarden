@@ -53,7 +53,7 @@ describe('RoomQueryBanner', () => {
     )
   })
 
-  it('renders completed chip and calls onScrollTo on click', () => {
+  it('renders completed chip and calls onScrollTo when the body is clicked', () => {
     const onScrollTo = vi.fn()
     render(
       <RoomQueryBanner
@@ -64,8 +64,28 @@ describe('RoomQueryBanner', () => {
     )
     const chip = screen.getByTestId('room-query-chip-q1')
     expect(chip).toHaveAttribute('data-status', 'completed')
-    fireEvent.click(chip)
+    fireEvent.click(screen.getByLabelText('결과로 이동: #dev'))
     expect(onScrollTo).toHaveBeenCalledWith('q1')
+  })
+
+  // Issue #94: completed chips used to stay until the viewport
+  // observer dismissed them; users had no way to dismiss them
+  // manually (e.g. if they never scroll to the result). The X button
+  // must fire onDismiss but NOT onScrollTo — the two events must not
+  // double-dispatch.
+  it('completed chip X button dismisses without scrolling', () => {
+    const onDismiss = vi.fn()
+    const onScrollTo = vi.fn()
+    render(
+      <RoomQueryBanner
+        queries={[pending({ status: 'completed', responded: 3, expected: 3 })]}
+        onDismiss={onDismiss}
+        onScrollTo={onScrollTo}
+      />,
+    )
+    fireEvent.click(screen.getByLabelText('알림 닫기'))
+    expect(onDismiss).toHaveBeenCalledWith('q1')
+    expect(onScrollTo).not.toHaveBeenCalled()
   })
 
   it('renders timeout chip with missing-count hint and dismiss button', () => {

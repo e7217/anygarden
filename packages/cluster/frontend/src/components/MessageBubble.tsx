@@ -4,18 +4,34 @@ import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
 import RoomQueryResultCard from '@/components/RoomQueryResultCard'
+import BrailleSpinner from '@/components/BrailleSpinner'
 import { apiFetch } from '@/lib/api'
 import { useRooms } from '@/hooks/useRooms'
-import { parseForward, parseResult, stripRoomQueryPrefix } from '@/lib/room-query'
+import {
+  parseForward,
+  parseQuestion,
+  parseResult,
+  stripRoomQueryPrefix,
+} from '@/lib/room-query'
 import { parseServerDate } from '@/lib/datetime'
 
 interface MessageBubbleProps {
   message: ChatMessage
   participants: Record<string, Participant>
   isMine: boolean
+  /** Issue #94 — ``query_id``s of currently in-flight room_query
+   * questions. When a question bubble's ``query_id`` is in this set
+   * we render a ``BrailleSpinner`` + "응답 대기 중" badge so the user
+   * can tie the banner chip back to the originating message. */
+  pendingQueryIds?: Set<string>
 }
 
-export default memo(function MessageBubble({ message, participants, isMine }: MessageBubbleProps) {
+export default memo(function MessageBubble({
+  message,
+  participants,
+  isMine,
+  pendingQueryIds,
+}: MessageBubbleProps) {
   const [saved, setSaved] = useState(false)
   const { rooms } = useRooms()
 
@@ -58,6 +74,19 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
   // names / room name here so the card stays presentational.
   const resultMeta = useMemo(() => parseResult(message), [message])
   const forwardMeta = useMemo(() => parseForward(message), [message])
+  const questionMeta = useMemo(() => parseQuestion(message), [message])
+  const isPendingQuestion = !!(
+    questionMeta && pendingQueryIds?.has(questionMeta.query_id)
+  )
+  const pendingBadge = isPendingQuestion ? (
+    <span
+      data-testid="question-pending-badge"
+      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)]"
+    >
+      <BrailleSpinner />
+      <span>응답 대기 중</span>
+    </span>
+  ) : null
 
   const participantNamesMap = useMemo(() => {
     const m = new Map<string, string>()
@@ -191,9 +220,12 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
             resolveRoom={resolveRoom}
           />
         </div>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pr-1">
-          {formatTime(message.created_at)}
-        </span>
+        <div className="mt-1 pr-1 flex items-center gap-2 justify-end">
+          {pendingBadge}
+          <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+            {formatTime(message.created_at)}
+          </span>
+        </div>
       </div>
     )
   }
@@ -216,9 +248,12 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
       <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'w-full' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
         <MarkdownContent content={message.content} resolveUser={resolveUser} resolveRoom={resolveRoom} />
       </div>
-      <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
-        {formatTime(message.created_at)}
-      </span>
+      <div className="mt-1 pl-1 flex items-center gap-2">
+        {pendingBadge}
+        <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
     </div>
   )
 })
