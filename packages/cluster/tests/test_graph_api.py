@@ -315,7 +315,7 @@ class TestGraphSchema:
         assert (f"m_{ids['m_alice']}", f"a_{ids['a1']}") in places_pairs
 
         represents_pairs = {(e["source"], e["target"]) for e in edges if e["kind"] == "represents"}
-        assert (f"r_{ids['r3']}", f"a_{ids['a2']}") in represents_pairs
+        assert (f"a_{ids['a2']}", f"r_{ids['r3']}") in represents_pairs
 
         parent_pairs = {(e["source"], e["target"]) for e in edges if e["kind"] == "parent_of"}
         assert (f"r_{ids['r1']}", f"r_{ids['r2']}") in parent_pairs

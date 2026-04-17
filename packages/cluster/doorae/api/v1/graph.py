@@ -584,14 +584,23 @@ def _assemble_edges(
                 )
             )
 
-    # represents: room -> representative agent
+    # represents: representative agent -> room
+    #
+    # Direction follows the dagre TB layout (User → Machine → Agent →
+    # Room) so the edge flows downward like every other kind. The
+    # previous ``room → agent`` direction forced a horseshoe-shaped
+    # detour through ``getSmoothStepPath`` that overlapped the
+    # ``participates`` edge on the same pair. Reading "agent represents
+    # room" also matches the DB schema (``Room.representative_agent_id``
+    # points from room to agent, but the *relation* is naturally
+    # expressed with the agent as the actor).
     for r in rooms:
         if r.representative_agent_id and r.representative_agent_id in known_agent_ids:
             edges.append(
                 EdgeOut(
                     id=_next_id("er"),
-                    source=_rid(r.id),
-                    target=_aid(r.representative_agent_id),
+                    source=_aid(r.representative_agent_id),
+                    target=_rid(r.id),
                     kind="represents",
                 )
             )
