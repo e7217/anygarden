@@ -219,4 +219,30 @@ describe('buildPendingQueries', () => {
     expect(out).toHaveLength(1)
     expect(out[0].status).toBe('pending')
   })
+
+  // Issue #93 regression — the historical server emitted ISO strings
+  // without a timezone designator for UTC instants. ``new Date`` reads
+  // those as local time, so in KST every fresh pending question looked
+  // nine hours old and was culled by the TTL filter. ``parseServerDate``
+  // must treat bare strings as UTC so the chip survives.
+  it('regression #93: TZ-less ISO 1 min ago is treated as UTC and included', () => {
+    const now = new Date('2026-04-17T05:13:00Z')
+    const oneMinAgoNoTz = '2026-04-17T05:12:00'
+    const msgs = [
+      question({ query_id: 'q1', target_room_id: 't1', created_at: oneMinAgoNoTz }),
+    ]
+    const out = buildPendingQueries(msgs, 'room-a', new Set(), lookup, now)
+    expect(out).toHaveLength(1)
+    expect(out[0].status).toBe('pending')
+  })
+
+  it('regression #93: TZ-less ISO 8 min ago is still excluded by TTL', () => {
+    const now = new Date('2026-04-17T05:20:00Z')
+    const eightMinAgoNoTz = '2026-04-17T05:12:00'
+    const msgs = [
+      question({ query_id: 'q1', target_room_id: 't1', created_at: eightMinAgoNoTz }),
+    ]
+    const out = buildPendingQueries(msgs, 'room-a', new Set(), lookup, now)
+    expect(out).toEqual([])
+  })
 })

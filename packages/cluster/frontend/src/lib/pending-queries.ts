@@ -20,6 +20,7 @@
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { PendingQuery } from '@/components/RoomQueryBanner'
 import { parseQuestion, parseResult } from './room-query'
+import { parseServerDate } from './datetime'
 
 /** Agent-side ``COLLECT_TIMEOUT`` is 5 min; we add 2 min slack for
  * network / DB commit / broadcast so legitimate slow results at
@@ -108,15 +109,18 @@ export function buildPendingQueries(
     if (dismissedIds.has(entry.query_id)) continue
 
     // TTL: orphan pending (no result) older than PENDING_TTL_MS is
-    // dropped. Malformed timestamps parse to NaN → the comparison
-    // below is false → entry is kept (defensive: better to show a
-    // stale chip than accidentally hide a valid one).
+    // dropped. ``parseServerDate`` treats designator-less ISO strings
+    // as UTC so a KST browser doesn't misread server-emitted
+    // timestamps as nine hours in the past (issue #93). Malformed
+    // timestamps parse to NaN → the comparison below is false →
+    // entry is kept (defensive: better to show a stale chip than
+    // accidentally hide a valid one).
     if (
       entry.status === 'pending' &&
       !entry.result_message_id &&
       entry._question_created_at
     ) {
-      const questionMs = new Date(entry._question_created_at).getTime()
+      const questionMs = parseServerDate(entry._question_created_at).getTime()
       if (Number.isFinite(questionMs) && nowMs - questionMs > PENDING_TTL_MS) {
         continue
       }

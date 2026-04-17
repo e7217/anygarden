@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -9,6 +11,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity
 from doorae.dependencies import get_current_identity, get_db
+
+
+def _fts_created_at_to_iso(value: object) -> str:
+    """Normalize FTS row's ``created_at`` to a UTC-aware ISO string.
+
+    Issue #93 — FTS virtual tables store timestamps as opaque TEXT
+    (SQLite's ``YYYY-MM-DD HH:MM:SS[.ffffff]``), bypassing
+    ``UtcDateTime``. We parse and re-emit with an explicit ``+00:00``
+    so browsers don't interpret the string as local time.
+    """
+    if not value:
+        return ""
+    raw = str(value)
+    try:
+        dt = datetime.fromisoformat(raw.replace(" ", "T"))
+    except ValueError:
+        return raw
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -72,7 +94,7 @@ async def search_messages(
             room_id=row.room_id,
             participant_id=row.participant_id,
             content=row.content,
-            created_at=str(row.created_at) if row.created_at else "",
+            created_at=_fts_created_at_to_iso(row.created_at),
             snippet=row.snippet,
         )
         for row in rows

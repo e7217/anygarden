@@ -9,7 +9,6 @@ from typing import Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -21,6 +20,8 @@ from sqlalchemy import (
     text as sa_text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from doorae.db.types import UtcDateTime
 
 
 def _utcnow() -> datetime:
@@ -42,7 +43,7 @@ class Project(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     # ``passive_deletes=True`` defers child cleanup to the FK's
     # ``ON DELETE CASCADE`` — without it, SA tries to UPDATE
@@ -72,7 +73,7 @@ class Room(Base):
     representative_agent_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, default=None
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="rooms")
     parent_room: Mapped[Optional["Room"]] = relationship(
@@ -130,7 +131,7 @@ class User(Base):
     # to the server beyond length limits — enforcement lives in the
     # auth handler, not the DB.
     display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class Agent(Base):
@@ -154,10 +155,10 @@ class Agent(Base):
     # See docs/plans/2026-04-11-per-agent-directory-skills.md
     agents_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     last_crash_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     reasoning_effort: Mapped[Optional[str]] = mapped_column(
@@ -182,7 +183,7 @@ class Agent(Base):
     runtime: Mapped[str] = mapped_column(
         String(20), nullable=False, default="python", server_default="python"
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")
     files: Mapped[list["AgentFile"]] = relationship(
@@ -205,7 +206,7 @@ class Machine(Base):
     status: Mapped[str] = mapped_column(String(32), default="offline")
     daemon_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     daemon_last_seen_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     cpu_cores: Mapped[int] = mapped_column(Integer, default=0)
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
@@ -215,7 +216,7 @@ class Machine(Base):
     # migration. Set absurdly high so it never bites in practice.
     max_agents: Mapped[int] = mapped_column(Integer, default=1000)
     labels: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     owner: Mapped["User"] = relationship("User")
     agents: Mapped[list["Agent"]] = relationship("Agent", back_populates="machine")
@@ -249,7 +250,7 @@ class MachineEngine(Base):
     )
     engine: Mapped[str] = mapped_column(String(128), nullable=False)
     version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped["Machine"] = relationship("Machine", back_populates="engines")
 
@@ -267,12 +268,12 @@ class MachineToken(Base):
     )
     token_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     lookup_hint: Mapped[str] = mapped_column(String(12), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
 
     machine: Mapped["Machine"] = relationship("Machine", back_populates="tokens")
@@ -291,12 +292,12 @@ class AgentToken(Base):
     )
     token_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     lookup_hint: Mapped[str] = mapped_column(String(12), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
 
     agent: Mapped["Agent"] = relationship("Agent")
@@ -327,15 +328,15 @@ class RoomInviteLink(Base):
     )
     token_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     lookup_hint: Mapped[str] = mapped_column(String(12), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     # None = no expiry. Checked only at acceptance time in PR C.
     expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     # Non-null ⇒ admin called DELETE /invites/{id}. Accepting this
     # invite is rejected regardless of ``expires_at``/``use_count``.
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
+        UtcDateTime, nullable=True, default=None
     )
     # None = unlimited uses. Acceptance increments ``use_count`` and
     # refuses when ``use_count >= max_uses``.
@@ -360,7 +361,7 @@ class Participant(Base):
         String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, default=None
     )
     role: Mapped[str] = mapped_column(String(32), default="member")
-    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    joined_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     # Sidebar pin state — user can drag a room to a top "pinned"
     # section in the sidebar and reorder within it. ``pinned=False``
     # keeps the room in the default (alphabetical) section; ``True``
@@ -413,7 +414,7 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     extra_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     room: Mapped["Room"] = relationship("Room", back_populates="messages")
     participant: Mapped[Optional["Participant"]] = relationship(
@@ -446,7 +447,7 @@ class AgentFile(Base):
     path: Mapped[str] = mapped_column(String(512), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
     )
 
     agent: Mapped["Agent"] = relationship("Agent", back_populates="files")
@@ -467,7 +468,7 @@ class SavedMessage(Base):
     message_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("messages.id", ondelete="CASCADE"), nullable=False
     )
-    saved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    saved_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class ActivityLog(Base):
@@ -483,7 +484,7 @@ class ActivityLog(Base):
         String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
     )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
 
 
@@ -500,7 +501,7 @@ class MachineActivityLog(Base):
         String(36), ForeignKey("machines.id", ondelete="CASCADE"), nullable=False
     )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
 
 
@@ -524,4 +525,4 @@ class Task(Base):
     created_by: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
