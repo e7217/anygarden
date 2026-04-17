@@ -7,6 +7,7 @@ import RoomQueryResultCard from '@/components/RoomQueryResultCard'
 import { apiFetch } from '@/lib/api'
 import { useRooms } from '@/hooks/useRooms'
 import { parseForward, parseResult, stripRoomQueryPrefix } from '@/lib/room-query'
+import { parseServerDate } from '@/lib/datetime'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -42,7 +43,7 @@ export default memo(function MessageBubble({ message, participants, isMine }: Me
 
   const formatTime = (iso: string) => {
     try {
-      const d = new Date(iso)
+      const d = parseServerDate(iso)
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     } catch {
       return ''

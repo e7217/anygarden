@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 
 import pytest
@@ -128,3 +129,34 @@ class TestRestMessageMetadataAlias:
         assert "metadata" in msg_without
         assert msg_without["metadata"] is None
         assert "extra_metadata" not in msg_without
+
+
+class TestRestMessageCreatedAtTimezone:
+    """Issue #93 — ``created_at`` must carry a timezone designator.
+
+    Without a designator, ECMAScript parses the ISO string as local
+    time, shifting KST clients nine hours into the past and breaking
+    the ``RoomQueryBanner`` TTL filter.
+    """
+
+    TZ_SUFFIX = re.compile(r"(Z|[+\-]\d{2}:?\d{2})$")
+
+    @pytest.mark.asyncio
+    async def test_created_at_has_timezone_designator(self, msg_env) -> None:
+        app = msg_env["app"]
+        token = msg_env["token"]
+        room_id = msg_env["room"].id
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as http:
+            resp = await http.get(
+                f"/api/v1/rooms/{room_id}/messages",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        assert resp.status_code == 200
+        messages = resp.json()
+        assert len(messages) >= 1
+        for m in messages:
+            assert self.TZ_SUFFIX.search(m["created_at"]), (
+                f"created_at missing timezone designator: {m['created_at']!r}"
+            )
