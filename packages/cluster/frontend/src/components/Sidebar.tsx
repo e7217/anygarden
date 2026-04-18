@@ -24,7 +24,7 @@ import AgentHistoryDialog from '@/components/AgentHistoryDialog'
 import AvatarPickerDialog from '@/components/AvatarPickerDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical, Share2, PanelLeftClose,
+  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -705,6 +705,17 @@ export default function Sidebar({
             >
               <Server className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
               Machines
+            </button>
+            <button
+              onClick={() => go('/admin/skills')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname === '/admin/skills'
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <BookOpen className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              Skills
             </button>
             <button
               onClick={() => go('/topology')}
