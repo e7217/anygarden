@@ -42,7 +42,13 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
 )
 
 _ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
-    {".md", ".json", ".toml", ".txt", ".yaml", ".yml", ".env"}
+    {
+        ".md", ".json", ".toml", ".txt", ".yaml", ".yml", ".env",
+        # Issue #112 — scripts invoked by engine CLIs from inside
+        # ``skills/<name>/scripts/*``. Kept in lockstep with the
+        # server-side whitelist in ``doorae/agent_files.py``.
+        ".sh", ".py", ".js", ".ts", ".mjs",
+    }
 )
 
 # Cap path depth so a manifest can't force the materializer into

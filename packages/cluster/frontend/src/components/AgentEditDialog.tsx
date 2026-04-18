@@ -26,7 +26,7 @@
  * Style: follows DESIGN.md (warm neutral palette, whisper borders,
  * near-black text, single-accent brand color).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +39,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Download, FileText, Plus, Trash2, Upload } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FileText,
+  FolderPlus,
+  Plus,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile } from '@/hooks/useAgents'
@@ -67,6 +76,13 @@ const ALLOWED_EXTENSIONS: readonly string[] = [
   '.yaml',
   '.yml',
   '.env',
+  // Issue #112 — scripts admitted under ``skills/<name>/scripts/*``.
+  // doorae does not execute these; engine CLIs do.
+  '.sh',
+  '.py',
+  '.js',
+  '.ts',
+  '.mjs',
 ]
 
 // Friendly label for each prefix grouping in the file list.
@@ -76,6 +92,321 @@ const PREFIX_LABELS: Record<string, string> = {
   '.claude/': 'Claude Code config',
   '.gemini/': 'Gemini CLI config',
   '.openhands/': 'OpenHands config',
+}
+
+// Issue #112 — engine → permissible prefixes. An agent's ``engine``
+// is fixed at creation, so only the matching CLI's config dir is
+// meaningful; showing every other engine's config would just clutter
+// the tree with dead paths. ``skills/`` and ``AGENTS.md`` are
+// universal so every engine gets them.
+//
+// Must stay in sync with the backend's ``_ALLOWED_PREFIXES``:
+// adding a new engine means editing this map AND
+// ``doorae/agent_files.py``. The server accepts every prefix
+// regardless of engine today, so this filter is purely a UX
+// affordance — API callers still bear the responsibility of not
+// writing garbage.
+const ENGINE_PREFIXES: Record<string, readonly string[]> = {
+  'claude-code': ['skills/', '.claude/'],
+  'codex': ['skills/', '.codex/'],
+  'gemini-cli': ['skills/', '.gemini/'],
+  'openhands': ['skills/', '.openhands/'],
+  // API-only and library-style engines: no CLI config dir to edit.
+  'deep-agents': ['skills/'],
+  'openai': ['skills/'],
+  'anthropic': ['skills/'],
+}
+
+// Fallback for engines we haven't classified yet — surface only the
+// universal ``skills/`` bucket rather than exposing every config dir
+// by accident.
+const FALLBACK_ENGINE_PREFIXES: readonly string[] = ['skills/']
+
+function allowedPrefixesForEngine(engine: string | undefined): readonly string[] {
+  if (!engine) return FALLBACK_ENGINE_PREFIXES
+  return ENGINE_PREFIXES[engine] ?? FALLBACK_ENGINE_PREFIXES
+}
+
+// ── Tree structure (Issue #112) ───────────────────────────────────
+//
+// The file list used to be rendered as a flat "group by top-level
+// prefix" stack. Real skills carry nested directories (``skills/
+// <name>/scripts/``, ``skills/<name>/references/``) that the flat
+// view could not express. ``buildTree`` produces a recursive
+// ``TreeNode`` forest so arbitrary depth renders as a collapsible
+// tree with the same click-to-select and dirty-dot affordances the
+// flat list already had.
+
+export type TreeNode =
+  | {
+      kind: 'file'
+      /** Absolute path (``skills/coder/scripts/build.py``). */
+      path: string
+      /** Last segment only, rendered by the file row. */
+      name: string
+      file: WorkingFile
+    }
+  | {
+      kind: 'dir'
+      /** Absolute path (``skills/coder/scripts``). Used as the
+       *  stable id for expand/collapse persistence. */
+      path: string
+      /** Last segment, shown as the directory label. */
+      name: string
+      children: TreeNode[]
+    }
+
+// Display order helpers: directories first, then files; each group
+// sorted alphabetically. Keeps the tree stable even when rows are
+// dirty-added mid-session.
+function compareNodes(a: TreeNode, b: TreeNode): number {
+  if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+  return a.name.localeCompare(b.name)
+}
+
+/**
+ * Build a recursive tree from the flat working-copy file list.
+ *
+ * - Hidden / undeletable entries (``deleted``) are skipped.
+ * - The virtual ``AGENTS.md`` row is placed at the root as a
+ *   regular file node so it reads as "first among equals".
+ * - File paths with a prefix outside ``allowedPrefixes`` are
+ *   silently skipped. Together with the engine-based prefix
+ *   filter at save time, that keeps dead files from older engines
+ *   out of the tree (today ``engine`` is immutable so this is a
+ *   defense-in-depth check, not a user-visible path).
+ *
+ * Complexity is O(N·D) where N is the file count and D the
+ * average depth; with the 6-segment cap that's effectively linear.
+ */
+export function buildTree(
+  files: readonly WorkingFile[],
+  allowedPrefixes: readonly string[],
+): TreeNode[] {
+  const root: TreeNode[] = []
+  // Directory lookup: absolute path → dir node. Lets us attach
+  // children in one pass without re-scanning the forest each time.
+  const dirByPath = new Map<string, Extract<TreeNode, { kind: 'dir' }>>()
+
+  for (const f of files) {
+    if (f.deleted) continue
+    // Virtual rows (AGENTS.md) sit at the root. The engine-prefix
+    // filter below would reject them because they have no prefix,
+    // so short-circuit first.
+    if (f.virtual) {
+      root.push({ kind: 'file', path: f.path, name: f.path, file: f })
+      continue
+    }
+    if (!allowedPrefixes.some(p => f.path.startsWith(p))) continue
+
+    const parts = f.path.split('/')
+    let parent: TreeNode[] = root
+    // Walk every segment except the last — those become directory
+    // nodes. The last segment becomes the file node.
+    for (let i = 0; i < parts.length - 1; i++) {
+      const dirPath = parts.slice(0, i + 1).join('/')
+      const existing = dirByPath.get(dirPath)
+      if (existing) {
+        parent = existing.children
+        continue
+      }
+      const dirNode: Extract<TreeNode, { kind: 'dir' }> = {
+        kind: 'dir',
+        path: dirPath,
+        name: parts[i],
+        children: [],
+      }
+      dirByPath.set(dirPath, dirNode)
+      parent.push(dirNode)
+      parent = dirNode.children
+    }
+    parent.push({
+      kind: 'file',
+      path: f.path,
+      name: parts[parts.length - 1],
+      file: f,
+    })
+  }
+
+  // Recursive sort: dirs before files, each sorted by name.
+  const sortRec = (nodes: TreeNode[]): void => {
+    nodes.sort(compareNodes)
+    for (const n of nodes) {
+      if (n.kind === 'dir') sortRec(n.children)
+    }
+  }
+  sortRec(root)
+  return root
+}
+
+// Predicate used by the UI to decide where the "add file inside
+// this skill" shortcut applies. A skill directory is a child of
+// the top-level ``skills/`` group — ``skills/<name>`` with exactly
+// two path segments. Nested subdirs (``skills/<name>/scripts``)
+// don't get the shortcut: their files live beside the skill's
+// ``SKILL.md`` and the "New file" path input already prefills
+// correctly from the skill root.
+export function isSkillDirNode(node: TreeNode): boolean {
+  if (node.kind !== 'dir') return false
+  return node.path.startsWith('skills/') && node.path.split('/').length === 2
+}
+
+// Friendly label for the top-level prefix dir nodes. For every
+// other depth, the raw directory name is used.
+function dirLabelFor(node: Extract<TreeNode, { kind: 'dir' }>, depth: number): string {
+  if (depth === 0) {
+    const key = `${node.name}/`  // PREFIX_LABELS keys carry the trailing slash
+    return PREFIX_LABELS[key] ?? node.name
+  }
+  return node.name
+}
+
+// Slugify a human-entered skill name so the resulting directory
+// name is safe for the agent_files path whitelist (``skills/<slug>/``).
+// Keeps the alphabet narrow: lowercase alphanumerics and dashes.
+export function slugifySkillName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// Starter content for a fresh ``SKILL.md``. Frontmatter mirrors the
+// Anthropic/Agents.md convention so downstream CLIs can discover
+// the skill by name and description.
+function skillTemplate(slug: string): string {
+  return `---\nname: ${slug}\ndescription: TODO — when should this skill activate?\n---\n\n# ${slug}\n\n<!-- TODO: describe the skill's purpose and usage. -->\n`
+}
+
+// ── Recursive tree renderer (Issue #112) ──────────────────────────
+//
+// A single recursive function that returns JSX for a node and (if
+// expanded) its descendants. Kept at module scope so the component
+// body stays legible; everything it needs is passed in.
+
+interface RenderTreeNodeArgs {
+  node: TreeNode
+  depth: number
+  selectedPath: string | null
+  expandedPaths: Set<string>
+  onSelect: (path: string) => void
+  onToggle: (dirPath: string) => void
+  onRemove: (path: string) => void
+  onAddInSkill: (skillName: string) => void
+}
+
+function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
+  const { node, depth, selectedPath, expandedPaths, onSelect, onToggle, onRemove, onAddInSkill } = args
+  // Consistent indent per depth — dense enough to keep ~5 levels
+  // visible in the 240px tree column. ``paddingLeft`` is inline so
+  // the depth math doesn't have to live in Tailwind's class
+  // vocabulary.
+  const indentStyle: CSSProperties = { paddingLeft: 12 + depth * 12 }
+
+  if (node.kind === 'file') {
+    const f = node.file
+    const isSelected = f.path === selectedPath
+    const showTrash = !f.virtual
+    return (
+      <div
+        key={f.path}
+        className={`group flex items-center justify-between pr-3 py-1.5 text-sm cursor-pointer transition-colors ${
+          isSelected
+            ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
+            : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
+        }`}
+        style={indentStyle}
+        onClick={() => onSelect(f.path)}
+        data-testid={`agent-edit-file-${f.path}`}
+        data-virtual={f.virtual ? 'true' : undefined}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          {f.virtual ? (
+            <FileText
+              className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]"
+              aria-hidden="true"
+            />
+          ) : null}
+          <span className="truncate font-mono text-xs">
+            {node.name}
+            {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
+          </span>
+        </span>
+        {showTrash ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation()
+              onRemove(f.path)
+            }}
+            className="opacity-0 group-hover:opacity-100 transition-opacity"
+            title={`Remove ${f.path}`}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
+          </button>
+        ) : null}
+      </div>
+    )
+  }
+
+  // Directory node.
+  const isOpen = expandedPaths.has(node.path)
+  const isSkill = isSkillDirNode(node)
+  const label = dirLabelFor(node, depth)
+  const fileCount = countFilesRec(node)
+  return (
+    <div key={node.path}>
+      <div
+        className="group flex items-center justify-between pr-3 py-1 text-sm cursor-pointer hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)] transition-colors"
+        style={indentStyle}
+        onClick={() => onToggle(node.path)}
+        data-testid={`agent-edit-dir-${node.path}`}
+      >
+        <span className="flex min-w-0 items-center gap-1">
+          {isOpen ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
+          )}
+          <span className={`truncate text-xs ${depth === 0 ? 'uppercase tracking-wider text-[var(--color-foreground-muted)]' : 'font-mono text-[var(--color-foreground)]'}`}>
+            {label}
+          </span>
+          <span className="text-[10px] text-[var(--color-foreground-subtle)]">
+            ({fileCount})
+          </span>
+        </span>
+        {isSkill ? (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation()
+              onAddInSkill(node.name)
+            }}
+            className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-black/5"
+            title={`Add file in ${node.path}`}
+            data-testid={`agent-edit-add-in-skill-${node.name}`}
+          >
+            <Plus className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" />
+          </button>
+        ) : null}
+      </div>
+      {isOpen &&
+        node.children.map(child =>
+          renderTreeNode({ ...args, node: child, depth: depth + 1 }),
+        )}
+    </div>
+  )
+}
+
+// Count files recursively under a directory node, for the "(N)"
+// badge shown next to dir labels.
+function countFilesRec(node: TreeNode): number {
+  if (node.kind === 'file') return 1
+  let total = 0
+  for (const c of node.children) total += countFilesRec(c)
+  return total
 }
 
 // Strictly decode a ``File`` as UTF-8, throwing if the bytes are not
@@ -184,6 +515,18 @@ export default function AgentEditDialog({
   const [pendingContent, setPendingContent] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Issue #112 — "New skill" form is mutually exclusive with the
+  // "New file" form. The skill flow needs only a name; the path
+  // and frontmatter template are synthesized on submit.
+  const [showNewSkillForm, setShowNewSkillForm] = useState(false)
+  const [newSkillName, setNewSkillName] = useState('')
+
+  // Issue #112 — recursive tree expand/collapse persistence. Each
+  // agent gets its own localStorage key so unrelated agents don't
+  // leak expand state into each other. The value is a Set of
+  // directory paths (no trailing slash, matching ``TreeNode.path``).
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
+
   // Pull the canonical file list from the server into the working
   // copy, and prepend the virtual ``AGENTS.md`` row.
   //
@@ -276,41 +619,78 @@ export default function AgentEditDialog({
       setShowNewFileForm(false)
       setNewFilePath('skills/')
       setPendingContent(null)
+      setShowNewSkillForm(false)
+      setNewSkillName('')
       setError(null)
     }
   }, [open, agent, loadInitial])
 
-  const visibleFiles = useMemo(
-    () => files.filter(f => !f.deleted).sort((a, b) => a.path.localeCompare(b.path)),
-    [files],
+  // Issue #112 — engine-based prefix filter. Changes to the tree
+  // render in response to ``agent?.engine``; tests assert that a
+  // claude-code agent never sees a ``.codex/`` node.
+  const engineAllowedPrefixes = useMemo(
+    () => allowedPrefixesForEngine(agent?.engine),
+    [agent?.engine],
   )
 
-  // Group visible files by top-level prefix so the admin can see at
-  // a glance what kind of file each row is ("Skills" vs
-  // "Codex config"). Virtual rows (AGENTS.md) are collected into a
-  // headerless first group so they sit at the top of the tree
-  // without a category label above them — they are the agent's
-  // "identity", not a category.
-  const groupedFiles = useMemo(() => {
-    const groups: Array<{ prefix: string; label: string; files: WorkingFile[] }> = []
-    const virtualFiles = visibleFiles.filter(f => f.virtual)
-    if (virtualFiles.length > 0) {
-      groups.push({ prefix: '', label: '', files: virtualFiles })
-    }
-    for (const prefix of ALLOWED_PREFIXES) {
-      const matching = visibleFiles.filter(
-        f => !f.virtual && f.path.startsWith(prefix),
-      )
-      if (matching.length > 0) {
-        groups.push({
-          prefix,
-          label: PREFIX_LABELS[prefix] ?? prefix,
-          files: matching,
-        })
+  // Seed expanded paths from localStorage (per-agent key) or, on
+  // first open of an agent, default to expanded top-level prefix
+  // dirs so the tree shows something useful immediately. We read
+  // here instead of in the ``useState`` initializer because
+  // ``agent`` may be null on the first render and changes across
+  // dialog opens.
+  useEffect(() => {
+    if (!open || !agent) return
+    const key = `doorae_agent_tree_${agent.id}`
+    try {
+      const saved = localStorage.getItem(key)
+      if (saved) {
+        setExpandedPaths(new Set<string>(JSON.parse(saved)))
+        return
       }
+    } catch {
+      // Storage unavailable (private mode / SSR) — fall through to
+      // the seed so the tree still renders something sensible.
     }
-    return groups
-  }, [visibleFiles])
+    const seed = new Set<string>()
+    for (const p of engineAllowedPrefixes) {
+      // TreeNode.path uses ``parts.join('/')`` with no trailing
+      // slash, so strip the prefix's trailing slash for the seed.
+      seed.add(p.replace(/\/$/, ''))
+    }
+    setExpandedPaths(seed)
+  }, [open, agent?.id, engineAllowedPrefixes])
+
+  // Toggle a directory node's expand/collapse state and persist.
+  // Persist failures are swallowed (same rationale as the seed
+  // effect: localStorage is best-effort).
+  const toggleExpanded = useCallback((dirPath: string) => {
+    setExpandedPaths(prev => {
+      const next = new Set(prev)
+      if (next.has(dirPath)) next.delete(dirPath)
+      else next.add(dirPath)
+      if (agent) {
+        try {
+          localStorage.setItem(
+            `doorae_agent_tree_${agent.id}`,
+            JSON.stringify(Array.from(next)),
+          )
+        } catch {
+          // ignore
+        }
+      }
+      return next
+    })
+  }, [agent])
+
+  // The recursive forest that backs the file tree render. Virtual
+  // AGENTS.md sits at the root; the engine-allowed prefixes each
+  // form a top-level directory (``skills/``, ``.claude/``, etc.)
+  // with arbitrary-depth subdirectories beneath them.
+  const treeRoots = useMemo(
+    () => buildTree(files, engineAllowedPrefixes),
+    [files, engineAllowedPrefixes],
+  )
 
   const selectedFile = useMemo(
     () => (selectedPath ? files.find(f => f.path === selectedPath) ?? null : null),
@@ -353,8 +733,15 @@ export default function AgentEditDialog({
     // has the authoritative check on save. Path-structure rules
     // (length, segments, control chars) are left to the server —
     // mirroring the whole validator here would be redundant.
-    if (!ALLOWED_PREFIXES.some(p => path.startsWith(p))) {
-      setError(`path must start with one of: ${ALLOWED_PREFIXES.join(', ')}`)
+    //
+    // Issue #112 — the admissible prefix set is narrowed by engine
+    // so claude-code admins can't accidentally drop a file under
+    // ``.codex/`` (which that engine will never read). The server
+    // still accepts any whitelist-prefix path regardless of engine,
+    // so this check is a UX affordance.
+    const engineAllowed = allowedPrefixesForEngine(agent?.engine)
+    if (!engineAllowed.some(p => path.startsWith(p))) {
+      setError(`path must start with one of: ${engineAllowed.join(', ')}`)
       return
     }
     if (!ALLOWED_EXTENSIONS.some(ext => path.endsWith(ext))) {
@@ -450,6 +837,93 @@ export default function AgentEditDialog({
   const handleUploadClick = () => {
     setError(null)
     fileInputRef.current?.click()
+  }
+
+  // Issue #112 — "+" button on a skill dir node. Prefills the
+  // "New file" form with the skill's path + trailing slash so the
+  // admin only types the filename. Closes the "New skill" form if
+  // it was open so the two flows don't compete for the same input.
+  const handleAddInSkill = useCallback((skillName: string) => {
+    setError(null)
+    setShowNewSkillForm(false)
+    setNewSkillName('')
+    setShowNewFileForm(true)
+    setNewFilePath(`skills/${skillName}/`)
+    // Keep the skill expanded so the new file appears in place after
+    // commit. Persist via ``toggleExpanded`` only on actual toggles;
+    // here we unconditionally ensure expanded.
+    setExpandedPaths(prev => {
+      const dirPath = `skills/${skillName}`
+      if (prev.has(dirPath)) return prev
+      const next = new Set(prev)
+      next.add(dirPath)
+      if (agent) {
+        try {
+          localStorage.setItem(
+            `doorae_agent_tree_${agent.id}`,
+            JSON.stringify(Array.from(next)),
+          )
+        } catch {
+          // ignore
+        }
+      }
+      return next
+    })
+  }, [agent])
+
+  // Issue #112 — "New skill" action. Takes a human-readable name
+  // (e.g. "Code Review"), slugifies it, and creates
+  // ``skills/<slug>/SKILL.md`` with a frontmatter template in the
+  // working copy. The admin can then edit SKILL.md on the right
+  // and Save along with any other changes in one pass.
+  const handleCreateSkill = () => {
+    const slug = slugifySkillName(newSkillName)
+    if (!slug) {
+      setError('skill name must contain at least one alphanumeric character')
+      return
+    }
+    const path = `skills/${slug}/SKILL.md`
+    if (files.some(f => f.path === path && !f.deleted)) {
+      setError(`skill "${slug}" already exists`)
+      return
+    }
+    setFiles(prev => [
+      ...prev,
+      {
+        path,
+        content: skillTemplate(slug),
+        updated_at: new Date().toISOString(),
+        originalContent: null,
+        dirty: true,
+        deleted: false,
+      },
+    ])
+    // Expand the new skill dir so the file appears immediately.
+    setExpandedPaths(prev => {
+      const next = new Set(prev)
+      next.add('skills')
+      next.add(`skills/${slug}`)
+      if (agent) {
+        try {
+          localStorage.setItem(
+            `doorae_agent_tree_${agent.id}`,
+            JSON.stringify(Array.from(next)),
+          )
+        } catch {
+          // ignore
+        }
+      }
+      return next
+    })
+    setSelectedPath(path)
+    setShowNewSkillForm(false)
+    setNewSkillName('')
+    setError(null)
+  }
+
+  const handleCancelNewSkill = () => {
+    setShowNewSkillForm(false)
+    setNewSkillName('')
   }
 
   // Read the picked file as strict UTF-8 and stage it for path
@@ -619,6 +1093,7 @@ export default function AgentEditDialog({
                       if (showNewFileForm) {
                         handleCancelNewFile()
                       } else {
+                        handleCancelNewSkill()
                         setShowNewFileForm(true)
                       }
                     }}
@@ -626,6 +1101,22 @@ export default function AgentEditDialog({
                   >
                     <Plus className="mr-1 h-4 w-4" />
                     New file
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (showNewSkillForm) {
+                        handleCancelNewSkill()
+                      } else {
+                        handleCancelNewFile()
+                        setShowNewSkillForm(true)
+                      }
+                    }}
+                    data-testid="agent-edit-toggle-new-skill"
+                  >
+                    <FolderPlus className="mr-1 h-4 w-4" />
+                    New skill
                   </Button>
                 </div>
               </div>
@@ -670,76 +1161,58 @@ export default function AgentEditDialog({
                 </div>
               ) : null}
 
+              {showNewSkillForm ? (
+                <div className="flex gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+                  <span className="shrink-0 font-mono text-xs text-[var(--color-foreground-muted)]">
+                    skills/
+                  </span>
+                  <Input
+                    value={newSkillName}
+                    onChange={e => setNewSkillName(e.target.value)}
+                    placeholder="greeting"
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleCreateSkill()
+                      }
+                    }}
+                    autoFocus
+                    data-testid="agent-edit-new-skill-name"
+                  />
+                  <span className="shrink-0 font-mono text-xs text-[var(--color-foreground-muted)]">
+                    /SKILL.md
+                  </span>
+                  <Button size="sm" onClick={handleCreateSkill} data-testid="agent-edit-create-skill">
+                    Create
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleCancelNewSkill}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : null}
+
               <div className="grid grid-cols-[240px_1fr] gap-3 min-h-[280px]">
                 {/* Left: file tree */}
                 <div className="overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)]">
-                  {groupedFiles.length === 0 ? (
+                  {treeRoots.length === 0 ? (
                     <div className="p-4 text-caption text-[var(--color-foreground-subtle)]">
                       No files yet. Click "New file" to add one.
                     </div>
                   ) : (
-                    groupedFiles.map(group => (
-                      <div
-                        key={group.prefix || '__virtual__'}
-                        className="py-1"
-                      >
-                        {group.label ? (
-                          <div className="px-3 py-1 text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">
-                            {group.label}
-                          </div>
-                        ) : null}
-                        {group.files.map(f => {
-                          const isSelected = f.path === selectedPath
-                          // Virtual rows (AGENTS.md) can't be deleted —
-                          // hide the trash icon and render a FileText
-                          // glyph up front so the row reads as the
-                          // "identity" file, not just another entry.
-                          const showTrash = !f.virtual
-                          const displayName = group.prefix
-                            ? f.path.slice(group.prefix.length)
-                            : f.path
-                          return (
-                            <div
-                              key={f.path}
-                              className={`group flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer transition-colors ${
-                                isSelected
-                                  ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
-                                  : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
-                              }`}
-                              onClick={() => setSelectedPath(f.path)}
-                              data-testid={`agent-edit-file-${f.path}`}
-                              data-virtual={f.virtual ? 'true' : undefined}
-                            >
-                              <span className="flex min-w-0 items-center gap-1.5">
-                                {f.virtual ? (
-                                  <FileText
-                                    className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]"
-                                    aria-hidden="true"
-                                  />
-                                ) : null}
-                                <span className="truncate font-mono text-xs">
-                                  {displayName}
-                                  {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
-                                </span>
-                              </span>
-                              {showTrash ? (
-                                <button
-                                  type="button"
-                                  onClick={e => {
-                                    e.stopPropagation()
-                                    handleRemoveFile(f.path)
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 transition-opacity"
-                                  title={`Remove ${f.path}`}
-                                >
-                                  <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
-                                </button>
-                              ) : null}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    ))
+                    <div className="py-1">
+                      {treeRoots.map(node =>
+                        renderTreeNode({
+                          node,
+                          depth: 0,
+                          selectedPath,
+                          expandedPaths,
+                          onSelect: setSelectedPath,
+                          onToggle: toggleExpanded,
+                          onRemove: handleRemoveFile,
+                          onAddInSkill: handleAddInSkill,
+                        }),
+                      )}
+                    </div>
                   )}
                 </div>
 
