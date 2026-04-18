@@ -1,4 +1,4 @@
-"""Service layer for SkillLibrary — registration and resolution (#119 Phase 1).
+"""Service layer for SkillLibrary — registration and resolution (#119 / #123).
 
 Splits responsibilities between the GitHub fetcher (pure IO) and the
 DB (persistence / resolution), so tests can drive each side in
@@ -43,6 +43,30 @@ class _SkillFetcher(Protocol):
     ) -> SkillFetchResult: ...
 
 
+def _canonical_tree_hash(files: dict[str, str]) -> str:
+    """Deterministic hash over ``{path: body}`` independent of dict
+    order.
+
+    Why not just hash SKILL.md: Phase 3 materializes the whole skill
+    directory, and drift in any file (script, reference doc) must
+    trip ``body_changed`` so attached agents re-spawn with the fresh
+    content.  Path-sorted ``sha256(body)`` concat → final sha256
+    gives a short stable digest that changes iff any file's path or
+    body changes.
+
+    Separator choice: ``{path}\\n{body_hash}\\n`` — body_hash is a
+    64-char hex so collisions between ``"a/b.py" + "X"`` and ``"a"
+    + "b.py\\nX"`` are structurally impossible (hex alphabet has no
+    newline).
+    """
+    lines = []
+    for path in sorted(files.keys()):
+        body_hash = hashlib.sha256(files[path].encode("utf-8")).hexdigest()
+        lines.append(f"{path}\n{body_hash}")
+    blob = "\n".join(lines)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 class SkillLibraryService:
     """Orchestrator between GitHub fetch, DB persistence, and agent resolution."""
 
@@ -77,7 +101,14 @@ class SkillLibraryService:
         attached agent only when a respawn is actually warranted.
         """
         result = await self._fetcher.fetch_skill(source, name, rev)
-        content_hash = hashlib.sha256(result.skill_md.encode("utf-8")).hexdigest()
+        # Canonical tree hash covers SKILL.md plus every extra file.
+        # Phase 1 hashed skill_md only; upgrading here means the bump
+        # fix (#122) now also fires when a helper script changes.
+        tree_blob = {
+            f"skills/{name}/SKILL.md": result.skill_md,
+            **result.extra_files,
+        }
+        content_hash = _canonical_tree_hash(tree_blob)
 
         async with self._session_factory() as db:
             existing = (
@@ -93,6 +124,7 @@ class SkillLibraryService:
             if existing is not None:
                 body_changed = existing.content_hash != content_hash
                 existing.skill_md = result.skill_md
+                existing.extra_files = dict(result.extra_files)
                 existing.scripts_detected = list(result.scripts_detected)
                 existing.content_hash = content_hash
                 await db.commit()
@@ -104,7 +136,7 @@ class SkillLibraryService:
                 name=name,
                 pinned_rev=result.commit_sha,
                 skill_md=result.skill_md,
-                extra_files={},
+                extra_files=dict(result.extra_files),
                 scripts_detected=list(result.scripts_detected),
                 content_hash=content_hash,
             )
@@ -179,10 +211,12 @@ class SkillLibraryService:
     ) -> dict[str, str]:
         """Return ``{path_on_agent_disk: body}`` for every skill attached.
 
-        Phase 1 only materializes SKILL.md under ``skills/<name>/``.
-        Phase 3 will unpack ``extra_files`` and merge them in here,
-        using the same return shape so the lifecycle caller doesn't
-        change.
+        Phase 3: yields SKILL.md *and* every entry from
+        ``SkillLibraryEntry.extra_files`` so the whole skill
+        directory lands in the sync frame. Collision resolution
+        between multiple skills is last-write-wins within this
+        function; AgentFile precedence is applied by the caller
+        (``lifecycle._build_sync_frame``).
         """
         rows = (
             await db.execute(
@@ -198,4 +232,6 @@ class SkillLibraryService:
         files: dict[str, str] = {}
         for entry in rows:
             files[f"skills/{entry.name}/SKILL.md"] = entry.skill_md
+            for rel_path, body in (entry.extra_files or {}).items():
+                files[rel_path] = body
         return files

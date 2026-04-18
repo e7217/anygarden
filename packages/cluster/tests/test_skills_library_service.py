@@ -1,8 +1,6 @@
-"""Tests for SkillLibraryService — skill_library (#119 Phase 1)."""
+"""Tests for SkillLibraryService — skill_library (#119 Phase 1 / #123 Phase 3)."""
 
 from __future__ import annotations
-
-import hashlib
 
 import pytest
 import pytest_asyncio
@@ -11,7 +9,7 @@ from sqlalchemy import select
 from doorae.db.engine import build_engine, build_session_factory
 from doorae.db.models import Agent, AgentSkill, Base, SkillLibraryEntry
 from doorae.skills_library.github_fetcher import SkillFetchResult
-from doorae.skills_library.service import SkillLibraryService
+from doorae.skills_library.service import SkillLibraryService, _canonical_tree_hash
 
 
 class FakeFetcher:
@@ -51,12 +49,17 @@ async def _seed_agent(factory, name: str = "a") -> Agent:
 
 
 @pytest.mark.asyncio
-async def test_register_creates_row_and_hashes_skill_md(session_factory):
+async def test_register_creates_row_with_extra_files_and_canonical_hash(session_factory):
+    """Phase 3: register stores SKILL.md + extra_files, and content_hash
+    is computed over the canonical tree (so later drift in any file is
+    detectable)."""
+    extra = {"skills/hello/scripts/x.py": "print('x')"}
     fetcher = FakeFetcher(
         SkillFetchResult(
             commit_sha="c0ffee",
             skill_md="# Hello\nbody",
             scripts_detected=["skills/hello/scripts/x.py"],
+            extra_files=extra,
         )
     )
     service = SkillLibraryService(session_factory, fetcher=fetcher)
@@ -75,9 +78,54 @@ async def test_register_creates_row_and_hashes_skill_md(session_factory):
     assert row.pinned_rev == "c0ffee"
     assert row.skill_md == "# Hello\nbody"
     assert row.scripts_detected == ["skills/hello/scripts/x.py"]
-    assert row.extra_files == {}
-    expected_hash = hashlib.sha256("# Hello\nbody".encode("utf-8")).hexdigest()
-    assert row.content_hash == expected_hash
+    assert row.extra_files == extra
+    # content_hash is the canonical tree hash over SKILL.md + extras.
+    expected_tree = {"skills/hello/SKILL.md": "# Hello\nbody", **extra}
+    assert row.content_hash == _canonical_tree_hash(expected_tree)
+
+
+@pytest.mark.asyncio
+async def test_canonical_tree_hash_is_path_order_independent(session_factory):
+    """Different Python dict orderings must yield the same hash —
+    the hash is what gates bump decisions, and we don't want spurious
+    bumps just because dict insertion order happened to flip."""
+    a = {"skills/x/SKILL.md": "md", "skills/x/scripts/a.py": "a", "skills/x/scripts/b.py": "b"}
+    b = {"skills/x/scripts/b.py": "b", "skills/x/SKILL.md": "md", "skills/x/scripts/a.py": "a"}
+    assert _canonical_tree_hash(a) == _canonical_tree_hash(b)
+
+
+@pytest.mark.asyncio
+async def test_canonical_tree_hash_changes_when_any_body_changes(session_factory):
+    base = {"skills/x/SKILL.md": "md", "skills/x/scripts/a.py": "print(1)"}
+    mutated = {"skills/x/SKILL.md": "md", "skills/x/scripts/a.py": "print(2)"}
+    assert _canonical_tree_hash(base) != _canonical_tree_hash(mutated)
+
+
+@pytest.mark.asyncio
+async def test_register_body_changed_when_only_extra_file_changes(session_factory):
+    """Canonical hash must detect drift in extra_files even when
+    SKILL.md itself is unchanged — otherwise attached agents never get
+    re-materialized after a script update."""
+    fetcher = FakeFetcher(
+        SkillFetchResult(
+            commit_sha="same",
+            skill_md="same md",
+            scripts_detected=["skills/x/scripts/a.py"],
+            extra_files={"skills/x/scripts/a.py": "v1"},
+        )
+    )
+    service = SkillLibraryService(session_factory, fetcher=fetcher)
+    await service.register(source="owner/repo", name="x")
+
+    # Only the extra file body flips; SKILL.md is byte-identical.
+    fetcher.result = SkillFetchResult(
+        commit_sha="same",
+        skill_md="same md",
+        scripts_detected=["skills/x/scripts/a.py"],
+        extra_files={"skills/x/scripts/a.py": "v2"},
+    )
+    result = await service.register(source="owner/repo", name="x")
+    assert result.body_changed is True
 
 
 @pytest.mark.asyncio
@@ -163,6 +211,34 @@ async def test_resolve_for_agent_returns_skill_md_under_skills_path(session_fact
         await db.commit()
         resolved = await service.resolve_for_agent(db, agent.id)
     assert resolved == {"skills/hello/SKILL.md": "# Body"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_for_agent_includes_extra_files(session_factory):
+    """Phase 3: resolve must return SKILL.md *and* every extra_file so
+    the lifecycle frame materializes the whole directory."""
+    extra = {
+        "skills/hello/scripts/x.py": "print('x')",
+        "skills/hello/references/guide.md": "# Guide",
+    }
+    fetcher = FakeFetcher(
+        SkillFetchResult(
+            commit_sha="sha",
+            skill_md="# Body",
+            scripts_detected=list(extra.keys()),
+            extra_files=extra,
+        )
+    )
+    service = SkillLibraryService(session_factory, fetcher=fetcher)
+
+    result = await service.register(source="owner/repo", name="hello")
+    agent = await _seed_agent(session_factory)
+
+    async with session_factory() as db:
+        await service.attach(db, agent_id=agent.id, skill_id=result.entry.id)
+        await db.commit()
+        resolved = await service.resolve_for_agent(db, agent.id)
+    assert resolved == {"skills/hello/SKILL.md": "# Body", **extra}
 
 
 @pytest.mark.asyncio

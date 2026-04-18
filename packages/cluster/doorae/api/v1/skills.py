@@ -48,6 +48,11 @@ class SkillOut(BaseModel):
     source: str
     name: str
     pinned_rev: str
+    # Paths of every extra file fetched alongside SKILL.md — Phase 3
+    # (#123) promoted this from "detected only" to "actually bundled
+    # into the agent directory". Field name kept for frontend compat
+    # (AdminSkills still renders ``scripts_detected.length`` as "+N
+    # files" and the count matches the new semantics 1:1).
     scripts_detected: list[str]
     content_hash: str
     approved_by: Optional[str]
