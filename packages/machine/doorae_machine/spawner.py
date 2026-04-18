@@ -517,6 +517,31 @@ class Spawner:
                 # "read-only view via symlink-plus-sandbox" pattern.
                 slot.symlink_to(f"../{slot_name}")
 
+        # --- workspace/.claude bridge for claude-code -----------------
+        # Issue #111. The claude CLI looks for ``settings.json`` at
+        # exactly ``cwd + '/.claude/settings.json'`` and does NOT walk
+        # upward (verified via debug-file output:
+        # ``Broken symlink or missing file encountered for
+        # settings.json at path: <workspace>/.claude/settings.json``).
+        # The adapter pins cwd to ``workspace/``, so without this
+        # bridge the canonical ``.claude/settings.json`` one level up
+        # is invisible to the SDK and the agent reverts to ask-mode
+        # tool denials. Symlinking the whole ``.claude`` directory is
+        # cleaner than a per-file symlink: skill discovery
+        # (``.claude/skills``) and any future ``.claude/`` artifact
+        # come along for free, and the existing
+        # ``agent_root/.claude/skills → ../skills`` link the
+        # materializer creates above keeps working through the
+        # additional indirection.
+        if msg.engine == "claude-code":
+            ws_link = workspace / ".claude"
+            if ws_link.is_symlink() or ws_link.exists():
+                if ws_link.is_symlink() or ws_link.is_file():
+                    ws_link.unlink()
+                else:
+                    shutil.rmtree(ws_link)
+            ws_link.symlink_to("../.claude")
+
         return agent_root
 
     async def spawn(self, msg: SpawnManifest) -> SpawnResult:

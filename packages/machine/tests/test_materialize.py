@@ -634,3 +634,37 @@ class TestClaudeCodeDefaultSettings:
         path = agent_root / ".claude" / "settings.json"
         assert path.is_file()
         assert path.stat().st_mode & 0o777 == 0o600
+
+    def test_workspace_claude_symlink_for_claude_code(
+        self, spawner: Spawner
+    ) -> None:
+        """claude CLI는 ``cwd + '/.claude/settings.json'`` 만 보고
+        walk-up 하지 않는다 (확인된 동작 — debug log:
+        ``Broken symlink or missing file encountered for
+        settings.json at path: <workspace>/.claude/settings.json``).
+        어댑터는 cwd를 ``workspace/`` 로 고정하므로 spawner 가
+        ``workspace/.claude → ../.claude`` 심볼릭 링크를 만들어
+        둬야 settings.json 이 발견된다. AGENTS.md/CLAUDE.md 의
+        sandbox-into-workspace 브리지 패턴과 동일.
+        """
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        link = agent_root / "workspace" / ".claude"
+        assert link.is_symlink()
+        assert os.readlink(link) == "../.claude"
+        # 링크를 따라가면 실제 settings.json 이 보여야 한다.
+        assert (link / "settings.json").is_file()
+
+    @pytest.mark.parametrize("engine", ["codex", "gemini-cli", "openhands"])
+    def test_no_workspace_claude_symlink_for_other_engines(
+        self, spawner: Spawner, engine: str
+    ) -> None:
+        """심볼릭 링크는 claude-code 전용이다. 다른 엔진의
+        workspace에 ``.claude`` 가 생기면 prune 일관성과 디스크
+        노이즈 측면에서 손해.
+        """
+        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
+        link = agent_root / "workspace" / ".claude"
+        assert not link.exists()
+        assert not link.is_symlink()
