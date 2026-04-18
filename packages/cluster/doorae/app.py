@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -251,6 +253,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.skill_library_service = SkillLibraryService(
             app.state.session_factory,
         )
+    # #126 — in-memory stale-check cache shared between the cron loop
+    # (writer) and the API layer (reader). Stored on app.state so tests
+    # that drive the API without the cron can still seed values.
+    if not getattr(app.state, "skill_stale_cache", None):
+        app.state.skill_stale_cache = {}
+    if not getattr(app.state, "skill_search_cache", None):
+        app.state.skill_search_cache = {}
     # #124 — MCPTemplateService + Fernet-backed secrets. Wired
     # BEFORE AgentLifecycle so we can inject it into the lifecycle
     # constructor; lifecycle skips the overlay step when the service
@@ -359,11 +368,96 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 import structlog
                 structlog.get_logger().info("dev.admin_created", email="admin@doorae.dev")
 
+    # #126 — stale-check cron. Default 6h interval so we don't hammer
+    # GitHub; override via ``DOORAE_SKILL_STALE_INTERVAL_HOURS``. A
+    # value of 0 (or any non-positive) disables the task entirely —
+    # used by tests to avoid background I/O. Similarly, the task is
+    # skipped when an existing ``skill_stale_task`` is already on
+    # app.state (test double).
+    stale_task = getattr(app.state, "skill_stale_task", None)
+    if stale_task is None:
+        interval_hours_env = os.environ.get(
+            "DOORAE_SKILL_STALE_INTERVAL_HOURS", "6"
+        )
+        try:
+            interval_hours = float(interval_hours_env)
+        except ValueError:
+            interval_hours = 6.0
+        if interval_hours > 0:
+            interval_seconds = interval_hours * 3600.0
+            app.state.skill_stale_task = asyncio.create_task(
+                _run_skill_stale_cron(app, interval_seconds),
+                name="skill_stale_cron",
+            )
+
     yield
 
-    # Shutdown: dispose of the engine only if we created it
+    # Shutdown: cancel the stale cron (if we spawned it) and wait for
+    # it to actually stop before the event loop tears down. A gather
+    # with return_exceptions keeps the shutdown path from being
+    # poisoned by CancelledError or a late task exception.
+    task: asyncio.Task | None = getattr(app.state, "skill_stale_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
     if not engine_provided:
         await app.state.engine.dispose()
+
+
+async def _run_skill_stale_cron(app: FastAPI, interval_seconds: float) -> None:
+    """Periodically refresh the stale-check cache on ``app.state``.
+
+    First sweep fires immediately after a short warm-up so a fresh
+    boot doesn't show "nothing stale, nothing checked" for hours; then
+    sleeps for ``interval_seconds`` between each sweep.
+
+    Any per-sweep exception is logged and swallowed — the loop stays
+    alive so a transient GitHub outage doesn't permanently disable the
+    stale badge.
+    """
+    import structlog
+
+    log = structlog.get_logger("skill_library.stale_cron")
+
+    # Tiny warm-up delay so the task doesn't fight the rest of lifespan
+    # for the event loop right at boot; configurable implicitly via the
+    # interval itself but 15s is a good fixed floor.
+    warmup = min(15.0, interval_seconds)
+    try:
+        await asyncio.sleep(warmup)
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        try:
+            service = getattr(app.state, "skill_library_service", None)
+            if service is not None:
+                results = await service.check_all_stale()
+                cache = app.state.skill_stale_cache
+                # Replace wholesale rather than merge — a row that
+                # dropped out of ``check_all_stale`` (was deleted) must
+                # disappear from the cache too, else the UI keeps
+                # flagging zombie skills as stale.
+                cache.clear()
+                cache.update(results)
+                log.info(
+                    "skill_library.stale_swept",
+                    total=len(results),
+                    stale=sum(1 for r in results.values() if r.stale),
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("skill_library.stale_sweep_error", error=str(exc))
+
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            return
 
 
 def create_app(config: DooraeSettings | None = None) -> FastAPI:

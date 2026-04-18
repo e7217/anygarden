@@ -38,7 +38,12 @@ from doorae.db.models import (
     SkillLibraryAudit,
     SkillLibraryEntry,
 )
-from doorae.skills_library.github_fetcher import GitHubFetcher, SkillFetchResult
+from doorae.skills_library.github_fetcher import (
+    GitHubFetchError,
+    GitHubFetcher,
+    GitHubRateLimitError,
+    SkillFetchResult,
+)
 
 
 logger = structlog.get_logger(__name__)
@@ -140,6 +145,28 @@ class _SkillFetcher(Protocol):
     async def fetch_skill(
         self, source: str, name: str, rev: str = "HEAD"
     ) -> SkillFetchResult: ...
+
+    async def resolve_head_sha(
+        self, source: str, rev: str = "HEAD"
+    ) -> str: ...
+
+
+@dataclass
+class StaleCheckResult:
+    """Return shape for ``SkillLibraryService.check_stale`` (#126).
+
+    ``stale`` is the verdict the UI cares about; ``current_sha`` lets
+    the caller log exactly what drift they observed so post-mortems
+    can correlate with upstream commit timelines. ``error`` is set
+    when the probe failed (rate limit, repo gone) — the UI renders
+    those as a separate "couldn't check" state rather than silently
+    treating them as up-to-date.
+    """
+    skill_id: str
+    pinned_rev: str
+    current_sha: Optional[str]
+    stale: bool
+    error: Optional[str] = None
 
 
 def _canonical_tree_hash(files: dict[str, str]) -> str:
@@ -701,6 +728,128 @@ class SkillLibraryService:
             for rel_path, body in (entry.extra_files or {}).items():
                 files[rel_path] = body
         return files
+
+    # ── Stale check (#126) ──────────────────────────────────────
+
+    async def check_stale(
+        self,
+        db: AsyncSession,
+        skill_id: str,
+    ) -> Optional[StaleCheckResult]:
+        """Probe one skill's upstream HEAD and compare against pinned_rev.
+
+        Only issues the lightweight tree-head request (via
+        ``resolve_head_sha``) — full body fetch happens on refresh.
+        Agent-authored rows (``source`` starting with
+        ``agent-authored:``) have no upstream to poll, so they're
+        short-circuited to ``stale=False``.
+
+        Returns ``None`` when the skill id doesn't resolve so the API
+        caller can translate to 404. Any GitHub error short-circuits
+        with ``stale=False`` + ``error`` populated — we don't want a
+        transient 5xx or rate-limit to flip every skill into the
+        "Update available" state.
+        """
+        entry = (
+            await db.execute(
+                select(SkillLibraryEntry).where(
+                    SkillLibraryEntry.id == skill_id
+                )
+            )
+        ).scalar_one_or_none()
+        if entry is None:
+            return None
+        if entry.source.startswith(self._AGENT_AUTHORED_SOURCE_PREFIX):
+            return StaleCheckResult(
+                skill_id=entry.id,
+                pinned_rev=entry.pinned_rev,
+                current_sha=entry.pinned_rev,
+                stale=False,
+            )
+        try:
+            current_sha = await self._fetcher.resolve_head_sha(entry.source, "HEAD")
+        except GitHubRateLimitError as exc:
+            return StaleCheckResult(
+                skill_id=entry.id,
+                pinned_rev=entry.pinned_rev,
+                current_sha=None,
+                stale=False,
+                error=f"rate limited: {exc}",
+            )
+        except GitHubFetchError as exc:
+            return StaleCheckResult(
+                skill_id=entry.id,
+                pinned_rev=entry.pinned_rev,
+                current_sha=None,
+                stale=False,
+                error=f"fetch failed: {exc}",
+            )
+        return StaleCheckResult(
+            skill_id=entry.id,
+            pinned_rev=entry.pinned_rev,
+            current_sha=current_sha,
+            stale=current_sha != entry.pinned_rev,
+        )
+
+    async def check_all_stale(self) -> dict[str, StaleCheckResult]:
+        """Probe every registered skill. Used by the stale-check cron.
+
+        Stops the loop early on a rate-limit error — skills we haven't
+        probed yet stay as "unknown" (absent from the returned dict)
+        so the next cron tick can pick up where this one left off.
+        Other per-skill errors are recorded but don't halt the loop.
+        """
+        async with self._session_factory() as db:
+            entries = (
+                await db.execute(select(SkillLibraryEntry))
+            ).scalars().all()
+
+        results: dict[str, StaleCheckResult] = {}
+        for entry in entries:
+            if entry.source.startswith(self._AGENT_AUTHORED_SOURCE_PREFIX):
+                results[entry.id] = StaleCheckResult(
+                    skill_id=entry.id,
+                    pinned_rev=entry.pinned_rev,
+                    current_sha=entry.pinned_rev,
+                    stale=False,
+                )
+                continue
+            try:
+                current_sha = await self._fetcher.resolve_head_sha(
+                    entry.source, "HEAD"
+                )
+            except GitHubRateLimitError as exc:
+                logger.warning(
+                    "skill_library.stale_check_rate_limited",
+                    skill_id=entry.id,
+                    source=entry.source,
+                    error=str(exc),
+                )
+                # Stop the sweep — subsequent probes would just pile
+                # more errors on the same rate-limit window.
+                break
+            except GitHubFetchError as exc:
+                logger.warning(
+                    "skill_library.stale_check_failed",
+                    skill_id=entry.id,
+                    source=entry.source,
+                    error=str(exc),
+                )
+                results[entry.id] = StaleCheckResult(
+                    skill_id=entry.id,
+                    pinned_rev=entry.pinned_rev,
+                    current_sha=None,
+                    stale=False,
+                    error=f"fetch failed: {exc}",
+                )
+                continue
+            results[entry.id] = StaleCheckResult(
+                skill_id=entry.id,
+                pinned_rev=entry.pinned_rev,
+                current_sha=current_sha,
+                stale=current_sha != entry.pinned_rev,
+            )
+        return results
 
     # ── Agent-authoring (#120) ──────────────────────────────────
 

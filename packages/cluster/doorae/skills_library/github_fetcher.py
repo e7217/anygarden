@@ -21,6 +21,7 @@ decision 1 for the full trade-off.
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Optional
@@ -120,9 +121,29 @@ class GitHubFetcher:
         client: Optional[httpx.AsyncClient] = None,
         *,
         timeout: float = 15.0,
+        token: Optional[str] = None,
     ) -> None:
         self._external_client = client
         self._timeout = timeout
+        # #126: GITHUB_TOKEN support lifts the anonymous 60/h limit to
+        # the authenticated 5000/h limit, which the stale-check cron and
+        # Phase 3's per-skill fan-out of raw blob fetches need. We read
+        # the env var at construction time (not per-request) so a test
+        # can construct a fetcher with ``token=None`` deterministically
+        # even when the process env happens to have a token set.
+        self._token = token if token is not None else os.environ.get("GITHUB_TOKEN")
+
+    def _auth_headers(self) -> dict[str, str]:
+        """Header dict that's empty when no token is configured.
+
+        Keeping this inline-applied rather than setting client defaults
+        so the injected-client test fixture (MockTransport) doesn't need
+        to know about auth headers; the MockTransport handler can still
+        assert on ``request.headers`` when a token test needs to.
+        """
+        if not self._token:
+            return {}
+        return {"Authorization": f"Bearer {self._token}"}
 
     async def fetch_skill(
         self,
@@ -200,6 +221,31 @@ class GitHubFetcher:
             if owns_client:
                 await client.aclose()
 
+    async def resolve_head_sha(
+        self,
+        source: str,
+        rev: str = "HEAD",
+    ) -> str:
+        """Return the current commit SHA for ``source@rev`` without
+        fetching any blob bodies.
+
+        Used by the #126 stale-check cron: the expensive part of
+        ``fetch_skill`` is the per-file raw fan-out, so a periodic
+        "has upstream moved?" probe only needs the tree response's
+        ``sha`` field. A drift here triggers a full ``fetch_skill``
+        at refresh time so the canonical content hash can weigh in
+        on whether the body actually changed (same SHA across
+        branches, for instance, shouldn't mark every skill stale).
+        """
+        client = self._external_client or httpx.AsyncClient(timeout=self._timeout)
+        owns_client = self._external_client is None
+        try:
+            commit_sha, _entries = await self._resolve_tree(client, source, rev)
+            return commit_sha
+        finally:
+            if owns_client:
+                await client.aclose()
+
     # ── internal ──────────────────────────────────────────────────
 
     async def _resolve_tree(
@@ -209,7 +255,11 @@ class GitHubFetcher:
         rev: str,
     ) -> tuple[str, list[dict]]:
         url = self._TREE_URL.format(source=source, rev=rev)
-        response = await client.get(url, params={"recursive": "1"})
+        response = await client.get(
+            url,
+            params={"recursive": "1"},
+            headers=self._auth_headers(),
+        )
         _raise_for_github_status(response)
         body = response.json()
         commit_sha = body.get("sha")
@@ -228,7 +278,10 @@ class GitHubFetcher:
         path: str,
     ) -> str:
         url = self._RAW_URL.format(source=source, sha=sha, path=path)
-        response = await client.get(url)
+        # raw.githubusercontent.com accepts the same token as the REST
+        # API; passing it lifts the per-IP anonymous limit on raw blob
+        # fetches when GITHUB_TOKEN is set.
+        response = await client.get(url, headers=self._auth_headers())
         if response.status_code != 200:
             raise GitHubFetchError(
                 f"raw fetch {source}@{sha}/{path} → {response.status_code}",
