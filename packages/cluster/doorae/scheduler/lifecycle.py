@@ -338,11 +338,14 @@ class AgentLifecycle:
         ).scalars().all()
         files_map: dict[str, str] = {row.path: row.content for row in file_rows}
 
-        # #119 — merge attached library skills into the same files map.
-        # Skill rows live in skill_library; the link table agent_skills
-        # gates which skills apply to this agent. AgentFile entries win
-        # on key collision because they represent an explicit admin
-        # override uploaded directly to the agent.
+        # #119 / #123 — merge attached library skills into the same
+        # files map. Skill rows live in skill_library; the link table
+        # agent_skills gates which skills apply to this agent. Phase 3
+        # (#123) materializes the whole skill directory, so each entry
+        # contributes SKILL.md *plus* every path in ``extra_files``.
+        # AgentFile entries win on key collision because they represent
+        # an explicit admin override uploaded directly to the agent —
+        # ``setdefault`` is load-bearing here.
         skill_rows = (
             await db.execute(
                 select(SkillLibraryEntry)
@@ -354,8 +357,11 @@ class AgentLifecycle:
             )
         ).scalars().all()
         for entry in skill_rows:
-            path = f"skills/{entry.name}/SKILL.md"
-            files_map.setdefault(path, entry.skill_md)
+            files_map.setdefault(
+                f"skills/{entry.name}/SKILL.md", entry.skill_md,
+            )
+            for rel_path, body in (entry.extra_files or {}).items():
+                files_map.setdefault(rel_path, body)
 
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []

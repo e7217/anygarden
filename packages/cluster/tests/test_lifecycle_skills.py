@@ -1,4 +1,4 @@
-"""Tests that lifecycle._build_sync_frame merges attached skills (#119)."""
+"""Tests that lifecycle._build_sync_frame merges attached skills (#119 / #123)."""
 
 from __future__ import annotations
 
@@ -100,3 +100,71 @@ async def test_agent_file_wins_over_skill_file_at_same_path(env):
     assert frame["files"] == {
         "skills/web-design/SKILL.md": "# admin override",
     }
+
+
+@pytest.mark.asyncio
+async def test_sync_frame_merges_skill_extra_files(env):
+    """Phase 3: every entry in ``SkillLibraryEntry.extra_files`` should
+    land in the sync frame alongside the SKILL.md body, so the machine
+    materializes the whole skill directory."""
+    async with env() as db:
+        agent = Agent(engine="echo", name="a", desired_state="idle", actual_state="idle")
+        skill = SkillLibraryEntry(
+            source="owner/repo",
+            name="pdf",
+            pinned_rev="sha",
+            skill_md="# PDF skill",
+            extra_files={
+                "skills/pdf/scripts/extract.py": "print('extract')",
+                "skills/pdf/references/notes.md": "# Notes",
+            },
+            scripts_detected=[
+                "skills/pdf/scripts/extract.py",
+                "skills/pdf/references/notes.md",
+            ],
+            content_hash="h",
+        )
+        db.add_all([agent, skill])
+        await db.flush()
+        db.add(AgentSkill(agent_id=agent.id, skill_library_id=skill.id))
+        await db.commit()
+        agent_id = agent.id
+
+    frame = await _build_frame(env, agent_id)
+    assert frame["files"] == {
+        "skills/pdf/SKILL.md": "# PDF skill",
+        "skills/pdf/scripts/extract.py": "print('extract')",
+        "skills/pdf/references/notes.md": "# Notes",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_file_wins_over_skill_extra_file_at_same_path(env):
+    """AgentFile precedence must extend to extra_files too, not just
+    SKILL.md — otherwise admins couldn't override a script from a
+    library skill."""
+    async with env() as db:
+        agent = Agent(engine="echo", name="a", desired_state="idle", actual_state="idle")
+        skill = SkillLibraryEntry(
+            source="owner/repo",
+            name="pdf",
+            pinned_rev="sha",
+            skill_md="# PDF",
+            extra_files={"skills/pdf/scripts/extract.py": "library version"},
+            scripts_detected=["skills/pdf/scripts/extract.py"],
+            content_hash="h",
+        )
+        db.add_all([agent, skill])
+        await db.flush()
+        db.add(AgentSkill(agent_id=agent.id, skill_library_id=skill.id))
+        db.add(AgentFile(
+            agent_id=agent.id,
+            path="skills/pdf/scripts/extract.py",
+            content="admin override",
+        ))
+        await db.commit()
+        agent_id = agent.id
+
+    frame = await _build_frame(env, agent_id)
+    assert frame["files"]["skills/pdf/scripts/extract.py"] == "admin override"
+    assert frame["files"]["skills/pdf/SKILL.md"] == "# PDF"
