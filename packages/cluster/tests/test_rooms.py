@@ -262,6 +262,52 @@ class TestRoomCRUD:
             assert owner2["last_seen_at"] is not None
 
     @pytest.mark.asyncio
+    async def test_get_room_detail_exposes_agent_engine(self, room_env) -> None:
+        """#102 — ``GET /rooms/{id}`` must carry ``engine`` for agent
+        participants so that non-admin clients (who cannot hit the
+        admin-gated ``/api/v1/agents`` endpoint) still have enough
+        info to render the engine-mark badge on ``EntityAvatar``.
+        User/guest rows keep ``engine=None``."""
+        app = room_env["app"]
+        room = room_env["room"]
+        participant = room_env["participant"]
+        token = room_env["token"]
+
+        sf = app.state.session_factory
+        async with sf() as db:
+            agent = Agent(name="Reviewer", engine="claude-code")
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(
+                room_id=room.id,
+                agent_id=agent.id,
+                role="member",
+            ))
+            await db.commit()
+            await db.refresh(agent)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            parts = resp.json()["participants"]
+            by_kind = {p["kind"]: p for p in parts}
+            assert "agent" in by_kind
+            assert "user" in by_kind
+            # Agent participant surfaces the backing engine string.
+            assert by_kind["agent"]["engine"] == "claude-code"
+            assert by_kind["agent"]["display_name"] == "Reviewer"
+            # Non-agent rows stay None so the client can skip the
+            # engine-mark overlay for users/guests.
+            assert by_kind["user"]["engine"] is None
+            # The owner row's participant id still matches the fixture
+            # so we haven't accidentally swapped rows.
+            assert by_kind["user"]["id"] == participant.id
+
+    @pytest.mark.asyncio
     async def test_add_participant(self, room_env) -> None:
         app = room_env["app"]
         room = room_env["room"]

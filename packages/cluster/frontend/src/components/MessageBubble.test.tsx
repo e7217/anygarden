@@ -23,18 +23,20 @@ vi.mock('@/hooks/useRooms', () => ({
 // Stub EntityAvatar so these presentational tests don't pull in the
 // @lobehub/icons bundle transitively. The avatar is already covered
 // by its own unit tests; here we only care that MessageBubble wires
-// it up with the right kind + id.
+// it up with the right kind + id + engine.
 vi.mock('@/components/EntityAvatar', () => ({
-  EntityAvatar: ({ id, name, kind, 'data-testid': testId }: {
+  EntityAvatar: ({ id, name, kind, engine, 'data-testid': testId }: {
     id: string
     name: string
     kind: string
+    engine?: string
     'data-testid'?: string
   }) => (
     <span
       data-testid={testId ?? 'entity-avatar'}
       data-id={id}
       data-kind={kind}
+      data-engine={engine ?? ''}
     >
       {name.slice(0, 2)}
     </span>
@@ -55,9 +57,19 @@ function baseMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 const participants: Record<string, Participant> = {
-  'agent-rep': { id: 'agent-rep', display_name: 'Rep', kind: 'agent' },
+  'agent-rep': {
+    id: 'agent-rep',
+    display_name: 'Rep',
+    kind: 'agent',
+    engine: 'claude-code',
+  },
   'user-alice': { id: 'user-alice', display_name: 'Alice', kind: 'user' },
-  'agent-1': { id: 'agent-1', display_name: 'Helper', kind: 'agent' },
+  'agent-1': {
+    id: 'agent-1',
+    display_name: 'Helper',
+    kind: 'agent',
+    engine: 'codex',
+  },
 }
 
 describe('MessageBubble — room_query forward variant', () => {
@@ -162,6 +174,37 @@ describe('MessageBubble — avatar wiring', () => {
     const avatar = screen.getByTestId('message-avatar')
     expect(avatar.getAttribute('data-kind')).toBe('agent')
     expect(avatar.getAttribute('data-id')).toBe('agent-rep')
+  })
+
+  it('forwards the agent engine to the avatar (#102)', () => {
+    // The agent fixture carries engine='claude-code'; once Participant
+    // exposes ``engine`` the bubble must pass it through so the avatar
+    // renders the corner engine-mark badge for non-admin viewers.
+    const msg = baseMsg({
+      id: 'me',
+      participant_id: 'agent-rep',
+      content: 'engine check',
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    expect(avatar.getAttribute('data-engine')).toBe('claude-code')
+  })
+
+  it('leaves data-engine empty for user senders (no engine field)', () => {
+    const msg = baseMsg({
+      id: 'mu-eng',
+      participant_id: 'user-alice',
+      content: 'hi',
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    // Fixture omits engine on user-alice; the avatar mock stringifies
+    // undefined to '' so callers can distinguish agent vs user.
+    expect(avatar.getAttribute('data-engine')).toBe('')
   })
 
   it('renders a user-kind avatar for a regular user sender', () => {
