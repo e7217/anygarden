@@ -76,6 +76,11 @@ class SkillOut(BaseModel):
     content_hash: str
     approved_by: Optional[str]
     approved_at: Optional[datetime]
+    # #120 — agent-authored rows carry the author's agent id here;
+    # shared / admin-registered rows keep this NULL.  Exposed so the
+    # admin UI can filter and render a "Promote" button on
+    # agent-authored rows.
+    created_by_agent_id: Optional[str] = None
     fetched_at: datetime
     # Derived status — "pending" / "approved" / "rejected". Computed
     # by the service using approved_by + last audit action.
@@ -166,6 +171,7 @@ async def _serialize(
         content_hash=entry.content_hash,
         approved_by=entry.approved_by,
         approved_at=entry.approved_at,
+        created_by_agent_id=entry.created_by_agent_id,
         fetched_at=entry.fetched_at,
         status=status,
         attached_agent_ids=list(agent_ids),
@@ -212,10 +218,70 @@ async def list_skills(
         default=None,
         description="Filter by derived status.",
     ),
+    filter: Optional[Literal["agent_authored"]] = Query(
+        default=None,
+        description=(
+            "Additional filter orthogonal to ``status``. "
+            "``agent_authored`` keeps only rows with a non-NULL "
+            "``created_by_agent_id`` so the admin UI can surface the "
+            "Agent-authored tab (#120)."
+        ),
+    ),
 ) -> list[SkillOut]:
+    """Admin listing.
+
+    ``status=pending|approved|rejected`` filters by the #125 approval
+    gate. ``filter=agent_authored`` is orthogonal and narrows to rows
+    authored by agents via the MCP channel (#120). The two compose so
+    an admin can, e.g., see "agent-authored rows waiting for promote".
+    """
     service = _service(request)
     pairs = await service.list_with_status(db, status=status)
+    if filter == "agent_authored":
+        pairs = [(entry, st) for entry, st in pairs if entry.created_by_agent_id is not None]
     return [await _serialize(entry, db, status=st) for entry, st in pairs]
+
+
+@router.post("/{skill_id}/promote", response_model=SkillOut)
+async def promote_skill(
+    skill_id: str,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+) -> SkillOut:
+    """Promote an agent-authored skill into the shared library (#120).
+
+    Clears ``created_by_agent_id`` and stamps ``approved_by`` with the
+    admin's user id so ``resolve_for_agent`` will surface the row for
+    any agent that attaches to it afterwards.  The existing
+    ``attach`` endpoint remains the way to fan the skill out to other
+    agents.
+    """
+    service = _service(request)
+    try:
+        entry = await service.promote_to_shared(
+            skill_id=skill_id, admin_user_id=identity.id
+        )
+    except Exception as exc:
+        # The service raises SkillNotFoundError via a string-typed
+        # RuntimeError subclass; map any failure onto a 404/500 the
+        # UI can display.
+        from doorae.skills_library.service import SkillNotFoundError
+        if isinstance(exc, SkillNotFoundError):
+            raise HTTPException(status_code=404, detail=str(exc))
+        raise
+
+    # Bump every already-attached agent so the promotion (which only
+    # changes metadata, not body) still triggers a re-materialize —
+    # the row now carries ``approved_by`` which resolves it through
+    # the #125 gate for any agent, not just the original author.
+    agent_ids = await _attached_agent_ids(db, entry.id)
+    lifecycle = _lifecycle(request)
+    for agent_id in agent_ids:
+        await lifecycle.bump_generation(agent_id)
+
+    status = await service.get_status(db, entry.id) or STATUS_PENDING
+    return await _serialize(entry, db, status=status)
 
 
 @router.delete("/{skill_id}", status_code=204)

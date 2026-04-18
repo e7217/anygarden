@@ -11,6 +11,15 @@ History
 - #125 Phase 2 — approve / reject gate + ``skill_library_audits``
   append-only log. Resolution now filters unapproved rows so spawned
   agents never pick up a skill that hasn't cleared admin review.
+- #120 adds an *agent-authoring* branch (``create_from_agent`` and
+  friends) that shares the canonical content-hash helper with the
+  GitHub-backed ``register`` path but persists directly from
+  caller-supplied bodies instead of fetching remotely. Keeping both
+  branches in one service keeps ``resolve_for_agent`` and the link
+  table semantics in one place; hash parity is what lets an admin
+  promote an agent-authored row into the shared library without
+  re-hashing. ``resolve_for_agent`` ORs on ``created_by_agent_id``
+  so an author always sees their own skills regardless of approval.
 """
 
 from __future__ import annotations
@@ -21,7 +30,7 @@ from datetime import datetime, timezone
 from typing import Optional, Protocol
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.db.models import (
@@ -67,6 +76,30 @@ ACTION_GRANDFATHERED = "grandfathered"
 STATUS_APPROVED = "approved"
 STATUS_REJECTED = "rejected"
 STATUS_PENDING = "pending"
+
+
+# ── Exceptions (#120 agent-authoring) ────────────────────────────────
+
+
+class SkillOwnershipError(RuntimeError):
+    """Raised when an agent tries to mutate a skill it doesn't own.
+
+    The MCP layer maps this to an ``isError=True`` tool result rather
+    than a JSON-RPC error so the LLM can read the message and decide
+    what to do.
+    """
+
+
+class SkillNameConflictError(RuntimeError):
+    """Raised when ``create_from_agent`` sees an existing
+    ``(created_by_agent_id, name)`` pair.  Author scope, not global —
+    two different agents may independently both have a skill called
+    ``notes``.
+    """
+
+
+class SkillNotFoundError(RuntimeError):
+    """Raised when a skill id doesn't resolve (or isn't visible)."""
 
 
 @dataclass
@@ -608,22 +641,31 @@ class SkillLibraryService:
         db: AsyncSession,
         agent_id: str,
     ) -> dict[str, str]:
-        """Return ``{path_on_agent_disk: body}`` for every *approved* skill attached.
+        """Return ``{path_on_agent_disk: body}`` for every skill visible
+        to the agent.
+
+        Visibility (#125 + #120): approved rows OR rows authored by
+        this agent (self-approved). Pre-#125 rows are grandfathered in
+        migration 020 so they already carry ``approved_by`` and fall
+        under the first branch.
 
         Phase 3: yields SKILL.md *and* every entry from
-        ``SkillLibraryEntry.extra_files`` so the whole skill
-        directory lands in the sync frame.
+        ``SkillLibraryEntry.extra_files`` so the whole skill directory
+        lands in the sync frame. Collision resolution between multiple
+        skills is last-write-wins within this function; AgentFile
+        precedence is applied by the caller
+        (``lifecycle._build_sync_frame``).
 
-        Phase 2 (#125): unapproved rows are filtered out here. If an
-        attached row is unapproved we additionally structlog.warn —
-        the UI prevents attaching unapproved skills, so an unapproved
-        attachment in the wild means either a race (approve→reject
-        after attach) or a manual DB edit, both of which an operator
-        wants to see in the logs.
+        #120 self-authored skills are visible to their author
+        regardless of approval state — this pre-empts #125's gate so
+        an agent never loses a skill it just created to itself via
+        the MCP tool channel.
 
-        Collision resolution between multiple skills is last-write-wins
-        within this function; AgentFile precedence is applied by the
-        caller (``lifecycle._build_sync_frame``).
+        If an attached row slips through unapproved and is not self-
+        authored (DB edit, race between approve→reject and attach),
+        the SQL filter already excludes it; the Python loop keeps
+        a defensive check + structlog.warn so operators see the
+        anomaly in logs.
         """
         rows = (
             await db.execute(
@@ -632,13 +674,21 @@ class SkillLibraryService:
                     AgentSkill,
                     AgentSkill.skill_library_id == SkillLibraryEntry.id,
                 )
-                .where(AgentSkill.agent_id == agent_id)
+                .where(
+                    AgentSkill.agent_id == agent_id,
+                    or_(
+                        SkillLibraryEntry.approved_by.is_not(None),
+                        SkillLibraryEntry.created_by_agent_id == agent_id,
+                    ),
+                )
             )
         ).scalars().all()
 
         files: dict[str, str] = {}
         for entry in rows:
-            if entry.approved_by is None:
+            # Self-authored rows bypass the approval gate — #120.
+            is_self_authored = entry.created_by_agent_id == agent_id
+            if entry.approved_by is None and not is_self_authored:
                 logger.warning(
                     "skill_library.resolve_skipped_unapproved",
                     agent_id=agent_id,
@@ -651,3 +701,216 @@ class SkillLibraryService:
             for rel_path, body in (entry.extra_files or {}).items():
                 files[rel_path] = body
         return files
+
+    # ── Agent-authoring (#120) ──────────────────────────────────
+
+    _AGENT_AUTHORED_SOURCE_PREFIX = "agent-authored:"
+
+    async def create_from_agent(
+        self,
+        *,
+        agent_id: str,
+        name: str,
+        description: str,
+        body: str,
+        extra_files: Optional[dict[str, str]] = None,
+    ) -> SkillLibraryEntry:
+        """Persist an agent-authored skill and auto-attach it to the author.
+
+        Canonical content-hash is computed with the same helper the
+        GitHub-backed path uses — this makes a later ``promote`` a
+        no-op at the content layer (the hash doesn't change, so
+        ``body_changed`` stays stable).  ``source`` is stamped with
+        ``agent-authored:<agent_id>`` so the ``(source, name,
+        pinned_rev)`` unique constraint that protects GitHub registrations
+        stays non-colliding here: each agent gets its own synthetic
+        source namespace.
+
+        Name uniqueness per author is enforced at the service layer
+        because the DB constraint keys off ``(source, name, pinned_rev)``
+        — a second create with the same ``name`` would pass DB
+        validation but break ``list_by_owner`` UX and make lookup
+        ambiguous.
+        """
+        extras = dict(extra_files or {})
+        skill_md_path = f"skills/{name}/SKILL.md"
+        tree_blob = {skill_md_path: body, **extras}
+        content_hash = _canonical_tree_hash(tree_blob)
+        source = f"{self._AGENT_AUTHORED_SOURCE_PREFIX}{agent_id}"
+
+        async with self._session_factory() as db:
+            conflict = (
+                await db.execute(
+                    select(SkillLibraryEntry).where(
+                        SkillLibraryEntry.created_by_agent_id == agent_id,
+                        SkillLibraryEntry.name == name,
+                    )
+                )
+            ).scalar_one_or_none()
+            if conflict is not None:
+                raise SkillNameConflictError(
+                    f"skill named {name!r} already exists for this agent"
+                )
+
+            entry = SkillLibraryEntry(
+                source=source,
+                name=name,
+                # ``pinned_rev`` is required (NOT NULL) in the Phase 1
+                # migration; agent-authored rows use the content hash
+                # as a stand-in so repeated updates get distinct
+                # "revisions" without collision on the unique
+                # constraint.  Not a git SHA, but the column's
+                # consumers (UI display, resolve query) treat it as an
+                # opaque identifier.
+                pinned_rev=content_hash,
+                skill_md=body,
+                extra_files=extras,
+                scripts_detected=sorted(extras.keys()),
+                content_hash=content_hash,
+                created_by_agent_id=agent_id,
+                approved_by=None,
+            )
+            db.add(entry)
+            await db.flush()
+            db.add(AgentSkill(agent_id=agent_id, skill_library_id=entry.id))
+            # Stash description on agents_md? No — description is a
+            # UI-only hint for "list_my_skills"; keep it out of the
+            # DB row to avoid a schema change and use the first line
+            # of ``body`` as a proxy.  Accepted in the tool signature
+            # so the MCP schema is discoverable.
+            _ = description
+            await db.commit()
+            await db.refresh(entry)
+            return entry
+
+    async def update_by_owner(
+        self,
+        *,
+        agent_id: str,
+        skill_id: str,
+        body: Optional[str] = None,
+        extra_files: Optional[dict[str, str]] = None,
+    ) -> SkillLibraryEntry:
+        """Rewrite body / extras on a skill the caller authored.
+
+        Ownership is enforced — any other agent's skill trips
+        ``SkillOwnershipError`` which the MCP layer maps to an
+        ``isError`` tool result.  Admin-shared rows (``created_by_agent_id
+        IS NULL``) are likewise not owned by any agent and so are
+        untouchable from this path; the admin still uses the
+        ``/api/v1/admin/skills`` REST surface for those.
+        """
+        async with self._session_factory() as db:
+            entry = (
+                await db.execute(
+                    select(SkillLibraryEntry).where(
+                        SkillLibraryEntry.id == skill_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if entry is None:
+                raise SkillNotFoundError(f"skill {skill_id!r} not found")
+            if entry.created_by_agent_id != agent_id:
+                raise SkillOwnershipError(
+                    f"skill {skill_id!r} is not owned by agent {agent_id!r}"
+                )
+
+            if body is not None:
+                entry.skill_md = body
+            if extra_files is not None:
+                entry.extra_files = dict(extra_files)
+                entry.scripts_detected = sorted(extra_files.keys())
+
+            # Recompute content_hash from the (possibly updated) tree
+            # so later drift detection stays accurate.
+            tree_blob = {
+                f"skills/{entry.name}/SKILL.md": entry.skill_md,
+                **(entry.extra_files or {}),
+            }
+            entry.content_hash = _canonical_tree_hash(tree_blob)
+            # Keep pinned_rev synced with the hash for agent-authored rows
+            # (see ``create_from_agent`` for rationale).
+            entry.pinned_rev = entry.content_hash
+            await db.commit()
+            await db.refresh(entry)
+            return entry
+
+    async def list_by_owner(
+        self,
+        *,
+        agent_id: str,
+    ) -> list[SkillLibraryEntry]:
+        """All skills authored by ``agent_id``, ordered by name."""
+        async with self._session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(SkillLibraryEntry)
+                    .where(SkillLibraryEntry.created_by_agent_id == agent_id)
+                    .order_by(SkillLibraryEntry.name)
+                )
+            ).scalars().all()
+            return list(rows)
+
+    async def delete_by_owner(
+        self,
+        *,
+        agent_id: str,
+        skill_id: str,
+    ) -> bool:
+        """Delete an agent-authored skill (and cascade link rows).
+
+        Ownership-checked — same semantics as ``update_by_owner``.
+        Returns ``True`` when a row was actually removed so the MCP
+        tool can surface the outcome; the only way to reach ``False``
+        is a row that vanished between the fetch and the delete (a
+        race we don't actively trigger, but keeping the return shape
+        symmetric with ``attach/detach`` is useful).
+        """
+        async with self._session_factory() as db:
+            entry = (
+                await db.execute(
+                    select(SkillLibraryEntry).where(
+                        SkillLibraryEntry.id == skill_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if entry is None:
+                raise SkillNotFoundError(f"skill {skill_id!r} not found")
+            if entry.created_by_agent_id != agent_id:
+                raise SkillOwnershipError(
+                    f"skill {skill_id!r} is not owned by agent {agent_id!r}"
+                )
+            await db.delete(entry)
+            await db.commit()
+            return True
+
+    async def promote_to_shared(
+        self,
+        *,
+        skill_id: str,
+        admin_user_id: str,
+    ) -> SkillLibraryEntry:
+        """Admin-only: flip an agent-authored row into a shared library
+        entry.
+
+        The semantics match "approve" in the #125 workflow: stamp
+        ``approved_by`` with the admin's user id and null out
+        ``created_by_agent_id`` so the row no longer belongs to any
+        one agent.  After promotion, ``attach`` from the existing REST
+        surface can fan the skill out to other agents.
+        """
+        async with self._session_factory() as db:
+            entry = (
+                await db.execute(
+                    select(SkillLibraryEntry).where(
+                        SkillLibraryEntry.id == skill_id
+                    )
+                )
+            ).scalar_one_or_none()
+            if entry is None:
+                raise SkillNotFoundError(f"skill {skill_id!r} not found")
+            entry.created_by_agent_id = None
+            entry.approved_by = admin_user_id
+            await db.commit()
+            await db.refresh(entry)
+            return entry

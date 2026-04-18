@@ -488,6 +488,7 @@ class SkillLibraryEntry(Base):
             name="uq_skill_library_source_name_rev",
         ),
         Index("ix_skill_library_source_name", "source", "name"),
+        Index("ix_skill_library_created_by_agent", "created_by_agent_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -514,6 +515,18 @@ class SkillLibraryEntry(Base):
     )
     approved_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
+    )
+    # #120 — agent-authored skills carry the author's agent id here;
+    # shared / admin-registered rows keep this NULL.  The
+    # ``resolve_for_agent`` query ORs on this column so an author
+    # always sees their own skills regardless of approval state, and
+    # the admin ``promote`` endpoint flips it back to NULL to move
+    # the row into the shared library.
+    created_by_agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 

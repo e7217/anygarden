@@ -24,6 +24,7 @@ from doorae.api.v1.graph import router as graph_router
 from doorae.api.v1.skills import router as skills_api_router
 from doorae.api.v1.mcp_templates import router as mcp_templates_router
 from doorae.api.v1.projects import router as projects_router
+from doorae.mcp import router as mcp_rpc_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
 from doorae.api.v1.saved import router as saved_router
@@ -381,6 +382,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(graph_router)
     app.include_router(skills_api_router)
     app.include_router(mcp_templates_router)
+    app.include_router(mcp_rpc_router)
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(invites_router)

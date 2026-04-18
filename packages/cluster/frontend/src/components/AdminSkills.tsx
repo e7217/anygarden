@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
-  Plus, Trash2, BookOpen, RefreshCw, Check, X, Eye, History,
+  Plus, Trash2, BookOpen, RefreshCw, Check, X, Eye, History, Share2, Bot,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
@@ -36,6 +36,9 @@ interface Skill {
   content_hash: string
   approved_by: string | null
   approved_at: string | null
+  // #120 — non-null when an agent authored this skill via MCP. Null
+  // for shared library entries (admin-registered or post-Promote).
+  created_by_agent_id: string | null
   fetched_at: string
   status: SkillStatus
   attached_agent_ids: string[]
@@ -203,6 +206,20 @@ export default function AdminSkills() {
     if (resp.status === 204) await load()
   }, [load])
 
+  // #120 — move an agent-authored skill into the shared library so any
+  // agent can attach to it afterwards.
+  const handlePromote = useCallback(async (skill: Skill) => {
+    if (!window.confirm(
+      `"${skill.name}" 을 공유 라이브러리로 승격하시겠습니까? ` +
+      `다른 에이전트도 이 스킬에 attach 할 수 있게 됩니다.`
+    )) return
+    const resp = await apiFetch(
+      `/api/v1/admin/skills/${skill.id}/promote`,
+      { method: 'POST' },
+    )
+    if (resp.ok) await load()
+  }, [load])
+
   const openPreview = useCallback(async (skill: Skill) => {
     setPreviewTarget(skill)
     setPreview(null)
@@ -358,6 +375,16 @@ export default function AdminSkills() {
                             +{skill.scripts_detected.length} files
                           </Badge>
                         )}
+                        {skill.created_by_agent_id !== null && (
+                          <Badge
+                            variant="outline"
+                            className="text-[var(--color-foreground-muted)]"
+                            title={`Authored by agent ${skill.created_by_agent_id}`}
+                            data-testid={`admin-skill-agent-authored-${skill.id}`}
+                          >
+                            <Bot className="mr-1 h-3 w-3" /> agent
+                          </Badge>
+                        )}
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--color-foreground-muted)]">
                         <code>{skill.source}</code>
@@ -413,6 +440,17 @@ export default function AdminSkills() {
                           data-testid={`admin-skill-attach-${skill.id}`}
                         >
                           Attach
+                        </Button>
+                      )}
+                      {skill.created_by_agent_id !== null && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handlePromote(skill)}
+                          data-testid={`admin-skill-promote-${skill.id}`}
+                          title="Promote to shared library"
+                        >
+                          <Share2 className="mr-1 h-3.5 w-3.5" /> Promote
                         </Button>
                       )}
                       <Button
