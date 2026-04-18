@@ -8,6 +8,8 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from sqlalchemy import select
+
 from doorae.app import create_app
 from doorae.auth.jwt import create_user_token
 from doorae.config import DooraeSettings
@@ -60,20 +62,21 @@ async def skills_env():
             regular.id, regular.email, regular.is_admin, secret=config.jwt_secret
         )
 
+        fetcher = FakeFetcher(
+            SkillFetchResult(
+                commit_sha="c0ffee",
+                skill_md="# Hello\nbody",
+                scripts_detected=["skills/hello/scripts/x.py"],
+            )
+        )
+
         app = create_app(config)
         app.state.engine = engine
         app.state.session_factory = factory
         app.state.machine_bus = bus
         app.state.agent_lifecycle = lifecycle
         app.state.skill_library_service = SkillLibraryService(
-            factory,
-            fetcher=FakeFetcher(
-                SkillFetchResult(
-                    commit_sha="c0ffee",
-                    skill_md="# Hello\nbody",
-                    scripts_detected=["skills/hello/scripts/x.py"],
-                )
-            ),
+            factory, fetcher=fetcher,
         )
 
         transport = ASGITransport(app=app)
@@ -84,6 +87,9 @@ async def skills_env():
                 "regular_token": regular_token,
                 "factory": factory,
                 "agent": agent,
+                # Exposed so tests can mutate ``fetcher.result`` mid-run
+                # to simulate upstream body drift on re-register.
+                "app_state": {"fetcher": fetcher},
             }
 
     await engine.dispose()
@@ -231,6 +237,232 @@ class TestSkillsAPI:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404
+
+    # ── Generation bump (#119 fix) ─────────────────────────────
+    #
+    # Without these bumps the running agent keeps its old generation;
+    # daemon's ``_reconcile_agent`` treats ``current_gen >= desired``
+    # as a no-op and never re-runs the materializer, so skill files
+    # stay missing on disk until the admin manually stops/starts the
+    # agent or the machine daemon restarts.
+
+    async def _generation(self, factory, agent_id: str) -> int:
+        async with factory() as db:
+            row = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            return row.generation
+
+    @pytest.mark.asyncio
+    async def test_attach_bumps_attached_agent_generation(self, skills_env):
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+
+        before = await self._generation(factory, agent.id)
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+
+        resp = await client.post(
+            f"/api/v1/admin/skills/{skill_id}/attach",
+            json={"agent_id": agent.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204
+
+        after = await self._generation(factory, agent.id)
+        assert after == before + 1
+
+    @pytest.mark.asyncio
+    async def test_attach_idempotent_does_not_double_bump(self, skills_env):
+        """Second attach on an already-attached (skill, agent) is a no-op
+        in the DB; that no-op must also skip the bump so we don't force
+        a wasted respawn."""
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+
+        await client.post(
+            f"/api/v1/admin/skills/{skill_id}/attach",
+            json={"agent_id": agent.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        once = await self._generation(factory, agent.id)
+
+        # Second attach on the same pair — should not bump.
+        await client.post(
+            f"/api/v1/admin/skills/{skill_id}/attach",
+            json={"agent_id": agent.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        twice = await self._generation(factory, agent.id)
+        assert twice == once
+
+    @pytest.mark.asyncio
+    async def test_detach_bumps_agent_generation(self, skills_env):
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+        await client.post(
+            f"/api/v1/admin/skills/{skill_id}/attach",
+            json={"agent_id": agent.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        before_detach = await self._generation(factory, agent.id)
+
+        resp = await client.delete(
+            f"/api/v1/admin/skills/{skill_id}/attach/{agent.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204
+        after_detach = await self._generation(factory, agent.id)
+        assert after_detach == before_detach + 1
+
+    @pytest.mark.asyncio
+    async def test_detach_noop_does_not_bump(self, skills_env):
+        """Detach of an (agent, skill) pair that isn't attached must not
+        gratuitously bump the agent's generation."""
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+
+        before = await self._generation(factory, agent.id)
+        resp = await client.delete(
+            f"/api/v1/admin/skills/{skill_id}/attach/{agent.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204
+        after = await self._generation(factory, agent.id)
+        assert after == before
+
+    @pytest.mark.asyncio
+    async def test_delete_skill_bumps_all_attached_agents(self, skills_env):
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+
+        # Add a second agent so we verify "all attached" rather than
+        # "just the first one".
+        async with factory() as db:
+            second = Agent(
+                engine="echo", name="a2",
+                desired_state="idle", actual_state="idle",
+            )
+            db.add(second)
+            await db.commit()
+            await db.refresh(second)
+            second_id = second.id
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+        for aid in (agent.id, second_id):
+            await client.post(
+                f"/api/v1/admin/skills/{skill_id}/attach",
+                json={"agent_id": aid},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        before = {
+            agent.id: await self._generation(factory, agent.id),
+            second_id: await self._generation(factory, second_id),
+        }
+
+        resp = await client.delete(
+            f"/api/v1/admin/skills/{skill_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204
+
+        after = {
+            agent.id: await self._generation(factory, agent.id),
+            second_id: await self._generation(factory, second_id),
+        }
+        assert after[agent.id] == before[agent.id] + 1
+        assert after[second_id] == before[second_id] + 1
+
+    @pytest.mark.asyncio
+    async def test_register_upsert_with_changed_body_bumps_attached(
+        self, skills_env,
+    ):
+        """When register() hits an existing (source, name, rev) row and
+        the skill_md changes, every agent attached to that row needs to
+        pick up the new body on its next spawn — hence a generation bump.
+        Same body = no bump (would force a wasted respawn)."""
+        client = skills_env["client"]
+        token = skills_env["token"]
+        agent = skills_env["agent"]
+        factory = skills_env["factory"]
+        app_state = skills_env["app_state"]
+
+        reg = await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        skill_id = reg.json()["id"]
+        await client.post(
+            f"/api/v1/admin/skills/{skill_id}/attach",
+            json={"agent_id": agent.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        gen_after_attach = await self._generation(factory, agent.id)
+
+        # Re-register with identical body (same fetcher result) — no bump.
+        await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert await self._generation(factory, agent.id) == gen_after_attach
+
+        # Re-register with changed body — bump.
+        app_state["fetcher"].result = SkillFetchResult(
+            commit_sha="c0ffee",
+            skill_md="# Hello\nbody v2",
+            scripts_detected=[],
+        )
+        await client.post(
+            "/api/v1/admin/skills",
+            json={"source": "owner/repo", "name": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert await self._generation(factory, agent.id) == gen_after_attach + 1
 
     @pytest.mark.asyncio
     async def test_attach_nonexistent_agent_returns_404(self, skills_env):

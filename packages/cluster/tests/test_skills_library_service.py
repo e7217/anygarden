@@ -61,14 +61,15 @@ async def test_register_creates_row_and_hashes_skill_md(session_factory):
     )
     service = SkillLibraryService(session_factory, fetcher=fetcher)
 
-    entry = await service.register(source="owner/repo", name="hello")
+    result = await service.register(source="owner/repo", name="hello")
     assert fetcher.calls == [("owner/repo", "hello", "HEAD")]
+    assert result.body_changed is True  # new row
 
     async with session_factory() as db:
         rows = (await db.execute(select(SkillLibraryEntry))).scalars().all()
     assert len(rows) == 1
     row = rows[0]
-    assert row.id == entry.id
+    assert row.id == result.entry.id
     assert row.source == "owner/repo"
     assert row.name == "hello"
     assert row.pinned_rev == "c0ffee"
@@ -90,10 +91,30 @@ async def test_register_same_source_name_rev_is_idempotent(session_factory):
     second = await service.register(source="owner/repo", name="x")
     # Upsert behaviour — same triple reuses the row id, no duplicate
     # row in the DB.
-    assert first.id == second.id
+    assert first.entry.id == second.entry.id
+    # Identical body on re-register → body_changed False (no bump).
+    assert second.body_changed is False
     async with session_factory() as db:
         count = len((await db.execute(select(SkillLibraryEntry))).scalars().all())
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_register_upsert_with_changed_body_reports_changed(session_factory):
+    fetcher = FakeFetcher(
+        SkillFetchResult(commit_sha="same", skill_md="v1", scripts_detected=[])
+    )
+    service = SkillLibraryService(session_factory, fetcher=fetcher)
+    await service.register(source="owner/repo", name="x")
+
+    # Same commit_sha, different body — real-world case when a force-push
+    # or branch retag moves the SHA but the pointed-at content diverges,
+    # and the admin re-registers.
+    fetcher.result = SkillFetchResult(
+        commit_sha="same", skill_md="v2", scripts_detected=[]
+    )
+    result = await service.register(source="owner/repo", name="x")
+    assert result.body_changed is True
 
 
 @pytest.mark.asyncio
@@ -134,11 +155,11 @@ async def test_resolve_for_agent_returns_skill_md_under_skills_path(session_fact
     )
     service = SkillLibraryService(session_factory, fetcher=fetcher)
 
-    entry = await service.register(source="owner/repo", name="hello")
+    result = await service.register(source="owner/repo", name="hello")
     agent = await _seed_agent(session_factory)
 
     async with session_factory() as db:
-        await service.attach(db, agent_id=agent.id, skill_id=entry.id)
+        await service.attach(db, agent_id=agent.id, skill_id=result.entry.id)
         await db.commit()
         resolved = await service.resolve_for_agent(db, agent.id)
     assert resolved == {"skills/hello/SKILL.md": "# Body"}
@@ -150,13 +171,16 @@ async def test_attach_is_idempotent(session_factory):
         SkillFetchResult(commit_sha="sha", skill_md="# Body", scripts_detected=[])
     )
     service = SkillLibraryService(session_factory, fetcher=fetcher)
-    entry = await service.register(source="owner/repo", name="hello")
+    result = await service.register(source="owner/repo", name="hello")
     agent = await _seed_agent(session_factory)
 
     async with session_factory() as db:
-        await service.attach(db, agent_id=agent.id, skill_id=entry.id)
-        await service.attach(db, agent_id=agent.id, skill_id=entry.id)
+        first = await service.attach(db, agent_id=agent.id, skill_id=result.entry.id)
+        second = await service.attach(db, agent_id=agent.id, skill_id=result.entry.id)
         await db.commit()
+
+    assert first is True
+    assert second is False  # no-op on re-attach — signals "no bump"
 
     async with session_factory() as db:
         rows = (await db.execute(select(AgentSkill))).scalars().all()
@@ -169,17 +193,37 @@ async def test_detach_removes_link_without_touching_entry(session_factory):
         SkillFetchResult(commit_sha="sha", skill_md="# Body", scripts_detected=[])
     )
     service = SkillLibraryService(session_factory, fetcher=fetcher)
-    entry = await service.register(source="owner/repo", name="hello")
+    result = await service.register(source="owner/repo", name="hello")
     agent = await _seed_agent(session_factory)
 
     async with session_factory() as db:
-        await service.attach(db, agent_id=agent.id, skill_id=entry.id)
+        await service.attach(db, agent_id=agent.id, skill_id=result.entry.id)
         await db.commit()
-        await service.detach(db, agent_id=agent.id, skill_id=entry.id)
+        did_detach = await service.detach(db, agent_id=agent.id, skill_id=result.entry.id)
         await db.commit()
+
+    assert did_detach is True
 
     async with session_factory() as db:
         rows = (await db.execute(select(AgentSkill))).scalars().all()
         entries = (await db.execute(select(SkillLibraryEntry))).scalars().all()
     assert rows == []
     assert len(entries) == 1  # library entry itself stays
+
+
+@pytest.mark.asyncio
+async def test_detach_noop_returns_false(session_factory):
+    fetcher = FakeFetcher(
+        SkillFetchResult(commit_sha="sha", skill_md="# Body", scripts_detected=[])
+    )
+    service = SkillLibraryService(session_factory, fetcher=fetcher)
+    result = await service.register(source="owner/repo", name="hello")
+    agent = await _seed_agent(session_factory)
+
+    async with session_factory() as db:
+        # Never attached — detach should be a no-op and report False
+        # so the API handler skips the unnecessary bump.
+        did_detach = await service.detach(
+            db, agent_id=agent.id, skill_id=result.entry.id,
+        )
+    assert did_detach is False

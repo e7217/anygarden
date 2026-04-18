@@ -3,6 +3,13 @@
 All endpoints require admin identity (``get_admin_identity`` dependency).
 The actual SkillLibraryService instance lives on ``app.state`` so tests
 can wire a fake fetcher without monkey-patching.
+
+Mutations bump the generation of every agent that should see the
+change so the machine daemon re-materializes the agent directory on
+its next reconcile. Without these bumps the daemon's
+``_reconcile_agent`` path treats ``current_gen >= manifest.generation``
+as a no-op and skipping the materialize step leaves ``skills/`` empty
+on disk even though the DB + manifest already reflect the attachment.
 """
 
 from __future__ import annotations
@@ -67,18 +74,31 @@ def _service(request: Request) -> SkillLibraryService:
     return service
 
 
+def _lifecycle(request: Request):
+    # Typed as Any here to avoid circular imports — AgentLifecycle is
+    # set by the app factory in lifespan. In test setups app.state is
+    # populated before the client issues any request.
+    return request.app.state.agent_lifecycle
+
+
+async def _attached_agent_ids(db: AsyncSession, skill_id: str) -> list[str]:
+    return list(
+        (
+            await db.execute(
+                select(AgentSkill.agent_id).where(
+                    AgentSkill.skill_library_id == skill_id
+                )
+            )
+        ).scalars().all()
+    )
+
+
 async def _serialize(
     entry: SkillLibraryEntry,
     db: AsyncSession,
 ) -> SkillOut:
     """Attach ``attached_agent_ids`` onto an ORM row."""
-    agent_ids = (
-        await db.execute(
-            select(AgentSkill.agent_id).where(
-                AgentSkill.skill_library_id == entry.id
-            )
-        )
-    ).scalars().all()
+    agent_ids = await _attached_agent_ids(db, entry.id)
     return SkillOut(
         id=entry.id,
         source=entry.source,
@@ -103,12 +123,22 @@ async def register_skill(
     db: AsyncSession = Depends(get_db),
 ) -> SkillOut:
     service = _service(request)
-    entry = await service.register(
+    result = await service.register(
         source=body.source,
         name=body.name,
         rev=body.rev,
     )
-    return await _serialize(entry, db)
+    # When the upsert actually changed the stored body, every agent
+    # already attached to this skill needs to pick up the new content
+    # on its next spawn. A pure no-op re-register (same hash) skips
+    # the bump so admins can safely re-hit the endpoint to force a
+    # network refresh without kicking every dependent agent.
+    if result.body_changed:
+        agent_ids = await _attached_agent_ids(db, result.entry.id)
+        lifecycle = _lifecycle(request)
+        for agent_id in agent_ids:
+            await lifecycle.bump_generation(agent_id)
+    return await _serialize(result.entry, db)
 
 
 @router.get("", response_model=list[SkillOut])
@@ -129,6 +159,7 @@ async def list_skills(
 @router.delete("/{skill_id}", status_code=204)
 async def delete_skill(
     skill_id: str,
+    request: Request,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
@@ -139,8 +170,18 @@ async def delete_skill(
     ).scalar_one_or_none()
     if entry is None:
         raise HTTPException(status_code=404, detail="Skill not found")
+
+    # Snapshot attached agent IDs BEFORE the delete — the CASCADE on
+    # agent_skills wipes those rows atomically with the skill row, and
+    # the post-delete query would otherwise come back empty.
+    affected_agent_ids = await _attached_agent_ids(db, skill_id)
+
     await db.delete(entry)
     await db.commit()
+
+    lifecycle = _lifecycle(request)
+    for agent_id in affected_agent_ids:
+        await lifecycle.bump_generation(agent_id)
     return Response(status_code=204)
 
 
@@ -169,8 +210,11 @@ async def attach_skill(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     service = _service(request)
-    await service.attach(db, agent_id=body.agent_id, skill_id=skill_id)
+    did_insert = await service.attach(db, agent_id=body.agent_id, skill_id=skill_id)
     await db.commit()
+    if did_insert:
+        lifecycle = _lifecycle(request)
+        await lifecycle.bump_generation(body.agent_id)
     return Response(status_code=204)
 
 
@@ -183,6 +227,9 @@ async def detach_skill(
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     service = _service(request)
-    await service.detach(db, agent_id=agent_id, skill_id=skill_id)
+    did_delete = await service.detach(db, agent_id=agent_id, skill_id=skill_id)
     await db.commit()
+    if did_delete:
+        lifecycle = _lifecycle(request)
+        await lifecycle.bump_generation(agent_id)
     return Response(status_code=204)
