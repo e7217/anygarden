@@ -130,6 +130,39 @@ class Spawner:
         "claude-code": ".claude/.env",
     }
 
+    # Default ``.claude/settings.json`` body for claude-code agents
+    # whose admin manifest doesn't supply one. claude-agent-sdk loads
+    # only project-scoped settings (``setting_sources=["project"]``),
+    # so without this file every tool call gets denied by the SDK's
+    # default ask-mode and there is no human in the loop to approve.
+    # The trust model matches gemini-cli's ``--approval-mode yolo``
+    # and codex's ``workspace-write`` sandbox: tool calls are
+    # permitted, but the cwd-pinned ``workspace/`` plus the
+    # symlink-into-sandbox bridge for AGENTS.md/CLAUDE.md
+    # (see ``_materialize_agent_dir`` below) keeps the blast radius
+    # the same as the other CLI engines. Admins who want a tighter
+    # policy ship their own ``.claude/settings.json`` via the spawn
+    # manifest — that file is written first and the "is the slot
+    # empty?" check below skips the default.
+    _CLAUDE_CODE_DEFAULT_SETTINGS = (
+        '{\n'
+        '  "permissions": {\n'
+        '    "allow": [\n'
+        '      "WebSearch",\n'
+        '      "WebFetch",\n'
+        '      "Bash",\n'
+        '      "Read",\n'
+        '      "Write",\n'
+        '      "Edit",\n'
+        '      "Glob",\n'
+        '      "Grep",\n'
+        '      "Task",\n'
+        '      "TodoWrite"\n'
+        '    ]\n'
+        '  }\n'
+        '}\n'
+    )
+
     @staticmethod
     def _compose_agents_md(msg: SpawnManifest) -> str:
         """Return the AGENTS.md body rendered from the manifest.
@@ -350,6 +383,21 @@ class Spawner:
                         shutil.rmtree(alias_dir)
                 alias_dir.symlink_to(target_rel)
 
+        # --- Default .claude/settings.json for claude-code ------------
+        # Issue #111. The admin-supplied file (if any) was already
+        # written by the manifest loop above, so the existence check
+        # here is the override mechanism: present → admin wins, absent
+        # → fall back to the permissive default that lets the agent
+        # actually use its tools. See ``_CLAUDE_CODE_DEFAULT_SETTINGS``
+        # for the trust-model rationale.
+        if msg.engine == "claude-code":
+            settings_path = agent_root / ".claude" / "settings.json"
+            if not settings_path.exists():
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(settings_path.parent, 0o700)
+                settings_path.write_text(self._CLAUDE_CODE_DEFAULT_SETTINGS)
+                os.chmod(settings_path, 0o600)
+
         # --- Engine-specific .env -------------------------------------
         if msg.engine_secrets:
             env_rel = self._ENGINE_ENV_PATHS.get(msg.engine)
@@ -468,6 +516,31 @@ class Spawner:
                 # and the engine rejects them. This is the classic
                 # "read-only view via symlink-plus-sandbox" pattern.
                 slot.symlink_to(f"../{slot_name}")
+
+        # --- workspace/.claude bridge for claude-code -----------------
+        # Issue #111. The claude CLI looks for ``settings.json`` at
+        # exactly ``cwd + '/.claude/settings.json'`` and does NOT walk
+        # upward (verified via debug-file output:
+        # ``Broken symlink or missing file encountered for
+        # settings.json at path: <workspace>/.claude/settings.json``).
+        # The adapter pins cwd to ``workspace/``, so without this
+        # bridge the canonical ``.claude/settings.json`` one level up
+        # is invisible to the SDK and the agent reverts to ask-mode
+        # tool denials. Symlinking the whole ``.claude`` directory is
+        # cleaner than a per-file symlink: skill discovery
+        # (``.claude/skills``) and any future ``.claude/`` artifact
+        # come along for free, and the existing
+        # ``agent_root/.claude/skills → ../skills`` link the
+        # materializer creates above keeps working through the
+        # additional indirection.
+        if msg.engine == "claude-code":
+            ws_link = workspace / ".claude"
+            if ws_link.is_symlink() or ws_link.exists():
+                if ws_link.is_symlink() or ws_link.is_file():
+                    ws_link.unlink()
+                else:
+                    shutil.rmtree(ws_link)
+            ws_link.symlink_to("../.claude")
 
         return agent_root
 
