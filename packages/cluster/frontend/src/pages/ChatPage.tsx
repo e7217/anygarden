@@ -18,7 +18,7 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu, Search, ListTodo } from 'lucide-react'
+import { MessageSquare, Menu, Search, ListTodo, PanelLeftOpen } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 
 export interface Participant {
@@ -64,6 +64,24 @@ export default function ChatPage() {
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  // Desktop-only collapsed state (#106). Persists across reloads so
+  // users who prefer a wider main pane don't have to re-collapse on
+  // every visit. Mobile (< md) ignores this — the off-canvas
+  // ``sidebarOpen`` drawer handles visibility there; see Sidebar.tsx.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('doorae_sidebar_collapsed') === 'true'
+    } catch { return false }
+  })
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev
+      try {
+        localStorage.setItem('doorae_sidebar_collapsed', String(next))
+      } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const [searchOpen, setSearchOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'chat' | 'tasks'>('chat')
   const [participantsVersion, setParticipantsVersion] = useState(0)
@@ -117,6 +135,20 @@ export default function ChatPage() {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
+
+  // Ctrl/Cmd+B → toggle sidebar collapse (#106). Mirrors VS Code's
+  // muscle memory; no text-editor bold conflict because doorae's
+  // inputs are plain text.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault()
+        toggleSidebarCollapsed()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [toggleSidebarCollapsed])
 
   // Fetch room details to get participants with display_name/kind
   useEffect(() => {
@@ -372,7 +404,27 @@ export default function ChatPage() {
         selectedRoom={selectedRoom}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebarCollapsed}
       />
+
+      {/* Floating expand button (#106). Appears only when the
+          desktop sidebar is collapsed. Hidden on mobile — the
+          off-canvas flow uses the RoomHeader hamburger / empty-
+          state menu instead. z-30 keeps it below the sidebar
+          (z-40) so an animating sidebar overlays it naturally. */}
+      {sidebarCollapsed && (
+        <button
+          type="button"
+          onClick={toggleSidebarCollapsed}
+          aria-label="Expand sidebar"
+          data-testid="sidebar-expand"
+          title="Expand sidebar (⌘B)"
+          className="hidden md:inline-flex fixed left-2 top-2 z-30 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white p-1.5 text-[var(--color-foreground-muted)] shadow-whisper hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+        </button>
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedRoom && currentRoom ? (
