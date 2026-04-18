@@ -13,6 +13,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -536,6 +537,103 @@ class AgentSkill(Base):
         primary_key=True,
     )
     attached_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class MCPServerTemplate(Base):
+    """An MCP server definition (#124).
+
+    One row per server template (github / slack / notion / any
+    admin-authored custom server). ``config_per_engine`` is the
+    engine-native config body keyed by engine id — the cluster does
+    NOT translate between engines; builtin definitions include one
+    entry per supported engine and custom templates author each engine
+    block explicitly. This keeps the representation faithful to the
+    format each CLI actually reads.
+
+    ``source`` splits the table into ``"builtin"`` (re-seeded at
+    startup via ``seed_builtins``) and ``"custom"`` (authored via the
+    admin API). The split matters for mutation rules — the service
+    layer refuses to PUT/DELETE builtin rows so an admin can't
+    accidentally break a well-known server config. ``created_by`` is
+    NULL on builtins and is the admin user id on customs.
+    """
+
+    __tablename__ = "mcp_server_templates"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_mcp_server_templates_name"),
+        Index("ix_mcp_server_templates_source", "source"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
+    icon: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
+    config_per_engine: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    required_env_vars: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    supported_engines: Mapped[list] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="custom")
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class MCPServerInstance(Base):
+    """A per-agent attachment of an MCP server template (#124).
+
+    Holds the Fernet-encrypted env values in ``env_values_encrypted``
+    (nullable — some templates like ``filesystem`` require no
+    credentials). The ``(template_id, agent_id)`` uniqueness
+    constraint enforces "one instance per template per agent"; the
+    service's attach path upserts so re-submitting credentials
+    overwrites in place instead of creating duplicates.
+
+    ``enabled=False`` lets admins temporarily disable a server
+    without losing the stored credentials — the render path skips
+    disabled rows so the agent's settings file is stripped of that
+    server on its next spawn.
+    """
+
+    __tablename__ = "mcp_server_instances"
+    __table_args__ = (
+        UniqueConstraint(
+            "template_id", "agent_id",
+            name="uq_mcp_server_instances_template_agent",
+        ),
+        Index("ix_mcp_server_instances_agent", "agent_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    template_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("mcp_server_templates.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    env_values_encrypted: Mapped[Optional[bytes]] = mapped_column(
+        LargeBinary, nullable=True, default=None
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
 
 
 class SavedMessage(Base):

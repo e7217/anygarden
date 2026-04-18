@@ -24,6 +24,13 @@ dependencies = [
     "prometheus-client>=0.20",
     "alembic>=1.13",
     "click>=8.1",
+    # #124 — MCP server template catalog. Fernet (symmetric encryption)
+    # for credential at-rest; tomli-w for codex ``.codex/config.toml``
+    # merging (tomllib is stdlib-read-only). Both were previously only
+    # available transitively via python-jose; pin them directly so the
+    # mcp_templates package has an explicit dependency contract.
+    "cryptography>=42",
+    "tomli-w>=1.0",
 ]
 
 [project.optional-dependencies]
