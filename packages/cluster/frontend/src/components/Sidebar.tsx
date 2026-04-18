@@ -896,6 +896,8 @@ function AgentDMListAdmin({
     fetchAgentFiles,
     upsertAgentFile,
     deleteAgentFile,
+    fetchAttachedSkills,
+    fetchSkillPreview,
   } = useAgents()
   const { fetchAgentDMs } = useRooms()
 
@@ -1038,6 +1040,8 @@ function AgentDMListAdmin({
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
         deleteAgentFile={deleteAgentFile}
+        fetchAttachedSkills={fetchAttachedSkills}
+        fetchSkillPreview={fetchSkillPreview}
       />
       <AgentRoomsDialog
         open={roomsDialogOpen}

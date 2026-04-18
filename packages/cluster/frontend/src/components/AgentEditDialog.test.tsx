@@ -2,13 +2,14 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
+import { MemoryRouter } from 'react-router-dom'
 import AgentEditDialog, {
   buildTree,
   isSkillDirNode,
   slugifySkillName,
   type TreeNode,
 } from './AgentEditDialog'
-import type { Agent, AgentFile } from '@/hooks/useAgents'
+import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
 
 // jsdom doesn't implement the Object URL API, so stub them as
 // callable no-ops before the download test spies on them.
@@ -36,7 +37,13 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   }
 }
 
-function renderDialog(initialFiles: AgentFile[] = []) {
+function renderDialog(
+  initialFiles: AgentFile[] = [],
+  opts: {
+    attachedSkills?: AttachedSkill[]
+    skillPreview?: SkillPreview | null
+  } = {},
+) {
   const fetchAgentFiles = vi.fn().mockResolvedValue(initialFiles)
   const upsertAgentFile = vi
     .fn()
@@ -47,18 +54,35 @@ function renderDialog(initialFiles: AgentFile[] = []) {
     }))
   const deleteAgentFile = vi.fn().mockResolvedValue(undefined)
   const updateAgent = vi.fn().mockResolvedValue(makeAgent())
+  const fetchAttachedSkills = vi
+    .fn()
+    .mockResolvedValue(opts.attachedSkills ?? [])
+  const fetchSkillPreview = vi
+    .fn()
+    .mockResolvedValue(opts.skillPreview ?? null)
   render(
-    <AgentEditDialog
-      agent={makeAgent()}
-      open={true}
-      onOpenChange={() => {}}
-      fetchAgentFiles={fetchAgentFiles}
-      updateAgent={updateAgent}
-      upsertAgentFile={upsertAgentFile}
-      deleteAgentFile={deleteAgentFile}
-    />,
+    <MemoryRouter>
+      <AgentEditDialog
+        agent={makeAgent()}
+        open={true}
+        onOpenChange={() => {}}
+        fetchAgentFiles={fetchAgentFiles}
+        updateAgent={updateAgent}
+        upsertAgentFile={upsertAgentFile}
+        deleteAgentFile={deleteAgentFile}
+        fetchAttachedSkills={fetchAttachedSkills}
+        fetchSkillPreview={fetchSkillPreview}
+      />
+    </MemoryRouter>,
   )
-  return { fetchAgentFiles, upsertAgentFile, deleteAgentFile, updateAgent }
+  return {
+    fetchAgentFiles,
+    upsertAgentFile,
+    deleteAgentFile,
+    updateAgent,
+    fetchAttachedSkills,
+    fetchSkillPreview,
+  }
 }
 
 describe('AgentEditDialog — upload/download', () => {
@@ -490,5 +514,59 @@ describe('AgentEditDialog — script extensions (Issue #112)', () => {
     await waitFor(() =>
       expect(screen.queryByTestId('agent-edit-new-file-path')).toBeNull(),
     )
+  })
+})
+
+describe('AgentEditDialog — attached library skills (Issue #133)', () => {
+  it('does not render the section when no skills are attached', async () => {
+    renderDialog([], { attachedSkills: [] })
+    await screen.findByTestId('agent-edit-upload')
+    // Toggle / section / items all keyed by testids.
+    expect(
+      screen.queryByTestId('agent-edit-attached-skills-toggle'),
+    ).toBeNull()
+  })
+
+  it('renders the attached skills section and loads SKILL.md on select', async () => {
+    const skills: AttachedSkill[] = [
+      {
+        id: 'sk-1',
+        name: 'web-design-guidelines',
+        source: 'vercel-labs/agent-skills',
+        pinned_rev: 'ce3e64e4',
+        extra_files: [],
+      },
+    ]
+    const preview: SkillPreview = {
+      id: 'sk-1',
+      name: 'web-design-guidelines',
+      skill_md: '# Web Design\n\nFollow the design system.',
+      extra_files: ['references/guide.md'],
+    }
+    const { fetchSkillPreview } = renderDialog([], {
+      attachedSkills: skills,
+      skillPreview: preview,
+    })
+    await screen.findByTestId('agent-edit-upload')
+
+    // Section header is visible.
+    expect(
+      screen.getByTestId('agent-edit-attached-skills-toggle'),
+    ).toBeInTheDocument()
+    const skillRow = screen.getByTestId(
+      'agent-edit-attached-skill-web-design-guidelines',
+    )
+    fireEvent.click(skillRow)
+
+    await waitFor(() =>
+      expect(fetchSkillPreview).toHaveBeenCalledWith('sk-1'),
+    )
+    const textarea = (await screen.findByTestId(
+      'agent-edit-attached-skill-content',
+    )) as HTMLTextAreaElement
+    expect(textarea.readOnly).toBe(true)
+    expect(textarea.value).toContain('Follow the design system')
+    // "View in Skills" link should be present for navigation.
+    expect(screen.getByTestId('agent-edit-view-in-skills')).toBeInTheDocument()
   })
 })

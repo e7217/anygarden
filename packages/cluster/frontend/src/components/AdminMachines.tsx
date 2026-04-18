@@ -69,6 +69,7 @@ export default function AdminMachines() {
   const {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
+    fetchAttachedSkills, fetchSkillPreview,
   } = useAgents()
   const { projects, rooms: roomsByProject, fetchAgentDMs } = useRooms()
 
@@ -847,6 +848,8 @@ export default function AdminMachines() {
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
         deleteAgentFile={deleteAgentFile}
+        fetchAttachedSkills={fetchAttachedSkills}
+        fetchSkillPreview={fetchSkillPreview}
       />
       <AgentHistoryDialog
         open={historyOpen}
