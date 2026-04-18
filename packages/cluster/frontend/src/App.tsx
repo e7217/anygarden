@@ -7,6 +7,7 @@ import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
 import AdminSkillsPage from '@/pages/AdminSkillsPage'
+import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
 
@@ -58,6 +59,7 @@ export default function App() {
             <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
             <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
             <Route path="/admin/skills" element={<AdminRoute><AdminSkillsPage /></AdminRoute>} />
+            <Route path="/admin/mcp-templates" element={<AdminRoute><AdminMCPTemplatesPage /></AdminRoute>} />
             <Route
               path="/topology"
               element={

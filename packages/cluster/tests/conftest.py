@@ -18,11 +18,20 @@ from doorae.db.models import Base
 
 @pytest.fixture()
 def config() -> DooraeSettings:
-    """Return a test configuration with an in-memory SQLite DB."""
+    """Return a test configuration with an in-memory SQLite DB.
+
+    ``mcp_secrets_key`` is pre-populated with a freshly generated
+    Fernet key so #124's encryption layer stays happy during boot
+    without every test having to spell it out. Tests that need to
+    exercise the missing-key path should construct their own
+    ``DooraeSettings`` without this key.
+    """
+    from cryptography.fernet import Fernet
     return DooraeSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
+        mcp_secrets_key=Fernet.generate_key().decode("ascii"),
     )
 
 

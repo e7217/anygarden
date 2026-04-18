@@ -22,6 +22,7 @@ from doorae.api.v1.machines import router as machines_api_router
 from doorae.api.v1.agents import router as agents_api_router
 from doorae.api.v1.graph import router as graph_router
 from doorae.api.v1.skills import router as skills_api_router
+from doorae.api.v1.mcp_templates import router as mcp_templates_router
 from doorae.api.v1.projects import router as projects_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
@@ -241,13 +242,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize scheduler components (only if not already set by tests)
     if not getattr(app.state, "machine_bus", None):
         app.state.machine_bus = MachineBus()
-    if not getattr(app.state, "agent_lifecycle", None):
-        server_url = f"ws://{config.reachable_host()}:{config.port}"
-        app.state.agent_lifecycle = AgentLifecycle(
-            db_factory=app.state.session_factory,
-            machine_bus=app.state.machine_bus,
-            server_url=server_url,
-        )
     # #119 — SkillLibraryService with the default (network-backed)
     # GitHubFetcher. Tests may pre-populate app.state with a service
     # wired to a fake fetcher so register() stays offline.
@@ -255,6 +249,46 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from doorae.skills_library.service import SkillLibraryService
         app.state.skill_library_service = SkillLibraryService(
             app.state.session_factory,
+        )
+    # #124 — MCPTemplateService + Fernet-backed secrets. Wired
+    # BEFORE AgentLifecycle so we can inject it into the lifecycle
+    # constructor; lifecycle skips the overlay step when the service
+    # is absent, so tests that don't care about MCP can pre-set
+    # ``app.state.agent_lifecycle`` without wiring a key.
+    #
+    # When the operator hasn't configured ``DOORAE_MCP_SECRETS_KEY``,
+    # we fall back to an ephemeral key and log a loud warning — the
+    # cluster still boots (so a fresh install without any MCP usage
+    # keeps working) but attach/detach of encrypted credentials will
+    # surface the mismatch on every restart. Production deployments
+    # that actually use MCP credentials must set the key.
+    if not getattr(app.state, "mcp_template_service", None):
+        from doorae.mcp_templates.encryption import MCPSecrets
+        from doorae.mcp_templates.service import MCPTemplateService
+        # dev_mode=True here means "accept missing key, generate
+        # ephemeral, warn loudly" — same behaviour as the JWT
+        # secret fallback above. Tests don't set the key and don't
+        # care, production operators see the warning in logs.
+        # Name this ``mcp_secrets`` (not ``secrets``) to avoid
+        # shadowing the stdlib ``secrets`` module imported at the
+        # top of the file.
+        mcp_secrets = MCPSecrets.from_config_key(
+            config.mcp_secrets_key, dev_mode=True,
+        )
+        app.state.mcp_template_service = MCPTemplateService(
+            app.state.session_factory,
+            secrets=mcp_secrets,
+        )
+        # Idempotent builtin seed on every boot so templates stay
+        # in sync with the code (new builtin → one restart away).
+        await app.state.mcp_template_service.seed_builtins()
+    if not getattr(app.state, "agent_lifecycle", None):
+        server_url = f"ws://{config.reachable_host()}:{config.port}"
+        app.state.agent_lifecycle = AgentLifecycle(
+            db_factory=app.state.session_factory,
+            machine_bus=app.state.machine_bus,
+            server_url=server_url,
+            mcp_template_service=app.state.mcp_template_service,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state
@@ -346,6 +380,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(agents_api_router)
     app.include_router(graph_router)
     app.include_router(skills_api_router)
+    app.include_router(mcp_templates_router)
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(invites_router)

@@ -26,6 +26,13 @@ class DooraeSettings(BaseSettings):
     jwt_expire_hours: int = 24
     log_level: str = "INFO"
     dev: bool = False  # DOORAE_DEV=1 for development mode
+    # #124 — Fernet symmetric key for encrypting MCP server credentials
+    # at rest (``mcp_server_instances.env_values_encrypted``). Loaded
+    # from ``DOORAE_MCP_SECRETS_KEY``. Empty string falls back to a
+    # process-local ephemeral key when ``dev=True`` (with a loud
+    # warning); production deployments MUST set this explicitly or the
+    # MCPSecrets initializer will refuse to boot.
+    mcp_secrets_key: str = ""
 
     model_config = SettingsConfigDict(env_prefix="DOORAE_")
 

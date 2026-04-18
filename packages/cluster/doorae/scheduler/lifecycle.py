@@ -30,10 +30,23 @@ class AgentLifecycle:
     """Declarative lifecycle: the server pushes *desired* state to machines
     and reacts to state reports from them."""
 
-    def __init__(self, db_factory, machine_bus: MachineBus, server_url: str = "") -> None:
+    def __init__(
+        self,
+        db_factory,
+        machine_bus: MachineBus,
+        server_url: str = "",
+        *,
+        mcp_template_service=None,
+    ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
         self._server_url = server_url
+        # #124 — Optional MCP template service. Kept optional so
+        # tests that only care about the skill library path don't
+        # need to wire a secrets key. When None, ``_build_sync_frame``
+        # skips the MCP overlay step entirely (no-op for agents that
+        # have no instances attached anyway).
+        self._mcp_template_service = mcp_template_service
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -362,6 +375,51 @@ class AgentLifecycle:
             )
             for rel_path, body in (entry.extra_files or {}).items():
                 files_map.setdefault(rel_path, body)
+
+        # #124 — overlay attached MCP server instances onto the
+        # engine-specific settings file. When the admin already
+        # uploaded a settings file as an AgentFile, we merge the
+        # template overlays into that base so admin-authored keys
+        # (permissions / env / custom mcpServers overrides) are
+        # preserved — but when there's no admin file the overlay
+        # seeds a fresh one. ``MCPTemplateService.render_for_agent``
+        # returns ``{}`` for agents with no attachments or engines
+        # without MCP support, making this block cheap.
+        if self._mcp_template_service is not None:
+            from doorae.mcp_templates.merge import (
+                merge_for_engine,
+                render_instance,
+                settings_path_for_engine,
+            )
+
+            settings_path = settings_path_for_engine(agent.engine)
+            if settings_path is not None:
+                pairs = await self._mcp_template_service.list_instances_for_agent(
+                    db, agent.id,
+                )
+                overlays = []
+                secrets = self._mcp_template_service._secrets
+                for instance, template in pairs:
+                    if not instance.enabled:
+                        continue
+                    env_values = secrets.decrypt_dict(
+                        instance.env_values_encrypted,
+                    )
+                    rendered = render_instance(
+                        name=template.name,
+                        config_per_engine=template.config_per_engine or {},
+                        env_values=env_values,
+                        engine=agent.engine,
+                    )
+                    if rendered is not None:
+                        overlays.append(rendered)
+                if overlays:
+                    admin_content = files_map.get(settings_path)
+                    files_map[settings_path] = merge_for_engine(
+                        engine=agent.engine,
+                        admin_content=admin_content,
+                        overlays=overlays,
+                    )
 
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []

@@ -24,7 +24,7 @@ import AgentHistoryDialog from '@/components/AgentHistoryDialog'
 import AvatarPickerDialog from '@/components/AvatarPickerDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen,
+  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -716,6 +716,17 @@ export default function Sidebar({
             >
               <BookOpen className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
               Skills
+            </button>
+            <button
+              onClick={() => go('/admin/mcp-templates')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname === '/admin/mcp-templates'
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <Plug className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              MCP Servers
             </button>
             <button
               onClick={() => go('/topology')}
