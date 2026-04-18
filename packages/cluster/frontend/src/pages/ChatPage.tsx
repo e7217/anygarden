@@ -84,6 +84,17 @@ export default function ChatPage() {
     return null
   }, [selectedRoom, rooms, agentDMs])
 
+  // #116 — 1:1 agent DMs hide controls that are meaningless (agents
+  // 1/1 badge, representative select with only one choice, participant
+  // toggle, sub-room / edit room / manage-agents) or that break the
+  // DM invariant (invite links). The guard lives here at the call
+  // site because RoomHeader / RoomSettingsMenu already treat an
+  // undefined handler/value as "hide", so we just flip the relevant
+  // props to undefined when ``isDm`` is true. Uses ``!!`` so that a
+  // null currentRoom (waiting for the room details fetch) never
+  // accidentally flips the guard true.
+  const isDm = !!currentRoom?.is_dm
+
   // Walk the ``parent_room_id`` chain upward and return the parent
   // breadcrumb (root → direct parent). Rooms from the same
   // project always share the same ``rooms[project_id]`` array, so
@@ -389,34 +400,67 @@ export default function ChatPage() {
               <RoomHeader
                 roomName={currentRoom.name}
                 connected={connected}
-                participantCount={Object.keys(participants).length}
-                agentsOnline={agentsOnline}
-                agentsTotal={agentsTotal}
+                // #116 — hide participant toggle, agents liveness, and
+                // representative select in agent DMs (fixed 1:1, no
+                // meaningful variance in any of those values).
+                participantCount={
+                  isDm ? undefined : Object.keys(participants).length
+                }
+                agentsOnline={isDm ? undefined : agentsOnline}
+                agentsTotal={isDm ? undefined : agentsTotal}
                 parentBreadcrumb={parentBreadcrumb}
                 representativeAgentId={currentRoom.representative_agent_id}
-                agentParticipants={user?.is_admin ? agentParticipants : undefined}
+                agentParticipants={
+                  isDm
+                    ? undefined
+                    : user?.is_admin
+                      ? agentParticipants
+                      : undefined
+                }
                 isDm={currentRoom.is_dm}
                 dmAgent={currentRoom.is_dm ? dmAgent : undefined}
-                onSetRepresentative={user?.is_admin ? handleSetRepresentative : undefined}
-                onManageAgents={user?.is_admin ? () => setAgentDialogOpen(true) : undefined}
-                onCreateSubRoom={() => setSubRoomDialogOpen(true)}
-                onEditRoom={() => setRoomEditOpen(true)}
-                onManageInvites={
-                  // Match the server's auth rule in invites.py: global
-                  // admin OR a room-level admin/owner Participant.
-                  // The backend stays the sole authority — hiding the
-                  // button is purely to avoid leading non-privileged
-                  // users to a 403.
-                  (() => {
-                    if (user?.is_admin) return () => setRoomInvitesOpen(true)
-                    const myRole = myParticipantId
-                      ? participants[myParticipantId]?.role
+                onSetRepresentative={
+                  isDm
+                    ? undefined
+                    : user?.is_admin
+                      ? handleSetRepresentative
                       : undefined
-                    if (myRole === 'admin' || myRole === 'owner') {
-                      return () => setRoomInvitesOpen(true)
-                    }
-                    return undefined
-                  })()
+                }
+                // #116 — Sub-room / Edit room / Invite links / Manage
+                // agents are structurally meaningless (sub-rooms of a
+                // DM, inviting a third party) or redundant (managing
+                // the sole agent) in DM rooms. Drop the handlers so
+                // RoomSettingsMenu hides those menu items via its
+                // existing "undefined ⇒ omit" contract.
+                onManageAgents={
+                  isDm
+                    ? undefined
+                    : user?.is_admin
+                      ? () => setAgentDialogOpen(true)
+                      : undefined
+                }
+                onCreateSubRoom={
+                  isDm ? undefined : () => setSubRoomDialogOpen(true)
+                }
+                onEditRoom={isDm ? undefined : () => setRoomEditOpen(true)}
+                onManageInvites={
+                  isDm
+                    ? undefined
+                    : // Match the server's auth rule in invites.py: global
+                      // admin OR a room-level admin/owner Participant.
+                      // The backend stays the sole authority — hiding the
+                      // button is purely to avoid leading non-privileged
+                      // users to a 403.
+                      (() => {
+                        if (user?.is_admin) return () => setRoomInvitesOpen(true)
+                        const myRole = myParticipantId
+                          ? participants[myParticipantId]?.role
+                          : undefined
+                        if (myRole === 'admin' || myRole === 'owner') {
+                          return () => setRoomInvitesOpen(true)
+                        }
+                        return undefined
+                      })()
                 }
                 onStopAllAgents={user?.is_admin ? async () => {
                   if (!selectedRoom) return
@@ -424,16 +468,24 @@ export default function ChatPage() {
                 } : undefined}
                 onDeleteRoom={canRemoveParticipants ? handleDeleteRoom : undefined}
                 onOpenSidebar={() => setSidebarOpen(true)}
-                onToggleParticipants={() => setParticipantsOpen((v) => !v)}
+                onToggleParticipants={
+                  isDm ? undefined : () => setParticipantsOpen((v) => !v)
+                }
               />
-              <ParticipantListPopover
-                participants={participants}
-                presence={presence}
-                open={participantsOpen}
-                onClose={() => setParticipantsOpen(false)}
-                myParticipantId={myParticipantId}
-                onRemove={canRemoveParticipants ? handleRemoveParticipant : undefined}
-              />
+              {/* #116 — no participant toggle in DMs means the
+                  popover has no entry point; skipping the mount
+                  prevents stale ``participantsOpen=true`` from
+                  silently reopening it after a room switch. */}
+              {!isDm && (
+                <ParticipantListPopover
+                  participants={participants}
+                  presence={presence}
+                  open={participantsOpen}
+                  onClose={() => setParticipantsOpen(false)}
+                  myParticipantId={myParticipantId}
+                  onRemove={canRemoveParticipants ? handleRemoveParticipant : undefined}
+                />
+              )}
             </div>
             {/* Chat / Tasks tab bar + Search */}
             <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4">
