@@ -504,10 +504,16 @@ class SkillLibraryEntry(Base):
     # extra files we didn't materialize".
     scripts_detected: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    # Phase 2 will wire approval. NULL in Phase 1 — spawner ignores
-    # this column until the approval gate lands.
+    # Phase 2 (#125) wires the approval gate. ``approved_by`` holds the
+    # admin user id; NULL means the skill is still pending review and
+    # ``resolve_for_agent`` / the attach endpoint both refuse it.
+    # ``approved_at`` is the companion timestamp — stored separately so
+    # the approval moment survives the SET NULL on user delete.
     approved_by: Mapped[Optional[str]] = mapped_column(
         String(36), nullable=True, default=None
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
     )
     fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
@@ -537,6 +543,47 @@ class AgentSkill(Base):
         primary_key=True,
     )
     attached_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class SkillLibraryAudit(Base):
+    """Append-only audit log for skill library state changes (#125 Phase 2).
+
+    Every register / approve / reject / delete / update / attach /
+    detach operation lands a row here so administrators have a
+    reviewable trail of "who did what to this skill". Rows are never
+    updated or deleted by the application — the FKs use ``SET NULL``
+    on delete so audit entries survive even after the referenced
+    skill or actor is purged, which is the whole point of an audit
+    trail (you want to know *that* a deletion happened, even after the
+    skill row itself is gone).
+
+    ``action`` is a free-form ``String(32)`` rather than a DB enum so
+    adding new actions (Phase 5 stale-check re-approvals, etc.) is a
+    code-only change. ``detail`` is JSON so the schema can evolve per
+    action type without requiring a migration — the service layer
+    chooses the shape per call site (see ``020_skill_approve_and_audit``
+    migration docstring for the current conventions).
+    """
+
+    __tablename__ = "skill_library_audits"
+    __table_args__ = (
+        Index("ix_skill_library_audits_skill_at", "skill_library_id", "at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    skill_library_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("skill_library.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    actor_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class MCPServerTemplate(Base):

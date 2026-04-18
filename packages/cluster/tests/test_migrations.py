@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "019"
+                assert version == "020"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -185,6 +185,71 @@ class TestMigrations:
             except OSError:
                 pass
 
+    def test_020_grandfathers_phase1_skills(self) -> None:
+        """Migration 020 auto-approves Phase 1 skill_library rows and
+        writes a ``grandfathered`` audit entry. Guards against a future
+        migration edit that silently breaks the data migration path."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            # Stop at 019 so we can seed a pending Phase 1 skill before
+            # 020 runs its grandfather pass.
+            command.upgrade(cfg, "019")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO users "
+                        "(id, email, password_hash, is_admin, "
+                        "is_anonymous, created_at) "
+                        "VALUES ('admin-1', 'a@x', 'h', 1, 0, "
+                        "'2026-01-01T00:00:00+00:00')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO skill_library "
+                        "(id, source, name, pinned_rev, skill_md, "
+                        "extra_files, scripts_detected, content_hash, "
+                        "approved_by, fetched_at) "
+                        "VALUES ('sk-1', 'owner/repo', 'hello', 'sha', "
+                        "'body', '{}', '[]', 'h', NULL, "
+                        "'2026-01-02T00:00:00+00:00')"
+                    )
+                )
+            engine.dispose()
+
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text(
+                        "SELECT approved_by, approved_at "
+                        "FROM skill_library WHERE id='sk-1'"
+                    )
+                ).one()
+                assert row[0] == "admin-1"
+                assert row[1] is not None
+
+                audit = conn.execute(
+                    text(
+                        "SELECT action, actor_user_id "
+                        "FROM skill_library_audits "
+                        "WHERE skill_library_id='sk-1'"
+                    )
+                ).one()
+                assert audit[0] == "grandfathered"
+                assert audit[1] == "admin-1"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
     def test_downgrade_to_base_and_back(self) -> None:
         """Full round-trip: head → base → head must succeed."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -242,7 +307,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "019"
+                assert version == "020"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -282,7 +347,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "019"
+                assert version == "020"
             sync_engine.dispose()
         finally:
             try:
@@ -316,7 +381,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "019"
+            assert head == "020"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -418,7 +483,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "019"
+                assert version == "020"
             sync_engine.dispose()
         finally:
             try:
