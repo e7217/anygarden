@@ -355,6 +355,11 @@ class MachineAgentOut(BaseModel):
     actual_state: str
     reasoning_effort: Optional[str] = None
     rooms: list[str] = []
+    # Issue #101 — avatar override so the AdminMachines detail row
+    # can render the admin's customized avatar without a second
+    # lookup against the cluster-wide /agents list.
+    avatar_kind: Optional[str] = None
+    avatar_value: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -399,6 +404,8 @@ async def list_machine_agents(
             actual_state=agent.actual_state,
             reasoning_effort=agent.reasoning_effort,
             rooms=list(room_rows),
+            avatar_kind=agent.avatar_kind,
+            avatar_value=agent.avatar_value,
         ))
     return results
 

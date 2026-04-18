@@ -147,4 +147,64 @@ describe('EntityAvatar', () => {
     const root = getByTestId('sz')
     expect(root.className).toContain('mr-2')
   })
+
+  // Issue #101 — admin-customizable avatar (emoji / lucide).
+  it('renders an emoji body when avatarKind=emoji', () => {
+    const { getByTestId, queryByText } = render(
+      <EntityAvatar
+        id="a-1"
+        name="Planner"
+        kind="agent"
+        avatarKind="emoji"
+        avatarValue="🤖"
+      />,
+    )
+    expect(getByTestId('entity-avatar-emoji')).toHaveTextContent('🤖')
+    // The name-derived initial must NOT appear when the emoji takes over.
+    expect(queryByText('P')).toBeNull()
+  })
+
+  it('renders a lucide icon body when avatarKind=lucide with a known name', () => {
+    const { getByTestId, queryByText } = render(
+      <EntityAvatar
+        id="a-2"
+        name="Searcher"
+        kind="agent"
+        avatarKind="lucide"
+        avatarValue="Search"
+      />,
+    )
+    expect(getByTestId('entity-avatar-lucide')).toBeInTheDocument()
+    expect(queryByText('S')).toBeNull()
+  })
+
+  it('falls back to initials for an unknown lucide name', () => {
+    const { queryByTestId, getByText } = render(
+      <EntityAvatar
+        id="a-3"
+        name="Bogus Name"
+        kind="agent"
+        avatarKind="lucide"
+        avatarValue="DefinitelyNotALucideIcon"
+      />,
+    )
+    expect(queryByTestId('entity-avatar-lucide')).toBeNull()
+    expect(queryByTestId('entity-avatar-emoji')).toBeNull()
+    expect(getByText('BN')).toBeInTheDocument()
+  })
+
+  it('keeps the engine glyph overlay for agents even when a custom avatar is set', () => {
+    const { getByTestId } = render(
+      <EntityAvatar
+        id="a-4"
+        name="Claude"
+        kind="agent"
+        engine="claude-code"
+        avatarKind="emoji"
+        avatarValue="⚡"
+      />,
+    )
+    expect(getByTestId('entity-avatar-emoji')).toHaveTextContent('⚡')
+    expect(getByTestId('entity-avatar-engine-glyph')).toBeInTheDocument()
+  })
 })

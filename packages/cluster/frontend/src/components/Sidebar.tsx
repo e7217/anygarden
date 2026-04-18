@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
-import { EntityAvatar } from '@/components/EntityAvatar'
+import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
@@ -832,6 +832,10 @@ function AgentDMListAdmin({
               kind="agent"
               engine={agent?.engine}
               size="xs"
+              avatarKind={
+                (agent?.avatar_kind as AvatarKind | null | undefined) ?? null
+              }
+              avatarValue={agent?.avatar_value ?? null}
             />
             <PresenceDot
               variant="agent"

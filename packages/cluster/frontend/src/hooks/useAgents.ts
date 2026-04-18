@@ -20,6 +20,10 @@ export interface Agent {
   // surfaces it as a tooltip on ``pending`` / ``crashed`` state
   // badges so admins can tell at a glance why an agent is stuck.
   last_crash_reason?: string | null;
+  // Issue #101 — admin-chosen avatar override. Both NULL means
+  // the UI falls back to the seed-driven initial from EntityAvatar.
+  avatar_kind?: string | null;
+  avatar_value?: string | null;
 }
 
 export interface EngineModel {
@@ -126,7 +130,18 @@ export function useAgents() {
 
   const updateAgent = useCallback(async (
     id: string,
-    patch: { name?: string; agents_md?: string | null; agents_md_set?: boolean },
+    patch: {
+      name?: string;
+      agents_md?: string | null;
+      agents_md_set?: boolean;
+      // Issue #101 — admin-chosen avatar override. Follows the same
+      // ``*_set`` idiom as ``agents_md`` to distinguish "omit the
+      // field" from "clear to null".
+      avatar_kind?: string | null;
+      avatar_kind_set?: boolean;
+      avatar_value?: string | null;
+      avatar_value_set?: boolean;
+    },
   ) => {
     const resp = await apiFetch(`/api/v1/agents/${id}`, {
       method: 'PUT',

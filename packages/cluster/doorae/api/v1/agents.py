@@ -73,6 +73,15 @@ class AgentUpdate(BaseModel):
     # the new runtime) which ``update_agent`` already triggers.
     runtime: Optional[str] = None
     runtime_set: bool = False
+    # Issue #101 — avatar kind/value. Pure UI metadata; the PATCH
+    # handler skips ``bump_generation`` when these are the only
+    # fields that changed, so an admin reshuffling avatars never
+    # triggers spurious agent restarts. ``avatar_kind`` is
+    # ``'emoji'``, ``'lucide'``, or ``None`` (reset to initials).
+    avatar_kind: Optional[str] = None
+    avatar_kind_set: bool = False
+    avatar_value: Optional[str] = None
+    avatar_value_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -96,6 +105,10 @@ class AgentOut(BaseModel):
     # badge next to the engine picker without re-querying.
     runtime: str = "python"
     last_crash_reason: Optional[str] = None
+    # Issue #101 — admin-chosen avatar override. Both NULL means
+    # the UI falls back to the seed-driven initial.
+    avatar_kind: Optional[str] = None
+    avatar_value: Optional[str] = None
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -229,33 +242,49 @@ async def update_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    changed = False
+    # Two change counters so avatar-only edits can skip the
+    # ``bump_generation`` call: avatars are UI metadata and do not
+    # flow into the machine-side materializer, so restarting the
+    # subprocess for an emoji swap would be surprising. Any other
+    # mutable field flips ``non_avatar_changed`` and keeps the
+    # existing "mutate → generation bump → respawn" semantics.
+    non_avatar_changed = False
+    avatar_changed = False
     if body.name is not None:
         agent.name = body.name
-        changed = True
+        non_avatar_changed = True
     if body.agents_md_set:
         # Explicit opt-in flag is needed to distinguish "omit the
         # field" (no change) from "set the field to null" (clear
         # the role/rules body).
         agent.agents_md = body.agents_md
-        changed = True
+        non_avatar_changed = True
     if body.reasoning_effort_set:
         agent.reasoning_effort = body.reasoning_effort
-        changed = True
+        non_avatar_changed = True
     if body.model_set:
         agent.model = body.model
-        changed = True
+        non_avatar_changed = True
     if body.runtime_set and body.runtime is not None:
         # Issue #73 — runtime change needs a respawn to take effect,
         # which ``bump_generation`` below will trigger.
         agent.runtime = body.runtime
-        changed = True
+        non_avatar_changed = True
+    if body.avatar_kind_set:
+        agent.avatar_kind = body.avatar_kind
+        avatar_changed = True
+    if body.avatar_value_set:
+        agent.avatar_value = body.avatar_value
+        avatar_changed = True
 
-    await db.commit()
-    await db.refresh(agent)
+    if non_avatar_changed or avatar_changed:
+        await db.commit()
+        await db.refresh(agent)
 
-    # Bump generation and push sync to machine if config changed
-    if changed:
+    # Bump generation and push sync to machine only when a non-avatar
+    # field changed. Avatar-only edits reach the UI via the REST
+    # response alone.
+    if non_avatar_changed:
         lifecycle = request.app.state.agent_lifecycle
         await lifecycle.bump_generation(agent_id)
 

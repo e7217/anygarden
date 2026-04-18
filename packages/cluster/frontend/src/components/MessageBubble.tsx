@@ -5,7 +5,7 @@ import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
 import RoomQueryResultCard from '@/components/RoomQueryResultCard'
 import BrailleSpinner from '@/components/BrailleSpinner'
-import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
+import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/EntityAvatar'
 import { apiFetch } from '@/lib/api'
 import { useRooms } from '@/hooks/useRooms'
 import {
@@ -144,6 +144,16 @@ export default memo(function MessageBubble({
       kind={avatarKind}
       engine={participant?.engine}
       size="sm"
+      // Issue #101 — agent participants carry ``avatar_*`` through
+      // ParticipantOut. Users/guests always pass null (kind='user'
+      // ignores these fields inside EntityAvatar anyway, but being
+      // explicit keeps the call-site easy to audit).
+      avatarKind={
+        isAgent
+          ? ((participant?.avatar_kind as AvatarKind | null | undefined) ?? null)
+          : null
+      }
+      avatarValue={isAgent ? (participant?.avatar_value ?? null) : null}
       data-testid="message-avatar"
     />
   )
