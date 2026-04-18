@@ -132,6 +132,14 @@ class TestOnMessage:
         # configuration — pin the exact value.
         assert opts["setting_sources"] == ["project"]
 
+        # Issue #134 — permission_mode must be bypassPermissions so
+        # MCP tool calls aren't gated by an interactive approval
+        # prompt that will never be answered in a headless agent.
+        # Without this, any attached MCP (GitHub, Linear, etc.) is
+        # effectively unusable: Claude reports "no permission" and
+        # never actually invokes the tool.
+        assert opts["permission_mode"] == "bypassPermissions"
+
     @pytest.mark.asyncio
     async def test_system_prompt_only_passed_when_set(
         self, fake_sdk: list[dict[str, Any]]
