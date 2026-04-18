@@ -20,6 +20,27 @@ vi.mock('@/hooks/useRooms', () => ({
   }),
 }))
 
+// Stub EntityAvatar so these presentational tests don't pull in the
+// @lobehub/icons bundle transitively. The avatar is already covered
+// by its own unit tests; here we only care that MessageBubble wires
+// it up with the right kind + id.
+vi.mock('@/components/EntityAvatar', () => ({
+  EntityAvatar: ({ id, name, kind, 'data-testid': testId }: {
+    id: string
+    name: string
+    kind: string
+    'data-testid'?: string
+  }) => (
+    <span
+      data-testid={testId ?? 'entity-avatar'}
+      data-id={id}
+      data-kind={kind}
+    >
+      {name.slice(0, 2)}
+    </span>
+  ),
+}))
+
 function baseMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
     type: 'message',
@@ -125,6 +146,77 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.queryByTestId('room-query-forward')).toBeNull()
     expect(screen.queryByTestId('room-query-result-q1')).toBeNull()
     expect(screen.getByText('just a hello')).toBeInTheDocument()
+  })
+})
+
+describe('MessageBubble — avatar wiring', () => {
+  it('renders an agent-kind avatar for an agent sender', () => {
+    const msg = baseMsg({
+      id: 'ma',
+      participant_id: 'agent-rep',
+      content: 'hi from an agent',
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    expect(avatar.getAttribute('data-kind')).toBe('agent')
+    expect(avatar.getAttribute('data-id')).toBe('agent-rep')
+  })
+
+  it('renders a user-kind avatar for a regular user sender', () => {
+    const msg = baseMsg({
+      id: 'mu',
+      participant_id: 'user-alice',
+      content: 'hi',
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    expect(avatar.getAttribute('data-kind')).toBe('user')
+    expect(avatar.getAttribute('data-id')).toBe('user-alice')
+  })
+
+  it('still renders an avatar for orphan rows (participant_id=null)', () => {
+    const msg = baseMsg({
+      id: 'mo',
+      participant_id: null as unknown as string,
+      content: 'ghost message',
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    // Orphans get a stable per-message seed so two orphans don't
+    // accidentally share a color.
+    expect(avatar.getAttribute('data-id')).toBe('orphan-mo')
+    expect(avatar.getAttribute('data-kind')).toBe('user')
+  })
+
+  it('flags anonymous guests as kind=guest', () => {
+    const guestParticipants: Record<string, Participant> = {
+      'guest-1': {
+        id: 'guest-1',
+        display_name: 'Visitor',
+        kind: 'user',
+        is_anonymous: true,
+      },
+    }
+    const msg = baseMsg({
+      id: 'mg',
+      participant_id: 'guest-1',
+      content: 'hi',
+    })
+    render(
+      <MessageBubble
+        message={msg}
+        participants={guestParticipants}
+        isMine={false}
+      />,
+    )
+    const avatar = screen.getByTestId('message-avatar')
+    expect(avatar.getAttribute('data-kind')).toBe('guest')
   })
 })
 

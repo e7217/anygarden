@@ -5,6 +5,7 @@ import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
 import RoomQueryResultCard from '@/components/RoomQueryResultCard'
 import BrailleSpinner from '@/components/BrailleSpinner'
+import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
 import { apiFetch } from '@/lib/api'
 import { useRooms } from '@/hooks/useRooms'
 import {
@@ -121,6 +122,31 @@ export default memo(function MessageBubble({
     </button>
   )
 
+  // Avatar kind derivation — participants can be agents, anonymous
+  // guests, or regular users. Orphan rows (participant FK cleared
+  // to NULL) render a neutral "user" fallback so the avatar still
+  // anchors the row visually even when we don't know who spoke.
+  const avatarKind: EntityKind = isOrphan
+    ? 'user'
+    : isAgent
+      ? 'agent'
+      : participant?.is_anonymous
+        ? 'guest'
+        : 'user'
+  // Seed the tone hash on the most stable id we have. Orphans get
+  // a per-message fallback so two orphan rows don't visually collide.
+  const avatarId =
+    participant?.id ?? message.participant_id ?? `orphan-${message.id}`
+  const avatar = (
+    <EntityAvatar
+      id={avatarId}
+      name={displayName}
+      kind={avatarKind}
+      size="sm"
+      data-testid="message-avatar"
+    />
+  )
+
   // Result variant: full-width structured card. We still expose
   // the bookmark button in the corner so users can save the
   // aggregated result like any other message.
@@ -128,7 +154,8 @@ export default memo(function MessageBubble({
     const targetRoomName = resolveRoom(resultMeta.target_room_id)?.name
     return (
       <div className="group flex flex-col items-start">
-        <div className="flex items-center gap-1 mb-1 pl-1">
+        <div className="flex items-center gap-1.5 mb-1 pl-1">
+          {avatar}
           <span className="text-badge text-[var(--color-foreground-muted)]">
             {displayName}
           </span>
@@ -163,7 +190,8 @@ export default memo(function MessageBubble({
     const stripped = stripRoomQueryPrefix(message.content)
     return (
       <div className="group flex flex-col items-start">
-        <div className="flex items-center gap-1 mb-1 pl-1">
+        <div className="flex items-center gap-1.5 mb-1 pl-1">
+          {avatar}
           <span className="text-badge text-[var(--color-foreground-muted)]">
             {displayName}
           </span>
@@ -209,9 +237,10 @@ export default memo(function MessageBubble({
     // 나 = 오른쪽
     return (
       <div className="group flex flex-col items-end">
-        <div className="flex items-center gap-1 mb-1 pr-1">
+        <div className="flex items-center gap-1.5 mb-1 pr-1">
           {bookmarkBtn}
           <span className="text-badge text-[var(--color-foreground-muted)]">나</span>
+          {avatar}
         </div>
         <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tr-[var(--radius-xs)] bg-[var(--color-brand-tint-bg)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%]">
           <MarkdownContent
@@ -239,7 +268,8 @@ export default memo(function MessageBubble({
 
   return (
     <div className="group flex flex-col items-start">
-      <div className="flex items-center gap-1 mb-1 pl-1">
+      <div className="flex items-center gap-1.5 mb-1 pl-1">
+        {avatar}
         <span className="text-badge text-[var(--color-foreground-muted)]">
           {displayName}
         </span>
