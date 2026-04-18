@@ -39,6 +39,11 @@ export interface Participant {
   // merged in realtime via ``useParticipantPresence`` WS patches.
   online?: boolean
   last_seen_at?: string | null
+  // Agent engine identifier (#102). Populated when ``kind === 'agent'``
+  // from the backing ``Agent.engine`` row; undefined for user/guest.
+  // Drives the engine-mark badge on ``EntityAvatar`` (available to
+  // non-admin viewers too, unlike the admin-gated ``useAgents()``).
+  engine?: string
 }
 
 export default function ChatPage() {
@@ -224,7 +229,11 @@ export default function ChatPage() {
       (p) => p.kind === 'agent',
     )
     if (!agentP) return undefined
-    return { id: agentP.id, name: agentP.display_name }
+    return {
+      id: agentP.id,
+      name: agentP.display_name,
+      engine: agentP.engine,
+    }
   }, [participants])
 
   // Mirror the server auth rule (api/v1/invites.py::_require_room_admin_or_owner):

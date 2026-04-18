@@ -94,6 +94,14 @@ class ParticipantOut(BaseModel):
     # presence info keep working.
     online: bool = False
     last_seen_at: Optional[datetime] = None
+    # Agent engine identifier (#102) — 'claude-code', 'codex',
+    # 'gemini-cli', 'openhands', 'deep-agents', etc. Populated when
+    # ``kind == 'agent'`` from the backing ``Agent.engine`` row; None
+    # for user/guest rows. Drives the engine-mark badge on
+    # ``EntityAvatar`` so non-admin viewers see it too — the
+    # admin-gated ``useAgents()`` hook is not available to guests
+    # or regular users.
+    engine: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -264,6 +272,7 @@ async def get_room(
         display_name = ""
         kind = "user"
         is_anonymous = False
+        engine: Optional[str] = None
         if p.user_id:
             user_result = await db.execute(select(User).where(User.id == p.user_id))
             user = user_result.scalar_one_or_none()
@@ -284,6 +293,7 @@ async def get_room(
             agent = agent_result.scalar_one_or_none()
             if agent:
                 display_name = agent.name
+                engine = agent.engine
             kind = "agent"
         online, last_seen_at = presence_by_pid.get(p.id, (False, None))
         participant_outs.append(ParticipantOut(
@@ -297,6 +307,7 @@ async def get_room(
             is_anonymous=is_anonymous,
             online=online,
             last_seen_at=last_seen_at,
+            engine=engine,
         ))
 
     return RoomDetailOut(

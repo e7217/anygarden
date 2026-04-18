@@ -142,6 +142,7 @@ export default memo(function MessageBubble({
       id={avatarId}
       name={displayName}
       kind={avatarKind}
+      engine={participant?.engine}
       size="sm"
       data-testid="message-avatar"
     />
