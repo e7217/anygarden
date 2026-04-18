@@ -2,6 +2,7 @@ import { Component, useMemo, useState } from 'react'
 import type { Edge, Node } from '@xyflow/react'
 import { Menu, RefreshCcw, AlertTriangle } from 'lucide-react'
 import Sidebar from '@/components/Sidebar'
+import SidebarExpandButton from '@/components/SidebarExpandButton'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
 import TopologyCanvas from '@/components/topology/TopologyCanvas'
@@ -220,6 +221,7 @@ export default function TopologyPage() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
+      <SidebarExpandButton />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
         {/* Mobile top bar */}
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">

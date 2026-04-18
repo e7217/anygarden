@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
+import { useSidebarLayout } from '@/hooks/useSidebarLayout'
 import { apiFetch } from '@/lib/api'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
@@ -139,25 +140,34 @@ interface SidebarProps {
   /** Mobile off-canvas open state. Desktop (md+) is always visible. */
   open?: boolean
   onClose?: () => void
-  /**
-   * Desktop-only collapsed state (#106). When true, the
-   * ``<aside>`` shrinks to ``md:w-0`` and translates off-screen so
-   * the main content area reclaims the column. Ignored below the
-   * ``md:`` breakpoint — mobile uses ``open`` for off-canvas.
-   */
-  collapsed?: boolean
-  /** Called by the header collapse button on desktop. */
-  onToggleCollapsed?: () => void
 }
 
 export default function Sidebar({
   selectedRoom,
   open = false,
   onClose,
-  collapsed = false,
-  onToggleCollapsed,
 }: SidebarProps) {
   const { user, logout } = useAuth()
+  // #115 — desktop collapse state/toggle/Ctrl+B now live in a shared
+  // provider so every page hosting <Sidebar> gets identical behaviour
+  // without prop drilling. The hook throws when used outside the
+  // provider, matching useRooms's discipline.
+  const { collapsed, toggleCollapsed } = useSidebarLayout()
+
+  // Ctrl/Cmd+B → toggle collapse (#106). Registered here so the
+  // shortcut only binds on routes that actually render <Sidebar>
+  // (Login/Guest pages share the provider but don't mount Sidebar,
+  // so Cmd+B stays a no-op there instead of eating the keystroke).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault()
+        toggleCollapsed()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [toggleCollapsed])
   const {
     projects, rooms, agentDMs, createProject, deleteProject, createRoom, fetchRooms,
     pinRoom, reorderPinnedRooms,
@@ -379,18 +389,16 @@ export default function Sidebar({
               main-area floating expand button so users can toggle
               from either side. Hidden below ``md:`` — mobile uses
               the X close button to the right. */}
-          {onToggleCollapsed && (
-            <button
-              type="button"
-              className="hidden md:inline-flex rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
-              onClick={onToggleCollapsed}
-              aria-label="Collapse sidebar"
-              data-testid="sidebar-collapse"
-              title="Collapse sidebar (⌘B)"
-            >
-              <PanelLeftClose className="h-4 w-4" />
-            </button>
-          )}
+          <button
+            type="button"
+            className="hidden md:inline-flex rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            onClick={toggleCollapsed}
+            aria-label="Collapse sidebar"
+            data-testid="sidebar-collapse"
+            title="Collapse sidebar (⌘B)"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
           <button
             type="button"
             className="md:hidden rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5"
