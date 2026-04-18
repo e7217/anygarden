@@ -570,7 +570,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
             Claude / Gemini, <code>[mcp_servers.&lt;name&gt;]</code> for Codex).
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 py-2 max-h-[60vh] overflow-auto">
+        <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto">
           <div>
             <Label htmlFor="mcp-name">Name (slug)</Label>
             <Input
