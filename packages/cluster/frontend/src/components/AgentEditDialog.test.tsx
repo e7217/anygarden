@@ -125,8 +125,10 @@ describe('AgentEditDialog — upload/download', () => {
         updated_at: '2026-04-18T00:00:00Z',
       },
     ])
-    // Wait for the file row to render after fetchAgentFiles resolves.
-    await screen.findByTestId('agent-edit-file-skills/greet/SKILL.md')
+    // Issue #109 — AGENTS.md is now the default-selected row, so
+    // explicitly select the skill file before downloading.
+    const row = await screen.findByTestId('agent-edit-file-skills/greet/SKILL.md')
+    fireEvent.click(row)
 
     const createSpy = vi
       .spyOn(URL, 'createObjectURL')
@@ -144,5 +146,87 @@ describe('AgentEditDialog — upload/download', () => {
 
     createSpy.mockRestore()
     revokeSpy.mockRestore()
+  })
+})
+
+// Issue #109 — AGENTS.md is a virtual tree entry, always present,
+// never deletable, routed through ``updateAgent`` on Save.
+describe('AgentEditDialog — AGENTS.md virtual entry', () => {
+  it('always shows AGENTS.md at the top of the tree, even when agents_md is null', async () => {
+    renderDialog()
+    const row = await screen.findByTestId('agent-edit-file-AGENTS.md')
+    expect(row).toBeInTheDocument()
+    expect(row).toHaveAttribute('data-virtual', 'true')
+  })
+
+  it('selects AGENTS.md by default when the dialog opens', async () => {
+    renderDialog([
+      {
+        path: 'skills/greet/SKILL.md',
+        content: 'hello',
+        updated_at: '2026-04-18T00:00:00Z',
+      },
+    ])
+    // The editor's textarea is bound to the selected row's content;
+    // a null ``agents_md`` agent renders empty content when AGENTS.md
+    // is selected. Skill file content should NOT appear.
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    expect(textarea.value).toBe('')
+  })
+
+  it('does not render a trash icon on the AGENTS.md row', async () => {
+    renderDialog()
+    const row = await screen.findByTestId('agent-edit-file-AGENTS.md')
+    // The trash button's title ``Remove <path>`` is gated on
+    // ``!f.virtual``, so the AGENTS.md row must not contain one.
+    expect(row.querySelector('button[title^="Remove"]')).toBeNull()
+  })
+
+  it('routes AGENTS.md Save through updateAgent with agents_md_set', async () => {
+    const { updateAgent, upsertAgentFile } = renderDialog()
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '# role\n\nYou are a helper.' } })
+    fireEvent.click(screen.getByTestId('agent-edit-save'))
+
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+    expect(updateAgent).toHaveBeenCalledWith('a1', {
+      agents_md: '# role\n\nYou are a helper.',
+      agents_md_set: true,
+    })
+    // Non-virtual files should NOT upsert when only AGENTS.md changed.
+    expect(upsertAgentFile).not.toHaveBeenCalled()
+  })
+
+  it('clears agents_md to null when AGENTS.md is saved with empty content', async () => {
+    const { updateAgent } = renderDialog()
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    // Seed some content then clear it so dirty triggers.
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: 'temp' } })
+    fireEvent.change(textarea, { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('agent-edit-save'))
+
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+    expect(updateAgent).toHaveBeenCalledWith('a1', {
+      agents_md: null,
+      agents_md_set: true,
+    })
+  })
+
+  it('rejects AGENTS.md as a "New file" path with a clear message', async () => {
+    renderDialog()
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    fireEvent.click(screen.getByTestId('agent-edit-toggle-new-file'))
+    const pathInput = (await screen.findByTestId(
+      'agent-edit-new-file-path',
+    )) as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: 'AGENTS.md' } })
+    fireEvent.click(screen.getByText('Add'))
+
+    expect(
+      await screen.findByText(/AGENTS\.md already exists/i),
+    ).toBeInTheDocument()
   })
 })

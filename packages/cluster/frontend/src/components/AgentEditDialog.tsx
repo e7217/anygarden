@@ -1,22 +1,22 @@
 /**
  * AgentEditDialog — admin UI for the per-agent file manifest.
  *
- * Two panels:
- *
- * 1. AGENTS.md — the system-prompt/role/rules body the materializer
- *    writes to ``agent_root/AGENTS.md``. Nullable so the admin can
- *    clear it.
- *
- * 2. Files tree — every ``agent_files`` row, grouped by top-level
- *    prefix (``skills/``, ``.codex/``, ``.claude/``, ``.gemini/``,
- *    ``.openhands/``) and editable as plain text. The backend
- *    whitelist in ``doorae/agent_files.py`` rejects anything else,
- *    so the UI mirrors those prefixes in its "new file" picker.
+ * A single file-tree + editor panel. Backend-side ``Agent.agents_md``
+ * and ``agent_files`` rows have different storage (column vs table)
+ * but surface identically: ``AGENTS.md`` appears at the top of the
+ * tree as a "virtual" entry that is always present and cannot be
+ * deleted — clearing its content on Save writes ``agents_md=null``.
+ * Other rows live under the ``skills/``, ``.codex/``, ``.claude/``,
+ * ``.gemini/``, ``.openhands/`` prefixes that the server whitelists
+ * in ``doorae/agent_files.py``.
  *
  * Save semantics:
  *
  * - Saves happen in bulk on the Save button so the admin can edit
  *   several files without network churn.
+ * - Path-based routing: the virtual ``AGENTS.md`` entry is flushed
+ *   via ``updateAgent({agents_md_set: true})``; all others go
+ *   through ``upsertAgentFile``.
  * - Changes take effect on the NEXT spawn, not immediately — the
  *   running subprocess is not hot-reloaded (each engine re-reads
  *   its manifest at a different moment, so making "update =
@@ -104,6 +104,14 @@ function basename(path: string): string {
 // whitelist before the working copy accepts the content.
 const UPLOAD_ACCEPT = [...ALLOWED_EXTENSIONS, 'text/*'].join(',')
 
+// The virtual ``AGENTS.md`` entry is identified by exact path match.
+// Keeping the constant named lets search / refactor tools flag every
+// touchpoint instead of leaving string literals scattered across the
+// file. Path has no prefix because the materializer writes it at the
+// agent root (``agent_root/AGENTS.md``) — distinct from every other
+// allowed prefix in ``_ALLOWED_PREFIXES``.
+const AGENTS_MD_PATH = 'AGENTS.md'
+
 type WorkingFile = AgentFile & {
   // Tracks per-file edit state so we only PUT what actually changed
   // and only DELETE what the admin actively removed. ``originalContent``
@@ -114,6 +122,28 @@ type WorkingFile = AgentFile & {
   // list but still present in state so the Save pass can issue
   // DELETE requests for them.
   deleted: boolean
+  // Issue #109 — ``true`` for the virtual ``AGENTS.md`` row. Virtual
+  // rows are always present in the tree, cannot be deleted via the
+  // trash icon, cannot be created through the "New file" form, and
+  // route through ``updateAgent`` on Save (not ``upsertAgentFile``).
+  virtual?: boolean
+}
+
+// Build the virtual AGENTS.md working-file row from an agent prop.
+// ``originalContent`` mirrors the server: ``null`` when the agent
+// has never had an AGENTS.md (distinct from the empty string, which
+// is a valid saved value).
+function makeAgentsMdFile(md: string | null | undefined, updatedAt: string): WorkingFile {
+  const content = md ?? ''
+  return {
+    path: AGENTS_MD_PATH,
+    content,
+    updated_at: updatedAt,
+    originalContent: md ?? null,
+    dirty: false,
+    deleted: false,
+    virtual: true,
+  }
 }
 
 interface Props {
@@ -138,8 +168,6 @@ export default function AgentEditDialog({
   upsertAgentFile,
   deleteAgentFile,
 }: Props) {
-  const [agentsMd, setAgentsMd] = useState<string>('')
-  const [agentsMdDirty, setAgentsMdDirty] = useState(false)
   const [files, setFiles] = useState<WorkingFile[]>([])
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -157,19 +185,21 @@ export default function AgentEditDialog({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Pull the canonical file list from the server into the working
-  // copy. Used in two places with slightly different behavior:
+  // copy, and prepend the virtual ``AGENTS.md`` row.
   //
-  // - ``loadInitial`` (on open): also reads ``agentsMd`` from the
+  // Used in two places with slightly different behavior:
+  //
+  // - ``loadInitial`` (on open): seeds AGENTS.md from the
   //   parent-supplied ``agent`` prop, because that's the freshest
   //   the dialog has access to at open time.
   //
-  // - ``resyncAfterSave`` (after Save succeeds): leaves the local
-  //   ``agentsMd`` state as-is — it's already been flushed to the
-  //   server and the ``agent`` prop is a STALE snapshot from when
-  //   the dialog was opened, so re-reading it would clobber the
-  //   edit we just saved. Same for the file contents: the textarea
-  //   already holds the bytes we just saved, so we just clear the
-  //   dirty flags and drop rows that were marked deleted.
+  // - ``resyncAfterSave`` (after Save succeeds): seeds AGENTS.md
+  //   from the local working copy that was just flushed — the
+  //   ``agent`` prop is a STALE snapshot from when the dialog
+  //   was opened, so re-reading it would clobber the edit we
+  //   just saved. For file rows we rely on the server-fresh
+  //   ``fetchAgentFiles`` result, which already reflects any
+  //   upserts/deletes we just issued.
   const fetchFilesIntoWorking = useCallback(async (agentId: string) => {
     const rows = await fetchAgentFiles(agentId)
     return rows.map<WorkingFile>(r => ({
@@ -188,14 +218,15 @@ export default function AgentEditDialog({
     setError(null)
     try {
       const working = await fetchFilesIntoWorking(agent.id)
-      setFiles(working)
-      setAgentsMd(agent.agents_md ?? '')
-      setAgentsMdDirty(false)
+      const agentsMdFile = makeAgentsMdFile(agent.agents_md, new Date().toISOString())
+      const allFiles = [agentsMdFile, ...working]
+      setFiles(allFiles)
       setSelectedPath(prev => {
         // Keep the previously-selected path if it still exists,
-        // otherwise fall back to the first file.
-        if (prev && working.some(f => f.path === prev)) return prev
-        return working[0]?.path ?? null
+        // otherwise default to AGENTS.md so the agent's "identity"
+        // is the first thing the admin sees when the dialog opens.
+        if (prev && allFiles.some(f => f.path === prev)) return prev
+        return AGENTS_MD_PATH
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -206,12 +237,31 @@ export default function AgentEditDialog({
   const resyncAfterSave = useCallback(async () => {
     if (!agent) return
     try {
-      const working = await fetchFilesIntoWorking(agent.id)
-      setFiles(working)
-      setAgentsMdDirty(false)
+      const serverRows = await fetchFilesIntoWorking(agent.id)
+      // Preserve the just-saved AGENTS.md content rather than
+      // re-reading the stale ``agent.agents_md`` prop. After Save
+      // succeeds, the working copy's content is already server-
+      // authoritative; we just need to promote ``content`` to
+      // ``originalContent`` and drop the dirty flag.
+      setFiles(prev => {
+        const oldAgentsMd = prev.find(f => f.virtual && f.path === AGENTS_MD_PATH)
+        const savedContent = oldAgentsMd?.content ?? ''
+        const refreshed: WorkingFile = {
+          path: AGENTS_MD_PATH,
+          content: savedContent,
+          updated_at: new Date().toISOString(),
+          // Empty string on the client represents ``agents_md=null``
+          // on the server (see the Save branch), so mirror that here.
+          originalContent: savedContent === '' ? null : savedContent,
+          dirty: false,
+          deleted: false,
+          virtual: true,
+        }
+        return [refreshed, ...serverRows]
+      })
       setSelectedPath(prev => {
-        if (prev && working.some(f => f.path === prev)) return prev
-        return working[0]?.path ?? null
+        if (prev && (prev === AGENTS_MD_PATH || serverRows.some(f => f.path === prev))) return prev
+        return AGENTS_MD_PATH
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -237,11 +287,20 @@ export default function AgentEditDialog({
 
   // Group visible files by top-level prefix so the admin can see at
   // a glance what kind of file each row is ("Skills" vs
-  // "Codex config").
+  // "Codex config"). Virtual rows (AGENTS.md) are collected into a
+  // headerless first group so they sit at the top of the tree
+  // without a category label above them — they are the agent's
+  // "identity", not a category.
   const groupedFiles = useMemo(() => {
     const groups: Array<{ prefix: string; label: string; files: WorkingFile[] }> = []
+    const virtualFiles = visibleFiles.filter(f => f.virtual)
+    if (virtualFiles.length > 0) {
+      groups.push({ prefix: '', label: '', files: virtualFiles })
+    }
     for (const prefix of ALLOWED_PREFIXES) {
-      const matching = visibleFiles.filter(f => f.path.startsWith(prefix))
+      const matching = visibleFiles.filter(
+        f => !f.virtual && f.path.startsWith(prefix),
+      )
       if (matching.length > 0) {
         groups.push({
           prefix,
@@ -259,17 +318,12 @@ export default function AgentEditDialog({
   )
 
   // Track "anything changed" to enable/disable the Save button and
-  // warn on close. agentsMdDirty covers the top textarea; the files
-  // array is scanned for ``dirty`` or ``deleted`` markers.
+  // warn on close. AGENTS.md sits in ``files`` as a virtual row so
+  // its ``dirty`` flag is already covered by the scan below.
   const hasChanges = useMemo(
-    () => agentsMdDirty || files.some(f => f.dirty || f.deleted),
-    [agentsMdDirty, files],
+    () => files.some(f => f.dirty || f.deleted),
+    [files],
   )
-
-  const handleAgentsMdChange = (value: string) => {
-    setAgentsMd(value)
-    setAgentsMdDirty(true)
-  }
 
   const handleFileContentChange = (value: string) => {
     if (!selectedPath) return
@@ -285,6 +339,15 @@ export default function AgentEditDialog({
   const handleAddFile = () => {
     const path = newFilePath.trim()
     if (!path) return
+    // AGENTS.md is a virtual entry that always lives at the top of
+    // the tree; it cannot be "created" through this form because it
+    // already exists and has a distinct save path. Reject explicitly
+    // so the admin sees a clear message instead of a confusing
+    // "file already exists" or prefix-validation error.
+    if (path === AGENTS_MD_PATH) {
+      setError(`${AGENTS_MD_PATH} already exists at the top of the tree`)
+      return
+    }
     // Client-side validation mirrors a slice of the server-side
     // whitelist so the admin gets immediate feedback. The server
     // has the authoritative check on save. Path-structure rules
@@ -434,6 +497,12 @@ export default function AgentEditDialog({
   }
 
   const handleRemoveFile = (path: string) => {
+    // Virtual rows (currently just AGENTS.md) can't be deleted —
+    // the trash icon is hidden in the tree for them, but gate this
+    // callback too as a belt-and-braces guard in case a future
+    // caller wires it up elsewhere.
+    const target = files.find(f => f.path === path)
+    if (target?.virtual) return
     setFiles(prev => prev.map(f => (f.path === path ? { ...f, deleted: true } : f)))
     if (selectedPath === path) {
       const nextVisible = files.find(f => f.path !== path && !f.deleted)
@@ -446,32 +515,39 @@ export default function AgentEditDialog({
     setSaving(true)
     setError(null)
     try {
-      // 1. agents_md patch — only when actually dirty. Empty string
-      //    is a valid value (admin cleared all rules) so we key on
-      //    the dirty flag rather than value emptiness.
-      if (agentsMdDirty) {
-        await updateAgent(agent.id, {
-          agents_md: agentsMd === '' ? null : agentsMd,
-          agents_md_set: true,
-        })
-      }
-
-      // 2. New and updated files — PUT upserts them one at a time.
-      //    A single bad path 400s that one call; we surface the
-      //    error and stop so the admin can fix it without losing
-      //    state on the other files.
+      // 1. New and updated rows — path-based routing between the
+      //    ``agents_md`` column (virtual AGENTS.md row) and the
+      //    ``agent_files`` table (everything else). A single bad
+      //    path 400s that one call; we surface the error and stop
+      //    so the admin can fix it without losing state on the
+      //    other rows.
       for (const f of files) {
         if (f.deleted) continue
-        if (f.dirty) {
+        if (!f.dirty) continue
+        if (f.virtual && f.path === AGENTS_MD_PATH) {
+          // Empty string is a valid "admin cleared all rules"
+          // state on the client but the server stores that as
+          // ``null`` (the column is nullable). Keep the dirty
+          // flag as the source of truth — we only land here when
+          // the content changed from ``originalContent``.
+          await updateAgent(agent.id, {
+            agents_md: f.content === '' ? null : f.content,
+            agents_md_set: true,
+          })
+        } else {
           await upsertAgentFile(agent.id, f.path, f.content)
         }
       }
 
-      // 3. Deletions — only for files that existed on the server
-      //    (have an ``originalContent``). Admin-created files that
-      //    were then marked deleted never hit the server in the
-      //    first place, so skipping them is correct.
+      // 2. Deletions — only for server-backed files (have an
+      //    ``originalContent``) that are not virtual. Admin-created
+      //    files that were then marked deleted never hit the server
+      //    in the first place, so skipping them is correct. Virtual
+      //    rows can't enter the deleted state (guarded in
+      //    ``handleRemoveFile``) but the ``!f.virtual`` check keeps
+      //    the save loop self-contained.
       for (const f of files) {
+        if (f.virtual) continue
         if (f.deleted && f.originalContent !== null) {
           await deleteAgentFile(agent.id, f.path)
         }
@@ -481,10 +557,9 @@ export default function AgentEditDialog({
       // rows so ``updated_at`` values reflect the write, drop
       // rows that were marked ``deleted`` in the working copy,
       // and clear dirty flags. Deliberately does NOT re-read
-      // ``agents_md`` — the local state is already authoritative
-      // (we just pushed it), and the ``agent`` prop the dialog
-      // was opened with is a stale snapshot that would revert
-      // the edit we just saved.
+      // ``agents_md`` via the ``agent`` prop — that's a stale
+      // snapshot; the working-copy content we just saved is
+      // authoritative.
       await resyncAfterSave()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -521,33 +596,6 @@ export default function AgentEditDialog({
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto py-2 space-y-5">
-            {/* AGENTS.md ----------------------------------------------- */}
-            <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="agents-md" className="flex items-center gap-2">
-                  <FileText className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" />
-                  AGENTS.md
-                </Label>
-                {agentsMdDirty ? (
-                  <Badge
-                    variant="outline"
-                    className="bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] border-[color:color-mix(in_srgb,var(--color-brand)_20%,transparent)]"
-                  >
-                    Unsaved
-                  </Badge>
-                ) : null}
-              </div>
-              <textarea
-                id="agents-md"
-                className="font-mono text-sm flex w-full min-h-[160px] rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
-                placeholder="# Agent role and rules&#10;&#10;Define the agent's role, instructions, and any skill usage conventions here."
-                value={agentsMd}
-                onChange={e => handleAgentsMdChange(e.target.value)}
-                spellCheck={false}
-                data-testid="agent-edit-agents-md"
-              />
-            </section>
-
             {/* Files tree + editor ----------------------------------- */}
             <section className="space-y-2">
               <div className="flex items-center justify-between">
@@ -631,12 +679,25 @@ export default function AgentEditDialog({
                     </div>
                   ) : (
                     groupedFiles.map(group => (
-                      <div key={group.prefix} className="py-1">
-                        <div className="px-3 py-1 text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">
-                          {group.label}
-                        </div>
+                      <div
+                        key={group.prefix || '__virtual__'}
+                        className="py-1"
+                      >
+                        {group.label ? (
+                          <div className="px-3 py-1 text-badge uppercase tracking-wider text-[var(--color-foreground-muted)]">
+                            {group.label}
+                          </div>
+                        ) : null}
                         {group.files.map(f => {
                           const isSelected = f.path === selectedPath
+                          // Virtual rows (AGENTS.md) can't be deleted —
+                          // hide the trash icon and render a FileText
+                          // glyph up front so the row reads as the
+                          // "identity" file, not just another entry.
+                          const showTrash = !f.virtual
+                          const displayName = group.prefix
+                            ? f.path.slice(group.prefix.length)
+                            : f.path
                           return (
                             <div
                               key={f.path}
@@ -647,22 +708,33 @@ export default function AgentEditDialog({
                               }`}
                               onClick={() => setSelectedPath(f.path)}
                               data-testid={`agent-edit-file-${f.path}`}
+                              data-virtual={f.virtual ? 'true' : undefined}
                             >
-                              <span className="truncate font-mono text-xs">
-                                {f.path.slice(group.prefix.length)}
-                                {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
+                              <span className="flex min-w-0 items-center gap-1.5">
+                                {f.virtual ? (
+                                  <FileText
+                                    className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]"
+                                    aria-hidden="true"
+                                  />
+                                ) : null}
+                                <span className="truncate font-mono text-xs">
+                                  {displayName}
+                                  {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
+                                </span>
                               </span>
-                              <button
-                                type="button"
-                                onClick={e => {
-                                  e.stopPropagation()
-                                  handleRemoveFile(f.path)
-                                }}
-                                className="opacity-0 group-hover:opacity-100 transition-opacity"
-                                title={`Remove ${f.path}`}
-                              >
-                                <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
-                              </button>
+                              {showTrash ? (
+                                <button
+                                  type="button"
+                                  onClick={e => {
+                                    e.stopPropagation()
+                                    handleRemoveFile(f.path)
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title={`Remove ${f.path}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
+                                </button>
+                              ) : null}
                             </div>
                           )
                         })}
@@ -695,6 +767,11 @@ export default function AgentEditDialog({
                         value={selectedFile.content}
                         onChange={e => handleFileContentChange(e.target.value)}
                         spellCheck={false}
+                        placeholder={
+                          selectedFile.virtual
+                            ? '# Agent role and rules\n\nDefine the agent\'s role, instructions, and any skill usage conventions here.'
+                            : undefined
+                        }
                         data-testid="agent-edit-file-content"
                       />
                     </>
