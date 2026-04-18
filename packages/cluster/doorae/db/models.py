@@ -465,6 +465,79 @@ class AgentFile(Base):
     agent: Mapped["Agent"] = relationship("Agent", back_populates="files")
 
 
+class SkillLibraryEntry(Base):
+    """A shared skill registered from a GitHub repo (#119 Phase 1).
+
+    One row per (source, name, pinned_rev). ``source`` is a
+    ``"owner/repo"`` slug (e.g. ``"vercel-labs/agent-skills"``);
+    ``name`` is the skill directory under ``skills/``; ``pinned_rev``
+    is the commit SHA resolved at registration time so that spawning
+    an agent never depends on upstream being reachable.
+
+    Phase 1 only materializes ``skill_md`` (the SKILL.md body) —
+    ``extra_files`` and ``scripts_detected`` stay as empty / metadata
+    JSON until Phase 3 flips on the full directory passthrough. The
+    columns ship now so Phase 3 is a code-only change.
+    """
+
+    __tablename__ = "skill_library"
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "name", "pinned_rev",
+            name="uq_skill_library_source_name_rev",
+        ),
+        Index("ix_skill_library_source_name", "source", "name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    source: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    pinned_rev: Mapped[str] = mapped_column(String(64), nullable=False)
+    skill_md: Mapped[str] = mapped_column(Text, nullable=False)
+    # Phase 3 will populate ``extra_files`` with ``{rel_path: body}``;
+    # in Phase 1 it's always ``{}``. Default=dict keeps ORM writes
+    # consistent with the migration's NOT NULL constraint.
+    extra_files: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    # Non-SKILL.md paths the GitHub tree returned at registration.
+    # Pure UI metadata in Phase 1 so admins can see "this skill ships
+    # extra files we didn't materialize".
+    scripts_detected: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Phase 2 will wire approval. NULL in Phase 1 — spawner ignores
+    # this column until the approval gate lands.
+    approved_by: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    fetched_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class AgentSkill(Base):
+    """M:N link between an Agent and a SkillLibraryEntry (#119 Phase 1).
+
+    Splitting attachment into a link table (rather than stamping a
+    JSON array on Agent) lets one skill fan out to many agents
+    without duplicating its body, and lets the spawner resolve
+    ``agent.skills`` by a single join instead of parsing JSON.
+    """
+
+    __tablename__ = "agent_skills"
+    __table_args__ = (
+        Index("ix_agent_skills_skill", "skill_library_id"),
+    )
+
+    agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    skill_library_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("skill_library.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    attached_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class SavedMessage(Base):
     """A user's bookmarked message."""
 

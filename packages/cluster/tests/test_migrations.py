@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "017"
+                assert version == "018"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -242,7 +242,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "017"
+                assert version == "018"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -282,7 +282,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "017"
+                assert version == "018"
             sync_engine.dispose()
         finally:
             try:
@@ -316,7 +316,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "017"
+            assert head == "018"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -418,7 +418,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "017"
+                assert version == "018"
             sync_engine.dispose()
         finally:
             try:

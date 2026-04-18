@@ -21,6 +21,7 @@ from doorae.ws.machine_handler import router as machine_ws_router
 from doorae.api.v1.machines import router as machines_api_router
 from doorae.api.v1.agents import router as agents_api_router
 from doorae.api.v1.graph import router as graph_router
+from doorae.api.v1.skills import router as skills_api_router
 from doorae.api.v1.projects import router as projects_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
@@ -247,6 +248,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             machine_bus=app.state.machine_bus,
             server_url=server_url,
         )
+    # #119 — SkillLibraryService with the default (network-backed)
+    # GitHubFetcher. Tests may pre-populate app.state with a service
+    # wired to a fake fetcher so register() stays offline.
+    if not getattr(app.state, "skill_library_service", None):
+        from doorae.skills_library.service import SkillLibraryService
+        app.state.skill_library_service = SkillLibraryService(
+            app.state.session_factory,
+        )
 
     # Initialize WebSocket manager and orchestration singletons on app.state
     # so they are not module-level globals (avoids state leaks in tests and
@@ -336,6 +345,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
     app.include_router(graph_router)
+    app.include_router(skills_api_router)
     app.include_router(auth_router)
     app.include_router(projects_router)
     app.include_router(invites_router)

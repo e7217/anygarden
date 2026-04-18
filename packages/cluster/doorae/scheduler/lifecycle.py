@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from doorae.auth.token import generate_token, hash_agent_token
-from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Participant, Room
+from doorae.db.models import (
+    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Participant, Room,
+    SkillLibraryEntry,
+)
 from doorae.scheduler.machine_bus import MachineBus
 from doorae.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -334,6 +337,25 @@ class AgentLifecycle:
             )
         ).scalars().all()
         files_map: dict[str, str] = {row.path: row.content for row in file_rows}
+
+        # #119 — merge attached library skills into the same files map.
+        # Skill rows live in skill_library; the link table agent_skills
+        # gates which skills apply to this agent. AgentFile entries win
+        # on key collision because they represent an explicit admin
+        # override uploaded directly to the agent.
+        skill_rows = (
+            await db.execute(
+                select(SkillLibraryEntry)
+                .join(
+                    AgentSkill,
+                    AgentSkill.skill_library_id == SkillLibraryEntry.id,
+                )
+                .where(AgentSkill.agent_id == agent.id)
+            )
+        ).scalars().all()
+        for entry in skill_rows:
+            path = f"skills/{entry.name}/SKILL.md"
+            files_map.setdefault(path, entry.skill_md)
 
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
