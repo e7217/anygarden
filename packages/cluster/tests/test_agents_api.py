@@ -668,6 +668,130 @@ class TestAgentManifestAPI:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_update_agent_avatar_roundtrip(self, agents_env) -> None:
+        """Issue #101 — avatar_kind / avatar_value persist, and the
+        ``*_set`` flags distinguish "omit" from "clear to null"."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "stylish"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        data = resp.json()
+        agent_id = data["id"]
+        assert data["avatar_kind"] is None
+        assert data["avatar_value"] is None
+
+        # Set an emoji avatar.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "avatar_kind_set": True,
+                "avatar_kind": "emoji",
+                "avatar_value_set": True,
+                "avatar_value": "🤖",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["avatar_kind"] == "emoji"
+        assert resp.json()["avatar_value"] == "🤖"
+
+        # Omit both — no change.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"name": "renamed"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["avatar_kind"] == "emoji"
+        assert resp.json()["avatar_value"] == "🤖"
+
+        # Reset back to initials with explicit flags.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "avatar_kind_set": True,
+                "avatar_kind": None,
+                "avatar_value_set": True,
+                "avatar_value": None,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["avatar_kind"] is None
+        assert resp.json()["avatar_value"] is None
+
+    @pytest.mark.asyncio
+    async def test_update_agent_avatar_only_does_not_bump_generation(
+        self, agents_env
+    ) -> None:
+        """Issue #101 — avatar is pure UI metadata, so editing it
+        alone must not trigger ``bump_generation`` (which respawns
+        the agent). Mixed edits (avatar + another field) still bump
+        as usual."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "stable"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        agent_id = resp.json()["id"]
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            gen_before = agent.generation
+
+        # Avatar-only change → no bump.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "avatar_kind_set": True,
+                "avatar_kind": "lucide",
+                "avatar_value_set": True,
+                "avatar_value": "Rocket",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.generation == gen_before
+            assert agent.avatar_kind == "lucide"
+            assert agent.avatar_value == "Rocket"
+
+        # Name + avatar → name side of the edit triggers the bump.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "name": "renamed",
+                "avatar_kind_set": True,
+                "avatar_kind": "emoji",
+                "avatar_value_set": True,
+                "avatar_value": "🧪",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.generation > gen_before
+            assert agent.avatar_kind == "emoji"
+            assert agent.avatar_value == "🧪"
+            assert agent.name == "renamed"
+
+    @pytest.mark.asyncio
     async def test_list_agent_files_empty(self, agents_env) -> None:
         client = agents_env["client"]
         token = agents_env["token"]

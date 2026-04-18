@@ -183,6 +183,18 @@ class Agent(Base):
     runtime: Mapped[str] = mapped_column(
         String(20), nullable=False, default="python", server_default="python"
     )
+    # Issue #101 — admin-customizable avatar. ``avatar_kind`` picks the
+    # renderer branch (``'emoji'``, ``'lucide'``, or NULL for the default
+    # seed-driven initial); ``avatar_value`` carries the payload (the
+    # emoji character or the lucide icon component name). Both NULL is
+    # the "no customization" state and is how every pre-#101 agent
+    # loads post-migration.
+    avatar_kind: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default=None
+    )
+    avatar_value: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")

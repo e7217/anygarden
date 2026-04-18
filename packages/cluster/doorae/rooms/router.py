@@ -102,6 +102,12 @@ class ParticipantOut(BaseModel):
     # admin-gated ``useAgents()`` hook is not available to guests
     # or regular users.
     engine: Optional[str] = None
+    # Issue #101 — agent avatar override (null/null for user rows).
+    # Lets MessageBubble / ParticipantListPopover render the admin's
+    # chosen emoji / lucide icon without a second lookup against
+    # ``/api/v1/agents``.
+    avatar_kind: Optional[str] = None
+    avatar_value: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -273,6 +279,8 @@ async def get_room(
         kind = "user"
         is_anonymous = False
         engine: Optional[str] = None
+        avatar_kind: Optional[str] = None
+        avatar_value: Optional[str] = None
         if p.user_id:
             user_result = await db.execute(select(User).where(User.id == p.user_id))
             user = user_result.scalar_one_or_none()
@@ -294,6 +302,11 @@ async def get_room(
             if agent:
                 display_name = agent.name
                 engine = agent.engine
+                # Issue #101 — carry the admin's avatar choice so the
+                # room renders the same glyph everywhere the agent
+                # appears, without a second /agents round-trip.
+                avatar_kind = agent.avatar_kind
+                avatar_value = agent.avatar_value
             kind = "agent"
         online, last_seen_at = presence_by_pid.get(p.id, (False, None))
         participant_outs.append(ParticipantOut(
@@ -308,6 +321,8 @@ async def get_room(
             online=online,
             last_seen_at=last_seen_at,
             engine=engine,
+            avatar_kind=avatar_kind,
+            avatar_value=avatar_value,
         ))
 
     return RoomDetailOut(

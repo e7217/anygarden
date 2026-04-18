@@ -19,6 +19,9 @@ import { apiFetch } from '@/lib/api'
 import AgentEditDialog from '@/components/AgentEditDialog'
 import AgentRoomsDialog from '@/components/AgentRoomsDialog'
 import AgentHistoryDialog from '@/components/AgentHistoryDialog'
+import AgentSettingsMenu from '@/components/AgentSettingsMenu'
+import AvatarPickerDialog from '@/components/AvatarPickerDialog'
+import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
 import type { Agent } from '@/hooks/useAgents'
@@ -29,6 +32,9 @@ interface MachineAgent {
   id: string; name: string; engine: string
   desired_state: string; actual_state: string
   reasoning_effort?: string | null; rooms: string[]
+  // Issue #101 — mirrors the new MachineAgentOut avatar fields.
+  avatar_kind?: string | null
+  avatar_value?: string | null
 }
 
 interface MachineEngineInfo {
@@ -194,6 +200,11 @@ export default function AdminMachines() {
   const [historyAgentId, setHistoryAgentId] = useState<string | null>(null)
   const [historyAgentName, setHistoryAgentName] = useState('')
 
+  // Issue #101 — avatar picker is scoped to a single agent at a time,
+  // same lifecycle pattern as the manifest editor.
+  const [avatarDialogOpen, setAvatarDialogOpen] = useState(false)
+  const [avatarAgent, setAvatarAgent] = useState<Agent | null>(null)
+
   // The machine-detail agent list carries a stripped-down shape
   // (MachineAgent) that misses fields AgentEditDialog needs
   // (agents_md, model, restart_policy, etc.). Look up the full
@@ -203,6 +214,26 @@ export default function AdminMachines() {
     if (!full) return
     setEditingAgent(full)
     setEditDialogOpen(true)
+  }
+
+  // Issue #101 — open the avatar picker. Like handleEditManifest,
+  // we look up the cluster-wide Agent so the picker has the full
+  // record to echo back on Save.
+  const handleEditAvatar = (agentId: string) => {
+    const full = agents.find(a => a.id === agentId)
+    if (!full) return
+    setAvatarAgent(full)
+    setAvatarDialogOpen(true)
+  }
+
+  const handleCopyAgentId = async (agentId: string) => {
+    try {
+      await navigator.clipboard.writeText(agentId)
+    } catch {
+      // Clipboard access denied (insecure context or permissions).
+      // Falling back to a prompt would be annoying; the admin can
+      // still select the id visually from the row if needed.
+    }
   }
 
   const handleManageRooms = (agentId: string) => {
@@ -344,22 +375,39 @@ export default function AdminMachines() {
                   <p className="text-sm text-[var(--color-foreground-muted)]">No unplaced agents</p>
                 </div>
               ) : unplacedAgents.map(agent => (
-                <div key={agent.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
-                      <span className="text-xs text-[var(--color-foreground-muted)]">· {agent.actual_state}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
-                      <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
-                      {agent.last_crash_reason && (
-                        <span className="truncate text-[var(--color-warning)]" title={agent.last_crash_reason}>
-                          · {agent.last_crash_reason}
-                        </span>
-                      )}
+                <div key={agent.id} className="flex items-center justify-between px-4 py-3 gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <EntityAvatar
+                      id={agent.id}
+                      name={agent.name}
+                      kind="agent"
+                      engine={agent.engine}
+                      size="md"
+                      avatarKind={
+                        (agent.avatar_kind as AvatarKind | null | undefined) ?? null
+                      }
+                      avatarValue={agent.avatar_value ?? null}
+                      data-testid={`admin-agent-avatar-${agent.id}`}
+                    />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
+                        <span className="text-xs text-[var(--color-foreground-muted)]">· {agent.actual_state}</span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
+                        <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
+                        {agent.last_crash_reason && (
+                          <span className="truncate text-[var(--color-warning)]" title={agent.last_crash_reason}>
+                            · {agent.last_crash_reason}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    {/* Retry placement stays inline — it's the primary
+                        affordance on an unplaced agent and a hidden
+                        menu entry would bury it. */}
                     <Button
                       variant="ghost"
                       size="icon"
@@ -368,30 +416,13 @@ export default function AdminMachines() {
                     >
                       <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleEditManifest(agent.id)}
-                      title="Edit manifest"
-                    >
-                      <FileCog className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleShowHistory(agent.id, agent.name)}
-                      title="Activity"
-                    >
-                      <History className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleDeleteAgent(agent.id)}
-                      title="Delete"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                    </Button>
+                    <AgentSettingsMenu
+                      onEditAvatar={() => handleEditAvatar(agent.id)}
+                      onEditManifest={() => handleEditManifest(agent.id)}
+                      onShowActivity={() => handleShowHistory(agent.id, agent.name)}
+                      onCopyId={() => handleCopyAgentId(agent.id)}
+                      onDelete={() => handleDeleteAgent(agent.id)}
+                    />
                   </div>
                 </div>
               ))}
@@ -498,28 +529,47 @@ export default function AdminMachines() {
                   const isStopped = agent.actual_state === 'stopped' || agent.actual_state === 'idle' || agent.actual_state === 'crashed'
                   const isRunning = agent.actual_state === 'running' || agent.actual_state === 'starting'
                   return (
-                    <div key={agent.id} className={`flex items-center justify-between px-4 py-3 ${isStopped || isMachineOffline ? 'opacity-50' : ''}`}>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
-                          <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
-                            <PresenceDot
-                              variant="agent"
-                              online={online}
-                              agentState={displayState}
-                            />
-                            {displayState}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
-                          <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
-                          {agent.reasoning_effort && <span>· {agent.reasoning_effort}</span>}
-                          {agent.rooms.length > 0 && (
-                            <span className="truncate">· {agent.rooms.map(r => `#${r}`).join(', ')}</span>
-                          )}
+                    <div key={agent.id} className={`flex items-center justify-between px-4 py-3 gap-3 ${isStopped || isMachineOffline ? 'opacity-50' : ''}`}>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <EntityAvatar
+                          id={agent.id}
+                          name={agent.name}
+                          kind="agent"
+                          engine={agent.engine}
+                          size="md"
+                          avatarKind={
+                            (agent.avatar_kind as AvatarKind | null | undefined) ?? null
+                          }
+                          avatarValue={agent.avatar_value ?? null}
+                          data-testid={`admin-agent-avatar-${agent.id}`}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
+                            <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                              <PresenceDot
+                                variant="agent"
+                                online={online}
+                                agentState={displayState}
+                              />
+                              {displayState}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
+                            <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
+                            {agent.reasoning_effort && <span>· {agent.reasoning_effort}</span>}
+                            {agent.rooms.length > 0 && (
+                              <span className="truncate">· {agent.rooms.map(r => `#${r}`).join(', ')}</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-1">
+                        {/* Start/Stop stays inline — frequent toggle,
+                            and Play/Square icons themselves
+                            communicate state better than a menu item
+                            would. Rest of the admin actions collapsed
+                            into AgentSettingsMenu. */}
                         {isRunning ? (
                           <Button
                             variant="ghost"
@@ -541,18 +591,14 @@ export default function AdminMachines() {
                             <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                           </Button>
                         )}
-                        <Button variant="ghost" size="icon" onClick={() => handleManageRooms(agent.id)} title="Manage rooms">
-                          <DoorOpen className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleEditManifest(agent.id)} title="Edit manifest">
-                          <FileCog className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleShowHistory(agent.id, agent.name)} title="Activity">
-                          <History className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDeleteAgent(agent.id)} title="Delete">
-                          <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                        </Button>
+                        <AgentSettingsMenu
+                          onEditAvatar={() => handleEditAvatar(agent.id)}
+                          onEditManifest={() => handleEditManifest(agent.id)}
+                          onManageRooms={() => handleManageRooms(agent.id)}
+                          onShowActivity={() => handleShowHistory(agent.id, agent.name)}
+                          onCopyId={() => handleCopyAgentId(agent.id)}
+                          onDelete={() => handleDeleteAgent(agent.id)}
+                        />
                       </div>
                     </div>
                   )
@@ -807,6 +853,12 @@ export default function AdminMachines() {
         onOpenChange={setHistoryOpen}
         agentId={historyAgentId}
         agentName={historyAgentName}
+      />
+      <AvatarPickerDialog
+        agent={avatarAgent}
+        open={avatarDialogOpen}
+        onOpenChange={setAvatarDialogOpen}
+        updateAgent={updateAgent}
       />
     </div>
   )

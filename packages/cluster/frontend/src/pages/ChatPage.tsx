@@ -44,6 +44,9 @@ export interface Participant {
   // Drives the engine-mark badge on ``EntityAvatar`` (available to
   // non-admin viewers too, unlike the admin-gated ``useAgents()``).
   engine?: string
+  // Issue #101 — agent avatar override (null for user participants).
+  avatar_kind?: string | null
+  avatar_value?: string | null
 }
 
 export default function ChatPage() {
@@ -141,6 +144,12 @@ export default function ChatPage() {
             is_anonymous: Boolean(p.is_anonymous),
             online: typeof p.online === 'boolean' ? p.online : false,
             last_seen_at: p.last_seen_at ?? null,
+            // #102 — thread agent engine through so MessageBubble can
+            // render the engine badge without admin access.
+            engine: p.engine,
+            // Issue #101 — avatar override per agent participant.
+            avatar_kind: p.avatar_kind ?? null,
+            avatar_value: p.avatar_value ?? null,
           }
           if (user && p.user_id === user.id) {
             myPid = p.id
@@ -233,6 +242,10 @@ export default function ChatPage() {
       id: agentP.id,
       name: agentP.display_name,
       engine: agentP.engine,
+      // Issue #101 — propagate the avatar so the RoomHeader of a
+      // DM shows the same custom glyph the admin picked.
+      avatar_kind: agentP.avatar_kind ?? null,
+      avatar_value: agentP.avatar_value ?? null,
     }
   }, [participants])
 

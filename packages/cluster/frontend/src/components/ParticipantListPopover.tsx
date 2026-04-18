@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { X } from 'lucide-react'
 import type { Participant } from '@/pages/ChatPage'
 import PresenceDot from '@/components/PresenceDot'
-import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
+import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/EntityAvatar'
 import type { PresenceMap } from '@/hooks/useParticipantPresence'
 
 interface Props {
@@ -135,6 +135,12 @@ export default function ParticipantListPopover({
                 name={p.display_name || p.id}
                 kind={avatarKind}
                 size="xs"
+                avatarKind={
+                  avatarKind === 'agent'
+                    ? ((p.avatar_kind as AvatarKind | null | undefined) ?? null)
+                    : null
+                }
+                avatarValue={avatarKind === 'agent' ? (p.avatar_value ?? null) : null}
               />
               <PresenceDot
                 online={

@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Hash, Users, Menu, ChevronLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
-import { EntityAvatar } from '@/components/EntityAvatar'
+import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 
 interface ParentBreadcrumb {
   id: string
@@ -23,6 +23,11 @@ interface DmAgent {
   /** Optional engine id (claude-code, codex, gemini-cli, …).
    *  When provided, shows up as a corner badge on the avatar. */
   engine?: string
+  /** Issue #101 — optional avatar override forwarded from the
+   *  participants map. Non-agent callers pass null/undefined and
+   *  the avatar falls back to initials. */
+  avatar_kind?: string | null
+  avatar_value?: string | null
 }
 
 interface AgentParticipant {
@@ -145,6 +150,10 @@ export default function RoomHeader({
             kind="agent"
             engine={dmAgent.engine}
             size="md"
+            avatarKind={
+              (dmAgent.avatar_kind as AvatarKind | null | undefined) ?? null
+            }
+            avatarValue={dmAgent.avatar_value ?? null}
             data-testid="room-header-dm-avatar"
           />
         ) : (
