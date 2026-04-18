@@ -213,6 +213,20 @@ export default function ChatPage() {
     return { agentsOnline: on, agentsTotal: total }
   }, [participants, presence])
 
+  // For DM rooms, expose the partner agent so RoomHeader can swap
+  // its left Hash glyph for an engine-colored avatar. Derived from
+  // the participants map (not the admin-gated ``useAgents`` hook)
+  // so non-admin viewers of a DM still get the avatar. Engine stays
+  // unknown until we thread it through the participant payload —
+  // EntityAvatar gracefully omits the corner badge in that case.
+  const dmAgent = useMemo(() => {
+    const agentP = Object.values(participants).find(
+      (p) => p.kind === 'agent',
+    )
+    if (!agentP) return undefined
+    return { id: agentP.id, name: agentP.display_name }
+  }, [participants])
+
   // Mirror the server auth rule (api/v1/invites.py::_require_room_admin_or_owner):
   // global admin OR a room-level admin/owner Participant. The server
   // stays the sole authority; this flag only controls whether the UI
@@ -351,6 +365,8 @@ export default function ChatPage() {
                 parentBreadcrumb={parentBreadcrumb}
                 representativeAgentId={currentRoom.representative_agent_id}
                 agentParticipants={user?.is_admin ? agentParticipants : undefined}
+                isDm={currentRoom.is_dm}
+                dmAgent={currentRoom.is_dm ? dmAgent : undefined}
                 onSetRepresentative={user?.is_admin ? handleSetRepresentative : undefined}
                 onManageAgents={user?.is_admin ? () => setAgentDialogOpen(true) : undefined}
                 onCreateSubRoom={() => setSubRoomDialogOpen(true)}

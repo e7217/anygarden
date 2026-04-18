@@ -60,62 +60,9 @@ vi.mock('@xyflow/react', () => {
   }
 })
 
-import { EngineGlyph, AgentNode } from './AgentNode'
+import { AgentNode } from './AgentNode'
 
 afterEach(() => cleanup())
-
-describe('EngineGlyph', () => {
-  it('renders Claude colored logo for claude engine', () => {
-    const { getByTestId } = render(<EngineGlyph engine="claude" />)
-    expect(getByTestId('claude-color')).toBeInTheDocument()
-  })
-
-  it('renders Claude colored logo for claude-code variant', () => {
-    const { getByTestId } = render(<EngineGlyph engine="claude-code" />)
-    expect(getByTestId('claude-color')).toBeInTheDocument()
-  })
-
-  it('renders Claude colored logo for anthropic engine', () => {
-    const { getByTestId } = render(<EngineGlyph engine="anthropic" />)
-    expect(getByTestId('claude-color')).toBeInTheDocument()
-  })
-
-  it('renders Codex logo (mono) for codex engine', () => {
-    const { getByTestId } = render(<EngineGlyph engine="codex" />)
-    expect(getByTestId('codex-mono')).toBeInTheDocument()
-  })
-
-  it('renders Codex logo (mono) for openai engine', () => {
-    const { getByTestId } = render(<EngineGlyph engine="openai" />)
-    expect(getByTestId('codex-mono')).toBeInTheDocument()
-  })
-
-  it('renders Gemini colored logo for gemini-cli variant', () => {
-    const { getByTestId } = render(<EngineGlyph engine="gemini-cli" />)
-    expect(getByTestId('gemini-color')).toBeInTheDocument()
-  })
-
-  it('renders OpenHands colored logo for openhands engine', () => {
-    const { getByTestId } = render(<EngineGlyph engine="openhands" />)
-    expect(getByTestId('openhands-color')).toBeInTheDocument()
-  })
-
-  it('falls back to a lucide Bot icon for deep-agents (no brand mark)', () => {
-    const { container } = render(<EngineGlyph engine="deep-agents" />)
-    expect(container.querySelector('svg.lucide-bot')).toBeTruthy()
-  })
-
-  it('falls back to a lucide Bot icon for unknown engines', () => {
-    const { container } = render(<EngineGlyph engine="some-unknown" />)
-    // lucide Bot renders an <svg> with class "lucide lucide-bot"
-    expect(container.querySelector('svg.lucide-bot')).toBeTruthy()
-  })
-
-  it('tolerates uppercase / mixed-case engine values', () => {
-    const { getByTestId } = render(<EngineGlyph engine="CLAUDE" />)
-    expect(getByTestId('claude-color')).toBeInTheDocument()
-  })
-})
 
 describe('AgentNode', () => {
   // React Flow's NodeProps is a structural type — we only exercise

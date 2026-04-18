@@ -12,11 +12,12 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
+import { EntityAvatar } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import {
-  Hash, Plus, ChevronDown, ChevronRight, LogOut, Bot, Server, MessageSquare, X,
+  Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
   Pin, PinOff, GripVertical, Share2,
 } from 'lucide-react'
 import {
@@ -608,21 +609,29 @@ export default function Sidebar({ selectedRoom, open = false, onClose }: Sidebar
               />
             ) : (
               <div className="flex flex-col gap-0.5">
-                {agentDMs.map(dm => (
-                  <button
-                    key={dm.id}
-                    onClick={() => go(`/rooms/${dm.id}`)}
-                    data-testid={`sidebar-dm-${dm.id}`}
-                    className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                      selectedRoom === dm.id
-                        ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                        : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-                    }`}
-                  >
-                    <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-                    {dm.name.replace(/^DM:\s*/, '')}
-                  </button>
-                ))}
+                {agentDMs.map(dm => {
+                  const label = dm.name.replace(/^DM:\s*/, '')
+                  return (
+                    <button
+                      key={dm.id}
+                      onClick={() => go(`/rooms/${dm.id}`)}
+                      data-testid={`sidebar-dm-${dm.id}`}
+                      className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                        selectedRoom === dm.id
+                          ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                          : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                      }`}
+                    >
+                      <EntityAvatar
+                        id={dm.representative_agent_id ?? dm.id}
+                        name={label}
+                        kind="agent"
+                        size="xs"
+                      />
+                      <span className="truncate">{label}</span>
+                    </button>
+                  )
+                })}
               </div>
             )
           )}
@@ -805,25 +814,31 @@ function AgentDMListAdmin({
       {dms.map(dm => {
         const agent = findAgentForDM(dm, agents)
         const online = deriveAgentOnline(agent?.actual_state)
+        const label = dm.name.replace(/^DM:\s*/, '')
         return (
           <button
             key={dm.id}
             onClick={() => onGo(`/rooms/${dm.id}`)}
             data-testid={`sidebar-dm-${dm.id}`}
-            className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+            className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
               selectedRoom === dm.id
                 ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
                 : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
             }`}
           >
-            <Bot className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+            <EntityAvatar
+              id={agent?.id ?? dm.representative_agent_id ?? dm.id}
+              name={agent?.name ?? label}
+              kind="agent"
+              engine={agent?.engine}
+              size="xs"
+            />
             <PresenceDot
               variant="agent"
               online={online}
               agentState={agent?.actual_state}
-              className="mr-1.5"
             />
-            {dm.name.replace(/^DM:\s*/, '')}
+            <span className="truncate">{label}</span>
           </button>
         )
       })}

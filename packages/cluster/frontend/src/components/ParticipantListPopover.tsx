@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { X } from 'lucide-react'
 import type { Participant } from '@/pages/ChatPage'
 import PresenceDot from '@/components/PresenceDot'
+import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
 import type { PresenceMap } from '@/hooks/useParticipantPresence'
 
 interface Props {
@@ -118,11 +119,23 @@ export default function ParticipantListPopover({
           //    least one admin/owner alive)
           const canRemoveThis =
             !!onRemove && !isMe && p.role !== 'owner'
+          const avatarKind: EntityKind =
+            p.kind === 'agent'
+              ? 'agent'
+              : p.is_anonymous
+                ? 'guest'
+                : 'user'
           return (
             <li
               key={p.id}
               className="flex items-center gap-2 px-3 py-2 text-sm"
             >
+              <EntityAvatar
+                id={p.id}
+                name={p.display_name || p.id}
+                kind={avatarKind}
+                size="xs"
+              />
               <PresenceDot
                 online={
                   presence?.[p.id]?.online ?? Boolean(p.online)

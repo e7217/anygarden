@@ -3,10 +3,26 @@ import { Button } from '@/components/ui/button'
 import { Hash, Users, Menu, ChevronLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
+import { EntityAvatar } from '@/components/EntityAvatar'
 
 interface ParentBreadcrumb {
   id: string
   name: string
+}
+
+/**
+ * Minimal shape for the agent whose identity the DM room carries.
+ * Kept intentionally narrower than ``AgentParticipant`` because
+ * non-admin users never receive the full admin-gated agent list —
+ * ChatPage synthesizes this from the room's participants map, which
+ * every viewer can see.
+ */
+interface DmAgent {
+  id: string
+  name: string
+  /** Optional engine id (claude-code, codex, gemini-cli, …).
+   *  When provided, shows up as a corner badge on the avatar. */
+  engine?: string
 }
 
 interface AgentParticipant {
@@ -32,6 +48,12 @@ interface RoomHeaderProps {
   parentBreadcrumb?: ParentBreadcrumb[]
   representativeAgentId?: string | null
   agentParticipants?: AgentParticipant[]
+  /** True when the current room is a 1:1 DM with an agent. Drives
+   *  the left-glyph swap from #-hash to an engine avatar. */
+  isDm?: boolean
+  /** The agent whose identity the DM carries. Only consulted when
+   *  ``isDm`` is true. */
+  dmAgent?: DmAgent
   onSetRepresentative?: (agentId: string | null) => void
   onManageAgents?: () => void
   onCreateSubRoom?: () => void
@@ -71,6 +93,8 @@ export default function RoomHeader({
   parentBreadcrumb,
   representativeAgentId,
   agentParticipants,
+  isDm,
+  dmAgent,
   onSetRepresentative,
   onManageAgents,
   onCreateSubRoom,
@@ -114,7 +138,18 @@ export default function RoomHeader({
             </span>
           </button>
         )}
-        <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
+        {isDm && dmAgent ? (
+          <EntityAvatar
+            id={dmAgent.id}
+            name={dmAgent.name}
+            kind="agent"
+            engine={dmAgent.engine}
+            size="md"
+            data-testid="room-header-dm-avatar"
+          />
+        ) : (
+          <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
+        )}
         <h2 className="text-card-title truncate text-[var(--color-foreground)]">{roomName}</h2>
       </div>
       <div className="flex shrink-0 items-center gap-2 md:gap-3">
