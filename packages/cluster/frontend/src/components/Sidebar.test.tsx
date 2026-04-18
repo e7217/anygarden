@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 import Sidebar from './Sidebar'
 
 // Sidebar pulls in a chain of provider-backed hooks. For the
-// collapse/expand behaviour (#106) we only care about the root
+// collapse/expand behaviour (#106/#115) we only care about the root
 // ``<aside>`` class & header button, so stub the data hooks out
 // with minimal shapes. Each mock mirrors the live shape just
 // enough for the component to render without throwing.
@@ -33,6 +33,20 @@ vi.mock('@/hooks/useRooms', () => ({
   }),
 }))
 
+// #115 — Sidebar now reads collapse state from useSidebarLayout.
+// Mock the module the same way useRooms/useAuth are mocked; each
+// test controls the returned collapsed/toggleCollapsed via the
+// ``mockReturnValue`` below.
+const toggleCollapsedSpy = vi.fn()
+const mockSidebarLayout = vi.fn(() => ({
+  collapsed: false,
+  toggleCollapsed: toggleCollapsedSpy,
+  setCollapsed: vi.fn(),
+}))
+vi.mock('@/hooks/useSidebarLayout', () => ({
+  useSidebarLayout: () => mockSidebarLayout(),
+}))
+
 // Stub EntityAvatar to avoid pulling in @lobehub/ui transitively
 // — the suite is focused on layout/props for the collapse feature,
 // avatar rendering is covered by EntityAvatar.test.tsx.
@@ -40,21 +54,29 @@ vi.mock('@/components/EntityAvatar', () => ({
   EntityAvatar: () => null,
 }))
 
+beforeEach(() => {
+  toggleCollapsedSpy.mockReset()
+  mockSidebarLayout.mockReset()
+  mockSidebarLayout.mockReturnValue({
+    collapsed: false,
+    toggleCollapsed: toggleCollapsedSpy,
+    setCollapsed: vi.fn(),
+  })
+})
+
 afterEach(() => cleanup())
 
-function renderSidebar(
-  props: Partial<React.ComponentProps<typeof Sidebar>> = {},
-) {
+function renderSidebar() {
   return render(
     <MemoryRouter>
-      <Sidebar selectedRoom={null} {...props} />
+      <Sidebar selectedRoom={null} />
     </MemoryRouter>,
   )
 }
 
-describe('Sidebar — collapse/expand (#106)', () => {
+describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
   it('renders the expanded desktop layout when not collapsed', () => {
-    renderSidebar({ collapsed: false })
+    renderSidebar()
     const aside = screen.getByTestId('sidebar-root')
     // Default: static, w-64, not translated off at desktop.
     expect(aside.className).toMatch(/md:w-64/)
@@ -63,8 +85,13 @@ describe('Sidebar — collapse/expand (#106)', () => {
     expect(aside).not.toHaveAttribute('aria-hidden')
   })
 
-  it('applies the collapsed desktop classes when collapsed=true', () => {
-    renderSidebar({ collapsed: true, onToggleCollapsed: vi.fn() })
+  it('applies the collapsed desktop classes when hook reports collapsed=true', () => {
+    mockSidebarLayout.mockReturnValue({
+      collapsed: true,
+      toggleCollapsed: toggleCollapsedSpy,
+      setCollapsed: vi.fn(),
+    })
+    renderSidebar()
     const aside = screen.getByTestId('sidebar-root')
     // Collapsed: translated fully off + w-0 so the flex main
     // column reclaims the space. aria-hidden excludes the
@@ -75,17 +102,22 @@ describe('Sidebar — collapse/expand (#106)', () => {
     expect(aside).toHaveAttribute('aria-hidden', 'true')
   })
 
-  it('renders the desktop collapse trigger when onToggleCollapsed is provided', () => {
-    const onToggleCollapsed = vi.fn()
-    renderSidebar({ onToggleCollapsed })
+  it('always renders the desktop collapse trigger and wires it to the hook toggle', () => {
+    renderSidebar()
     const trigger = screen.getByTestId('sidebar-collapse')
     expect(trigger).toHaveAttribute('aria-label', 'Collapse sidebar')
     fireEvent.click(trigger)
-    expect(onToggleCollapsed).toHaveBeenCalledTimes(1)
+    expect(toggleCollapsedSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('omits the collapse trigger when no handler is supplied', () => {
+  it('invokes toggleCollapsed on Ctrl/Cmd+B keydown', () => {
     renderSidebar()
-    expect(screen.queryByTestId('sidebar-collapse')).toBeNull()
+    // Register the keydown on window — matches the useEffect inside
+    // Sidebar which installs a global listener while mounted.
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+    expect(toggleCollapsedSpy).toHaveBeenCalledTimes(1)
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+    expect(toggleCollapsedSpy).toHaveBeenCalledTimes(2)
   })
 })

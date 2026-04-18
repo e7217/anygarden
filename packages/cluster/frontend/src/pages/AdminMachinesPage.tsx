@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import Sidebar from '@/components/Sidebar'
+import SidebarExpandButton from '@/components/SidebarExpandButton'
 import AdminMachines from '@/components/AdminMachines'
 import { Button } from '@/components/ui/button'
 import { Menu } from 'lucide-react'
@@ -10,6 +11,7 @@ export default function AdminMachinesPage() {
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-background)]">
       <Sidebar selectedRoom={null} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <SidebarExpandButton />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
         {/* Mobile top bar */}
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">

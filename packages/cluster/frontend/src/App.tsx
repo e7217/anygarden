@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { RoomsProvider } from '@/hooks/useRooms'
+import { SidebarLayoutProvider } from '@/hooks/useSidebarLayout'
 import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
@@ -36,34 +37,43 @@ export default function App() {
           subscriber sees the new tree immediately, instead of
           going stale until the user reloads. */}
       <RoomsProvider>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          {/* Guest entry + single-room shell. Intentionally NOT
-              wrapped in ProtectedRoute — the guest flow has its own
-              JWT lifecycle and must not redirect through /login. */}
-          <Route path="/invite/:token" element={<GuestInvitePage />} />
-          <Route path="/g/:roomId" element={<GuestRoomPage />} />
-          <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-          <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
-          <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
-          <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
-          <Route
-            path="/topology"
-            element={
-              <ProtectedRoute>
-                <Suspense
-                  fallback={
-                    <div className="flex items-center justify-center h-screen text-[var(--color-foreground-muted)]">
-                      Loading topology…
-                    </div>
-                  }
-                >
-                  <TopologyPage />
-                </Suspense>
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
+        {/* #115 — SidebarLayoutProvider holds the desktop collapsed
+            flag + its localStorage-backed persistence + Ctrl/Cmd+B
+            handler (mounted inside <Sidebar>). Sitting under
+            RoomsProvider keeps the reading order "data → layout",
+            and is still safe on routes without a sidebar (LoginPage,
+            guest pages) because the provider has zero side effects
+            until a consumer mounts. */}
+        <SidebarLayoutProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            {/* Guest entry + single-room shell. Intentionally NOT
+                wrapped in ProtectedRoute — the guest flow has its own
+                JWT lifecycle and must not redirect through /login. */}
+            <Route path="/invite/:token" element={<GuestInvitePage />} />
+            <Route path="/g/:roomId" element={<GuestRoomPage />} />
+            <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+            <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
+            <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
+            <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
+            <Route
+              path="/topology"
+              element={
+                <ProtectedRoute>
+                  <Suspense
+                    fallback={
+                      <div className="flex items-center justify-center h-screen text-[var(--color-foreground-muted)]">
+                        Loading topology…
+                      </div>
+                    }
+                  >
+                    <TopologyPage />
+                  </Suspense>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </SidebarLayoutProvider>
       </RoomsProvider>
     </BrowserRouter>
   )
