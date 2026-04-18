@@ -9,6 +9,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Plus, Trash2, BookOpen, RefreshCw, Check, X, Eye, History, Share2, Bot,
+  Search as SearchIcon, AlertCircle,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
@@ -42,6 +43,19 @@ interface Skill {
   fetched_at: string
   status: SkillStatus
   attached_agent_ids: string[]
+  // #126 — merged from the server's in-memory stale cache. ``true``
+  // when upstream HEAD has moved past ``pinned_rev``; the UI flips on
+  // an "Update available" badge to prompt admin refresh.
+  stale: boolean
+}
+
+// #126 — one skills.sh search hit.
+interface SearchHit {
+  id: string
+  skillId: string
+  name: string
+  installs: number
+  source: string
 }
 
 interface SkillPreview {
@@ -103,6 +117,19 @@ export default function AdminSkills() {
   const [auditLoading, setAuditLoading] = useState(false)
 
   const [activeTab, setActiveTab] = useState<SkillStatus>('pending')
+
+  // #126 — search dialog state
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchHit[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  // Track which rows are mid-register so the button can show a
+  // per-row spinner (register can take a few seconds — N+1 raw
+  // fetches per skill directory).
+  const [registeringIds, setRegisteringIds] = useState<Set<string>>(new Set())
+  // Card-level refresh spinners, same idea.
+  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set())
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -206,6 +233,94 @@ export default function AdminSkills() {
     if (resp.status === 204) await load()
   }, [load])
 
+  // #126 — run a skills.sh search. Called on open and on every
+  // submit; TTL-cached on the server so re-opens are cheap.
+  const runSearch = useCallback(async (query: string) => {
+    setSearchLoading(true)
+    setSearchError(null)
+    try {
+      const qs = new URLSearchParams({ q: query, limit: '20' })
+      const resp = await apiFetch(`/api/v1/admin/skills/search?${qs.toString()}`)
+      if (!resp.ok) {
+        let detail = `Search failed (${resp.status})`
+        try {
+          const body = await resp.json()
+          if (body?.detail) detail = body.detail
+        } catch { /* ignore */ }
+        throw new Error(detail)
+      }
+      setSearchResults(await resp.json())
+    } catch (e) {
+      setSearchError(e instanceof Error ? e.message : String(e))
+      setSearchResults([])
+    } finally {
+      setSearchLoading(false)
+    }
+  }, [])
+
+  // Register a skill directly from a search result. Uses the
+  // skills.sh ``source`` + ``skillId`` as (source, name) for the
+  // server — matches how a manual admin register would work.
+  const registerFromSearch = useCallback(async (hit: SearchHit) => {
+    setRegisteringIds(prev => new Set(prev).add(hit.id))
+    try {
+      const resp = await apiFetch('/api/v1/admin/skills', {
+        method: 'POST',
+        body: JSON.stringify({
+          source: hit.source,
+          name: hit.skillId,
+          rev: 'HEAD',
+        }),
+      })
+      if (resp.ok) {
+        setActiveTab('pending')
+        await load()
+      } else {
+        let detail = `Register failed (${resp.status})`
+        try {
+          const body = await resp.json()
+          if (body?.detail) detail = body.detail
+        } catch { /* ignore */ }
+        setSearchError(detail)
+      }
+    } finally {
+      setRegisteringIds(prev => {
+        const next = new Set(prev)
+        next.delete(hit.id)
+        return next
+      })
+    }
+  }, [load])
+
+  // #126 — refresh a single skill against upstream HEAD. Phase 2 gate
+  // means a SHA change mints a new pending row — the list reloads to
+  // surface it in the pending tab.
+  const handleRefresh = useCallback(async (skill: Skill) => {
+    setRefreshingIds(prev => new Set(prev).add(skill.id))
+    try {
+      const resp = await apiFetch(
+        `/api/v1/admin/skills/${skill.id}/refresh`,
+        { method: 'POST' },
+      )
+      if (resp.ok) {
+        await load()
+      } else {
+        let detail = `Refresh failed (${resp.status})`
+        try {
+          const body = await resp.json()
+          if (body?.detail) detail = body.detail
+        } catch { /* ignore */ }
+        setError(detail)
+      }
+    } finally {
+      setRefreshingIds(prev => {
+        const next = new Set(prev)
+        next.delete(skill.id)
+        return next
+      })
+    }
+  }, [load])
+
   // #120 — move an agent-authored skill into the shared library so any
   // agent can attach to it afterwards.
   const handlePromote = useCallback(async (skill: Skill) => {
@@ -291,6 +406,17 @@ export default function AdminSkills() {
           <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSearchOpen(true)
+              if (searchResults.length === 0) void runSearch('')
+            }}
+            data-testid="admin-skill-search-open"
+          >
+            <SearchIcon className="mr-1 h-3.5 w-3.5" /> Search skills.sh
           </Button>
           <Button size="sm" onClick={() => setRegisterOpen(true)}>
             <Plus className="mr-1 h-3.5 w-3.5" /> Register skill
@@ -385,6 +511,17 @@ export default function AdminSkills() {
                             <Bot className="mr-1 h-3 w-3" /> agent
                           </Badge>
                         )}
+                        {skill.stale && (
+                          <Badge
+                            variant="outline"
+                            className="border-[rgba(0,0,0,0.12)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] text-[var(--color-warning)]"
+                            title="Upstream HEAD has moved — click Refresh to re-fetch"
+                            data-testid={`admin-skill-stale-${skill.id}`}
+                          >
+                            <AlertCircle className="mr-1 h-3 w-3" />
+                            Update available
+                          </Badge>
+                        )}
                       </div>
                       <p className="mt-0.5 text-xs text-[var(--color-foreground-muted)]">
                         <code>{skill.source}</code>
@@ -451,6 +588,22 @@ export default function AdminSkills() {
                           title="Promote to shared library"
                         >
                           <Share2 className="mr-1 h-3.5 w-3.5" /> Promote
+                        </Button>
+                      )}
+                      {/* #126 — refresh against upstream HEAD. Hidden for
+                          agent-authored rows since their ``source`` has
+                          no upstream to poll. */}
+                      {skill.created_by_agent_id === null && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={refreshingIds.has(skill.id)}
+                          onClick={() => void handleRefresh(skill)}
+                          data-testid={`admin-skill-refresh-${skill.id}`}
+                          title="Re-fetch from upstream HEAD"
+                        >
+                          <RefreshCw className={`mr-1 h-3.5 w-3.5 ${refreshingIds.has(skill.id) ? 'animate-spin' : ''}`} />
+                          Refresh
                         </Button>
                       )}
                       <Button
@@ -674,6 +827,93 @@ export default function AdminSkills() {
           <DialogFooter>
             <Button onClick={() => { setAttachTarget(null); setAttachError(null) }}>
               Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* #126 — skills.sh search dialog */}
+      <Dialog
+        open={searchOpen}
+        onOpenChange={(o) => {
+          if (!o) { setSearchOpen(false); setSearchError(null) }
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Search skills.sh</DialogTitle>
+            <DialogDescription>
+              검색어를 입력해 skills.sh 에서 스킬을 찾고 한 번 클릭으로 등록하세요.
+              등록된 스킬은 <strong>대기</strong> 탭에 들어가 승인 후 attach 가능합니다.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2 py-2">
+            <Input
+              placeholder="design / slack / python …"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') void runSearch(searchQuery)
+              }}
+              data-testid="admin-skill-search-input"
+            />
+            <Button
+              onClick={() => void runSearch(searchQuery)}
+              disabled={searchLoading}
+              data-testid="admin-skill-search-submit"
+            >
+              {searchLoading ? '검색 중…' : 'Search'}
+            </Button>
+          </div>
+          {searchError && (
+            <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+              {searchError}
+            </div>
+          )}
+          <div className="max-h-[26rem] overflow-auto">
+            {searchResults.length === 0 && !searchLoading ? (
+              <p className="py-6 text-center text-sm text-[var(--color-foreground-muted)]">
+                검색 결과가 없습니다.
+              </p>
+            ) : (
+              <ul className="space-y-1">
+                {searchResults.map(hit => (
+                  <li
+                    key={hit.id}
+                    className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-sm font-medium text-[var(--color-foreground)]">
+                          {hit.name}
+                        </span>
+                        <span className="text-xs text-[var(--color-foreground-muted)]">
+                          {hit.installs} installs
+                        </span>
+                      </div>
+                      <p className="truncate text-xs text-[var(--color-foreground-muted)]">
+                        <code>{hit.source}</code> · <code>{hit.skillId}</code>
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={registeringIds.has(hit.id)}
+                      onClick={() => void registerFromSearch(hit)}
+                      data-testid={`admin-skill-register-from-search-${hit.id}`}
+                    >
+                      {registeringIds.has(hit.id) ? 'Registering…' : 'Register'}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setSearchOpen(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
