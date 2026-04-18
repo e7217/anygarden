@@ -40,11 +40,18 @@ class CodexAdapter(EngineAdapter):
         self._sandbox = sandbox
         self._codex: Any = None  # Codex instance
         self._threads: dict[str, Any] = {}  # room_id → Thread
+        # Issue #134 — ThreadStartOptions class is resolved at start()
+        # time (not import time) so tests can stub the ``codex`` module
+        # with a MagicMock without needing to also stub the nested
+        # ``codex.options`` submodule. Stays ``None`` until ``start()``
+        # succeeds.
+        self._thread_options_cls: Any = None
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
         try:
             from codex import Codex
+            from codex.options import ThreadStartOptions
         except ImportError:
             logger.warning(
                 "codex.sdk_not_found",
@@ -53,6 +60,7 @@ class CodexAdapter(EngineAdapter):
             return
 
         self._codex = Codex()
+        self._thread_options_cls = ThreadStartOptions
 
         logger.info("codex.client_started")
 
@@ -79,11 +87,35 @@ class CodexAdapter(EngineAdapter):
             # Get or create thread for this room
             thread = self._threads.get(room_id)
             if thread is None:
-                thread = self._codex.start_thread()
+                # Issue #134 — bypass approval gates for tool calls.
+                # Codex otherwise prompts per tool invocation, which
+                # a headless agent can never answer. This mirrors
+                # the trust model applied to gemini-cli
+                # (``--approval-mode yolo``) and claude-code
+                # (``permission_mode="bypassPermissions"``).
+                # ``sandbox=workspace-write`` stays so the agent
+                # can write to its own workspace but can't escape
+                # to the host filesystem.
+                #
+                # When ``_thread_options_cls`` is None (real SDK not
+                # installed, or tests that bypass start() setup) the
+                # call degrades to the legacy signature so nothing
+                # breaks hard.
+                if self._thread_options_cls is not None:
+                    thread = self._codex.start_thread(
+                        options=self._thread_options_cls(
+                            approval_policy="never",
+                            sandbox=self._sandbox,
+                        ),
+                    )
+                else:
+                    thread = self._codex.start_thread()
                 self._threads[room_id] = thread
                 logger.info(
                     "codex.thread_created",
                     room_id=room_id,
+                    approval_policy="never",
+                    sandbox=self._sandbox,
                 )
 
             # run_text returns the response as a string directly

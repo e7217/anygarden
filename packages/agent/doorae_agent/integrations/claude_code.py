@@ -130,12 +130,20 @@ class ClaudeCodeAdapter(EngineAdapter):
           default of ``None`` silently skips them — that's the
           single most common "why aren't my skills firing?"
           mistake in claude-agent-sdk.
+        - ``permission_mode="bypassPermissions"`` (Issue #134) so
+          MCP tool calls auto-approve. Headless agents have no
+          human to click "allow" on an interactive approval
+          prompt, so the default gate silently blocks every MCP
+          server attached via the admin UI. This mirrors the
+          trust model already used by gemini-cli (``--approval-mode
+          yolo``) and codex (``approval_policy="never"``).
         - ``resume`` carries the per-room session id forward so
           follow-up messages stay in the same conversation.
         """
         kwargs: dict[str, Any] = {
             "cwd": str(Path.cwd()),
             "setting_sources": ["project"],
+            "permission_mode": "bypassPermissions",
         }
         if self._system_prompt is not None:
             kwargs["system_prompt"] = self._system_prompt
