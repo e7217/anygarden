@@ -26,7 +26,7 @@
  * Style: follows DESIGN.md (warm neutral palette, whisper borders,
  * near-black text, single-accent brand color).
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Plus, Trash2, FileText } from 'lucide-react'
+import { Download, FileText, Plus, Trash2, Upload } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile } from '@/hooks/useAgents'
@@ -54,6 +54,21 @@ const ALLOWED_PREFIXES: readonly string[] = [
   '.openhands/',
 ]
 
+// Allowed file extensions from the server-side whitelist.
+// Must stay in sync with ``_ALLOWED_EXTENSIONS`` in
+// ``packages/cluster/doorae/agent_files.py``. Used for the upload
+// ``accept`` hint and for client-side pre-validation so the admin
+// gets immediate feedback instead of a 400 from the server.
+const ALLOWED_EXTENSIONS: readonly string[] = [
+  '.md',
+  '.json',
+  '.toml',
+  '.txt',
+  '.yaml',
+  '.yml',
+  '.env',
+]
+
 // Friendly label for each prefix grouping in the file list.
 const PREFIX_LABELS: Record<string, string> = {
   'skills/': 'Skills',
@@ -62,6 +77,32 @@ const PREFIX_LABELS: Record<string, string> = {
   '.gemini/': 'Gemini CLI config',
   '.openhands/': 'OpenHands config',
 }
+
+// Strictly decode a ``File`` as UTF-8, throwing if the bytes are not
+// valid UTF-8. Unlike ``FileReader.readAsText`` / ``Blob.text()`` —
+// which silently replace invalid sequences with U+FFFD — this rejects
+// binary files so they never reach the ``agent_files.content`` text
+// column.
+async function decodeUtf8Strict(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  return decoder.decode(buffer)
+}
+
+// Return the final path segment, e.g. ``SKILL.md`` for
+// ``skills/greeting/SKILL.md``. Falls back to the full path when the
+// input has no slash (defensive — every valid agent_files path has at
+// least one segment under a prefix).
+function basename(path: string): string {
+  const idx = path.lastIndexOf('/')
+  return idx === -1 ? path : path.slice(idx + 1)
+}
+
+// Accept hint for the upload picker. Includes ``text/*`` so the
+// system dialog is forgiving on files without the exact extension
+// (e.g. dotfiles); client-side validation still enforces the
+// whitelist before the working copy accepts the content.
+const UPLOAD_ACCEPT = [...ALLOWED_EXTENSIONS, 'text/*'].join(',')
 
 type WorkingFile = AgentFile & {
   // Tracks per-file edit state so we only PUT what actually changed
@@ -106,6 +147,14 @@ export default function AgentEditDialog({
   const [error, setError] = useState<string | null>(null)
   const [showNewFileForm, setShowNewFileForm] = useState(false)
   const [newFilePath, setNewFilePath] = useState('skills/')
+
+  // Non-null when the admin has picked a file from the upload picker
+  // but has not yet confirmed the path. The same "New file" form is
+  // reused for confirmation so ``handleAddFile`` can consume this on
+  // commit. A null value means the form is in manual "create empty
+  // file" mode (the original behavior).
+  const [pendingContent, setPendingContent] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Pull the canonical file list from the server into the working
   // copy. Used in two places with slightly different behavior:
@@ -176,6 +225,7 @@ export default function AgentEditDialog({
       // Reset transient state on close so the next open starts clean.
       setShowNewFileForm(false)
       setNewFilePath('skills/')
+      setPendingContent(null)
       setError(null)
     }
   }, [open, agent, loadInitial])
@@ -237,40 +287,150 @@ export default function AgentEditDialog({
     if (!path) return
     // Client-side validation mirrors a slice of the server-side
     // whitelist so the admin gets immediate feedback. The server
-    // has the authoritative check on save.
+    // has the authoritative check on save. Path-structure rules
+    // (length, segments, control chars) are left to the server —
+    // mirroring the whole validator here would be redundant.
     if (!ALLOWED_PREFIXES.some(p => path.startsWith(p))) {
       setError(`path must start with one of: ${ALLOWED_PREFIXES.join(', ')}`)
       return
     }
-    if (files.some(f => f.path === path && !f.deleted)) {
+    if (!ALLOWED_EXTENSIONS.some(ext => path.endsWith(ext))) {
+      setError(`extension must be one of: ${ALLOWED_EXTENSIONS.join(', ')}`)
+      return
+    }
+    const uploadContent = pendingContent
+    const isUpload = uploadContent !== null
+    const existsVisible = files.some(f => f.path === path && !f.deleted)
+    // Manual "New file" rejects duplicates to match the original
+    // behavior. Upload is explicit content, so we offer to overwrite.
+    if (existsVisible && !isUpload) {
       setError(`file ${path} already exists`)
       return
     }
-    // Un-delete if the admin is re-adding a file they just removed.
-    const restored = files.find(f => f.path === path && f.deleted)
-    if (restored) {
-      setFiles(prev =>
-        prev.map(f =>
-          f.path === path ? { ...f, deleted: false, dirty: f.content !== f.originalContent } : f,
-        ),
-      )
-    } else {
-      setFiles(prev => [
-        ...prev,
-        {
-          path,
-          content: '',
-          updated_at: new Date().toISOString(),
-          originalContent: null,
-          dirty: true,
-          deleted: false,
-        },
-      ])
+    if (existsVisible && isUpload) {
+      const ok = window.confirm(`Overwrite existing ${path}?`)
+      if (!ok) return
     }
+
+    if (isUpload) {
+      // Upload always rewrites content and un-deletes if tombstoned,
+      // because the admin just picked a concrete file to land there.
+      setFiles(prev => {
+        const hit = prev.some(f => f.path === path)
+        if (hit) {
+          return prev.map(f =>
+            f.path === path
+              ? {
+                  ...f,
+                  content: uploadContent,
+                  dirty: f.originalContent !== uploadContent,
+                  deleted: false,
+                }
+              : f,
+          )
+        }
+        return [
+          ...prev,
+          {
+            path,
+            content: uploadContent,
+            updated_at: new Date().toISOString(),
+            originalContent: null,
+            dirty: true,
+            deleted: false,
+          },
+        ]
+      })
+    } else {
+      // Manual add: un-delete a tombstoned row (preserving its
+      // original content so an accidental delete+re-add is a no-op)
+      // or create a fresh empty row.
+      const restored = files.find(f => f.path === path && f.deleted)
+      if (restored) {
+        setFiles(prev =>
+          prev.map(f =>
+            f.path === path
+              ? { ...f, deleted: false, dirty: f.content !== f.originalContent }
+              : f,
+          ),
+        )
+      } else {
+        setFiles(prev => [
+          ...prev,
+          {
+            path,
+            content: '',
+            updated_at: new Date().toISOString(),
+            originalContent: null,
+            dirty: true,
+            deleted: false,
+          },
+        ])
+      }
+    }
+
     setSelectedPath(path)
     setShowNewFileForm(false)
     setNewFilePath('skills/')
+    setPendingContent(null)
     setError(null)
+  }
+
+  const handleCancelNewFile = () => {
+    setShowNewFileForm(false)
+    setNewFilePath('skills/')
+    setPendingContent(null)
+  }
+
+  // Trigger the hidden ``<input type="file">`` to open the OS picker.
+  // Uploads are explicit (no drag&drop for now — out of scope).
+  const handleUploadClick = () => {
+    setError(null)
+    fileInputRef.current?.click()
+  }
+
+  // Read the picked file as strict UTF-8 and stage it for path
+  // confirmation. The admin edits ``newFilePath`` in the existing
+  // "New file" form row, then clicks Add to commit to the working
+  // copy.
+  const handleUploadChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // Reset so picking the same file twice still fires ``change``.
+    e.target.value = ''
+    if (!file) return
+    setError(null)
+    let content: string
+    try {
+      content = await decodeUtf8Strict(file)
+    } catch {
+      setError(`${file.name}: not a valid UTF-8 text file (binary is not supported)`)
+      return
+    }
+    // Default path lands under ``skills/`` because that's the most
+    // common upload target (admins rarely upload engine configs).
+    // The admin can retarget to any allowed prefix before committing.
+    setPendingContent(content)
+    setNewFilePath(`skills/${file.name}`)
+    setShowNewFileForm(true)
+  }
+
+  // Push the currently-selected file's working-copy content to the
+  // admin's machine as a text download. Uses the working copy, not
+  // ``originalContent``, so unsaved edits are included — the admin
+  // is treating the editor as the source of truth.
+  const handleDownload = () => {
+    if (!selectedFile) return
+    const blob = new Blob([selectedFile.content], {
+      type: 'text/plain;charset=utf-8',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = basename(selectedFile.path)
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   const handleRemoveFile = (path: string) => {
@@ -392,19 +552,57 @@ export default function AgentEditDialog({
             <section className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>Files</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowNewFileForm(s => !s)}
-                  data-testid="agent-edit-toggle-new-file"
-                >
-                  <Plus className="mr-1 h-4 w-4" />
-                  New file
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleUploadClick}
+                    data-testid="agent-edit-upload"
+                  >
+                    <Upload className="mr-1 h-4 w-4" />
+                    Upload
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      // Toggling out of the form should also clear any
+                      // staged upload so the next open starts clean.
+                      if (showNewFileForm) {
+                        handleCancelNewFile()
+                      } else {
+                        setShowNewFileForm(true)
+                      }
+                    }}
+                    data-testid="agent-edit-toggle-new-file"
+                  >
+                    <Plus className="mr-1 h-4 w-4" />
+                    New file
+                  </Button>
+                </div>
               </div>
+
+              {/* Hidden upload input — triggered via the Upload button. */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={UPLOAD_ACCEPT}
+                onChange={handleUploadChange}
+                className="hidden"
+                data-testid="agent-edit-upload-input"
+              />
 
               {showNewFileForm ? (
                 <div className="flex gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+                  {pendingContent !== null ? (
+                    <Badge
+                      variant="outline"
+                      className="bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] border-[color:color-mix(in_srgb,var(--color-brand)_20%,transparent)] shrink-0"
+                      data-testid="agent-edit-upload-badge"
+                    >
+                      Upload
+                    </Badge>
+                  ) : null}
                   <Input
                     value={newFilePath}
                     onChange={e => setNewFilePath(e.target.value)}
@@ -418,14 +616,7 @@ export default function AgentEditDialog({
                     data-testid="agent-edit-new-file-path"
                   />
                   <Button size="sm" onClick={handleAddFile}>Add</Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setShowNewFileForm(false)
-                      setNewFilePath('skills/')
-                    }}
-                  >
+                  <Button size="sm" variant="ghost" onClick={handleCancelNewFile}>
                     Cancel
                   </Button>
                 </div>
@@ -484,8 +675,20 @@ export default function AgentEditDialog({
                 <div className="flex flex-col">
                   {selectedFile ? (
                     <>
-                      <div className="mb-1 font-mono text-xs text-[var(--color-foreground-muted)]">
-                        {selectedFile.path}
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="font-mono text-xs text-[var(--color-foreground-muted)] truncate">
+                          {selectedFile.path}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleDownload}
+                          className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                          title={`Download ${basename(selectedFile.path)}`}
+                          data-testid="agent-edit-download"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Download
+                        </button>
                       </div>
                       <textarea
                         className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
