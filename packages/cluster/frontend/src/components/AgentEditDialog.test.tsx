@@ -2,7 +2,12 @@
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import AgentEditDialog from './AgentEditDialog'
+import AgentEditDialog, {
+  buildTree,
+  isSkillDirNode,
+  slugifySkillName,
+  type TreeNode,
+} from './AgentEditDialog'
 import type { Agent, AgentFile } from '@/hooks/useAgents'
 
 // jsdom doesn't implement the Object URL API, so stub them as
@@ -109,7 +114,10 @@ describe('AgentEditDialog — upload/download', () => {
     const pathInput = (await screen.findByTestId(
       'agent-edit-new-file-path',
     )) as HTMLInputElement
-    fireEvent.change(pathInput, { target: { value: 'skills/do.sh' } })
+    // Issue #112 — ``.sh`` is now whitelisted. Use a truly-rejected
+    // extension instead (``.bash`` was deliberately left out of the
+    // expansion).
+    fireEvent.change(pathInput, { target: { value: 'skills/do.bash' } })
     fireEvent.click(screen.getByText('Add'))
 
     expect(
@@ -125,8 +133,13 @@ describe('AgentEditDialog — upload/download', () => {
         updated_at: '2026-04-18T00:00:00Z',
       },
     ])
-    // Issue #109 — AGENTS.md is now the default-selected row, so
-    // explicitly select the skill file before downloading.
+    // Issue #112 — the tree is recursive, so ``skills/greet`` sits
+    // inside the (seeded-open) ``skills`` dir and itself needs to
+    // be expanded before the file row renders. Click the dir
+    // header to toggle it open.
+    fireEvent.click(await screen.findByTestId('agent-edit-dir-skills/greet'))
+    // Then select the file (AGENTS.md is the default selection, so
+    // explicitly click the skill file for download to target it).
     const row = await screen.findByTestId('agent-edit-file-skills/greet/SKILL.md')
     fireEvent.click(row)
 
@@ -228,5 +241,254 @@ describe('AgentEditDialog — AGENTS.md virtual entry', () => {
     expect(
       await screen.findByText(/AGENTS\.md already exists/i),
     ).toBeInTheDocument()
+  })
+})
+
+// Issue #112 — skill-aware manifest tree pieces.
+describe('buildTree (Issue #112)', () => {
+  const skillsOnly = ['skills/'] as const
+  const claudeAndSkills = ['skills/', '.claude/'] as const
+
+  it('returns an empty forest for no files', () => {
+    expect(buildTree([], skillsOnly)).toEqual([])
+  })
+
+  it('places the virtual AGENTS.md row at the root', () => {
+    const files = [
+      {
+        path: 'AGENTS.md',
+        content: '# role',
+        updated_at: '2026-04-18',
+        originalContent: '# role',
+        dirty: false,
+        deleted: false,
+        virtual: true,
+      },
+    ] as const
+    const tree = buildTree(files as never, skillsOnly)
+    expect(tree).toHaveLength(1)
+    expect(tree[0]).toMatchObject({ kind: 'file', path: 'AGENTS.md' })
+  })
+
+  it('builds nested dir nodes for deep skill paths', () => {
+    const files = [
+      {
+        path: 'skills/greet/SKILL.md',
+        content: '# greet',
+        updated_at: '2026-04-18',
+        originalContent: '# greet',
+        dirty: false,
+        deleted: false,
+      },
+      {
+        path: 'skills/greet/scripts/helper.sh',
+        content: '#!/bin/bash',
+        updated_at: '2026-04-18',
+        originalContent: '#!/bin/bash',
+        dirty: false,
+        deleted: false,
+      },
+    ] as const
+    const tree = buildTree(files as never, skillsOnly)
+    // Only one root: skills/
+    expect(tree).toHaveLength(1)
+    const skillsDir = tree[0] as Extract<TreeNode, { kind: 'dir' }>
+    expect(skillsDir.kind).toBe('dir')
+    expect(skillsDir.name).toBe('skills')
+    // Below: greet/ dir → SKILL.md + scripts/
+    const greetDir = skillsDir.children.find(c => c.kind === 'dir' && c.name === 'greet') as
+      | Extract<TreeNode, { kind: 'dir' }>
+      | undefined
+    expect(greetDir).toBeDefined()
+    expect(greetDir!.children.map(c => c.name).sort()).toEqual(['SKILL.md', 'scripts'])
+    const scriptsDir = greetDir!.children.find(c => c.name === 'scripts') as
+      | Extract<TreeNode, { kind: 'dir' }>
+      | undefined
+    expect(scriptsDir!.kind).toBe('dir')
+    expect(scriptsDir!.children[0]).toMatchObject({ kind: 'file', name: 'helper.sh' })
+  })
+
+  it('skips files whose prefix is not admitted by the engine filter', () => {
+    const files = [
+      {
+        path: '.codex/config.toml',
+        content: '',
+        updated_at: '2026-04-18',
+        originalContent: '',
+        dirty: false,
+        deleted: false,
+      },
+      {
+        path: '.claude/settings.json',
+        content: '{}',
+        updated_at: '2026-04-18',
+        originalContent: '{}',
+        dirty: false,
+        deleted: false,
+      },
+    ] as const
+    const tree = buildTree(files as never, claudeAndSkills)
+    // .codex dropped; only .claude at root
+    expect(tree).toHaveLength(1)
+    expect(tree[0]).toMatchObject({ kind: 'dir', name: '.claude' })
+  })
+
+  it('drops deleted rows from the tree', () => {
+    const files = [
+      {
+        path: 'skills/old/SKILL.md',
+        content: '',
+        updated_at: '2026-04-18',
+        originalContent: '',
+        dirty: false,
+        deleted: true,
+      },
+    ] as const
+    expect(buildTree(files as never, skillsOnly)).toEqual([])
+  })
+})
+
+describe('isSkillDirNode (Issue #112)', () => {
+  it('matches ``skills/<name>`` at depth 2', () => {
+    expect(
+      isSkillDirNode({ kind: 'dir', path: 'skills/greet', name: 'greet', children: [] }),
+    ).toBe(true)
+  })
+
+  it('rejects ``skills/`` itself and deeper nested dirs', () => {
+    expect(
+      isSkillDirNode({ kind: 'dir', path: 'skills', name: 'skills', children: [] }),
+    ).toBe(false)
+    expect(
+      isSkillDirNode({
+        kind: 'dir',
+        path: 'skills/greet/scripts',
+        name: 'scripts',
+        children: [],
+      }),
+    ).toBe(false)
+  })
+
+  it('rejects file nodes', () => {
+    expect(
+      isSkillDirNode({
+        kind: 'file',
+        path: 'skills/greet/SKILL.md',
+        name: 'SKILL.md',
+        file: {} as never,
+      }),
+    ).toBe(false)
+  })
+})
+
+describe('slugifySkillName (Issue #112)', () => {
+  it('lowercases and collapses whitespace to dashes', () => {
+    expect(slugifySkillName('Code Review')).toBe('code-review')
+    expect(slugifySkillName('  Hello   World  ')).toBe('hello-world')
+  })
+
+  it('strips non-alphanumerics', () => {
+    expect(slugifySkillName('my_skill!@#')).toBe('my-skill')
+  })
+
+  it('returns empty string for purely non-alphanumeric input', () => {
+    expect(slugifySkillName('!!!')).toBe('')
+  })
+})
+
+describe('AgentEditDialog — engine-based prefix filter (Issue #112)', () => {
+  it('claude-code agent does not render .codex or .gemini groups', async () => {
+    renderDialog([
+      {
+        path: '.codex/config.toml',
+        content: '',
+        updated_at: '2026-04-18T00:00:00Z',
+      },
+      {
+        path: '.gemini/settings.json',
+        content: '{}',
+        updated_at: '2026-04-18T00:00:00Z',
+      },
+      {
+        path: 'skills/test/SKILL.md',
+        content: '',
+        updated_at: '2026-04-18T00:00:00Z',
+      },
+    ])
+    // skills/ is in claude-code's allowed set; wait for its dir node.
+    await screen.findByTestId('agent-edit-dir-skills')
+    expect(screen.queryByTestId('agent-edit-dir-.codex')).toBeNull()
+    expect(screen.queryByTestId('agent-edit-dir-.gemini')).toBeNull()
+  })
+})
+
+describe('AgentEditDialog — skill quick-add button (Issue #112)', () => {
+  it('prefills the New file form with the skill path', async () => {
+    renderDialog([
+      {
+        path: 'skills/greet/SKILL.md',
+        content: '',
+        updated_at: '2026-04-18T00:00:00Z',
+      },
+    ])
+    // Seed-expanded ``skills`` renders the greet dir node with the + button.
+    const addButton = await screen.findByTestId('agent-edit-add-in-skill-greet')
+    fireEvent.click(addButton)
+    const pathInput = (await screen.findByTestId(
+      'agent-edit-new-file-path',
+    )) as HTMLInputElement
+    expect(pathInput.value).toBe('skills/greet/')
+  })
+})
+
+describe('AgentEditDialog — New skill action (Issue #112)', () => {
+  it('creates skills/<slug>/SKILL.md with a frontmatter template', async () => {
+    renderDialog()
+    // Open the New skill form.
+    fireEvent.click(await screen.findByTestId('agent-edit-toggle-new-skill'))
+    const nameInput = (await screen.findByTestId(
+      'agent-edit-new-skill-name',
+    )) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: 'Code Review' } })
+    fireEvent.click(screen.getByTestId('agent-edit-create-skill'))
+    // The new SKILL.md row should now be in the tree and selected.
+    await screen.findByTestId('agent-edit-file-skills/code-review/SKILL.md')
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    expect(textarea.value).toContain('name: code-review')
+    expect(textarea.value).toContain('description: TODO')
+    expect(textarea.value).toContain('# code-review')
+  })
+
+  it('rejects a skill name that slugifies to empty', async () => {
+    renderDialog()
+    fireEvent.click(await screen.findByTestId('agent-edit-toggle-new-skill'))
+    const nameInput = (await screen.findByTestId(
+      'agent-edit-new-skill-name',
+    )) as HTMLInputElement
+    fireEvent.change(nameInput, { target: { value: '!!!' } })
+    fireEvent.click(screen.getByTestId('agent-edit-create-skill'))
+    expect(
+      await screen.findByText(/must contain at least one alphanumeric/i),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('AgentEditDialog — script extensions (Issue #112)', () => {
+  it('admits ``.sh`` as a valid path in the New file form', async () => {
+    renderDialog()
+    await screen.findByTestId('agent-edit-upload')
+    fireEvent.click(screen.getByTestId('agent-edit-toggle-new-file'))
+    const pathInput = (await screen.findByTestId(
+      'agent-edit-new-file-path',
+    )) as HTMLInputElement
+    fireEvent.change(pathInput, { target: { value: 'skills/greet/scripts/helper.sh' } })
+    fireEvent.click(screen.getByText('Add'))
+    // No validation error message.
+    expect(screen.queryByText(/extension must be one of/i)).toBeNull()
+    expect(screen.queryByText(/path must start with/i)).toBeNull()
+    // The form closes on successful add (``showNewFileForm=false``).
+    await waitFor(() =>
+      expect(screen.queryByTestId('agent-edit-new-file-path')).toBeNull(),
+    )
   })
 })

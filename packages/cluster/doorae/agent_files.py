@@ -25,7 +25,16 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
 )
 
 _ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
-    {".md", ".json", ".toml", ".txt", ".yaml", ".yml", ".env"}
+    {
+        ".md", ".json", ".toml", ".txt", ".yaml", ".yml", ".env",
+        # Issue #112 — scripts that engine CLIs (Claude Code skills,
+        # Codex / Gemini toolchains) legitimately invoke from
+        # ``skills/<name>/scripts/*``. doorae does not execute these
+        # itself: the materializer only writes them to the agent's
+        # scratch dir and the engine's own sandbox is responsible
+        # for execution policy. Write access stays admin-only.
+        ".sh", ".py", ".js", ".ts", ".mjs",
+    }
 )
 
 _MAX_DEPTH = 6

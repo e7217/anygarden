@@ -515,9 +515,12 @@ class TestMaterializeValidation:
     def test_rejects_unwhitelisted_extension(
         self, spawner: Spawner
     ) -> None:
+        # Issue #112 — ``.sh``/``.py``/etc. are now whitelisted so the
+        # materializer accepts skill-local scripts. Use ``.bash`` (an
+        # intentionally-omitted shell variant) for the rejection case.
         with pytest.raises(AgentFilePathError):
             spawner._materialize_agent_dir(
-                _msg(files={"skills/coder/run.sh": "#!/bin/sh"})
+                _msg(files={"skills/coder/run.bash": "#!/bin/bash"})
             )
 
     @pytest.mark.parametrize(

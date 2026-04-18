@@ -30,6 +30,13 @@ class TestAllowedPaths:
             ".gemini/.env",
             ".openhands/microagents/kb.md",
             "skills/a/b/c/refs/deep.md",
+            # Issue #112 — script extensions admitted for skills that
+            # CLIs invoke (bash/python/node-based tooling).
+            "skills/coder/scripts/helper.sh",
+            "skills/coder/scripts/build.py",
+            "skills/coder/scripts/runner.js",
+            "skills/coder/scripts/tool.ts",
+            "skills/coder/scripts/module.mjs",
         ],
     )
     def test_valid_paths_pass(self, path: str) -> None:
@@ -76,10 +83,14 @@ class TestRejectedPaths:
     @pytest.mark.parametrize(
         "path",
         [
-            "skills/coder/run.sh",
             "skills/coder/payload.exe",
             "skills/coder/binary.so",
-            ".codex/config.py",
+            "skills/coder/object.pyc",
+            "skills/coder/image.png",
+            "skills/coder/archive.zip",
+            # Issue #112 — ``.bash`` / ``.zsh`` were deliberately
+            # left out of the script expansion.
+            "skills/coder/run.bash",
         ],
     )
     def test_disallowed_extensions_rejected(self, path: str) -> None:
