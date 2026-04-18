@@ -553,3 +553,84 @@ class TestMaterializeValidation:
 
         # The sibling directory must be intact — no collateral damage.
         assert canary.read_text() == "must not be touched"
+
+
+class TestClaudeCodeDefaultSettings:
+    """claude-code 엔진은 cwd 단위 ``.claude/settings.json``만 권한
+    소스로 인정한다 (어댑터가 ``setting_sources=["project"]`` 고정).
+    admin manifest가 settings.json을 보내지 않으면 SDK의 기본 ask
+    모드 + headless 환경 조합으로 모든 도구 호출이 거부돼 에이전트
+    가 무용지물이 된다. 이슈 #111 — 빈 슬롯을 디폴트 화이트리스트
+    로 채워서 안전한 동작을 보장하되, admin이 manifest로 같은 경로
+    파일을 보내면 admin 버전이 우선한다 (per-agent override).
+    """
+
+    def test_default_written_for_claude_code(self, spawner: Spawner) -> None:
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        path = agent_root / ".claude" / "settings.json"
+        assert path.is_file()
+
+    def test_default_includes_websearch_and_webfetch(
+        self, spawner: Spawner
+    ) -> None:
+        """리그레션 가드: 디폴트가 비어있는 ``permissions.allow``로
+        퇴화하면 이슈 #111이 다시 재현된다 (WebSearch가 거부돼
+        '권한이 승인되지 않아…' 응답).
+        """
+        import json
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        path = agent_root / ".claude" / "settings.json"
+        body = json.loads(path.read_text())
+        allow = body.get("permissions", {}).get("allow", [])
+        assert "WebSearch" in allow
+        assert "WebFetch" in allow
+
+    def test_default_chmod_600(self, spawner: Spawner) -> None:
+        """다른 manifest 파일과 동일한 권한 정책. 0o600 — owner rw."""
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        path = agent_root / ".claude" / "settings.json"
+        assert path.stat().st_mode & 0o777 == 0o600
+
+    @pytest.mark.parametrize("engine", ["codex", "gemini-cli", "openhands"])
+    def test_no_default_for_other_engines(
+        self, spawner: Spawner, engine: str
+    ) -> None:
+        """``.claude/settings.json``은 claude-code 전용이다. 다른
+        엔진은 자기 엔진 디렉토리(.codex/, .gemini/, .openhands/)
+        만 본다 — 빈 .claude/ 디렉토리가 남으면 prune 일관성도
+        깨지고 디스크 노이즈가 된다.
+        """
+        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
+        assert not (agent_root / ".claude" / "settings.json").exists()
+
+    def test_admin_manifest_overrides_default(self, spawner: Spawner) -> None:
+        """admin이 자기 정책을 manifest로 보내면 그 파일이 단일
+        진실 원천이 된다. 디폴트와 머지하지 않는다 — 머지 의미론
+        을 admin이 학습할 필요가 없게 단순 대체로 일관.
+        """
+        custom = '{"permissions": {"allow": ["Read", "Glob"]}}'
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine="claude-code",
+                files={".claude/settings.json": custom},
+            )
+        )
+        path = agent_root / ".claude" / "settings.json"
+        assert path.read_text() == custom
+
+    def test_default_restored_after_respawn(self, spawner: Spawner) -> None:
+        """prune은 매 spawn에서 .claude/를 통째로 지운다. 디폴트
+        는 결정론적으로 매번 다시 작성돼야 한다 — "한 번 만들고
+        끝"이면 manifest가 비는 spawn 사이에서 권한이 사라짐.
+        """
+        spawner._materialize_agent_dir(_msg(engine="claude-code"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="claude-code"))
+        path = agent_root / ".claude" / "settings.json"
+        assert path.is_file()
+        assert path.stat().st_mode & 0o777 == 0o600

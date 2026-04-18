@@ -130,6 +130,39 @@ class Spawner:
         "claude-code": ".claude/.env",
     }
 
+    # Default ``.claude/settings.json`` body for claude-code agents
+    # whose admin manifest doesn't supply one. claude-agent-sdk loads
+    # only project-scoped settings (``setting_sources=["project"]``),
+    # so without this file every tool call gets denied by the SDK's
+    # default ask-mode and there is no human in the loop to approve.
+    # The trust model matches gemini-cli's ``--approval-mode yolo``
+    # and codex's ``workspace-write`` sandbox: tool calls are
+    # permitted, but the cwd-pinned ``workspace/`` plus the
+    # symlink-into-sandbox bridge for AGENTS.md/CLAUDE.md
+    # (see ``_materialize_agent_dir`` below) keeps the blast radius
+    # the same as the other CLI engines. Admins who want a tighter
+    # policy ship their own ``.claude/settings.json`` via the spawn
+    # manifest — that file is written first and the "is the slot
+    # empty?" check below skips the default.
+    _CLAUDE_CODE_DEFAULT_SETTINGS = (
+        '{\n'
+        '  "permissions": {\n'
+        '    "allow": [\n'
+        '      "WebSearch",\n'
+        '      "WebFetch",\n'
+        '      "Bash",\n'
+        '      "Read",\n'
+        '      "Write",\n'
+        '      "Edit",\n'
+        '      "Glob",\n'
+        '      "Grep",\n'
+        '      "Task",\n'
+        '      "TodoWrite"\n'
+        '    ]\n'
+        '  }\n'
+        '}\n'
+    )
+
     @staticmethod
     def _compose_agents_md(msg: SpawnManifest) -> str:
         """Return the AGENTS.md body rendered from the manifest.
@@ -349,6 +382,21 @@ class Spawner:
                     else:
                         shutil.rmtree(alias_dir)
                 alias_dir.symlink_to(target_rel)
+
+        # --- Default .claude/settings.json for claude-code ------------
+        # Issue #111. The admin-supplied file (if any) was already
+        # written by the manifest loop above, so the existence check
+        # here is the override mechanism: present → admin wins, absent
+        # → fall back to the permissive default that lets the agent
+        # actually use its tools. See ``_CLAUDE_CODE_DEFAULT_SETTINGS``
+        # for the trust-model rationale.
+        if msg.engine == "claude-code":
+            settings_path = agent_root / ".claude" / "settings.json"
+            if not settings_path.exists():
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(settings_path.parent, 0o700)
+                settings_path.write_text(self._CLAUDE_CODE_DEFAULT_SETTINGS)
+                os.chmod(settings_path, 0o600)
 
         # --- Engine-specific .env -------------------------------------
         if msg.engine_secrets:
