@@ -1,6 +1,8 @@
-"""Tests that lifecycle._build_sync_frame merges attached skills (#119 / #123)."""
+"""Tests that lifecycle._build_sync_frame merges attached skills (#119 / #127 / #125)."""
 
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -10,6 +12,16 @@ from doorae.db.engine import build_engine, build_session_factory
 from doorae.db.models import Agent, AgentFile, AgentSkill, Base, SkillLibraryEntry
 from doorae.scheduler.lifecycle import AgentLifecycle
 from doorae.scheduler.machine_bus import MachineBus
+
+
+def _approved() -> dict:
+    """Kwargs for SkillLibraryEntry that mark it as approved.
+
+    Phase 2 added the gate so every lifecycle skill-merge test now
+    needs to stamp ``approved_by`` to still exercise the merge path
+    (the negative-case test below flips it back to None to verify
+    the filter fires)."""
+    return {"approved_by": "admin", "approved_at": datetime.now(timezone.utc)}
 
 
 @pytest_asyncio.fixture()
@@ -56,6 +68,7 @@ async def test_sync_frame_merges_attached_skill_md(env):
             extra_files={},
             scripts_detected=[],
             content_hash="h",
+            **_approved(),
         )
         db.add_all([agent, skill])
         await db.flush()
@@ -84,6 +97,7 @@ async def test_agent_file_wins_over_skill_file_at_same_path(env):
             extra_files={},
             scripts_detected=[],
             content_hash="h",
+            **_approved(),
         )
         db.add_all([agent, skill])
         await db.flush()
@@ -123,6 +137,7 @@ async def test_sync_frame_merges_skill_extra_files(env):
                 "skills/pdf/references/notes.md",
             ],
             content_hash="h",
+            **_approved(),
         )
         db.add_all([agent, skill])
         await db.flush()
@@ -153,6 +168,7 @@ async def test_agent_file_wins_over_skill_extra_file_at_same_path(env):
             extra_files={"skills/pdf/scripts/extract.py": "library version"},
             scripts_detected=["skills/pdf/scripts/extract.py"],
             content_hash="h",
+            **_approved(),
         )
         db.add_all([agent, skill])
         await db.flush()
@@ -168,3 +184,68 @@ async def test_agent_file_wins_over_skill_extra_file_at_same_path(env):
     frame = await _build_frame(env, agent_id)
     assert frame["files"]["skills/pdf/scripts/extract.py"] == "admin override"
     assert frame["files"]["skills/pdf/SKILL.md"] == "# PDF"
+
+
+@pytest.mark.asyncio
+async def test_unapproved_skill_is_filtered_from_sync_frame(env):
+    """Phase 2 (#125) gate: an attached skill with approved_by=NULL
+    must not land in the sync frame. The API refuses to attach in the
+    first place, but this test simulates either a grandfathered
+    attachment from before Phase 2 or a race — the lifecycle layer is
+    the last line of defense."""
+    async with env() as db:
+        agent = Agent(engine="echo", name="a", desired_state="idle", actual_state="idle")
+        skill = SkillLibraryEntry(
+            source="owner/repo",
+            name="pending-skill",
+            pinned_rev="sha",
+            skill_md="# Pending",
+            extra_files={"skills/pending-skill/scripts/x.py": "x"},
+            scripts_detected=["skills/pending-skill/scripts/x.py"],
+            content_hash="h",
+            # Intentionally no ``**_approved()`` — approved_by stays NULL.
+        )
+        db.add_all([agent, skill])
+        await db.flush()
+        db.add(AgentSkill(agent_id=agent.id, skill_library_id=skill.id))
+        await db.commit()
+        agent_id = agent.id
+
+    frame = await _build_frame(env, agent_id)
+    assert frame["files"] == {}
+
+
+@pytest.mark.asyncio
+async def test_mixed_approved_and_unapproved_only_ships_approved(env):
+    """When two skills are attached and only one is approved, only
+    that one's contents appear in the sync frame."""
+    async with env() as db:
+        agent = Agent(engine="echo", name="a", desired_state="idle", actual_state="idle")
+        ok = SkillLibraryEntry(
+            source="owner/repo",
+            name="ok",
+            pinned_rev="sha1",
+            skill_md="# OK",
+            extra_files={},
+            scripts_detected=[],
+            content_hash="h1",
+            **_approved(),
+        )
+        pending = SkillLibraryEntry(
+            source="owner/repo",
+            name="pending",
+            pinned_rev="sha2",
+            skill_md="# Pending",
+            extra_files={},
+            scripts_detected=[],
+            content_hash="h2",
+        )
+        db.add_all([agent, ok, pending])
+        await db.flush()
+        db.add(AgentSkill(agent_id=agent.id, skill_library_id=ok.id))
+        db.add(AgentSkill(agent_id=agent.id, skill_library_id=pending.id))
+        await db.commit()
+        agent_id = agent.id
+
+    frame = await _build_frame(env, agent_id)
+    assert frame["files"] == {"skills/ok/SKILL.md": "# OK"}

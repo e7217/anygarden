@@ -336,6 +336,50 @@ class AgentLifecycle:
         result = await db.execute(select(Agent).where(Agent.id == agent_id))
         return result.scalar_one_or_none()
 
+    async def _resolve_skill_files(
+        self, db: AsyncSession, agent_id: str
+    ) -> dict[str, str]:
+        """Merge attached skills into ``{path: body}``, filtering unapproved.
+
+        Mirrors ``SkillLibraryService.resolve_for_agent`` so lifecycle
+        can stay service-injection-free for tests that only care about
+        agent files. Both code paths apply the same
+        ``approved_by IS NOT NULL`` gate — the service version is what
+        the REST layer calls for cache-friendly previews, while this
+        one runs in the hot spawn path.
+
+        Unapproved attachments trip a structlog warning: the UI and
+        API both refuse to attach unapproved skills, so the only way
+        this observation can fire in production is a race (approve →
+        attach → reject without detach) or a manual DB edit — either
+        of which an operator wants to see.
+        """
+        rows = (
+            await db.execute(
+                select(SkillLibraryEntry)
+                .join(
+                    AgentSkill,
+                    AgentSkill.skill_library_id == SkillLibraryEntry.id,
+                )
+                .where(AgentSkill.agent_id == agent_id)
+            )
+        ).scalars().all()
+        files: dict[str, str] = {}
+        for entry in rows:
+            if entry.approved_by is None:
+                logger.warning(
+                    "lifecycle.skill_attached_but_unapproved",
+                    agent_id=agent_id,
+                    skill_id=entry.id,
+                    source=entry.source,
+                    name=entry.name,
+                )
+                continue
+            files[f"skills/{entry.name}/SKILL.md"] = entry.skill_md
+            for rel_path, body in (entry.extra_files or {}).items():
+                files[rel_path] = body
+        return files
+
     async def _build_sync_frame(
         self,
         db: AsyncSession,
@@ -351,30 +395,18 @@ class AgentLifecycle:
         ).scalars().all()
         files_map: dict[str, str] = {row.path: row.content for row in file_rows}
 
-        # #119 / #123 — merge attached library skills into the same
-        # files map. Skill rows live in skill_library; the link table
-        # agent_skills gates which skills apply to this agent. Phase 3
-        # (#123) materializes the whole skill directory, so each entry
-        # contributes SKILL.md *plus* every path in ``extra_files``.
+        # #119 / #123 / #125 — merge attached *approved* library skills
+        # into the same files map. Delegating to
+        # ``SkillLibraryService.resolve_for_agent`` keeps the approval
+        # gate in a single place (service layer) — unapproved skills
+        # are filtered there, with a structlog warning when an
+        # unapproved attachment is observed (see service docstring).
         # AgentFile entries win on key collision because they represent
         # an explicit admin override uploaded directly to the agent —
         # ``setdefault`` is load-bearing here.
-        skill_rows = (
-            await db.execute(
-                select(SkillLibraryEntry)
-                .join(
-                    AgentSkill,
-                    AgentSkill.skill_library_id == SkillLibraryEntry.id,
-                )
-                .where(AgentSkill.agent_id == agent.id)
-            )
-        ).scalars().all()
-        for entry in skill_rows:
-            files_map.setdefault(
-                f"skills/{entry.name}/SKILL.md", entry.skill_md,
-            )
-            for rel_path, body in (entry.extra_files or {}).items():
-                files_map.setdefault(rel_path, body)
+        skill_files = await self._resolve_skill_files(db, agent.id)
+        for path, body in skill_files.items():
+            files_map.setdefault(path, body)
 
         # #124 — overlay attached MCP server instances onto the
         # engine-specific settings file. When the admin already
