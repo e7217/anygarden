@@ -701,19 +701,19 @@ export default function AdminSkills() {
             <p className="text-sm text-[var(--color-foreground-muted)]">Loading…</p>
           )}
           {preview && (
-            <div className="space-y-3">
-              <div>
+            <div className="space-y-3 min-w-0">
+              <div className="min-w-0">
                 <Label className="text-xs">SKILL.md</Label>
-                <pre className="mt-1 max-h-72 overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-3 text-xs">
+                <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-3 text-xs">
                   {preview.skill_md}
                 </pre>
               </div>
               {preview.extra_files.length > 0 && (
-                <div>
+                <div className="min-w-0">
                   <Label className="text-xs">
                     보조 파일 ({preview.extra_files.length})
                   </Label>
-                  <ul className="mt-1 max-h-40 overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-2 text-xs">
+                  <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-2 text-xs">
                     {preview.extra_files.map(path => (
                       <li key={path} className="font-mono">
                         {path}
