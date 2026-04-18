@@ -51,7 +51,9 @@ import {
 } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
-import type { Agent, AgentFile } from '@/hooks/useAgents'
+import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
+import { BookOpen, ExternalLink, Lock } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 // Allowed top-level prefixes from the server-side whitelist.
 // Must stay in sync with ``doorae-server/doorae/agent_files.py``.
@@ -488,6 +490,11 @@ interface Props {
   ) => Promise<Agent>
   upsertAgentFile: (id: string, path: string, content: string) => Promise<AgentFile>
   deleteAgentFile: (id: string, path: string) => Promise<void>
+  // Issue #133 — optional read-only surfacing of library skills
+  // attached to this agent. Both default to "no skills shown"
+  // when omitted so older callers / tests remain compatible.
+  fetchAttachedSkills?: (id: string) => Promise<AttachedSkill[]>
+  fetchSkillPreview?: (skillId: string) => Promise<SkillPreview | null>
 }
 
 export default function AgentEditDialog({
@@ -498,7 +505,10 @@ export default function AgentEditDialog({
   updateAgent,
   upsertAgentFile,
   deleteAgentFile,
+  fetchAttachedSkills,
+  fetchSkillPreview,
 }: Props) {
+  const navigate = useNavigate()
   const [files, setFiles] = useState<WorkingFile[]>([])
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -526,6 +536,17 @@ export default function AgentEditDialog({
   // leak expand state into each other. The value is a Set of
   // directory paths (no trailing slash, matching ``TreeNode.path``).
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
+
+  // Issue #133 — attached library skills surfaced as a read-only
+  // section. ``previewBySkillId`` is populated lazily on selection
+  // so opening the dialog for an agent with many skills doesn't
+  // fan out N preview requests up front. The selection state is
+  // mutually exclusive with ``selectedPath`` — clicking a library
+  // skill file clears ``selectedPath`` and vice versa.
+  const [attachedSkills, setAttachedSkills] = useState<AttachedSkill[]>([])
+  const [previewBySkillId, setPreviewBySkillId] = useState<Record<string, SkillPreview>>({})
+  const [selectedAttachedSkillId, setSelectedAttachedSkillId] = useState<string | null>(null)
+  const [attachedSkillSection, setAttachedSkillSection] = useState(true)
 
   // Pull the canonical file list from the server into the working
   // copy, and prepend the virtual ``AGENTS.md`` row.
@@ -560,10 +581,18 @@ export default function AgentEditDialog({
     setLoading(true)
     setError(null)
     try {
-      const working = await fetchFilesIntoWorking(agent.id)
+      const [working, skills] = await Promise.all([
+        fetchFilesIntoWorking(agent.id),
+        fetchAttachedSkills ? fetchAttachedSkills(agent.id) : Promise.resolve([]),
+      ])
       const agentsMdFile = makeAgentsMdFile(agent.agents_md, new Date().toISOString())
       const allFiles = [agentsMdFile, ...working]
       setFiles(allFiles)
+      setAttachedSkills(skills)
+      // Reset preview cache when the dialog reloads for a different
+      // agent so we don't display stale bodies.
+      setPreviewBySkillId({})
+      setSelectedAttachedSkillId(null)
       setSelectedPath(prev => {
         // Keep the previously-selected path if it still exists,
         // otherwise default to AGENTS.md so the agent's "identity"
@@ -575,7 +604,7 @@ export default function AgentEditDialog({
       setError(e instanceof Error ? e.message : String(e))
     }
     setLoading(false)
-  }, [agent, fetchFilesIntoWorking])
+  }, [agent, fetchFilesIntoWorking, fetchAttachedSkills])
 
   const resyncAfterSave = useCallback(async () => {
     if (!agent) return
@@ -696,6 +725,38 @@ export default function AgentEditDialog({
     () => (selectedPath ? files.find(f => f.path === selectedPath) ?? null : null),
     [files, selectedPath],
   )
+
+  // Issue #133 — the attached-skill file currently selected, if any.
+  // Mutually exclusive with ``selectedFile``; the render branch
+  // below picks whichever one is non-null.
+  const selectedAttachedSkill = useMemo(
+    () => attachedSkills.find(s => s.id === selectedAttachedSkillId) ?? null,
+    [attachedSkills, selectedAttachedSkillId],
+  )
+  const selectedAttachedPreview = selectedAttachedSkillId
+    ? previewBySkillId[selectedAttachedSkillId] ?? null
+    : null
+
+  // Lazy-load the SKILL.md body on first selection. The preview
+  // endpoint also returns ``extra_files`` paths so we can render
+  // them as a non-interactive list alongside the body.
+  const handleSelectAttachedSkill = useCallback(
+    async (skillId: string) => {
+      setSelectedAttachedSkillId(skillId)
+      setSelectedPath(null)
+      if (previewBySkillId[skillId] || !fetchSkillPreview) return
+      const pr = await fetchSkillPreview(skillId)
+      if (pr) setPreviewBySkillId(prev => ({ ...prev, [skillId]: pr }))
+    },
+    [previewBySkillId, fetchSkillPreview],
+  )
+
+  // Clicking a WorkingFile in the regular tree clears any
+  // attached-skill selection so the editor shows only one file.
+  const handleSelectWorkingPath = useCallback((path: string) => {
+    setSelectedPath(path)
+    setSelectedAttachedSkillId(null)
+  }, [])
 
   // Track "anything changed" to enable/disable the Save button and
   // warn on close. AGENTS.md sits in ``files`` as a virtual row so
@@ -1206,12 +1267,64 @@ export default function AgentEditDialog({
                           depth: 0,
                           selectedPath,
                           expandedPaths,
-                          onSelect: setSelectedPath,
+                          onSelect: handleSelectWorkingPath,
                           onToggle: toggleExpanded,
                           onRemove: handleRemoveFile,
                           onAddInSkill: handleAddInSkill,
                         }),
                       )}
+                      {/* Issue #133 — read-only section for library
+                          skills attached via the Skills admin page.
+                          Rendered below the editable tree so it's
+                          visually separated from files the admin
+                          can modify. */}
+                      {attachedSkills.length > 0 ? (
+                        <div className="border-t border-[var(--color-border)] mt-1 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setAttachedSkillSection(v => !v)}
+                            className="w-full flex items-center gap-1.5 pr-3 py-1 text-[10px] uppercase tracking-wider text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)]"
+                            style={{ paddingLeft: 12 }}
+                            data-testid="agent-edit-attached-skills-toggle"
+                          >
+                            {attachedSkillSection ? (
+                              <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            ) : (
+                              <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            )}
+                            <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                            <span>Attached skills</span>
+                            <span className="text-[10px] text-[var(--color-foreground-subtle)] normal-case tracking-normal">
+                              ({attachedSkills.length})
+                            </span>
+                            <Lock className="ml-auto h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
+                          </button>
+                          {attachedSkillSection
+                            ? attachedSkills.map(skill => {
+                                const isSelected = selectedAttachedSkillId === skill.id
+                                return (
+                                  <button
+                                    key={skill.id}
+                                    type="button"
+                                    onClick={() => void handleSelectAttachedSkill(skill.id)}
+                                    className={`w-full flex items-center gap-1.5 pr-3 py-1.5 text-sm text-left transition-colors ${
+                                      isSelected
+                                        ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
+                                        : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
+                                    }`}
+                                    style={{ paddingLeft: 24 }}
+                                    data-testid={`agent-edit-attached-skill-${skill.name}`}
+                                  >
+                                    <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
+                                    <span className="truncate font-mono text-xs">
+                                      {skill.name}
+                                    </span>
+                                  </button>
+                                )
+                              })
+                            : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -1247,6 +1360,64 @@ export default function AgentEditDialog({
                         }
                         data-testid="agent-edit-file-content"
                       />
+                    </>
+                  ) : selectedAttachedSkill ? (
+                    <>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Lock className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
+                          <div className="font-mono text-xs text-[var(--color-foreground-muted)] truncate">
+                            skills/{selectedAttachedSkill.name}/SKILL.md
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onOpenChange(false)
+                            navigate('/admin/skills')
+                          }}
+                          className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                          data-testid="agent-edit-view-in-skills"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          View in Skills
+                        </button>
+                      </div>
+                      <div className="mb-2 text-[11px] text-[var(--color-foreground-muted)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] rounded-[var(--radius-xs)] px-2 py-1">
+                        Managed by the Skills library — edit via the Skills admin page.
+                      </div>
+                      {selectedAttachedPreview ? (
+                        <>
+                          <textarea
+                            className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none"
+                            value={selectedAttachedPreview.skill_md}
+                            readOnly
+                            spellCheck={false}
+                            data-testid="agent-edit-attached-skill-content"
+                          />
+                          {selectedAttachedPreview.extra_files.length > 0 ? (
+                            <div className="mt-2">
+                              <div className="text-[10px] uppercase tracking-wider text-[var(--color-foreground-muted)] mb-1">
+                                Extra files ({selectedAttachedPreview.extra_files.length})
+                              </div>
+                              <ul className="rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs max-h-28 max-w-full overflow-auto">
+                                {selectedAttachedPreview.extra_files.map(p => (
+                                  <li key={p} className="font-mono text-[var(--color-foreground-muted)]">
+                                    {p}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div
+                          className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-xs)]"
+                          data-testid="agent-edit-attached-skill-loading"
+                        >
+                          Loading…
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-md)]">

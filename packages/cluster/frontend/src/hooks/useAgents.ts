@@ -50,6 +50,28 @@ export interface AgentFile {
   updated_at: string;
 }
 
+// Read-only snapshot of a library skill attached to an agent.
+// Issue #133 — manifest dialog surfaces these as a separate
+// read-only section so admins can see which library skills the
+// agent actually carries at spawn time, without confusing them
+// with the editable ``AgentFile`` rows.
+export interface AttachedSkill {
+  id: string;
+  name: string;
+  source: string;
+  pinned_rev: string;
+  // Paths of extra bundled files (not including SKILL.md). Shown as
+  // a list; bodies are not yet available through the preview API.
+  extra_files: string[];
+}
+
+export interface SkillPreview {
+  id: string;
+  name: string;
+  skill_md: string;
+  extra_files: string[];
+}
+
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
 
@@ -191,6 +213,44 @@ export function useAgents() {
     }
   }, []);
 
+  // Issue #133 — attached library skills for the manifest dialog.
+  // Reuses the admin skills endpoint with a client-side filter on
+  // ``attached_agent_ids``; keeps the server API unchanged.
+  const fetchAttachedSkills = useCallback(async (
+    agentId: string,
+  ): Promise<AttachedSkill[]> => {
+    const resp = await apiFetch('/api/v1/admin/skills');
+    if (!resp.ok) return [];
+    const rows: Array<{
+      id: string;
+      name: string;
+      source: string;
+      pinned_rev: string;
+      scripts_detected: string[];
+      attached_agent_ids: string[];
+      status: string;
+    }> = await resp.json();
+    return rows
+      .filter(r => r.status === 'approved' && r.attached_agent_ids.includes(agentId))
+      .map(r => ({
+        id: r.id,
+        name: r.name,
+        source: r.source,
+        pinned_rev: r.pinned_rev,
+        extra_files: r.scripts_detected,
+      }));
+  }, []);
+
+  // Fetch SKILL.md body for readonly viewing. Lazy — only called
+  // when the admin actually selects a skill file node.
+  const fetchSkillPreview = useCallback(async (
+    skillId: string,
+  ): Promise<SkillPreview | null> => {
+    const resp = await apiFetch(`/api/v1/admin/skills/${skillId}/preview`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  }, []);
+
   const [availableEngines, setAvailableEngines] = useState<AvailableEngine[]>([]);
 
   const fetchAvailableEngines = useCallback(async () => {
@@ -225,5 +285,7 @@ export function useAgents() {
     fetchAgentFiles,
     upsertAgentFile,
     deleteAgentFile,
+    fetchAttachedSkills,
+    fetchSkillPreview,
   };
 }
