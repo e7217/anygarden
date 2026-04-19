@@ -513,6 +513,58 @@ class TestCrashHandling:
         assert len(replacement_frames) == 1
         assert replacement_frames[0]["agent_id"] == "agent-crash"
 
+        # Manifest should be marked stopped so daemon restart does not
+        # re-spawn this agent behind the server's back (#182).
+        reloaded = daemon._manifest_store.load("agent-crash")
+        assert reloaded is not None
+        assert reloaded.desired_state == "stopped"
+
+    async def test_request_replacement_survives_missing_manifest(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If the manifest was already deleted when replacement fires,
+        the daemon must not crash on the FileNotFoundError path (#182).
+        """
+        sent_frames = _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="agent-ghost",
+            desired_state="running",
+            generation=1,
+            engine="claude-code",
+            restart_policy="restart_anywhere",
+            max_restarts=0,  # budget exhausted on first crash
+            restart_window_seconds=300,
+        )
+        daemon._manifest_store.save(manifest)
+        # Simulate the manifest being removed between save and crash —
+        # e.g. operator clean-up or a prior stop_agent flow.
+        daemon._manifest_store.delete("agent-ghost")
+
+        # Re-inject an in-memory manifest so the crash path can still load
+        # its restart_policy. We bypass the file and re-save then delete
+        # the desired_state field mid-flight by patching load() to return
+        # the known manifest once, then the real (absent) file afterwards.
+        real_load = daemon._manifest_store.load
+        calls = {"n": 0}
+
+        def _patched_load(agent_id: str):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return manifest
+            return real_load(agent_id)
+
+        daemon._manifest_store.load = _patched_load  # type: ignore[assignment]
+
+        await daemon._on_agent_crashed("agent-ghost", 1, "boom")
+
+        # request_replacement still fires even though update_desired_state
+        # raises FileNotFoundError internally (caught by the fix).
+        replacement_frames = [
+            f for f in sent_frames if f["type"] == "request_replacement"
+        ]
+        assert len(replacement_frames) == 1
+
     async def test_crash_with_stop_policy_does_not_restart(
         self, daemon: MachineDaemon
     ) -> None:
