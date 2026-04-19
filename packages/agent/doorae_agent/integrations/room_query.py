@@ -251,6 +251,7 @@ async def _deliver_result(
                 "responses": [
                     {
                         "participant_id": r["participant_id"],
+                        "name": r.get("name", ""),
                         "content": r["content"],
                     }
                     for r in responses
@@ -285,6 +286,16 @@ def _register_multi_reply_callback(
     responses: list[dict[str, str]] = []
     done = False
     candidates = agent_candidates or []
+    # #153 — freeze a ``participant_id → display_name`` snapshot at
+    # query-registration time so each reply can ship the sender's
+    # human-readable name to the source room. Reusing ``candidates``
+    # avoids a second network round-trip; ``display_name`` is already
+    # populated by ``/rooms/{id}/participants`` (router.py:284-324).
+    name_lookup: dict[str, str] = {
+        p["id"]: (p.get("display_name") or "")
+        for p in candidates
+        if p.get("id")
+    }
 
     async def _on_reply(msg: dict[str, Any]) -> None:
         nonlocal done
@@ -300,8 +311,10 @@ def _register_multi_reply_callback(
         if content.startswith("[ROOM_QUERY]"):
             return
 
+        pid = sender or "unknown"
         responses.append({
-            "participant_id": sender or "unknown",
+            "participant_id": pid,
+            "name": name_lookup.get(pid, ""),
             "content": content,
         })
         logger.info(

@@ -48,6 +48,13 @@ export interface RoomQueryForwardMeta {
 export interface RoomQueryResponseEntry {
   participant_id: string
   content: string
+  /** #153 — sender's display_name snapshot captured by the
+   * representative agent at reply time. Preferred over
+   * ``participantNames`` lookups in the source room because
+   * the responder is typically in a *different* room. Absent on
+   * legacy payloads and when the sender wasn't in the candidate
+   * snapshot — the render-side fallback chain handles both. */
+  name?: string
 }
 
 /** ``metadata.room_query_result`` — synthesized result back in the source room. */
@@ -139,7 +146,11 @@ export function parseResult(msg: ChatMessage): RoomQueryResultMeta | null {
     const e = entry as Record<string, unknown>
     const pid = typeof e.participant_id === 'string' ? e.participant_id : ''
     const content = typeof e.content === 'string' ? e.content : ''
-    responses.push({ participant_id: pid, content })
+    const parsed: RoomQueryResponseEntry = { participant_id: pid, content }
+    if (typeof e.name === 'string') {
+      parsed.name = e.name
+    }
+    responses.push(parsed)
   }
   return { query_id, target_room_id, responded, expected, status, responses }
 }

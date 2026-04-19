@@ -114,6 +114,52 @@ describe('RoomQueryResultCard', () => {
     expect(screen.getByText('@123456')).toBeInTheDocument()
   })
 
+  it('prefers server-provided response name over participantNames map', () => {
+    // #153 — cross-room responder names come from the
+    // representative agent's server-side snapshot. The source-room
+    // participants map won't contain the replying agent, so
+    // ``r.name`` must take priority to avoid the @hex fallback.
+    render(
+      <RoomQueryResultCard
+        result={makeResult({
+          responses: [
+            { participant_id: 'agent-1', name: 'Alice', content: 'Answer A' },
+          ],
+          responded: 1,
+          expected: 1,
+        })}
+        // Map deliberately has a *different* name for the same pid
+        // to prove ``r.name`` wins over the map.
+        participantNames={new Map([['agent-1', 'SHOULD_NOT_SHOW']])}
+        targetRoomName="ops"
+      />,
+    )
+    expect(screen.getByText('@Alice')).toBeInTheDocument()
+    expect(screen.queryByText('@SHOULD_NOT_SHOW')).not.toBeInTheDocument()
+  })
+
+  it('falls back to participantNames when response name is empty string', () => {
+    // Server writes ``name=""`` when the sender isn't in the
+    // candidate snapshot (agent joined mid-query). The card must
+    // still try the source-room ``participantNames`` map before
+    // falling through to the last-6 hex — empty strings must be
+    // treated as "no name", not as a valid display.
+    render(
+      <RoomQueryResultCard
+        result={makeResult({
+          responses: [
+            { participant_id: 'agent-1', name: '', content: 'Answer' },
+          ],
+          responded: 1,
+          expected: 1,
+        })}
+        participantNames={new Map([['agent-1', 'LocalName']])}
+        targetRoomName="ops"
+      />,
+    )
+    expect(screen.getByText('@LocalName')).toBeInTheDocument()
+  })
+
   it('falls back to #id-slice when targetRoomName is missing', () => {
     render(
       <RoomQueryResultCard

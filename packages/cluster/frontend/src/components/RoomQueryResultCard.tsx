@@ -117,8 +117,14 @@ export default function RoomQueryResultCard({
             <ResponseCard
               key={`${r.participant_id}-${idx}`}
               participantId={r.participant_id}
+              // #153 — cross-room responders aren't in the source
+              // room's ``participantNames`` map, so ``r.name``
+              // (captured server-side by the representative agent)
+              // takes priority. ``||`` so an empty string also
+              // drops through to the legacy chain.
               displayName={
-                participantNames.get(r.participant_id) ??
+                r.name ||
+                participantNames.get(r.participant_id) ||
                 nameFallback(r.participant_id)
               }
               content={r.content}
