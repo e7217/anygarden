@@ -156,6 +156,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # agent was offline).  The SDK will auto-join them.
     pending_rooms: list[str] = []
     agent_opt_out = False
+    # Issue #159 Phase A — speaker strategy fields cached from the
+    # Room row so the SDK can dispatch in ``decide_policy``. Defaults
+    # here reproduce the pre-#159 behaviour for welcome flows that
+    # skip the room lookup (guests, tests).
+    speaker_strategy = "mentioned_only"
+    orchestrator_agent_id: str | None = None
+    next_speaker_participant_id: str | None = None
     if identity and identity.kind == "agent":
         async with session_factory() as db:
             result = await db.execute(
@@ -185,6 +192,23 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         connected_room_ids.add(room_id)  # about to subscribe
         pending_rooms = sorted(set(pid_to_room.values()) - connected_room_ids)
 
+    # Issue #159 Phase A — propagate the room's speaker-strategy
+    # fields in every welcome frame so both agents and UIs know how
+    # the room dispatches turns. Separate session so any failure
+    # stays out of the opt-out read path above.
+    async with session_factory() as db:
+        row = (
+            await db.execute(
+                select(
+                    Room.speaker_strategy,
+                    Room.orchestrator_agent_id,
+                    Room.next_speaker_participant_id,
+                ).where(Room.id == room_id)
+            )
+        ).first()
+        if row is not None:
+            speaker_strategy, orchestrator_agent_id, next_speaker_participant_id = row
+
     welcome = WelcomeOut(
         participant_id=participant.id,
         pending_rooms=pending_rooms,
@@ -193,6 +217,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # forwarding to the representative agent only.
         agent_id=identity.id if identity and identity.kind == "agent" else None,
         context_window_opt_out=agent_opt_out,
+        speaker_strategy=speaker_strategy,
+        orchestrator_agent_id=orchestrator_agent_id,
+        next_speaker_participant_id=next_speaker_participant_id,
     )
     await websocket.send_text(welcome.model_dump_json())
 
