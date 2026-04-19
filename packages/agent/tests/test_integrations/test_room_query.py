@@ -225,6 +225,11 @@ class TestExecuteRoomQuery:
         assert result_meta["responded"] == 0
         assert result_meta["expected"] == 0
         assert result_meta["responses"] == []
+        # #74 — every [취합 결과] broadcast must carry the
+        # ``ingest_only`` flag so non-addressee listeners absorb it
+        # as context instead of silently dropping it at the
+        # ``decide_policy`` gate.
+        assert kwargs["metadata"]["ingest_only"] is True
         # No ``[ROOM_QUERY]`` fanout, no callback registration —
         # the solo path short-circuits before either.
         assert len(client._message_handlers) == 0
@@ -366,6 +371,9 @@ class TestExecuteRoomQuery:
             {"participant_id": "agent-d-pid", "content": "GraphQL이 좋겠습니다"},
             {"participant_id": "agent-e-pid", "content": "REST가 더 적합합니다"},
         ]
+        # #74 — completed-path result also carries the ingest_only
+        # flag so source-room peers absorb the synthesis as context.
+        assert kwargs["metadata"]["ingest_only"] is True
 
     @pytest.mark.asyncio
     async def test_timeout_path_marks_status_timeout(self):
@@ -415,6 +423,9 @@ class TestExecuteRoomQuery:
         assert result_meta["responded"] == 1
         assert result_meta["expected"] == 2
         assert len(result_meta["responses"]) == 1
+        # #74 — timeout path mirrors solo/completed in flagging the
+        # broadcast for ingest-only absorption by source-room peers.
+        assert kwargs["metadata"]["ingest_only"] is True
 
 
 class TestForwardBodyRegression:

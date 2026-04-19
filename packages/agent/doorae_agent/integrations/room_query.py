@@ -255,7 +255,15 @@ async def _deliver_result(
                     }
                     for r in responses
                 ],
-            }
+            },
+            # Issue #74 — tell every other listener in the source
+            # room to absorb this broadcast into their LLM session
+            # context without replying. Without this flag, the
+            # default gate silences the message for non-addressees
+            # and the synthesis is lost to every agent except the
+            # asking human. See ``docs/research/2026-04-19-multi-
+            # agent-context-injection.md``.
+            "ingest_only": True,
         },
     )
 
