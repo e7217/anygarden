@@ -16,11 +16,16 @@ def _make_client(
     agent_name: str = "테스트에이전트",
     my_pids: set | None = None,
     agent_id: str | None = None,
+    context_window_opt_out: bool = False,
 ):
     client = MagicMock()
     client._agent_name = agent_name
     client._my_participant_ids = my_pids or {"my-pid-123"}
     client._agent_id = agent_id
+    # #148 Part 3 — ambient opt-out cache. False by default preserves
+    # the pre-#148 INGEST_ONLY behaviour on the ``ingest_only`` flag;
+    # tests that exercise opt-out pass ``True``.
+    client._context_window_opt_out = context_window_opt_out
     return client
 
 
@@ -380,6 +385,39 @@ class TestDecidePolicy:
             "content": "<@user:alice-pid> 이거 봐줘",
             "metadata": {
                 "mentions": [{"type": "user", "id": "alice-pid"}],
+                "ingest_only": True,
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_opt_out_agent_skips_ingest_only_broadcast(self):
+        """#148 Part 3 — a direct-mention beats opt-out (addressability
+        wins), but an un-addressed ``ingest_only`` broadcast drops to
+        SKIP for an agent that opted out of ambient ingestion. Without
+        the opt-out the same message returns INGEST_ONLY."""
+        msg = {
+            "participant_id": "peer",
+            "content": "잡담 중 …",
+            "metadata": {"_nonce": "x", "ingest_only": True},
+        }
+        ingesting = _make_client(context_window_opt_out=False)
+        opted_out = _make_client(context_window_opt_out=True)
+        assert decide_policy(msg, ingesting) is MessagePolicy.INGEST_ONLY
+        assert decide_policy(msg, opted_out) is MessagePolicy.SKIP
+
+    def test_opt_out_does_not_override_direct_mention(self):
+        """Opt-out only demotes ``INGEST_ONLY`` → ``SKIP``; a direct
+        mention still gets RESPOND. Addressability always wins over
+        passive policy flags (decide_policy rule 3)."""
+        client = _make_client(
+            my_pids={"me-pid"},
+            context_window_opt_out=True,
+        )
+        msg = {
+            "participant_id": "human",
+            "content": "<@user:me-pid> ping",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "me-pid"}],
                 "ingest_only": True,
             },
         }

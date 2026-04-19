@@ -42,6 +42,41 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 
+def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
+    """Decide whether a new message is a candidate for the ambient
+    context window (#148 Part 3).
+
+    A message is "ambient" when it isn't directly aimed at anyone
+    specific and isn't carrying a task-initiation payload. Rules:
+
+    1. No user / legacy mention already parsed into metadata.
+       ``parse_mentions`` runs upstream, so seeing an addressable
+       mention means "someone is being targeted" — not ambient.
+    2. Not a delegated / room-routed task. These prefixes are the
+       adapter-side "always respond" short-circuits (``decide_policy``
+       rule 2); stamping ingest_only on them would silently convert
+       an active task into passive ingestion.
+    3. No ``room_query`` metadata — that marks the representative-
+       agent forwarding path and must reach the representative as a
+       real response.
+
+    Intentionally mirrors ``decide_policy``'s rule 5/7 surface in
+    agents/integrations/base.py — the two branches must stay
+    symmetric so the server's "should I stamp it?" and the agent's
+    "should I act on the stamp?" never drift. A contract test lives
+    alongside the migration work plan (#148 §6).
+    """
+    if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
+        return False
+    if metadata.get("room_query"):
+        return False
+    mentions = metadata.get("mentions") or []
+    for m in mentions:
+        if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
+            return False
+    return True
+
+
 def _extract_since_seq(query_string: str | None) -> int:
     """Parse ``since_seq`` from raw query string."""
     if not query_string:
@@ -120,6 +155,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # hasn't connected to yet (e.g. sub-rooms created while the
     # agent was offline).  The SDK will auto-join them.
     pending_rooms: list[str] = []
+    agent_opt_out = False
     if identity and identity.kind == "agent":
         async with session_factory() as db:
             result = await db.execute(
@@ -128,6 +164,20 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 )
             )
             pid_to_room = {row[0]: row[1] for row in result.all()}
+            # Issue #148 Part 3 — read the agent's opt-out flag at
+            # welcome time so the SDK can cache it for ``decide_policy``.
+            # Bundled in the same session so we don't pay a second
+            # round-trip. ``scalar_one_or_none`` guards the (unlikely)
+            # case where the agent row was deleted between auth and
+            # welcome.
+            opt_out_row = (
+                await db.execute(
+                    select(Agent.context_window_opt_out).where(
+                        Agent.id == identity.id
+                    )
+                )
+            ).scalar_one_or_none()
+            agent_opt_out = bool(opt_out_row)
         connected_pids = await manager.connected_participant_ids()
         connected_room_ids = {
             pid_to_room[pid] for pid in pid_to_room if pid in connected_pids
@@ -142,6 +192,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # connection is bound to so it can gate ``room_query``
         # forwarding to the representative agent only.
         agent_id=identity.id if identity and identity.kind == "agent" else None,
+        context_window_opt_out=agent_opt_out,
     )
     await websocket.send_text(welcome.model_dump_json())
 
@@ -377,7 +428,27 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     "representative_agent_id": rep_agent_id,
                                 }
 
+                # #148 Part 3 — stamp ``ingest_only`` on ambient broadcasts
+                # so peer agents absorb the text as context instead of
+                # treating it as an actionable message. Opt-in per room
+                # via ``rooms.context_window_enabled`` (Part 1). Scoped
+                # BEFORE the commit-and-broadcast so the stamp persists on
+                # the stored row and replays correctly on reconnect.
                 async with session_factory() as db:
+                    room_row = (
+                        await db.execute(
+                            select(Room.context_window_enabled).where(
+                                Room.id == room_id,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if (
+                        room_row
+                        and _is_ambient_candidate(frame_in.content, metadata)
+                        and "ingest_only" not in metadata
+                    ):
+                        metadata["ingest_only"] = True
+
                     msg = await append_message(
                         db,
                         room_id=room_id,

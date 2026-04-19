@@ -160,6 +160,13 @@ class WelcomeOut(BaseModel):
     # room re-forwards the ``[ROOM_QUERY]`` message. ``None`` for user
     # and guest connections.
     agent_id: Optional[str] = None
+    # Issue #148 Part 3 — agent-side ambient opt-out, read from
+    # ``agents.context_window_opt_out`` at welcome time. The SDK
+    # caches this and consults it in ``decide_policy``: when the
+    # server marks a message ``ingest_only`` AND this flag is True,
+    # the agent returns ``SKIP`` instead of ``INGEST_ONLY``. Default
+    # False so user/guest welcome frames stay unchanged.
+    context_window_opt_out: bool = False
 
 
 class ErrorOut(BaseModel):
