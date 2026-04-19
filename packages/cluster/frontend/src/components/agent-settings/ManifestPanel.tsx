@@ -1,14 +1,19 @@
 /**
- * AgentEditDialog — admin UI for the per-agent file manifest.
+ * ManifestPanel — per-agent file manifest editor (#158).
  *
- * A single file-tree + editor panel. Backend-side ``Agent.agents_md``
- * and ``agent_files`` rows have different storage (column vs table)
- * but surface identically: ``AGENTS.md`` appears at the top of the
- * tree as a "virtual" entry that is always present and cannot be
- * deleted — clearing its content on Save writes ``agents_md=null``.
- * Other rows live under the ``skills/``, ``.codex/``, ``.claude/``,
- * ``.gemini/``, ``.openhands/`` prefixes that the server whitelists
- * in ``doorae/agent_files.py``.
+ * Extracted from AgentEditDialog: same file-tree + editor UI, now
+ * rendered as a naked panel inside AgentSettingsDialog. The outer
+ * Dialog shell (header, close button, Escape) is owned by
+ * AgentSettingsDialog; this panel keeps only its own Save button
+ * because the edit flow is modal within the section.
+ *
+ * Backend-side ``Agent.agents_md`` and ``agent_files`` rows have
+ * different storage (column vs table) but surface identically:
+ * ``AGENTS.md`` appears at the top of the tree as a "virtual" entry
+ * that is always present and cannot be deleted — clearing its content
+ * on Save writes ``agents_md=null``. Other rows live under the
+ * ``skills/``, ``.codex/``, ``.claude/``, ``.gemini/``, ``.openhands/``
+ * prefixes that the server whitelists in ``doorae/agent_files.py``.
  *
  * Save semantics:
  *
@@ -18,23 +23,12 @@
  *   via ``updateAgent({agents_md_set: true})``; all others go
  *   through ``upsertAgentFile``.
  * - Changes take effect on the NEXT spawn, not immediately — the
- *   running subprocess is not hot-reloaded (each engine re-reads
- *   its manifest at a different moment, so making "update =
- *   restart" implicit would be surprising). A hint line at the
- *   bottom of the dialog reminds the admin.
+ *   running subprocess is not hot-reloaded.
  *
  * Style: follows DESIGN.md (warm neutral palette, whisper borders,
  * near-black text, single-accent brand color).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -481,8 +475,6 @@ function makeAgentsMdFile(md: string | null | undefined, updatedAt: string): Wor
 
 interface Props {
   agent: Agent | null
-  open: boolean
-  onOpenChange: (open: boolean) => void
   fetchAgentFiles: (id: string) => Promise<AgentFile[]>
   updateAgent: (
     id: string,
@@ -495,18 +487,21 @@ interface Props {
   // when omitted so older callers / tests remain compatible.
   fetchAttachedSkills?: (id: string) => Promise<AttachedSkill[]>
   fetchSkillPreview?: (skillId: string) => Promise<SkillPreview | null>
+  /** Fired when the admin clicks "View in Skills" on an attached
+   *  skill row — the parent closes the settings dialog before
+   *  navigating. */
+  onNavigateAway?: () => void
 }
 
-export default function AgentEditDialog({
+export default function ManifestPanel({
   agent,
-  open,
-  onOpenChange,
   fetchAgentFiles,
   updateAgent,
   upsertAgentFile,
   deleteAgentFile,
   fetchAttachedSkills,
   fetchSkillPreview,
+  onNavigateAway,
 }: Props) {
   const navigate = useNavigate()
   const [files, setFiles] = useState<WorkingFile[]>([])
@@ -641,18 +636,10 @@ export default function AgentEditDialog({
   }, [agent, fetchFilesIntoWorking])
 
   useEffect(() => {
-    if (open && agent) {
+    if (agent) {
       void loadInitial()
-    } else if (!open) {
-      // Reset transient state on close so the next open starts clean.
-      setShowNewFileForm(false)
-      setNewFilePath('skills/')
-      setPendingContent(null)
-      setShowNewSkillForm(false)
-      setNewSkillName('')
-      setError(null)
     }
-  }, [open, agent, loadInitial])
+  }, [agent, loadInitial])
 
   // Issue #112 — engine-based prefix filter. Changes to the tree
   // render in response to ``agent?.engine``; tests assert that a
@@ -669,7 +656,7 @@ export default function AgentEditDialog({
   // ``agent`` may be null on the first render and changes across
   // dialog opens.
   useEffect(() => {
-    if (!open || !agent) return
+    if (!agent) return
     const key = `doorae_agent_tree_${agent.id}`
     try {
       const saved = localStorage.getItem(key)
@@ -688,7 +675,7 @@ export default function AgentEditDialog({
       seed.add(p.replace(/\/$/, ''))
     }
     setExpandedPaths(seed)
-  }, [open, agent?.id, engineAllowedPrefixes])
+  }, [agent?.id, engineAllowedPrefixes])
 
   // Toggle a directory node's expand/collapse state and persist.
   // Persist failures are swallowed (same rationale as the seed
@@ -1103,29 +1090,12 @@ export default function AgentEditDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle>
-            Edit manifest
-            {agent ? (
-              <span className="ml-2 inline-flex items-center gap-1.5 text-sm font-normal text-[var(--color-foreground-muted)]">
-                <PresenceDot
-                  variant="agent"
-                  online={deriveAgentOnline(agent.actual_state)}
-                  agentState={agent.actual_state}
-                />
-                {agent.name} ({agent.engine})
-              </span>
-            ) : null}
-          </DialogTitle>
-          <DialogDescription>
-            Update the agent's system prompt and on-disk files. Changes
-            take effect on the next spawn — restart the agent to apply.
-          </DialogDescription>
-        </DialogHeader>
-
-        {loading ? (
+    <div className="flex h-full flex-col" data-testid="manifest-panel">
+      <p className="text-caption text-[var(--color-foreground-muted)] pb-2">
+        Update the agent's system prompt and on-disk files. Changes take
+        effect on the next spawn — restart the agent to apply.
+      </p>
+      {loading ? (
           <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
             Loading…
           </div>
@@ -1373,7 +1343,7 @@ export default function AgentEditDialog({
                         <button
                           type="button"
                           onClick={() => {
-                            onOpenChange(false)
+                            onNavigateAway?.()
                             navigate('/admin/skills')
                           }}
                           className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
@@ -1430,29 +1400,21 @@ export default function AgentEditDialog({
           </div>
         )}
 
-        {error ? (
-          <div className="mt-2 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
-            {error}
-          </div>
-        ) : null}
+      {error ? (
+        <div className="mt-2 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+          {error}
+        </div>
+      ) : null}
 
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            disabled={saving}
-          >
-            Close
-          </Button>
-          <Button
-            onClick={handleSave}
-            disabled={!hasChanges || saving || loading}
-            data-testid="agent-edit-save"
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      <div className="flex items-center justify-end gap-2 pt-3">
+        <Button
+          onClick={handleSave}
+          disabled={!hasChanges || saving || loading}
+          data-testid="agent-edit-save"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+    </div>
   )
 }

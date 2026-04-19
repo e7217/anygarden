@@ -3,12 +3,12 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
-import AgentEditDialog, {
+import ManifestPanel, {
   buildTree,
   isSkillDirNode,
   slugifySkillName,
   type TreeNode,
-} from './AgentEditDialog'
+} from './ManifestPanel'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
 
 // jsdom doesn't implement the Object URL API, so stub them as
@@ -62,10 +62,8 @@ function renderDialog(
     .mockResolvedValue(opts.skillPreview ?? null)
   render(
     <MemoryRouter>
-      <AgentEditDialog
+      <ManifestPanel
         agent={makeAgent()}
-        open={true}
-        onOpenChange={() => {}}
         fetchAgentFiles={fetchAgentFiles}
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
@@ -85,7 +83,7 @@ function renderDialog(
   }
 }
 
-describe('AgentEditDialog — upload/download', () => {
+describe('ManifestPanel — upload/download', () => {
   it('stages a UTF-8 file via the upload picker and fills the new-file form', async () => {
     renderDialog()
     // Dialog content mounts behind an async loadInitial; wait for
@@ -188,7 +186,7 @@ describe('AgentEditDialog — upload/download', () => {
 
 // Issue #109 — AGENTS.md is a virtual tree entry, always present,
 // never deletable, routed through ``updateAgent`` on Save.
-describe('AgentEditDialog — AGENTS.md virtual entry', () => {
+describe('ManifestPanel — AGENTS.md virtual entry', () => {
   it('always shows AGENTS.md at the top of the tree, even when agents_md is null', async () => {
     renderDialog()
     const row = await screen.findByTestId('agent-edit-file-AGENTS.md')
@@ -420,7 +418,7 @@ describe('slugifySkillName (Issue #112)', () => {
   })
 })
 
-describe('AgentEditDialog — engine-based prefix filter (Issue #112)', () => {
+describe('ManifestPanel — engine-based prefix filter (Issue #112)', () => {
   it('claude-code agent does not render .codex or .gemini groups', async () => {
     renderDialog([
       {
@@ -446,7 +444,7 @@ describe('AgentEditDialog — engine-based prefix filter (Issue #112)', () => {
   })
 })
 
-describe('AgentEditDialog — skill quick-add button (Issue #112)', () => {
+describe('ManifestPanel — skill quick-add button (Issue #112)', () => {
   it('prefills the New file form with the skill path', async () => {
     renderDialog([
       {
@@ -465,7 +463,7 @@ describe('AgentEditDialog — skill quick-add button (Issue #112)', () => {
   })
 })
 
-describe('AgentEditDialog — New skill action (Issue #112)', () => {
+describe('ManifestPanel — New skill action (Issue #112)', () => {
   it('creates skills/<slug>/SKILL.md with a frontmatter template', async () => {
     renderDialog()
     // Open the New skill form.
@@ -497,7 +495,7 @@ describe('AgentEditDialog — New skill action (Issue #112)', () => {
   })
 })
 
-describe('AgentEditDialog — script extensions (Issue #112)', () => {
+describe('ManifestPanel — script extensions (Issue #112)', () => {
   it('admits ``.sh`` as a valid path in the New file form', async () => {
     renderDialog()
     await screen.findByTestId('agent-edit-upload')
@@ -517,7 +515,7 @@ describe('AgentEditDialog — script extensions (Issue #112)', () => {
   })
 })
 
-describe('AgentEditDialog — attached library skills (Issue #133)', () => {
+describe('ManifestPanel — attached library skills (Issue #133)', () => {
   it('does not render the section when no skills are attached', async () => {
     renderDialog([], { attachedSkills: [] })
     await screen.findByTestId('agent-edit-upload')

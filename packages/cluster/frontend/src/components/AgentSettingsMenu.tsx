@@ -1,61 +1,48 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Check,
-  Copy,
-  DoorOpen,
   EyeOff,
-  FileCog,
-  History,
   MoreHorizontal,
-  Smile,
+  Settings,
   Trash2,
 } from 'lucide-react'
 
 /**
- * AgentSettingsMenu — Issue #101.
+ * AgentSettingsMenu — collapsed agent row menu (#101, rewired in #158).
  *
- * Mirrors ``RoomSettingsMenu`` for per-agent admin actions, and
- * replaces the four inline icon buttons
- * (Manage rooms / Edit manifest / Activity / Delete) that the
- * AdminMachines row used to stack. The Slack-style "collapse
- * mutation actions behind a single ⋯ trigger" pattern that
- * RoomSettingsMenu introduced solves the same row-crowding problem
- * here: the admin's per-row glance surface (name, avatar, state,
- * engine) stays legible, and every admin capability lives behind
- * one predictable entry point.
+ * Per-agent admin actions that don't fit inline on the row live
+ * behind a single ⋯ trigger. After the #158 unification, the menu
+ * collapses to three items:
  *
- * What stays inline in AdminMachines (and therefore does NOT have a
- * corresponding prop here) is Start/Stop — it's a frequent toggle
- * and the Play/Square icons communicate state in a way a menu
- * entry would lose.
+ * - **Settings…** — opens the unified AgentSettingsDialog
+ *   (Overview / Manifest / Rooms / Activity). Replaces the five
+ *   individual items (Edit avatar, Edit manifest, Manage rooms,
+ *   Activity, Copy agent ID) that used to fan out.
+ * - **대화 맥락 공유 제외** — one-click toggle kept in the menu
+ *   because its trailing check-mark communicates state efficiently.
+ * - **Delete agent** — destructive; stays here for the same reason
+ *   every other row-menu keeps its Delete at the bottom with a red
+ *   separator.
  *
- * Props are optional per action: a menu item only renders when its
- * handler is supplied, preserving the "show-when-permitted"
- * semantics that RoomSettingsMenu locked in.
+ * Each prop is optional: a menu item only renders when its handler
+ * is supplied, preserving the "show-when-permitted" semantics.
  */
 export interface AgentSettingsMenuProps {
-  onEditAvatar?: () => void
-  onEditManifest?: () => void
-  onManageRooms?: () => void
-  onShowActivity?: () => void
-  onCopyId?: () => void
+  /** Opens the unified AgentSettingsDialog. When omitted, the
+   *  Settings… entry is hidden (useful for callers that don't mount
+   *  the dialog). */
+  onOpenSettings?: () => void
   onDelete?: () => void
-  /** #148 Part 2 — current value of the opt-out flag. When provided
-   *  with ``onToggleContextWindowOptOut``, the menu renders a
-   *  check-mark-style toggle item so admins can flip the flag
-   *  inline (no separate dialog). The two props are a pair: if
-   *  either is omitted the item is not rendered. */
+  /** #148 Part 2 — current value of the opt-out flag. Paired with
+   *  ``onToggleContextWindowOptOut``: the menu renders a check-mark
+   *  toggle row when both are provided. */
   contextWindowOptOut?: boolean
   onToggleContextWindowOptOut?: () => void | Promise<void>
 }
 
 export default function AgentSettingsMenu({
-  onEditAvatar,
-  onEditManifest,
-  onManageRooms,
-  onShowActivity,
-  onCopyId,
+  onOpenSettings,
   onDelete,
   contextWindowOptOut,
   onToggleContextWindowOptOut,
@@ -63,48 +50,6 @@ export default function AgentSettingsMenu({
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const safeActions = [
-    onEditAvatar && {
-      label: 'Edit avatar',
-      icon: <Smile className="h-4 w-4" />,
-      onClick: onEditAvatar,
-      testId: 'agent-menu-edit-avatar',
-    },
-    onEditManifest && {
-      label: 'Edit manifest',
-      icon: <FileCog className="h-4 w-4" />,
-      onClick: onEditManifest,
-      testId: 'agent-menu-edit-manifest',
-    },
-    onManageRooms && {
-      label: 'Manage rooms',
-      icon: <DoorOpen className="h-4 w-4" />,
-      onClick: onManageRooms,
-      testId: 'agent-menu-manage-rooms',
-    },
-    onShowActivity && {
-      label: 'Activity',
-      icon: <History className="h-4 w-4" />,
-      onClick: onShowActivity,
-      testId: 'agent-menu-activity',
-    },
-    onCopyId && {
-      label: 'Copy agent ID',
-      icon: <Copy className="h-4 w-4" />,
-      onClick: onCopyId,
-      testId: 'agent-menu-copy-id',
-    },
-  ].filter(Boolean) as {
-    label: string
-    icon: ReactNode
-    onClick: () => void
-    testId?: string
-  }[]
-
-  // Hooks before any conditional return — see RoomSettingsMenu
-  // for the rules-of-hooks rationale; the same prop-swings-async
-  // concern applies here (permission checks toggling handler
-  // props between renders).
   useEffect(() => {
     if (!open) return
     const onOutside = (e: Event) => {
@@ -126,7 +71,7 @@ export default function AgentSettingsMenu({
     typeof contextWindowOptOut === 'boolean' &&
     typeof onToggleContextWindowOptOut === 'function'
 
-  if (safeActions.length === 0 && !onDelete && !showContextToggle) return null
+  if (!onOpenSettings && !onDelete && !showContextToggle) return null
 
   const handleSelect = (run: () => void | Promise<void>) => {
     setOpen(false)
@@ -153,32 +98,28 @@ export default function AgentSettingsMenu({
           className="absolute right-0 top-9 z-40 w-52 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white shadow-lg"
         >
           <ul className="py-1">
-            {safeActions.map(a => (
-              <li key={a.label}>
+            {onOpenSettings && (
+              <li>
                 <button
                   type="button"
-                  onClick={() => handleSelect(a.onClick)}
-                  data-testid={a.testId}
+                  onClick={() => handleSelect(onOpenSettings)}
+                  data-testid="agent-menu-settings"
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-black/5 cursor-pointer"
                 >
-                  {a.icon}
-                  <span>{a.label}</span>
+                  <Settings className="h-4 w-4" />
+                  <span>Settings…</span>
                 </button>
               </li>
-            ))}
+            )}
             {showContextToggle && (
               <>
-                {safeActions.length > 0 && (
+                {onOpenSettings && (
                   <li
                     aria-hidden="true"
                     className="my-1 border-t border-[var(--color-border)]"
                   />
                 )}
                 <li>
-                  {/* #148 Part 2 — toggle-style menu item. The trailing
-                      check mark reflects the current DB flag; the
-                      button only fires the mutation callback so the
-                      parent owns optimistic state + rollback. */}
                   <button
                     type="button"
                     role="menuitemcheckbox"
@@ -201,7 +142,7 @@ export default function AgentSettingsMenu({
                 </li>
               </>
             )}
-            {onDelete && (safeActions.length > 0 || showContextToggle) && (
+            {onDelete && (onOpenSettings || showContextToggle) && (
               <li
                 aria-hidden="true"
                 className="my-1 border-t border-[var(--color-border)]"
@@ -213,9 +154,6 @@ export default function AgentSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onDelete)}
                   data-testid="agent-menu-delete"
-                  // Destructive row — red text and separator above
-                  // make the consequence obvious, matching
-                  // RoomSettingsMenu's "Delete room" convention.
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
