@@ -102,6 +102,14 @@ class MachineDaemon:
         self._crash_budgets: dict[str, CrashBudget] = {}
         self._token_futures: dict[str, asyncio.Future[str]] = {}
         self._running_generations: dict[str, int] = {}
+        # Per-agent serialization. Every mutation of
+        # ``_running_generations`` or dispatch of a spawn task for a
+        # given agent_id must happen while holding the matching lock,
+        # so two concurrent ``_reconcile_agent`` calls cannot both
+        # clear the generation check and dispatch duplicate spawns
+        # (#183). Different agents get different locks — reconciliation
+        # across agents stays parallel.
+        self._agent_locks: dict[str, asyncio.Lock] = {}
 
     # ── Main loop ──────────────────────────────────────────────────────
 
@@ -228,18 +236,30 @@ class MachineDaemon:
             self._manifest_store.save(agent_frame)
             desired_ids.add(agent_frame.agent_id)
 
-        # Kill orphans: agents running locally but not in the batch
+        # Kill orphans: agents running locally but not in the batch.
+        # Hold the per-agent lock around each kill so the orphan pop
+        # doesn't clobber a concurrent reservation left by a newer
+        # ``_reconcile_agent`` (#183).
         running_list = self._spawner.list_running()
         for info in running_list:
             agent_id = info["agent_id"]
             if agent_id not in desired_ids:
                 log.info("killing_orphan", agent_id=agent_id)
-                await self._spawner.kill(agent_id)
-                self._running_generations.pop(agent_id, None)
+                async with self._lock_for(agent_id):
+                    await self._spawner.kill(agent_id)
+                    self._running_generations.pop(agent_id, None)
 
         # Reconcile all desired agents
         for agent_frame in frame.agents:
             await self._reconcile_agent(agent_frame.agent_id)
+
+    def _lock_for(self, agent_id: str) -> asyncio.Lock:
+        """Return (creating if absent) the per-agent serialization lock."""
+        lock = self._agent_locks.get(agent_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._agent_locks[agent_id] = lock
+        return lock
 
     async def _reconcile_agent(self, agent_id: str) -> None:
         """Reconcile a single agent's actual state toward its desired state."""
@@ -247,42 +267,64 @@ class MachineDaemon:
         if manifest is None:
             return
 
-        running = self._spawner.get_running(agent_id)
+        # Serialize per-agent reconcile decisions (#183). Without this
+        # lock, two sync_desired_state frames landing back to back for
+        # the same agent could both clear the generation check before
+        # either one completed, dispatching duplicate spawn tasks.
+        # Different agents use different locks so cross-agent reconcile
+        # stays parallel.
+        should_dispatch_spawn = False
+        async with self._lock_for(agent_id):
+            running = self._spawner.get_running(agent_id)
 
-        if manifest.desired_state == "stopped":
-            if running is not None:
-                log.info("stopping_agent", agent_id=agent_id)
-                await self._spawner.kill(agent_id)
+            if manifest.desired_state == "stopped":
+                if running is not None:
+                    log.info("stopping_agent", agent_id=agent_id)
+                    await self._spawner.kill(agent_id)
                 self._running_generations.pop(agent_id, None)
-            return
-
-        # desired_state == "running"
-        if running is not None:
-            current_gen = self._running_generations.get(agent_id, 0)
-            if current_gen >= manifest.generation:
-                # Already running with same or newer generation — no-op
                 return
-            # Running with older generation — kill (will respawn below)
-            log.info(
-                "killing_old_generation",
-                agent_id=agent_id,
-                current=current_gen,
-                desired=manifest.generation,
-            )
-            await self._spawner.kill(agent_id)
-            self._running_generations.pop(agent_id, None)
 
-        # Need to start: request token and spawn.
-        # Reset crash budget since this is a server-driven reconciliation
-        # (not a crash-driven restart).
-        budget = self._crash_budgets.get(agent_id)
-        if budget is not None:
-            budget.reset()
-        # IMPORTANT: run as background task so the WS message loop stays
-        # unblocked. _request_token_and_spawn awaits a Future that is
-        # resolved by an incoming token_grant frame — if we await it here
-        # in the handler, the WS loop deadlocks.
-        asyncio.create_task(self._request_token_and_spawn(agent_id, manifest))
+            # desired_state == "running". ``_running_generations`` holds
+            # either the completed spawn's gen OR a pre-reservation for
+            # an in-flight spawn; in both cases, a request at the same
+            # or lower gen is already-covered.
+            current_gen = self._running_generations.get(agent_id, -1)
+            if current_gen >= manifest.generation:
+                return
+
+            if running is not None:
+                log.info(
+                    "killing_old_generation",
+                    agent_id=agent_id,
+                    current=current_gen,
+                    desired=manifest.generation,
+                )
+                await self._spawner.kill(agent_id)
+
+            # Reset crash budget since this is a server-driven reconcile
+            # (not a crash-driven restart).
+            budget = self._crash_budgets.get(agent_id)
+            if budget is not None:
+                budget.reset()
+
+            # Pre-reserve the generation BEFORE dispatching the spawn
+            # task. Any concurrent reconcile at this gen or lower will
+            # now short-circuit on the ``current_gen >= ...`` check above
+            # instead of racing to dispatch a duplicate spawn. On spawn
+            # failure, ``_request_token_and_spawn`` rolls this back.
+            self._running_generations[agent_id] = manifest.generation
+            should_dispatch_spawn = True
+
+        # Dispatch OUTSIDE the lock: ``_request_token_and_spawn`` awaits
+        # a Future resolved by the WS message loop delivering a
+        # token_grant frame. Awaiting inline would block the loop and
+        # deadlock; the original code handled this with ``create_task``
+        # but without the lock+reservation above, the dispatch itself
+        # raced.
+        if should_dispatch_spawn:
+            asyncio.create_task(
+                self._request_token_and_spawn(agent_id, manifest)
+            )
 
     async def _request_token_and_spawn(
         self,
@@ -306,6 +348,8 @@ class MachineDaemon:
         except asyncio.TimeoutError:
             log.error("token_request_timeout", agent_id=agent_id)
             self._token_futures.pop(agent_id, None)
+            # Roll back the pre-reservation so a retry can proceed.
+            await self._rollback_reservation(agent_id, manifest.generation)
             return
         finally:
             self._token_futures.pop(agent_id, None)
@@ -333,7 +377,10 @@ class MachineDaemon:
 
         result = await self._spawner.spawn(spawn_manifest)
         if result.success:
-            self._running_generations[agent_id] = manifest.generation
+            # ``_running_generations[agent_id]`` was already pre-reserved
+            # by ``_reconcile_agent`` at the requested generation, so
+            # success leaves it in place. This log line is the single
+            # point of truth for "spawn happened".
             log.info(
                 "agent_spawned",
                 agent_id=agent_id,
@@ -346,7 +393,20 @@ class MachineDaemon:
                 agent_id=agent_id,
                 error=result.error,
             )
+            await self._rollback_reservation(agent_id, manifest.generation)
         await self._report_actual_state()
+
+    async def _rollback_reservation(
+        self, agent_id: str, generation: int
+    ) -> None:
+        """Undo the pre-reservation in ``_running_generations`` for
+        *agent_id* at *generation*, holding the per-agent lock so we
+        don't clobber a higher generation reserved by a newer reconcile
+        that arrived while this spawn was in flight (#183).
+        """
+        async with self._lock_for(agent_id):
+            if self._running_generations.get(agent_id) == generation:
+                self._running_generations.pop(agent_id, None)
 
     # ── Token grant ────────────────────────────────────────────────────
 
@@ -365,7 +425,8 @@ class MachineDaemon:
 
     async def _on_agent_stopped(self, agent_id: str, exit_code: int) -> None:
         """Callback when an agent exits normally (exit code 0)."""
-        self._running_generations.pop(agent_id, None)
+        async with self._lock_for(agent_id):
+            self._running_generations.pop(agent_id, None)
         log.info("agent_stopped", agent_id=agent_id, exit_code=exit_code)
         await self._report_actual_state()
 
@@ -373,7 +434,8 @@ class MachineDaemon:
         self, agent_id: str, exit_code: int, stderr_tail: str
     ) -> None:
         """Callback when an agent crashes. Attempt local restart if budget allows."""
-        self._running_generations.pop(agent_id, None)
+        async with self._lock_for(agent_id):
+            self._running_generations.pop(agent_id, None)
         log.warning(
             "agent_crashed",
             agent_id=agent_id,
@@ -400,14 +462,29 @@ class MachineDaemon:
             self._crash_budgets[agent_id] = budget
 
         if budget.record_crash():
-            # Budget allows restart
+            # Budget allows restart. Pre-reserve the generation under
+            # the per-agent lock so a concurrent server reconcile for
+            # the same agent_id short-circuits on its
+            # ``current_gen >= manifest.generation`` check instead of
+            # dispatching a second, duplicate spawn (#183). If the
+            # server's reconcile reserved first (newer gen), we honour
+            # it and skip the crash restart.
+            should_spawn = False
+            async with self._lock_for(agent_id):
+                current = self._running_generations.get(agent_id, -1)
+                if current < manifest.generation:
+                    self._running_generations[agent_id] = manifest.generation
+                    should_spawn = True
+
             log.info(
                 "crash_restart",
                 agent_id=agent_id,
                 crash_count=budget.crash_count,
                 max_restarts=manifest.max_restarts,
+                dispatched=should_spawn,
             )
-            await self._request_token_and_spawn(agent_id, manifest)
+            if should_spawn:
+                await self._request_token_and_spawn(agent_id, manifest)
         else:
             # Budget exhausted
             log.warning(

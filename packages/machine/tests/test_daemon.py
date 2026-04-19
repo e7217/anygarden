@@ -306,6 +306,202 @@ class TestSyncDesiredState:
         assert daemon._running_generations.get("agent-001") == 2
 
 
+# ── Per-agent reconcile serialization (#183) ─────────────────────────
+
+
+class TestReconcileSerialization:
+    """#183 — generation pre-reservation and per-agent lock close the
+    race window where two ``sync_desired_state`` frames arriving back
+    to back dispatched two concurrent spawn tasks for the same agent.
+    """
+
+    async def test_duplicate_same_generation_spawns_once(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Two ``sync_desired_state`` frames for the same agent at the
+        same generation that arrive while the first spawn is still
+        awaiting its token_grant must NOT dispatch a second spawn. The
+        generation reservation happens synchronously inside the lock
+        before ``create_task`` is called.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-race"
+        mock_result.pid = 42
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        base = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-race",
+            "desired_state": "running",
+            "engine": "claude-code",
+            "name": "a",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+
+        async def grant_after_delay():
+            # Wait long enough for BOTH sync frames to have been handled
+            # before we resolve the single token grant.
+            await asyncio.sleep(0.05)
+            grant = {
+                "type": "token_grant",
+                "agent_id": "agent-race",
+                "agent_token": "tok-once",
+            }
+            await daemon._handle(grant)
+
+        t_first = asyncio.create_task(
+            daemon._handle({**base, "generation": 1})
+        )
+        t_second = asyncio.create_task(
+            daemon._handle({**base, "generation": 1})
+        )
+        t_grant = asyncio.create_task(grant_after_delay())
+        await asyncio.gather(t_first, t_second, t_grant)
+
+        # Only one spawn dispatched despite two reconcile requests.
+        assert daemon._spawner.spawn.call_count == 1
+        # Only one token request sent.
+        token_reqs = [f for f in sent_frames if f["type"] == "token_request"]
+        assert len(token_reqs) == 1
+
+    async def test_stale_generation_ignored_when_reservation_higher(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """A reconcile at generation N when generation N+k is already
+        reserved (spawn in flight OR completed) must short-circuit: no
+        kill, no spawn, no token request.
+        """
+        sent_frames = _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        daemon._spawner.kill = AsyncMock()
+
+        # Pre-reserve gen 5 as if a spawn is already in flight / done.
+        daemon._running_generations["agent-stale"] = 5
+
+        sync_stale = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-stale",
+            "desired_state": "running",
+            "generation": 3,  # older
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+        # Save the manifest (what _handle does) — but since the test
+        # mutates state directly, use save directly too.
+        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-stale",
+                desired_state="running",
+                generation=3,
+                engine="claude-code",
+            )
+        )
+
+        await daemon._reconcile_agent("agent-stale")
+
+        daemon._spawner.spawn.assert_not_called()
+        daemon._spawner.kill.assert_not_called()
+        # Reservation untouched.
+        assert daemon._running_generations["agent-stale"] == 5
+
+    async def test_spawn_failure_rolls_back_reservation(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If ``Spawner.spawn`` fails, the pre-reservation in
+        ``_running_generations`` must be rolled back so a subsequent
+        reconcile can retry rather than seeing a phantom running agent.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        fail = MagicMock()
+        fail.success = False
+        fail.agent_id = "agent-broken"
+        fail.error = "spawn refused"
+        daemon._spawner.spawn = AsyncMock(return_value=fail)
+
+        sync = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-broken",
+            "desired_state": "running",
+            "generation": 7,
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+
+        async def grant():
+            await asyncio.sleep(0.01)
+            await daemon._handle(
+                {
+                    "type": "token_grant",
+                    "agent_id": "agent-broken",
+                    "agent_token": "tok-bad",
+                }
+            )
+
+        await asyncio.gather(
+            daemon._handle(sync),
+            grant(),
+        )
+
+        # Spawn was attempted
+        daemon._spawner.spawn.assert_called_once()
+        # And the reservation was cleaned up on failure — a retry
+        # (re-send of the same frame) must be able to try again.
+        assert "agent-broken" not in daemon._running_generations
+
+    async def test_parallel_reconcile_different_agents(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Different agents must NOT block each other — each lock is
+        per-agent so the daemon can reconcile agents in parallel. We
+        verify by arranging the grant arrival order to match the
+        expected progression and confirming both spawns happen.
+        """
+        daemon._spawner.spawn = AsyncMock(
+            side_effect=lambda m: MagicMock(
+                success=True, agent_id=m.agent_id, pid=100, error=""
+            )
+        )
+
+        base = {
+            "type": "sync_desired_state",
+            "desired_state": "running",
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+            "generation": 1,
+        }
+
+        async def grant_both():
+            await asyncio.sleep(0.02)
+            for aid, tok in (("agent-a", "tok-a"), ("agent-b", "tok-b")):
+                await daemon._handle(
+                    {
+                        "type": "token_grant",
+                        "agent_id": aid,
+                        "agent_token": tok,
+                    }
+                )
+
+        await asyncio.gather(
+            daemon._handle({**base, "agent_id": "agent-a"}),
+            daemon._handle({**base, "agent_id": "agent-b"}),
+            grant_both(),
+        )
+
+        assert daemon._spawner.spawn.call_count == 2
+        assert daemon._running_generations["agent-a"] == 1
+        assert daemon._running_generations["agent-b"] == 1
+
+
 # ── Sync batch ───────────────────────────────────────────────────────
 
 
