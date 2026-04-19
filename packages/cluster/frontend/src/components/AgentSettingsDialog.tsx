@@ -34,6 +34,7 @@ import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
+import { ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 interface Props {
@@ -63,6 +64,12 @@ interface Props {
   onRoomsChange?: () => void
 }
 
+// Small uppercase label used for every section heading. Kept as a
+// constant so the collapsible `<summary>` and the plain `<h3>` look
+// identical.
+const SECTION_HEADING_CLASS =
+  'text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]'
+
 function Section({
   id,
   title,
@@ -78,14 +85,49 @@ function Section({
       data-testid={`agent-settings-section-${id}`}
       className="space-y-3"
     >
-      <h3
-        id={`agent-settings-heading-${id}`}
-        className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]"
-      >
+      <h3 id={`agent-settings-heading-${id}`} className={SECTION_HEADING_CLASS}>
         {title}
       </h3>
       {children}
     </section>
+  )
+}
+
+/**
+ * Same visual shape as `<Section>` but the body is collapsed behind a
+ * native `<details>` so low-frequency sections (e.g. Activity) don't
+ * steal scroll real estate from Manifest/Rooms by default. A rotating
+ * chevron signals the collapsible affordance.
+ */
+function CollapsibleSection({
+  id,
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  id: string
+  title: string
+  children: ReactNode
+  defaultOpen?: boolean
+}) {
+  return (
+    <details
+      data-testid={`agent-settings-section-${id}`}
+      className="group"
+      open={defaultOpen}
+    >
+      <summary
+        className={`${SECTION_HEADING_CLASS} flex items-center gap-1.5 cursor-pointer list-none select-none`}
+        aria-labelledby={`agent-settings-heading-${id}`}
+      >
+        <ChevronRight
+          className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90"
+          aria-hidden="true"
+        />
+        <span id={`agent-settings-heading-${id}`}>{title}</span>
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
   )
 }
 
@@ -129,12 +171,12 @@ export default function AgentSettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Single scrollable body — sections stack top-to-bottom. The
-            ``divide-y`` separator between sections doubles as the
-            visual seam so each heading doesn't need its own top
-            border. */}
+        {/* Single scrollable body — sections stack top-to-bottom.
+            DESIGN.md §6.1: "No hard section borders — separation comes
+            from background color changes and spacing". We rely on
+            space-y-6 (24px) for the seam, not a divider. */}
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="px-6 py-5 divide-y divide-[var(--color-border)] [&>section]:py-5 first:[&>section]:pt-0 last:[&>section]:pb-0">
+          <div className="px-6 py-5 space-y-6">
             <Section id="overview" title="Overview">
               <OverviewPanel agent={agent} updateAgent={updateAgent} />
             </Section>
@@ -156,9 +198,12 @@ export default function AgentSettingsDialog({
               <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
             </Section>
 
-            <Section id="activity" title="Activity">
+            {/* Activity is a lifecycle log — least-often consulted of
+                the four sections. Collapsed by default keeps Manifest
+                and Rooms closer to the top of the scroll. */}
+            <CollapsibleSection id="activity" title="Activity">
               <ActivityPanel agentId={agent?.id ?? null} />
-            </Section>
+            </CollapsibleSection>
           </div>
         </div>
       </DialogContent>

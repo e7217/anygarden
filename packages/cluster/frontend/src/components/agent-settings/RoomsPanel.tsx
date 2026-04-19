@@ -105,12 +105,18 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
         ) : (
           <div className="space-y-2">
             {assignedRooms.map(room => (
-              <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-2">
+              <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-1.5">
                 <span className="flex items-center gap-2 min-w-0">
                   <EntityAvatar id={room.id} name={room.name} kind="room" size="sm" />
                   <span className="truncate text-sm font-medium text-[var(--color-foreground)]">{room.name}</span>
                 </span>
-                <Button variant="ghost" size="icon" onClick={() => removeRoom(room.id)} title="Remove room">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => removeRoom(room.id)}
+                  title="Remove room"
+                >
                   <X className="h-4 w-4 text-[var(--color-warning)]" />
                 </Button>
               </div>
@@ -127,12 +133,18 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
         ) : (
           <div className="space-y-2">
             {availableRooms.map(room => (
-              <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-2">
+              <div key={room.id} className="flex items-center justify-between rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] px-3 py-1.5">
                 <span className="flex items-center gap-2 min-w-0">
                   <EntityAvatar id={room.id} name={room.name} kind="room" size="sm" />
                   <span className="truncate text-sm font-medium text-[var(--color-foreground)]">{room.name}</span>
                 </span>
-                <Button variant="ghost" size="icon" onClick={() => addRoom(room.id)} title="Add room">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => addRoom(room.id)}
+                  title="Add room"
+                >
                   <Plus className="h-4 w-4 text-[var(--color-success)]" />
                 </Button>
               </div>
