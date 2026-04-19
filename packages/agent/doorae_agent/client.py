@@ -112,6 +112,17 @@ class ChatClient:
         self._agent_turn_count: dict[str, int] = {}
         self.max_agent_turns: int = 6
 
+        # Issue #157 Phase A — reset-prefix abuse guard.
+        # ``[ROOM_QUERY]`` / ``[DELEGATED]`` frames reset the agent-
+        # turn counter (issue #67), which a looping agent can exploit
+        # to evade ``max_agent_turns`` by emitting task-init prefixes
+        # in a loop. This counter tracks consecutive task-init resets
+        # per room; once it exceeds ``max_task_init_resets`` the reset
+        # no longer fires and ``max_agent_turns`` regains its bite.
+        # A non-self, non-nonce (human) message resets the streak.
+        self._consecutive_task_init: dict[str, int] = {}
+        self.max_task_init_resets: int = 5
+
         # HTTP client for REST calls
         self._http: httpx.AsyncClient | None = None
         self._running = False
@@ -262,6 +273,29 @@ class ChatClient:
 
     # ── Internal ─────────────────────────────────────────────────────
 
+    def _consume_task_init_reset(self, room_id: str) -> bool:
+        """Increment the per-room consecutive task-init counter and
+        return whether the caller should still honour the reset.
+
+        Issue #157 Phase A — returns False once more than
+        ``max_task_init_resets`` consecutive task-init frames have
+        arrived without a human message breaking the streak. The
+        caller must then keep ``_agent_turn_count`` as-is so
+        ``max_agent_turns`` can still fire on runaway loops that
+        spam ``[ROOM_QUERY]`` / ``[DELEGATED]`` prefixes.
+        """
+        count = self._consecutive_task_init.get(room_id, 0) + 1
+        self._consecutive_task_init[room_id] = count
+        if count > self.max_task_init_resets:
+            logger.warning(
+                "task_init.reset_guard_fired",
+                room_id=room_id,
+                consecutive=count,
+                limit=self.max_task_init_resets,
+            )
+            return False
+        return True
+
     async def _process_frame(self, room_id: str, data: dict[str, Any]) -> None:
         """Handle a single incoming WS frame (called from _room_loop)."""
         msg_type = data.get("type")
@@ -279,9 +313,13 @@ class ChatClient:
                 # don't inherit the previous exchange's count on the
                 # next task round.  Regular self-messages still count
                 # toward the limit to bound total agent-only traffic.
+                # Issue #157 Phase A — ``_consume_task_init_reset``
+                # drops the reset once consecutive task-inits exceed
+                # ``max_task_init_resets``, re-arming ``max_agent_turns``.
                 content = data.get("content", "")
                 if _is_task_init_content(content):
-                    self._agent_turn_count[room_id] = 0
+                    if self._consume_task_init_reset(room_id):
+                        self._agent_turn_count[room_id] = 0
                 else:
                     self._agent_turn_count[room_id] = (
                         self._agent_turn_count.get(room_id, 0) + 1
@@ -296,9 +334,11 @@ class ChatClient:
                 # Issue #67 — same task-boundary semantics apply when
                 # the echo arrives via the nonce path (e.g. the hard
                 # filter missed it because participant_id changed).
+                # Issue #157 Phase A — guard mirrors the hard-filter path.
                 content = data.get("content", "")
                 if _is_task_init_content(content):
-                    self._agent_turn_count[room_id] = 0
+                    if self._consume_task_init_reset(room_id):
+                        self._agent_turn_count[room_id] = 0
                 else:
                     self._agent_turn_count[room_id] = (
                         self._agent_turn_count.get(room_id, 0) + 1
@@ -317,8 +357,13 @@ class ChatClient:
             # initiations — always reset the counter so the handler
             # processes the task even if the previous agent-only
             # exchange hit the limit.
+            # Issue #157 Phase A — once consecutive task-inits exceed
+            # ``max_task_init_resets`` the reset no longer fires, so
+            # ``max_agent_turns`` regains authority over prefix-looping
+            # agents.
             if _is_task_init_content(content):
-                self._agent_turn_count[room_id] = 0
+                if self._consume_task_init_reset(room_id):
+                    self._agent_turn_count[room_id] = 0
             elif sender_has_nonce:
                 # From another agent — increment
                 count = self._agent_turn_count.get(room_id, 0) + 1
@@ -332,8 +377,11 @@ class ChatClient:
                     )
                     return  # skip — agent-only loop exceeded limit
             else:
-                # From a human — reset counter
+                # From a human — reset both counters. Human messages
+                # break the agent-only streak *and* clear the task-init
+                # consecutive counter that feeds the #157 guard.
                 self._agent_turn_count[room_id] = 0
+                self._consecutive_task_init[room_id] = 0
 
             for handler in self._message_handlers:
                 try:
