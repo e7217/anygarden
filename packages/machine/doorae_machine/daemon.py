@@ -229,25 +229,37 @@ class MachineDaemon:
         await self._reconcile_agent(frame.agent_id)
 
     async def _handle_sync_batch(self, frame: Any) -> None:
-        """Handle a batch of agent desired states (full reconciliation)."""
+        """Handle a batch of agent desired states.
+
+        ``frame.is_full_snapshot`` distinguishes two semantics (#185):
+
+        * True (default): the batch is the full desired set for this
+          machine. Agents running locally but missing from the batch
+          are orphans and get stopped.
+        * False: the batch is a targeted update. Only the listed
+          agents are reconciled; anything absent stays untouched. A
+          server-side bug that produces an empty partial batch must
+          not mass-kill local agents.
+        """
         # Save all manifests
         desired_ids: set[str] = set()
         for agent_frame in frame.agents:
             self._manifest_store.save(agent_frame)
             desired_ids.add(agent_frame.agent_id)
 
-        # Kill orphans: agents running locally but not in the batch.
-        # Hold the per-agent lock around each kill so the orphan pop
-        # doesn't clobber a concurrent reservation left by a newer
-        # ``_reconcile_agent`` (#183).
-        running_list = self._spawner.list_running()
-        for info in running_list:
-            agent_id = info["agent_id"]
-            if agent_id not in desired_ids:
-                log.info("killing_orphan", agent_id=agent_id)
-                async with self._lock_for(agent_id):
-                    await self._spawner.kill(agent_id)
-                    self._running_generations.pop(agent_id, None)
+        if frame.is_full_snapshot:
+            # Kill orphans: agents running locally but not in the batch.
+            # Hold the per-agent lock around each kill so the orphan
+            # pop doesn't clobber a concurrent reservation left by a
+            # newer ``_reconcile_agent`` (#183).
+            running_list = self._spawner.list_running()
+            for info in running_list:
+                agent_id = info["agent_id"]
+                if agent_id not in desired_ids:
+                    log.info("killing_orphan", agent_id=agent_id)
+                    async with self._lock_for(agent_id):
+                        await self._spawner.kill(agent_id)
+                        self._running_generations.pop(agent_id, None)
 
         # Reconcile all desired agents
         for agent_frame in frame.agents:

@@ -165,6 +165,38 @@ class TestSyncBatchFrame:
         restored = SyncBatchFrame.model_validate(data)
         assert restored == batch
 
+    # ── is_full_snapshot (#185) ─────────────────────────────────────
+
+    def test_is_full_snapshot_defaults_true_for_backward_compat(self):
+        """Pre-#185 servers don't emit the flag. The machine must treat
+        those frames as full snapshots (the historical behaviour) so
+        the upgrade is backwards-compatible: roll out the flag-aware
+        machine first, then the flag-aware server, in either order.
+        """
+        batch = SyncBatchFrame(agents=[])
+        assert batch.is_full_snapshot is True
+
+    def test_is_full_snapshot_explicit_false(self):
+        batch = SyncBatchFrame(agents=[], is_full_snapshot=False)
+        assert batch.is_full_snapshot is False
+
+    def test_is_full_snapshot_parses_from_dict_without_flag(self):
+        """``parse_server_frame`` on a dict missing ``is_full_snapshot``
+        must return a frame with the default True — guarantees mixed-
+        version clusters never silently flip to partial-snapshot mode.
+        """
+        raw = {"type": "sync_batch", "agents": []}
+        frame = parse_server_frame(raw)
+        assert isinstance(frame, SyncBatchFrame)
+        assert frame.is_full_snapshot is True
+
+    def test_is_full_snapshot_roundtrip(self):
+        batch = SyncBatchFrame(agents=[], is_full_snapshot=False)
+        data = batch.model_dump()
+        assert data["is_full_snapshot"] is False
+        restored = SyncBatchFrame.model_validate(data)
+        assert restored.is_full_snapshot is False
+
 
 # ── TokenGrantFrame ───────────────────────────────────────────────────
 

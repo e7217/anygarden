@@ -67,12 +67,25 @@ class SyncDesiredStateFrame(BaseModel):
 class SyncBatchFrame(BaseModel):
     """Server syncs desired state for multiple agents in a single frame.
 
-    The machine reconciles all listed agents. Agents not in this batch
-    that are currently running should be stopped (full reconciliation).
+    When ``is_full_snapshot`` is True (the historical and default
+    behaviour) the batch represents the complete list of agents the
+    server wants placed on this machine. Agents running locally but
+    missing from the batch are treated as orphans and stopped.
+
+    When ``is_full_snapshot`` is False, the batch is a targeted
+    update: the machine reconciles only the agents listed and does
+    **not** kill anything absent. This mode exists for #185 — a
+    server-side bug (failed query, empty filter) that sends an empty
+    batch would otherwise mass-kill every local agent.
+
+    Default remains True so pre-#185 servers that omit the flag
+    retain full-snapshot semantics; mixed-version rollouts are safe
+    in either order.
     """
 
     type: Literal["sync_batch"] = "sync_batch"
     agents: list[SyncDesiredStateFrame] = Field(default_factory=list)
+    is_full_snapshot: bool = True
 
 
 class TokenGrantFrame(BaseModel):
