@@ -563,6 +563,112 @@ class TestSyncBatch:
         assert "agent-orphan" in kill_calls
         assert "agent-orphan" not in daemon._running_generations
 
+    async def test_partial_batch_does_not_kill_orphans(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#185: A ``sync_batch`` with ``is_full_snapshot=False`` must
+        NOT kill agents missing from the batch. The server only listed
+        the agents it's updating — everything else should keep running.
+        A server bug that sent a bogus partial batch (e.g. a failed
+        query) previously caused mass kill of all local agents.
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-keep", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+            {"agent_id": "agent-untouched", "pid": 200, "engine": "codex", "uptime_seconds": 30},
+        ])
+        daemon._spawner.kill = AsyncMock()
+        daemon._spawner.get_running = MagicMock(return_value=None)
+        daemon._running_generations["agent-keep"] = 1
+        daemon._running_generations["agent-untouched"] = 1
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.pid = 100
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": False,
+            "agents": [
+                {
+                    "type": "sync_desired_state",
+                    "agent_id": "agent-keep",
+                    "desired_state": "running",
+                    "generation": 2,
+                    "engine": "claude-code",
+                },
+            ],
+        }
+
+        async def feed_token():
+            await asyncio.sleep(0.01)
+            await daemon._handle(
+                {
+                    "type": "token_grant",
+                    "agent_id": "agent-keep",
+                    "agent_token": "tok-keep",
+                }
+            )
+
+        await asyncio.gather(
+            daemon._handle(batch_data),
+            feed_token(),
+        )
+
+        # Untouched agent must NOT be killed — it's outside the partial
+        # batch's scope, not an orphan.
+        daemon._spawner.kill.assert_not_called()
+        assert daemon._running_generations["agent-untouched"] == 1
+
+    async def test_empty_partial_batch_kills_nothing(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#185: The core regression guard — an empty
+        ``is_full_snapshot=False`` batch from a server-side bug (empty
+        result set, failed filter, etc.) used to mass-kill every agent
+        on the machine. With the flag, it's now a no-op.
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-a", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+            {"agent_id": "agent-b", "pid": 200, "engine": "codex", "uptime_seconds": 30},
+        ])
+        daemon._spawner.kill = AsyncMock()
+        daemon._running_generations["agent-a"] = 1
+        daemon._running_generations["agent-b"] = 1
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": False,
+            "agents": [],
+        }
+        await daemon._handle(batch_data)
+
+        daemon._spawner.kill.assert_not_called()
+        assert daemon._running_generations == {"agent-a": 1, "agent-b": 1}
+
+    async def test_empty_full_snapshot_kills_all(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Sanity: the original behaviour must remain for
+        ``is_full_snapshot=True`` empty batches — used when the server
+        drops a machine's entire agent set (depopulation, reassignment).
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-a", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+        ])
+        daemon._spawner.kill = AsyncMock(return_value={"success": True})
+        daemon._running_generations["agent-a"] = 1
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": True,
+            "agents": [],
+        }
+        await daemon._handle(batch_data)
+
+        daemon._spawner.kill.assert_called_once_with("agent-a")
+        assert "agent-a" not in daemon._running_generations
+
 
 # ── Token grant ──────────────────────────────────────────────────────
 

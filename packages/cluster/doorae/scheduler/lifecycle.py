@@ -297,8 +297,14 @@ class AgentLifecycle:
                 frame = await self._build_sync_frame(db, agent, rooms)
                 frames.append(frame)
 
+        # ``send_sync_batch`` queries every agent placed on the machine,
+        # so the outgoing batch represents the full desired set. Set
+        # ``is_full_snapshot=True`` explicitly so the machine treats
+        # agents missing from this batch as orphans (#185). Partial
+        # updates — if we ever add them — must set the flag to False.
         await self._machine_bus.send(machine_id, {
             "type": "sync_batch",
+            "is_full_snapshot": True,
             "agents": frames,
         })
 
