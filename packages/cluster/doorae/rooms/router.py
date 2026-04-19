@@ -856,3 +856,55 @@ async def set_pin_order(
         request, user_id=identity.id, pinned_room_ids=pinned_ids, db=db
     )
     return PinOrderOut(pinned_room_ids=pinned_ids)
+
+
+# ---------------------------------------------------------------------------
+# Token telemetry (#157 Phase C)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{room_id}/token-stats")
+async def get_room_token_stats(
+    room_id: str,
+    # Admin-only — the endpoint leaks per-participant volumes that a
+    # regular member shouldn't see.
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return rolling-window token estimates for a room.
+
+    Response shape (see ``doorae.rooms.token_stats`` for details)::
+
+        {
+          "window_1h": {
+            "tokens": int, "messages": int, "agents": int,
+            "per_agent": [
+              {"participant_id", "agent_name", "tokens", "messages",
+               "last_active_at"},
+              ...
+            ],
+          },
+          "window_24h": { /* same */ },
+        }
+
+    Token counts are conservative estimates (``len(content) // 4``) —
+    accurate per-engine tokenisers are future work. ``per_agent``
+    lets #159 Phase D render the per-agent usage panel without
+    repeating the aggregation client-side.
+    """
+    from doorae.rooms.token_stats import (
+        get_room_token_stats as _compute,
+        serialise_window,
+    )
+
+    # Ensure the room exists (a 404 reads better than an empty stats
+    # payload, and matches the rest of this router's conventions).
+    room = await db.scalar(select(Room).where(Room.id == room_id))
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    stats = await _compute(db, room_id)
+    return {
+        label: serialise_window(window)
+        for label, window in stats.items()
+    }
