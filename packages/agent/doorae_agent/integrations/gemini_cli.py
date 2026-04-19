@@ -27,9 +27,12 @@ The adapter's job is kept narrow:
 - keep per-room conversation context so two rooms on the same agent
   don't cross-contaminate
 
-MCP servers and API key isolation live in ``.gemini/settings.json`` +
-``.gemini/.env`` respectively, materialized by
-``Spawner._materialize_agent_dir``.
+MCP servers live in ``.gemini/settings.json`` materialized by
+``Spawner._materialize_agent_dir``. API keys flow into the agent
+subprocess environment via ``Spawner.spawn`` (see #184) — they are
+no longer rendered to a ``.gemini/.env`` file, because that file
+was readable from the agent's tool sandbox and the LLM's ``Read``
+tool could exfiltrate the plaintext key.
 """
 
 from __future__ import annotations
@@ -62,8 +65,8 @@ class GeminiCliAdapter(EngineAdapter):
     """Adapter that calls the host-installed ``gemini`` CLI via subprocess.
 
     The host machine must have ``gemini`` installed and authenticated
-    (``GEMINI_API_KEY`` env var, ``.gemini/.env`` per-agent, or gcloud
-    ADC).
+    (``GEMINI_API_KEY`` env var — the daemon injects it into the agent
+    subprocess env from ``engine_secrets``, per #184 — or gcloud ADC).
     """
 
     def __init__(
