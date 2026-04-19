@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Issue #144 — auto-resync workspace after a merge.
+#
+# Runs after ``git merge`` and ``git pull`` (fast-forward or real
+# merge) to keep the editable installs in ``.venv/bin/*`` in sync
+# with the checked-out source. Without this, ``git pull`` on main
+# can leave ``.venv/bin/doorae-agent`` missing or stale, and the
+# machine daemon's spawner silently falls back to ``uvx doorae-agent``
+# (PyPI cached version) which lags behind recent engine-adapter
+# fixes — exactly the symptom that kept Issue #142 diagnosis going
+# for hours.
+#
+# Idempotent: ``uv sync`` is a no-op when the lock and the installed
+# set already agree, so the cost of running it on every merge is
+# trivial.
+#
+# Opt-in: the repo ships this file but git does not look at
+# ``.githooks/`` by default. ``make setup`` (or an equivalent one-
+# time ``git config core.hooksPath .githooks``) turns it on; until
+# then behavior is unchanged.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+echo "[post-merge] running: uv sync --all-packages"
+uv sync --all-packages

@@ -1,7 +1,12 @@
-.PHONY: install test lint clean dev release-agent release-machine release-cluster
+.PHONY: install setup test lint clean dev release-agent release-machine release-cluster
 
 install:                ## Install all packages (workspace)
 	uv sync --all-packages
+
+setup:                  ## One-time dev setup: install + activate git hooks
+	git config core.hooksPath .githooks
+	uv sync --all-packages
+	@echo "[setup] git hooks enabled via .githooks/ — 'git pull' will auto-run 'uv sync --all-packages'."
 
 test:                   ## Run tests across all packages
 	uv run pytest packages/
