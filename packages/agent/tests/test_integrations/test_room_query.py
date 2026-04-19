@@ -24,8 +24,8 @@ def _make_client(my_pids: set | None = None):
     client.join_room = AsyncMock()
     client.get_room_participants = AsyncMock(return_value=[
         {"id": "my-pid", "kind": "agent"},
-        {"id": "agent-d-pid", "kind": "agent"},
-        {"id": "agent-e-pid", "kind": "agent"},
+        {"id": "agent-d-pid", "kind": "agent", "display_name": "Daisy"},
+        {"id": "agent-e-pid", "kind": "agent", "display_name": "Ethan"},
     ])
     return client
 
@@ -367,9 +367,20 @@ class TestExecuteRoomQuery:
         assert result_meta["status"] == "completed"
         assert result_meta["responded"] == 2
         assert result_meta["expected"] == 2
+        # #153 — each response carries the sender's ``display_name``
+        # captured at query time so cross-room result cards render
+        # real names instead of the last-6 hex fallback.
         assert result_meta["responses"] == [
-            {"participant_id": "agent-d-pid", "content": "GraphQL이 좋겠습니다"},
-            {"participant_id": "agent-e-pid", "content": "REST가 더 적합합니다"},
+            {
+                "participant_id": "agent-d-pid",
+                "name": "Daisy",
+                "content": "GraphQL이 좋겠습니다",
+            },
+            {
+                "participant_id": "agent-e-pid",
+                "name": "Ethan",
+                "content": "REST가 더 적합합니다",
+            },
         ]
         # #74 — completed-path result also carries the ingest_only
         # flag so source-room peers absorb the synthesis as context.
@@ -426,6 +437,80 @@ class TestExecuteRoomQuery:
         # #74 — timeout path mirrors solo/completed in flagging the
         # broadcast for ingest-only absorption by source-room peers.
         assert kwargs["metadata"]["ingest_only"] is True
+
+    @pytest.mark.asyncio
+    async def test_response_metadata_includes_name(self):
+        """#153 — each entry in ``room_query_result.responses`` carries
+        the sender's ``display_name`` captured from the target-room
+        participants list. Without this the source-room result card
+        only has a ``participant_id`` to render, which it truncates
+        to a 6-char hex (``@cfb47a``) because the source room never
+        saw the cross-room agent."""
+        client = _make_client()
+        query = _make_query(content="API 의견?")
+
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        handler = client._message_handlers[0]
+        client.send.reset_mock()
+
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-d-pid",
+            "content": "GraphQL",
+        })
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-e-pid",
+            "content": "REST",
+        })
+
+        _, kwargs = client.send.call_args
+        responses = kwargs["metadata"]["room_query_result"]["responses"]
+        assert responses[0]["name"] == "Daisy"
+        assert responses[1]["name"] == "Ethan"
+
+    @pytest.mark.asyncio
+    async def test_response_name_falls_back_to_empty_for_unknown_sender(self):
+        """#153 — if a reply arrives from a participant not present in
+        the candidate snapshot (e.g. an agent that joined mid-query),
+        ``name`` serializes to an empty string so the frontend's
+        fallback chain (``participantNames`` → last-6 hex) engages
+        cleanly. Regression safety net — lookups should never crash
+        on unknown senders."""
+        client = _make_client()
+        query = _make_query(content="API 의견?")
+
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        handler = client._message_handlers[0]
+        client.send.reset_mock()
+
+        # Known agent replies first (completes 1/2).
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-d-pid",
+            "content": "GraphQL",
+        })
+        # Unknown agent (not in get_room_participants snapshot) fires
+        # the second response. ``expected_count`` is 2 so this
+        # completes the collection.
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "late-joiner-pid",
+            "content": "late answer",
+        })
+
+        _, kwargs = client.send.call_args
+        responses = kwargs["metadata"]["room_query_result"]["responses"]
+        assert responses[1]["participant_id"] == "late-joiner-pid"
+        assert responses[1]["name"] == ""
 
 
 class TestForwardBodyRegression:

@@ -155,6 +155,53 @@ describe('parseResult', () => {
     expect(parseResult(m)?.responses).toEqual([])
   })
 
+  it('preserves response name field from server payload', () => {
+    // #153 — the representative agent now includes the sender's
+    // display_name at serialization time so cross-room result cards
+    // can render real names instead of @last-6-hex fallbacks.
+    const m = msg({
+      metadata: {
+        room_query_result: {
+          query_id: 'q1',
+          target_room_id: 't1',
+          status: 'completed',
+          responded: 1,
+          expected: 1,
+          responses: [
+            { participant_id: 'a1', name: 'Alice', content: 'hi' },
+          ],
+        },
+      },
+    })
+    const result = parseResult(m)
+    expect(result?.responses[0]).toEqual({
+      participant_id: 'a1',
+      name: 'Alice',
+      content: 'hi',
+    })
+  })
+
+  it('omits name field when server payload lacks it (legacy/wire-compat)', () => {
+    // Pre-#153 payloads and any reply from an off-snapshot sender
+    // (empty/missing name) must survive parsing without ``name``
+    // showing up as the literal string 'undefined' or crashing.
+    const m = msg({
+      metadata: {
+        room_query_result: {
+          query_id: 'q1',
+          target_room_id: 't1',
+          status: 'completed',
+          responded: 1,
+          expected: 1,
+          responses: [{ participant_id: 'a1', content: 'hi' }],
+        },
+      },
+    })
+    const result = parseResult(m)
+    expect(result?.responses[0]).toEqual({ participant_id: 'a1', content: 'hi' })
+    expect(result?.responses[0].name).toBeUndefined()
+  })
+
   it('rejects unknown status values', () => {
     const m = msg({
       metadata: {
