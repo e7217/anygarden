@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -8,6 +8,18 @@ vi.mock('@/components/EngineGlyph', () => ({
   EngineGlyph: ({ engine }: { engine: string | undefined }) => (
     <svg data-testid={`engine-${engine ?? 'none'}`} />
   ),
+}))
+
+// The single-page dialog mounts every panel simultaneously (#165),
+// so the Activity and Rooms panels fire their data-fetch effects on
+// render. jsdom's URL parser chokes on relative paths in
+// ``fetch(/api/...)``, so stub apiFetch to resolve with empty
+// payloads — these tests don't assert on panel contents.
+vi.mock('@/lib/api', () => ({
+  apiFetch: vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => [],
+  }),
 }))
 
 import AgentSettingsDialog from './AgentSettingsDialog'
@@ -51,31 +63,40 @@ function setup(open: boolean = true) {
 }
 
 describe('AgentSettingsDialog', () => {
-  it('renders four nav items and opens on the Overview section by default', () => {
+  it('stacks all four sections vertically when open', async () => {
     setup()
-    expect(screen.getByTestId('agent-settings-nav-overview')).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
-    expect(screen.getByTestId('agent-settings-nav-manifest')).toBeInTheDocument()
-    expect(screen.getByTestId('agent-settings-nav-rooms')).toBeInTheDocument()
-    expect(screen.getByTestId('agent-settings-nav-activity')).toBeInTheDocument()
+    // Each section has its own aria-labelled wrapper so the admin
+    // can scan the whole agent without navigating.
+    expect(screen.getByTestId('agent-settings-section-overview')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-settings-section-manifest')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-settings-section-rooms')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-settings-section-activity')).toBeInTheDocument()
+
+    // All panels are mounted simultaneously — Manifest edits survive
+    // scrolling to other sections because no section unmounts.
     expect(screen.getByTestId('overview-panel')).toBeInTheDocument()
+    expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('rooms-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
   })
 
-  it('switches the right pane when a different nav item is clicked', async () => {
+  it('renders section headings in document order (Overview → Manifest → Rooms → Activity)', () => {
     setup()
-    fireEvent.click(screen.getByTestId('agent-settings-nav-manifest'))
-    expect(
-      await screen.findByTestId('agent-settings-nav-manifest'),
-    ).toHaveAttribute('aria-current', 'page')
-    expect(screen.queryByTestId('overview-panel')).toBeNull()
-    expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
+    const sections = screen.getAllByRole('region')
+    const labels = sections.map(s =>
+      (s.getAttribute('aria-labelledby') ?? '').replace(
+        'agent-settings-heading-',
+        '',
+      ),
+    )
+    expect(labels).toEqual(['overview', 'manifest', 'rooms', 'activity'])
   })
 
   it('does not render any panel content when closed', () => {
     setup(false)
     expect(screen.queryByTestId('overview-panel')).toBeNull()
     expect(screen.queryByTestId('manifest-panel')).toBeNull()
+    expect(screen.queryByTestId('rooms-panel')).toBeNull()
+    expect(screen.queryByTestId('activity-panel')).toBeNull()
   })
 })
