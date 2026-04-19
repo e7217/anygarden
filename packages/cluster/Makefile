@@ -6,7 +6,7 @@ install:                ## Install all dependencies
 
 DEV_PORT ?= 8001
 
-dev:                    ## Run server + frontend concurrently (dev mode)
+dev: migrate           ## Run server + frontend concurrently (dev mode, migrating first)
 	$(MAKE) -j2 server-dev frontend
 
 server:                 ## Run backend server
