@@ -20,6 +20,7 @@ from doorae_machine.agent_dir import (
     validate_agent_file_path,
     validate_agent_id,
 )
+from doorae_machine.safefs import safe_write_text
 from doorae_machine.supervisor import watch_process
 
 log = structlog.get_logger()
@@ -342,16 +343,14 @@ class Spawner:
         # gemini-cli tolerate the extra content.
         if msg.agents_md is not None:
             agents_md = agent_root / "AGENTS.md"
-            agents_md.write_text(self._compose_agents_md(msg))
-            os.chmod(agents_md, 0o600)
+            safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():
             target = agent_root / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             os.chmod(target.parent, 0o700)
-            target.write_text(content)
-            os.chmod(target, 0o600)
+            safe_write_text(target, content, mode=0o600)
 
         # --- Synthetic symlinks (engine convention aliases) -----------
         # CLAUDE.md → AGENTS.md (Claude Code auto-discovers CLAUDE.md)
@@ -395,8 +394,11 @@ class Spawner:
             if not settings_path.exists():
                 settings_path.parent.mkdir(parents=True, exist_ok=True)
                 os.chmod(settings_path.parent, 0o700)
-                settings_path.write_text(self._CLAUDE_CODE_DEFAULT_SETTINGS)
-                os.chmod(settings_path, 0o600)
+                safe_write_text(
+                    settings_path,
+                    self._CLAUDE_CODE_DEFAULT_SETTINGS,
+                    mode=0o600,
+                )
 
         # --- Engine-specific .env -------------------------------------
         if msg.engine_secrets:
@@ -408,8 +410,7 @@ class Spawner:
                 body = "".join(
                     f"{k}={v}\n" for k, v in sorted(msg.engine_secrets.items())
                 )
-                env_path.write_text(body)
-                os.chmod(env_path, 0o600)
+                safe_write_text(env_path, body, mode=0o600)
 
         # --- Ensure workspace/ exists ---------------------------------
         workspace = agent_root / "workspace"
@@ -423,12 +424,12 @@ class Spawner:
 
         # --- Seed workspace/MEMORY.md if absent -------------------------
         memory_md = workspace / "MEMORY.md"
-        if not memory_md.exists():
-            memory_md.write_text(
-                "# Memory\n\n"
-                "No prior context. This is the first session.\n"
+        if not memory_md.exists() and not memory_md.is_symlink():
+            safe_write_text(
+                memory_md,
+                "# Memory\n\nNo prior context. This is the first session.\n",
+                mode=0o600,
             )
-            os.chmod(memory_md, 0o600)
 
         # --- Narrow exception: bridge files inside workspace/ --------
         #
@@ -507,9 +508,10 @@ class Spawner:
             if use_real_copy:
                 # Real file, read-only for the owner. The materializer
                 # owns the bytes; the agent's session gets a snapshot,
-                # not a mutable handle.
-                slot.write_text(composed)
-                os.chmod(slot, 0o400)
+                # not a mutable handle. O_NOFOLLOW refuses to follow
+                # any symlink the agent might have planted between our
+                # unlink above and this open (#186).
+                safe_write_text(slot, composed, mode=0o400)
             else:
                 # Symlink one level up. Reads resolve to the canonical
                 # file; writes resolve to a path outside the sandbox
