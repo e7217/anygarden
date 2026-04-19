@@ -74,6 +74,15 @@ class Room(Base):
     representative_agent_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, default=None
     )
+    # Issue #148 — per-room ambient context window toggle. When True
+    # the WS broadcast path stamps ``metadata.ingest_only=True`` on
+    # messages that aren't directly addressed to anyone, letting
+    # peer agents ingest the text as background context without
+    # triggering a full response. Part 1 stores the flag; Part 3
+    # wires the broadcast-side logic.
+    context_window_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="rooms")
