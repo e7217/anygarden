@@ -261,7 +261,24 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         orchestrator_agent_id=orchestrator_agent_id,
         next_speaker_participant_id=next_speaker_participant_id,
     )
-    await websocket.send_text(welcome.model_dump_json())
+    # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
+    # try/except (which starts at the ``try:`` on the Subscribe block
+    # further down). In dev, Vite HMR + React StrictMode routinely
+    # close the client socket in the microseconds between accept and
+    # the first server write; uvicorn then raises
+    # ``ClientDisconnected`` which surfaces here as
+    # ``WebSocketDisconnect``. Nothing is subscribed yet and no gauge
+    # has been bumped, so we log the race at info-level and bail — no
+    # cleanup needed, no traceback noise in the dev log.
+    try:
+        await websocket.send_text(welcome.model_dump_json())
+    except WebSocketDisconnect:
+        logger.info(
+            "ws.disconnected_before_welcome",
+            room_id=room_id,
+            participant_id=participant.id,
+        )
+        return
 
     # Decide guest-ness BEFORE subscribe so the ``finally`` block can
     # safely test ``is_guest_session`` even if an exception fires
