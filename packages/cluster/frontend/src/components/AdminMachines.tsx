@@ -16,11 +16,8 @@ import {
   DoorOpen, FileCog, History,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import AgentEditDialog from '@/components/AgentEditDialog'
-import AgentRoomsDialog from '@/components/AgentRoomsDialog'
-import AgentHistoryDialog from '@/components/AgentHistoryDialog'
+import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
-import AvatarPickerDialog from '@/components/AvatarPickerDialog'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
@@ -193,62 +190,19 @@ export default function AdminMachines() {
     return agentCatalog.reasoning_levels
   }, [agentCatalog, agentModel])
 
-  // ── Per-agent row dialogs (rooms / edit / history) ───────────────
-  const [roomsDialogOpen, setRoomsDialogOpen] = useState(false)
-  const [roomsAgentId, setRoomsAgentId] = useState<string | null>(null)
+  // #158 — collapsed into a single AgentSettingsDialog. The
+  // machine-detail agent list carries a stripped-down shape
+  // (MachineAgent) that misses fields the dialog needs (agents_md,
+  // model, restart_policy, etc.), so we look up the full record from
+  // the cluster-wide ``agents`` list when opening settings.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null)
 
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
-
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [historyAgentId, setHistoryAgentId] = useState<string | null>(null)
-  const [historyAgentName, setHistoryAgentName] = useState('')
-
-  // Issue #101 — avatar picker is scoped to a single agent at a time,
-  // same lifecycle pattern as the manifest editor.
-  const [avatarDialogOpen, setAvatarDialogOpen] = useState(false)
-  const [avatarAgent, setAvatarAgent] = useState<Agent | null>(null)
-
-  // The machine-detail agent list carries a stripped-down shape
-  // (MachineAgent) that misses fields AgentEditDialog needs
-  // (agents_md, model, restart_policy, etc.). Look up the full
-  // record from the cluster-wide ``agents`` list when opening edit.
-  const handleEditManifest = (agentId: string) => {
+  const handleOpenSettings = (agentId: string) => {
     const full = agents.find(a => a.id === agentId)
     if (!full) return
-    setEditingAgent(full)
-    setEditDialogOpen(true)
-  }
-
-  // Issue #101 — open the avatar picker. Like handleEditManifest,
-  // we look up the cluster-wide Agent so the picker has the full
-  // record to echo back on Save.
-  const handleEditAvatar = (agentId: string) => {
-    const full = agents.find(a => a.id === agentId)
-    if (!full) return
-    setAvatarAgent(full)
-    setAvatarDialogOpen(true)
-  }
-
-  const handleCopyAgentId = async (agentId: string) => {
-    try {
-      await navigator.clipboard.writeText(agentId)
-    } catch {
-      // Clipboard access denied (insecure context or permissions).
-      // Falling back to a prompt would be annoying; the admin can
-      // still select the id visually from the row if needed.
-    }
-  }
-
-  const handleManageRooms = (agentId: string) => {
-    setRoomsAgentId(agentId)
-    setRoomsDialogOpen(true)
-  }
-
-  const handleShowHistory = (agentId: string, name: string) => {
-    setHistoryAgentId(agentId)
-    setHistoryAgentName(name)
-    setHistoryOpen(true)
+    setSettingsAgent(full)
+    setSettingsOpen(true)
   }
 
   const handleDeleteAgent = async (agentId: string) => {
@@ -443,10 +397,7 @@ export default function AdminMachines() {
                       <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                     </Button>
                     <AgentSettingsMenu
-                      onEditAvatar={() => handleEditAvatar(agent.id)}
-                      onEditManifest={() => handleEditManifest(agent.id)}
-                      onShowActivity={() => handleShowHistory(agent.id, agent.name)}
-                      onCopyId={() => handleCopyAgentId(agent.id)}
+                      onOpenSettings={() => handleOpenSettings(agent.id)}
                       onDelete={() => handleDeleteAgent(agent.id)}
                       contextWindowOptOut={
                         agents.find(a => a.id === agent.id)
@@ -629,11 +580,7 @@ export default function AdminMachines() {
                           </Button>
                         )}
                         <AgentSettingsMenu
-                          onEditAvatar={() => handleEditAvatar(agent.id)}
-                          onEditManifest={() => handleEditManifest(agent.id)}
-                          onManageRooms={() => handleManageRooms(agent.id)}
-                          onShowActivity={() => handleShowHistory(agent.id, agent.name)}
-                          onCopyId={() => handleCopyAgentId(agent.id)}
+                          onOpenSettings={() => handleOpenSettings(agent.id)}
                           onDelete={() => handleDeleteAgent(agent.id)}
                           contextWindowOptOut={
                             agent.context_window_opt_out ?? false
@@ -878,35 +825,19 @@ export default function AdminMachines() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Per-agent management dialogs ── */}
-      <AgentRoomsDialog
-        open={roomsDialogOpen}
-        onOpenChange={setRoomsDialogOpen}
-        agentId={roomsAgentId}
-        onChange={() => selectedId && fetchDetail(selectedId)}
-      />
-      <AgentEditDialog
-        agent={editingAgent}
-        open={editDialogOpen}
-        onOpenChange={setEditDialogOpen}
+      {/* #158 — unified per-agent settings dialog replaces the four
+          separate dialogs (rooms / edit / history / avatar). */}
+      <AgentSettingsDialog
+        agent={settingsAgent}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
         fetchAgentFiles={fetchAgentFiles}
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
         deleteAgentFile={deleteAgentFile}
         fetchAttachedSkills={fetchAttachedSkills}
         fetchSkillPreview={fetchSkillPreview}
-      />
-      <AgentHistoryDialog
-        open={historyOpen}
-        onOpenChange={setHistoryOpen}
-        agentId={historyAgentId}
-        agentName={historyAgentName}
-      />
-      <AvatarPickerDialog
-        agent={avatarAgent}
-        open={avatarDialogOpen}
-        onOpenChange={setAvatarDialogOpen}
-        updateAgent={updateAgent}
+        onRoomsChange={() => selectedId && fetchDetail(selectedId)}
       />
     </div>
   )

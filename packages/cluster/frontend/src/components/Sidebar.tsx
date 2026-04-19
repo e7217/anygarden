@@ -18,10 +18,7 @@ import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
-import AgentEditDialog from '@/components/AgentEditDialog'
-import AgentRoomsDialog from '@/components/AgentRoomsDialog'
-import AgentHistoryDialog from '@/components/AgentHistoryDialog'
-import AvatarPickerDialog from '@/components/AvatarPickerDialog'
+import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
   Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug,
@@ -902,54 +899,18 @@ function AgentDMListAdmin({
   const { fetchAgentDMs } = useRooms()
 
   // Per-row dialogs — mirrors AdminMachines.tsx state shape so the
-  // two call sites stay easy to diff. ``activeAgent`` vs agent_id
-  // follows the AdminMachines convention (agent_id + lookup) so the
-  // dialog always receives the latest record after an update.
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  // #158 — collapsed into a single settings dialog. ``settingsAgent``
+  // mirrors the previous AdminMachines pattern (agent_id → full record
+  // lookup) so the dialog always sees the latest Agent fields after
+  // an update.
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null)
 
-  const [roomsDialogOpen, setRoomsDialogOpen] = useState(false)
-  const [roomsAgentId, setRoomsAgentId] = useState<string | null>(null)
-
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [historyAgentId, setHistoryAgentId] = useState<string | null>(null)
-  const [historyAgentName, setHistoryAgentName] = useState('')
-
-  const [avatarDialogOpen, setAvatarDialogOpen] = useState(false)
-  const [avatarAgent, setAvatarAgent] = useState<Agent | null>(null)
-
-  const handleEditManifest = (agentId: string) => {
+  const handleOpenSettings = (agentId: string) => {
     const full = agents.find(a => a.id === agentId)
     if (!full) return
-    setEditingAgent(full)
-    setEditDialogOpen(true)
-  }
-
-  const handleEditAvatar = (agentId: string) => {
-    const full = agents.find(a => a.id === agentId)
-    if (!full) return
-    setAvatarAgent(full)
-    setAvatarDialogOpen(true)
-  }
-
-  const handleManageRooms = (agentId: string) => {
-    setRoomsAgentId(agentId)
-    setRoomsDialogOpen(true)
-  }
-
-  const handleShowHistory = (agentId: string, name: string) => {
-    setHistoryAgentId(agentId)
-    setHistoryAgentName(name)
-    setHistoryOpen(true)
-  }
-
-  const handleCopyAgentId = async (agentId: string) => {
-    try {
-      await navigator.clipboard.writeText(agentId)
-    } catch {
-      // Clipboard access denied (insecure context or permissions);
-      // same graceful-degrade as AdminMachines — no prompt fallback.
-    }
+    setSettingsAgent(full)
+    setSettingsOpen(true)
   }
 
   const handleDeleteAgent = async (agentId: string) => {
@@ -1033,11 +994,7 @@ function AgentDMListAdmin({
                 data-testid={`sidebar-dm-actions-${dm.id}`}
               >
                 <AgentSettingsMenu
-                  onEditAvatar={() => handleEditAvatar(agent.id)}
-                  onEditManifest={() => handleEditManifest(agent.id)}
-                  onManageRooms={() => handleManageRooms(agent.id)}
-                  onShowActivity={() => handleShowHistory(agent.id, agent.name)}
-                  onCopyId={() => handleCopyAgentId(agent.id)}
+                  onOpenSettings={() => handleOpenSettings(agent.id)}
                   onDelete={() => { void handleDeleteAgent(agent.id) }}
                   contextWindowOptOut={
                     agent.context_window_opt_out ?? false
@@ -1055,39 +1012,23 @@ function AgentDMListAdmin({
         )
       })}
 
-      {/* Per-agent management dialogs. Mounted inside
-          ``AgentDMListAdmin`` (not the Sidebar root) so the non-admin
-          render path stays free of this state. Both AdminMachines
-          and the sidebar mount their own instances — the two routes
-          never coexist, so duplicate instances don't race. */}
-      <AgentEditDialog
-        agent={editingAgent}
-        open={editDialogOpen}
-        onOpenChange={setEditDialogOpen}
+      {/* #158 — single unified settings dialog replaces the four
+          per-agent dialogs (edit manifest / rooms / history / avatar).
+          Mounted inside ``AgentDMListAdmin`` (not the Sidebar root) so
+          the non-admin render path stays free of this state. Both
+          AdminMachines and the sidebar mount their own instances; the
+          two routes never coexist so duplicate instances don't race. */}
+      <AgentSettingsDialog
+        agent={settingsAgent}
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
         fetchAgentFiles={fetchAgentFiles}
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
         deleteAgentFile={deleteAgentFile}
         fetchAttachedSkills={fetchAttachedSkills}
         fetchSkillPreview={fetchSkillPreview}
-      />
-      <AgentRoomsDialog
-        open={roomsDialogOpen}
-        onOpenChange={setRoomsDialogOpen}
-        agentId={roomsAgentId}
-        onChange={() => { fetchAgentDMs() }}
-      />
-      <AgentHistoryDialog
-        open={historyOpen}
-        onOpenChange={setHistoryOpen}
-        agentId={historyAgentId}
-        agentName={historyAgentName}
-      />
-      <AvatarPickerDialog
-        agent={avatarAgent}
-        open={avatarDialogOpen}
-        onOpenChange={setAvatarDialogOpen}
-        updateAgent={updateAgent}
+        onRoomsChange={() => { fetchAgentDMs() }}
       />
     </div>
   )

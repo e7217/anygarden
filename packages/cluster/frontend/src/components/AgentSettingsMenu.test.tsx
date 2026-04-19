@@ -12,36 +12,27 @@ describe('AgentSettingsMenu', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('renders only items whose handler is supplied', () => {
-    render(
-      <AgentSettingsMenu
-        onEditAvatar={vi.fn()}
-        onEditManifest={vi.fn()}
-      />,
-    )
+  it('renders Settings… only when onOpenSettings is supplied', () => {
+    render(<AgentSettingsMenu onOpenSettings={vi.fn()} />)
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
-    expect(screen.getByText('Edit avatar')).toBeInTheDocument()
-    expect(screen.getByText('Edit manifest')).toBeInTheDocument()
-    expect(screen.queryByText('Manage rooms')).toBeNull()
-    expect(screen.queryByText('Activity')).toBeNull()
-    expect(screen.queryByText('Copy agent ID')).toBeNull()
+    expect(screen.getByText('Settings…')).toBeInTheDocument()
     expect(screen.queryByText('Delete agent')).toBeNull()
+    expect(screen.queryByText('대화 맥락 공유 제외')).toBeNull()
   })
 
-  it('invokes the matching callback and closes the menu on selection', () => {
-    const onEditAvatar = vi.fn()
-    render(<AgentSettingsMenu onEditAvatar={onEditAvatar} />)
+  it('invokes onOpenSettings and closes the menu on selection', () => {
+    const onOpenSettings = vi.fn()
+    render(<AgentSettingsMenu onOpenSettings={onOpenSettings} />)
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
-    fireEvent.click(screen.getByTestId('agent-menu-edit-avatar'))
-    expect(onEditAvatar).toHaveBeenCalledTimes(1)
-    // Menu closes after selection — the item should no longer be in the DOM.
-    expect(screen.queryByTestId('agent-menu-edit-avatar')).toBeNull()
+    fireEvent.click(screen.getByTestId('agent-menu-settings'))
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('agent-menu-settings')).toBeNull()
   })
 
   it('separates Delete behind a divider and styles it as destructive', () => {
     render(
       <AgentSettingsMenu
-        onEditAvatar={vi.fn()}
+        onOpenSettings={vi.fn()}
         onDelete={vi.fn()}
       />,
     )
@@ -51,24 +42,24 @@ describe('AgentSettingsMenu', () => {
   })
 
   it('closes on Escape', () => {
-    render(<AgentSettingsMenu onEditAvatar={vi.fn()} />)
+    render(<AgentSettingsMenu onOpenSettings={vi.fn()} />)
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
-    expect(screen.getByTestId('agent-menu-edit-avatar')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
-    expect(screen.queryByTestId('agent-menu-edit-avatar')).toBeNull()
+    expect(screen.queryByTestId('agent-menu-settings')).toBeNull()
   })
 
   it('closes on outside pointer click', () => {
     render(
       <div>
         <div data-testid="outside">outside</div>
-        <AgentSettingsMenu onEditAvatar={vi.fn()} />
+        <AgentSettingsMenu onOpenSettings={vi.fn()} />
       </div>,
     )
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
-    expect(screen.getByTestId('agent-menu-edit-avatar')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
     fireEvent.pointerDown(screen.getByTestId('outside'))
-    expect(screen.queryByTestId('agent-menu-edit-avatar')).toBeNull()
+    expect(screen.queryByTestId('agent-menu-settings')).toBeNull()
   })
 
   // #148 Part 2 — context-window opt-out toggle.
@@ -76,7 +67,7 @@ describe('AgentSettingsMenu', () => {
     it('renders the toggle only when both props are provided', () => {
       render(
         <AgentSettingsMenu
-          onEditAvatar={vi.fn()}
+          onOpenSettings={vi.fn()}
           contextWindowOptOut={false}
           onToggleContextWindowOptOut={vi.fn()}
         />,
@@ -90,7 +81,7 @@ describe('AgentSettingsMenu', () => {
     it('omits the toggle when only one of the pair is supplied', () => {
       render(
         <AgentSettingsMenu
-          onEditAvatar={vi.fn()}
+          onOpenSettings={vi.fn()}
           // contextWindowOptOut omitted → toggle must not render even
           // though the handler is present.
           onToggleContextWindowOptOut={vi.fn()}
