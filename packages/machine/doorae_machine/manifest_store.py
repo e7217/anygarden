@@ -21,6 +21,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from doorae_machine.protocol.frames import SyncDesiredStateFrame
+from doorae_machine.safefs import safe_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +64,11 @@ class ManifestStore:
         data = self._frame_to_dict(frame)
         data["saved_at"] = datetime.now(tz=timezone.utc).isoformat()
 
-        manifest_path.write_text(
+        safe_write_text(
+            manifest_path,
             json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+            mode=0o600,
         )
-        # Enforce 0o600 regardless of umask
-        manifest_path.chmod(0o600)
 
         return manifest_path
 
@@ -102,11 +102,11 @@ class ManifestStore:
         data["desired_state"] = desired_state
         data["saved_at"] = datetime.now(tz=timezone.utc).isoformat()
 
-        manifest_path.write_text(
+        safe_write_text(
+            manifest_path,
             json.dumps(data, indent=2, ensure_ascii=False),
-            encoding="utf-8",
+            mode=0o600,
         )
-        manifest_path.chmod(0o600)
 
     # ── Read operations ──────────────────────────────────────────────
 

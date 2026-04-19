@@ -671,3 +671,77 @@ class TestClaudeCodeDefaultSettings:
         link = agent_root / "workspace" / ".claude"
         assert not link.exists()
         assert not link.is_symlink()
+
+
+# ── Symlink follow-refusal (Issue #186) ─────────────────────────────
+
+
+class TestMaterializeRefusesSymlinkFollow:
+    """Previously ``Path.write_text`` followed symlinks at the final
+    component. A malicious previous-session agent could leave a
+    symlink at ``workspace/MEMORY.md`` or a similar slot pointing to
+    an arbitrary path, and the next materialize would write through
+    it. All materialize-time writes now go through ``safe_write_text``
+    which uses ``O_NOFOLLOW``.
+    """
+
+    def test_memory_md_symlink_is_refused(
+        self,
+        spawner: Spawner,
+        agent_dirs_root: Path,
+        tmp_path: Path,
+    ) -> None:
+        """MEMORY.md의 seed 로직은 ``if not memory_md.exists() and not
+        memory_md.is_symlink()`` 가드로 기존 symlink를 건드리지 않고
+        통과해야 한다 — write 경로로 들어가도 ``safe_write_text`` 가
+        ELOOP로 거절한다.
+        """
+        # Pre-seed a symlink that would otherwise redirect writes.
+        victim = tmp_path / "outside.txt"
+        victim.write_text("sacred")
+        agent_root = agent_dirs_root / "agent-x"
+        (agent_root / "workspace").mkdir(parents=True, exist_ok=True)
+        memory_md = agent_root / "workspace" / "MEMORY.md"
+        memory_md.symlink_to(victim)
+
+        # Materialize — must NOT write through the symlink.
+        spawner._materialize_agent_dir(_msg(agent_id="agent-x"))
+
+        # Victim file untouched.
+        assert victim.read_text() == "sacred"
+
+    def test_gemini_workspace_bridge_refuses_symlink(
+        self,
+        spawner: Spawner,
+        agent_dirs_root: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Gemini 분기의 ``workspace/AGENTS.md`` real-copy write 경로가
+        이전 세션에서 심어둔 symlink를 unlink로 제거하고 새 파일을 만든다.
+        O_NOFOLLOW는 unlink와 open 사이 race가 발생해도 ELOOP로 방어한다.
+        """
+        victim = tmp_path / "outside.txt"
+        victim.write_text("sacred")
+        agent_root = agent_dirs_root / "agent-x"
+        (agent_root / "workspace").mkdir(parents=True, exist_ok=True)
+
+        # Run once to establish the agent_root in a sane state.
+        spawner._materialize_agent_dir(
+            _msg(agent_id="agent-x", engine="gemini-cli")
+        )
+
+        # Replace the real copy with a symlink pointing outside.
+        bridge = agent_root / "workspace" / "AGENTS.md"
+        if bridge.exists() or bridge.is_symlink():
+            bridge.unlink()
+        bridge.symlink_to(victim)
+
+        # Re-materialize. The unlink-then-write path handles the
+        # symlink cleanly and writes a real file inside workspace.
+        spawner._materialize_agent_dir(
+            _msg(agent_id="agent-x", engine="gemini-cli")
+        )
+
+        assert victim.read_text() == "sacred"
+        assert not bridge.is_symlink()
+        assert bridge.is_file()
