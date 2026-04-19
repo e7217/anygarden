@@ -812,6 +812,78 @@ class TestRepresentativeAgent:
             assert resp.status_code == 400
 
 
+class TestRoomContextWindow:
+    """Tests for the #148 per-room ``context_window_enabled`` flag."""
+
+    @pytest.mark.asyncio
+    async def test_default_is_false(self, room_env) -> None:
+        """Freshly created rooms do not opt into ambient context sharing."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["context_window_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_patch_toggles_context_window(self, room_env) -> None:
+        """PATCH accepts ``context_window_enabled`` and persists it."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"context_window_enabled": True},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["context_window_enabled"] is True
+
+            # Survives a reload — confirms the value is persisted, not just
+            # echoed from the request body.
+            resp2 = await client.get(
+                f"/api/v1/rooms/{room.id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp2.status_code == 200
+            assert resp2.json()["context_window_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_patch_name_leaves_context_window_unchanged(self, room_env) -> None:
+        """Partial updates don't reset the flag (None ⇒ "don't touch")."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Arrange: flip the flag on.
+            await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"context_window_enabled": True},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            # Act: rename the room without touching the flag.
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"name": "renamed"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["name"] == "renamed"
+            assert body["context_window_enabled"] is True
+
+
 class TestRemoveParticipant:
     """Tests for DELETE /api/v1/rooms/{room_id}/participants/{participant_id}."""
 

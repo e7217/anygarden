@@ -22,6 +22,7 @@ interface Props {
 export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: Props) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [contextWindowEnabled, setContextWindowEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -33,6 +34,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
       const data = await resp.json()
       setName(data.name ?? '')
       setDescription(data.description ?? '')
+      setContextWindowEnabled(Boolean(data.context_window_enabled))
       setError(null)
     } catch { /* ignore */ }
   }, [roomId])
@@ -50,6 +52,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         body: JSON.stringify({
           name: name.trim(),
           description: description.trim() || null,
+          context_window_enabled: contextWindowEnabled,
         }),
       })
       if (!resp.ok) {
@@ -92,6 +95,35 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
               value={description}
               onChange={e => setDescription(e.target.value)}
             />
+          </div>
+          {/* #148 — ambient context window toggle. Replaces the machine-
+              level ``DOORAE_CONTEXT_WINDOW_ENABLED`` env knob with a
+              per-room setting that operators can flip from the UI. Part 1
+              only persists the flag; Part 3 wires it into the broadcast
+              path. */}
+          <div className="space-y-1.5">
+            <label
+              htmlFor="room-edit-context-window"
+              className="flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5"
+            >
+              <input
+                id="room-edit-context-window"
+                data-testid="room-edit-context-window-toggle"
+                type="checkbox"
+                checked={contextWindowEnabled}
+                onChange={e => setContextWindowEnabled(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span className="flex-1 space-y-0.5">
+                <span className="block text-sm font-medium text-[var(--color-foreground)]">
+                  대화 맥락 공유
+                </span>
+                <span className="block text-caption text-[var(--color-foreground-muted)]">
+                  다른 에이전트의 응답·잡담도 이 룸의 에이전트 컨텍스트에
+                  함께 전달합니다 (토큰 비용이 늘 수 있음).
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 

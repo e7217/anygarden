@@ -70,6 +70,11 @@ class RoomOut(BaseModel):
     # sidebar doesn't apply to them.
     pinned: bool = False
     sort_order: Optional[int] = None
+    # #148 — when True the server stamps ``metadata.ingest_only=True``
+    # on ambient (un-addressed) broadcasts so peer agents pick up the
+    # text as background context. Part 1 only surfaces storage; Part 3
+    # wires the broadcast-side logic.
+    context_window_enabled: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -223,6 +228,7 @@ async def list_rooms(
                 representative_agent_id=r.representative_agent_id,
                 pinned=pinned,
                 sort_order=sort_order,
+                context_window_enabled=r.context_window_enabled,
             )
         )
     return out
@@ -332,6 +338,7 @@ async def get_room(
         parent_room_id=room.parent_room_id,
         is_dm=room.is_dm,
         representative_agent_id=room.representative_agent_id,
+        context_window_enabled=room.context_window_enabled,
         participants=participant_outs,
     )
 
@@ -514,6 +521,10 @@ async def remove_participant(
 class RoomUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    # #148 — ``None`` means "don't touch" so a rename PATCH can't
+    # accidentally reset the ambient-sharing flag. Explicit ``True``/
+    # ``False`` toggles it.
+    context_window_enabled: bool | None = None
 
 
 @router.patch("/{room_id}", response_model=RoomOut)
@@ -524,7 +535,7 @@ async def update_room(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update room name and/or description."""
+    """Update room name, description, and/or context-window flag."""
     result = await db.execute(select(Room).where(Room.id == room_id))
     room = result.scalar_one_or_none()
     if room is None:
@@ -533,6 +544,8 @@ async def update_room(
         room.name = body.name
     if body.description is not None:
         room.description = body.description
+    if body.context_window_enabled is not None:
+        room.context_window_enabled = body.context_window_enabled
     await db.commit()
     await db.refresh(room)
     return room
