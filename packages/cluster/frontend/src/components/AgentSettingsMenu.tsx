@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import {
+  Check,
   Copy,
   DoorOpen,
+  EyeOff,
   FileCog,
   History,
   MoreHorizontal,
@@ -39,6 +41,13 @@ export interface AgentSettingsMenuProps {
   onShowActivity?: () => void
   onCopyId?: () => void
   onDelete?: () => void
+  /** #148 Part 2 — current value of the opt-out flag. When provided
+   *  with ``onToggleContextWindowOptOut``, the menu renders a
+   *  check-mark-style toggle item so admins can flip the flag
+   *  inline (no separate dialog). The two props are a pair: if
+   *  either is omitted the item is not rendered. */
+  contextWindowOptOut?: boolean
+  onToggleContextWindowOptOut?: () => void | Promise<void>
 }
 
 export default function AgentSettingsMenu({
@@ -48,6 +57,8 @@ export default function AgentSettingsMenu({
   onShowActivity,
   onCopyId,
   onDelete,
+  contextWindowOptOut,
+  onToggleContextWindowOptOut,
 }: AgentSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -111,11 +122,15 @@ export default function AgentSettingsMenu({
     }
   }, [open])
 
-  if (safeActions.length === 0 && !onDelete) return null
+  const showContextToggle =
+    typeof contextWindowOptOut === 'boolean' &&
+    typeof onToggleContextWindowOptOut === 'function'
 
-  const handleSelect = (run: () => void) => {
+  if (safeActions.length === 0 && !onDelete && !showContextToggle) return null
+
+  const handleSelect = (run: () => void | Promise<void>) => {
     setOpen(false)
-    run()
+    void run()
   }
 
   return (
@@ -151,7 +166,42 @@ export default function AgentSettingsMenu({
                 </button>
               </li>
             ))}
-            {onDelete && safeActions.length > 0 && (
+            {showContextToggle && (
+              <>
+                {safeActions.length > 0 && (
+                  <li
+                    aria-hidden="true"
+                    className="my-1 border-t border-[var(--color-border)]"
+                  />
+                )}
+                <li>
+                  {/* #148 Part 2 — toggle-style menu item. The trailing
+                      check mark reflects the current DB flag; the
+                      button only fires the mutation callback so the
+                      parent owns optimistic state + rollback. */}
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={contextWindowOptOut}
+                    onClick={() =>
+                      handleSelect(onToggleContextWindowOptOut!)
+                    }
+                    data-testid="agent-menu-context-window-opt-out"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-black/5 cursor-pointer"
+                  >
+                    <EyeOff className="h-4 w-4" />
+                    <span className="flex-1">대화 맥락 공유 제외</span>
+                    {contextWindowOptOut ? (
+                      <Check
+                        className="h-4 w-4 text-[var(--color-brand)]"
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                  </button>
+                </li>
+              </>
+            )}
+            {onDelete && (safeActions.length > 0 || showContextToggle) && (
               <li
                 aria-hidden="true"
                 className="my-1 border-t border-[var(--color-border)]"

@@ -792,6 +792,69 @@ class TestAgentManifestAPI:
             assert agent.name == "renamed"
 
     @pytest.mark.asyncio
+    async def test_update_agent_context_window_opt_out_toggle(
+        self, agents_env
+    ) -> None:
+        """#148 Part 2 — admin can toggle ``context_window_opt_out`` via PUT.
+
+        Mirrors the other ``_set`` flags: omitting the flag keeps the
+        previous value, supplying it persists whatever ``bool`` came
+        in. The field also surfaces on GET/list so the admin UI can
+        pre-select the current state.
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        # Arrange — new agent defaults to opt_out=False.
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "amb-opt"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["context_window_opt_out"] is False
+        agent_id = resp.json()["id"]
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            gen_before = agent.generation
+
+        # Act — opt out.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "context_window_opt_out": True,
+                "context_window_opt_out_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["context_window_opt_out"] is True
+
+        # Assert persisted + generation bumped (policy change requires
+        # a respawn so the agent picks up the new setting).
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.context_window_opt_out is True
+            assert agent.generation > gen_before
+
+        # Rename without the _set flag must not reset the opt-out.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"name": "renamed", "context_window_opt_out": False},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "renamed"
+        assert body["context_window_opt_out"] is True  # untouched
+
+    @pytest.mark.asyncio
     async def test_list_agent_files_empty(self, agents_env) -> None:
         client = agents_env["client"]
         token = agents_env["token"]

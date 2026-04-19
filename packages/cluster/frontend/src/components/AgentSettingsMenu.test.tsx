@@ -70,4 +70,80 @@ describe('AgentSettingsMenu', () => {
     fireEvent.pointerDown(screen.getByTestId('outside'))
     expect(screen.queryByTestId('agent-menu-edit-avatar')).toBeNull()
   })
+
+  // #148 Part 2 — context-window opt-out toggle.
+  describe('context window opt-out toggle', () => {
+    it('renders the toggle only when both props are provided', () => {
+      render(
+        <AgentSettingsMenu
+          onEditAvatar={vi.fn()}
+          contextWindowOptOut={false}
+          onToggleContextWindowOptOut={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      expect(
+        screen.getByTestId('agent-menu-context-window-opt-out'),
+      ).toBeInTheDocument()
+    })
+
+    it('omits the toggle when only one of the pair is supplied', () => {
+      render(
+        <AgentSettingsMenu
+          onEditAvatar={vi.fn()}
+          // contextWindowOptOut omitted → toggle must not render even
+          // though the handler is present.
+          onToggleContextWindowOptOut={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      expect(
+        screen.queryByTestId('agent-menu-context-window-opt-out'),
+      ).toBeNull()
+    })
+
+    it('renders aria-checked=false when the flag is off', () => {
+      render(
+        <AgentSettingsMenu
+          contextWindowOptOut={false}
+          onToggleContextWindowOptOut={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      expect(
+        screen.getByTestId('agent-menu-context-window-opt-out'),
+      ).toHaveAttribute('aria-checked', 'false')
+    })
+
+    it('renders aria-checked=true when the flag is on', () => {
+      render(
+        <AgentSettingsMenu
+          contextWindowOptOut={true}
+          onToggleContextWindowOptOut={vi.fn()}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      expect(
+        screen.getByTestId('agent-menu-context-window-opt-out'),
+      ).toHaveAttribute('aria-checked', 'true')
+    })
+
+    it('invokes the toggle handler and closes the menu', () => {
+      const onToggle = vi.fn()
+      render(
+        <AgentSettingsMenu
+          contextWindowOptOut={false}
+          onToggleContextWindowOptOut={onToggle}
+        />,
+      )
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      fireEvent.click(
+        screen.getByTestId('agent-menu-context-window-opt-out'),
+      )
+      expect(onToggle).toHaveBeenCalledTimes(1)
+      expect(
+        screen.queryByTestId('agent-menu-context-window-opt-out'),
+      ).toBeNull()
+    })
+  })
 })

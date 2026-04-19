@@ -205,6 +205,14 @@ class Agent(Base):
     avatar_value: Mapped[Optional[str]] = mapped_column(
         String(64), nullable=True, default=None
     )
+    # Issue #148 Part 2 — agent-side opt-out from ambient context
+    # window broadcasts. When True the agent skips ``ingest_only``
+    # messages even if the containing room has the window enabled.
+    # Part 2 stores the flag and exposes it on the REST API; Part 3
+    # wires it into ``decide_policy``.
+    context_window_opt_out: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")
