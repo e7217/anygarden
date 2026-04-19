@@ -18,6 +18,7 @@ def _make_client(
     agent_id: str | None = None,
     context_window_opt_out: bool = False,
     recent_msgs: dict | None = None,
+    speaker_strategy: dict | None = None,
 ):
     client = MagicMock()
     client._agent_name = agent_name
@@ -32,6 +33,12 @@ def _make_client(
     # prior history). Tests that exercise the cycle rule pass a dict
     # with pre-populated deques.
     client._recent_msgs = recent_msgs if recent_msgs is not None else {}
+    # #159 Phase B — per-room speaker strategy cache. Empty dict ⇒
+    # every room falls back to 'mentioned_only', which is what every
+    # legacy test in this suite expects.
+    client._speaker_strategy = (
+        speaker_strategy if speaker_strategy is not None else {}
+    )
     return client
 
 
@@ -595,3 +602,126 @@ class TestCycleDetectionInDecidePolicy:
             },
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+
+class TestRoundRobinStrategy:
+    """Issue #159 Phase B — ``round_robin`` dispatches by the server-
+    computed ``next_speaker_participant_id``. Only the single agent
+    whose participant id matches wakes up; everyone else skips,
+    including the human-sender default that ``mentioned_only`` uses.
+    """
+
+    def test_my_turn_responds(self):
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "team, go",
+            "metadata": {
+                "next_speaker_participant_id": "my-pid-123",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_not_my_turn_skips(self):
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "team, go",
+            "metadata": {
+                "next_speaker_participant_id": "other-pid-456",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_no_next_speaker_metadata_skips(self):
+        """Round-robin strictly requires server to stamp the pointer.
+        Absence ⇒ SKIP (no fallback to 'everyone replies')."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "hi",
+            "metadata": {},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_direct_mention_still_wins(self):
+        """Explicit mention pre-empts round-robin routing (rule 3
+        beats the strategy tail)."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "yo",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}],
+                # Someone else is the "next speaker" but we were
+                # explicitly @-mentioned — addressability wins.
+                "next_speaker_participant_id": "other-pid-456",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_task_init_prefix_still_wins(self):
+        """[ROOM_QUERY] / [DELEGATED] pre-empt round-robin (rule 2)."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "[ROOM_QUERY] fetch the status",
+            "metadata": {
+                "next_speaker_participant_id": "other-pid-456",
+                "_nonce": "n1",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+
+class TestOrchestratorStrategyStub:
+    """Issue #159 Phase B stub — until Phase C fills in the real
+    handoff path, ``orchestrator`` rooms fall back to
+    ``mentioned_only`` semantics (direct mention → RESPOND,
+    unaddressed human → RESPOND, unaddressed agent → SKIP)."""
+
+    def test_unaddressed_human_responds_like_legacy(self):
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "orchestrator"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "hello",
+            "metadata": {},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_unaddressed_agent_skips_like_legacy(self):
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "orchestrator"},
+        )
+        msg = {
+            "participant_id": "other-agent",
+            "room_id": "room-a",
+            "content": "talking to no one in particular",
+            "metadata": {"_nonce": "n1"},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
