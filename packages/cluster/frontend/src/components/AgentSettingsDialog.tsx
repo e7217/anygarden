@@ -172,11 +172,18 @@ export default function AgentSettingsDialog({
         </DialogHeader>
 
         {/* Single scrollable body — sections stack top-to-bottom.
-            DESIGN.md §6.1: "No hard section borders — separation comes
-            from background color changes and spacing". We rely on
-            space-y-6 (24px) for the seam, not a divider. */}
+            DESIGN.md §2 lists the whisper border as the primitive for
+            "cards, dividers, sections", so each section is separated
+            by a 1px seam. Inside a bounded dialog the pure-gap rhythm
+            from §6.1 reads as "sections blending together" because
+            the ambient color alternation that carries that rule on
+            full-page layouts isn't available here. Each section gets
+            py-4 (16px top + bottom) → 32px of visual spacing between
+            section contents, with the seam in the middle. First/last
+            sections drop their outer padding so the dialog edges
+            stay clean. */}
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="px-6 py-5 space-y-6">
+          <div className="px-6 py-5 divide-y divide-[var(--color-border)] [&>section]:py-4 [&>details]:py-4 first:[&>*]:pt-0 last:[&>*]:pb-0">
             <Section id="overview" title="Overview">
               <OverviewPanel agent={agent} updateAgent={updateAgent} />
             </Section>
