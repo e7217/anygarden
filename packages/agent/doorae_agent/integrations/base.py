@@ -7,8 +7,14 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
+from doorae_agent.integrations.cycle_guard import is_cycle_detected
+
 if TYPE_CHECKING:
     from doorae_agent.client import ChatClient
+
+logger = structlog.get_logger(__name__)
 
 
 class MessagePolicy(Enum):
@@ -192,6 +198,28 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         pattern = rf"@{re.escape(agent_name)}(?![\w:])"
         if re.search(pattern, content, re.IGNORECASE):
             mentioned_me = True
+
+    # 2d. Semantic cycle detection (#157 Phase B). The same (sender,
+    # content_hash) pair repeating within a small window is a loop
+    # that ``max_agent_turns`` and the task-init reset guard can't
+    # catch — agents can emit distinct non-task-init content each
+    # turn and still be repeating the same idea. Runs *before* the
+    # mention rule so a determined @-chain can't force an agent to
+    # restate the same reply forever. Short content has ``hash=None``
+    # and is skipped inside ``is_cycle_detected``.
+    room_id = msg.get("room_id")
+    recent = (
+        client._recent_msgs.get(room_id, ())
+        if room_id and hasattr(client, "_recent_msgs")
+        else ()
+    )
+    if is_cycle_detected(msg, recent):
+        logger.warning(
+            "decide_policy.cycle_detected",
+            room_id=room_id,
+            sender=sender,
+        )
+        return MessagePolicy.SKIP
 
     # 3. Directly mentioned → respond. Evaluated before the
     # ingest_only flag check so addressability always wins over

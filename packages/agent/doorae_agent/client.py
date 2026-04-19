@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import uuid
 from typing import Any, Callable, Coroutine
@@ -12,6 +13,7 @@ import structlog
 import websockets
 from websockets.asyncio.client import connect as ws_connect
 
+from doorae_agent.integrations.cycle_guard import hash_content
 from doorae_agent.protocol.frames import MessageOut, SendFrame
 from doorae_agent.protocol.versioning import build_subprotocols
 
@@ -122,6 +124,19 @@ class ChatClient:
         # A non-self, non-nonce (human) message resets the streak.
         self._consecutive_task_init: dict[str, int] = {}
         self.max_task_init_resets: int = 5
+
+        # Issue #157 Phase B — per-room ring buffer of recent message
+        # fingerprints (sender, hash). Feeds ``cycle_guard`` in
+        # ``decide_policy``: when the same (sender, hash) pair has
+        # appeared ``min_repetitions`` times within ``window`` entries,
+        # the agent skips the message to break semantic loops that
+        # ``max_agent_turns`` / reset-guard can't catch. Short messages
+        # hash to None and never enter the buffer, protecting "ok"-style
+        # legitimate repeats.
+        self._recent_msgs: dict[
+            str, collections.deque[dict[str, str]]
+        ] = {}
+        self._recent_msgs_maxlen: int = 10
 
         # HTTP client for REST calls
         self._http: httpx.AsyncClient | None = None
@@ -273,6 +288,29 @@ class ChatClient:
 
     # ── Internal ─────────────────────────────────────────────────────
 
+    def _record_recent_message(
+        self, room_id: str, msg: dict[str, Any]
+    ) -> None:
+        """Append a (sender, hash) fingerprint to the room's ring
+        buffer for ``cycle_guard`` (#157 Phase B).
+
+        Short content hashes to ``None`` and is skipped — legitimate
+        short repeats ("ok", "네", "done") must not feed the detector.
+        Missing sender is also skipped (welcome/system frames).
+        """
+        sender = msg.get("participant_id")
+        if not sender:
+            return
+        content = msg.get("content", "") or ""
+        h = hash_content(content)
+        if h is None:
+            return
+        buf = self._recent_msgs.get(room_id)
+        if buf is None:
+            buf = collections.deque(maxlen=self._recent_msgs_maxlen)
+            self._recent_msgs[room_id] = buf
+        buf.append({"sender": sender, "hash": h})
+
     def _consume_task_init_reset(self, room_id: str) -> bool:
         """Increment the per-room consecutive task-init counter and
         return whether the caller should still honour the reset.
@@ -300,6 +338,12 @@ class ChatClient:
         """Handle a single incoming WS frame (called from _room_loop)."""
         msg_type = data.get("type")
         if msg_type == "message":
+            # Issue #157 Phase B — record the message for cycle detection
+            # before any early-return filters fire. Self / nonce-echo
+            # frames still count: the detector tracks (sender, hash)
+            # pairs, so repeats from this very agent are also caught.
+            self._record_recent_message(room_id, data)
+
             seq = data.get("seq", 0)
             if seq > self._last_seq.get(room_id, 0):
                 self._last_seq[room_id] = seq
@@ -382,6 +426,12 @@ class ChatClient:
                 # consecutive counter that feeds the #157 guard.
                 self._agent_turn_count[room_id] = 0
                 self._consecutive_task_init[room_id] = 0
+
+            # Issue #157 Phase B — surface the room_id on the frame so
+            # ``decide_policy`` can look up the per-room recent-message
+            # ring buffer. Adapters already read ``msg.get("room_id")``
+            # (see claude_code.py), this makes the field authoritative.
+            data.setdefault("room_id", room_id)
 
             for handler in self._message_handlers:
                 try:
