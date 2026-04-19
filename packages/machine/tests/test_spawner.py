@@ -41,6 +41,92 @@ def spawn_msg() -> SpawnManifest:
     )
 
 
+class TestSpawnEnvSecrets:
+    """#184: engine_secrets must be injected into the subprocess env
+    rather than rendered to a disk `.env` file that the agent sandbox
+    can read.
+    """
+
+    async def test_engine_secrets_forwarded_to_subprocess_env(
+        self, spawner: Spawner
+    ) -> None:
+        msg = SpawnManifest(
+            agent_id="agent-secret",
+            engine="claude-code",
+            agent_token="tok-xyz",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            engine_secrets={"ANTHROPIC_API_KEY": "sk-shh", "ANOTHER": "v"},
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+        captured: dict = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return mock_proc
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        env = captured["env"]
+        assert env is not None
+        assert env["ANTHROPIC_API_KEY"] == "sk-shh"
+        assert env["ANOTHER"] == "v"
+        # DOORAE_TOKEN survives — must not be clobbered by the merge
+        assert env["DOORAE_TOKEN"] == "tok-xyz"
+
+    async def test_engine_secrets_cannot_override_doorae_token(
+        self, spawner: Spawner
+    ) -> None:
+        """A manifest that (accidentally or maliciously) sets
+        ``DOORAE_TOKEN`` inside engine_secrets must not win over the
+        real agent token — the agent's identity with the server is
+        non-negotiable.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-secret",
+            engine="claude-code",
+            agent_token="tok-real",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            engine_secrets={"DOORAE_TOKEN": "tok-hijack"},
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+        captured: dict = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return mock_proc
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            await spawner.spawn(msg)
+
+        assert captured["env"]["DOORAE_TOKEN"] == "tok-real"
+
+
 class TestSpawn:
     """Tests for spawning agent subprocesses."""
 

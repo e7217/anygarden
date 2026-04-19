@@ -337,7 +337,14 @@ class TestMaterializeFresh:
         # The managed AGENTS.md one level up is gone too (prune).
         assert not (agent_root / "AGENTS.md").exists()
 
-    def test_engine_secrets_rendered_for_gemini(self, spawner: Spawner) -> None:
+    def test_engine_secrets_not_persisted_to_disk(self, spawner: Spawner) -> None:
+        """#184: secrets flow into the subprocess environment, never the
+        disk. The materializer must NOT drop a ``.env`` file under any
+        engine-specific config directory, because that file is readable
+        from the agent sandbox (``workspace/`` can reach ``../.claude/``
+        etc.) and the LLM's ``Read`` tool would happily exfiltrate the
+        plaintext key.
+        """
         agent_root = spawner._materialize_agent_dir(
             _msg(
                 engine="gemini-cli",
@@ -345,9 +352,10 @@ class TestMaterializeFresh:
                 files={".gemini/settings.json": "{}"},
             )
         )
-        env_path = agent_root / ".gemini" / ".env"
-        assert env_path.read_text() == "GEMINI_API_KEY=sk-abc\n"
-        assert env_path.stat().st_mode & 0o777 == 0o600
+
+        assert not (agent_root / ".gemini" / ".env").exists()
+        assert not (agent_root / ".codex" / ".env").exists()
+        assert not (agent_root / ".claude" / ".env").exists()
 
 
 class TestMaterializePrune:

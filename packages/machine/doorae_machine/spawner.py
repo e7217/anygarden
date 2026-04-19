@@ -123,14 +123,6 @@ class Spawner:
 
     # ── Per-agent directory materialization ──────────────────────────────
 
-    # Mapping from engine name to the .env file we render engine_secrets
-    # into. Each engine's CLI auto-loads its own dotenv from cwd.
-    _ENGINE_ENV_PATHS: dict[str, str] = {
-        "gemini-cli": ".gemini/.env",
-        "codex": ".codex/.env",
-        "claude-code": ".claude/.env",
-    }
-
     # Default ``.claude/settings.json`` body for claude-code agents
     # whose admin manifest doesn't supply one. claude-agent-sdk loads
     # only project-scoped settings (``setting_sources=["project"]``),
@@ -400,17 +392,11 @@ class Spawner:
                     mode=0o600,
                 )
 
-        # --- Engine-specific .env -------------------------------------
-        if msg.engine_secrets:
-            env_rel = self._ENGINE_ENV_PATHS.get(msg.engine)
-            if env_rel is not None:
-                env_path = agent_root / env_rel
-                env_path.parent.mkdir(parents=True, exist_ok=True)
-                os.chmod(env_path.parent, 0o700)
-                body = "".join(
-                    f"{k}={v}\n" for k, v in sorted(msg.engine_secrets.items())
-                )
-                safe_write_text(env_path, body, mode=0o600)
+        # engine_secrets is NOT rendered to disk — it flows into the
+        # subprocess environment via ``Spawner.spawn`` (#184). Writing
+        # an ``.env`` file here would re-expose the plaintext keys to
+        # the agent's Read tool since the agent sandbox can reach the
+        # engine config dir via cwd traversal.
 
         # --- Ensure workspace/ exists ---------------------------------
         workspace = agent_root / "workspace"
@@ -595,8 +581,21 @@ class Spawner:
                 error=f"Failed to write profile: {exc}",
             )
 
-        # Build environment: inherit current env + set DOORAE_TOKEN
+        # Build environment: inherit current env + merge engine_secrets
+        # + set DOORAE_TOKEN. Order matters:
+        #
+        # 1. ``os.environ.copy()`` — daemon's own env (PATH, HOME, etc.)
+        # 2. ``engine_secrets`` — per-agent API keys (ANTHROPIC_API_KEY,
+        #    OPENAI_API_KEY, GEMINI_API_KEY …). Merged BEFORE DOORAE_TOKEN
+        #    so a malicious or buggy manifest that tries to override the
+        #    agent's identity can't. ``engine_secrets`` was historically
+        #    written to disk as an engine-local ``.env`` file, but that
+        #    path was readable from the agent's tool sandbox (cwd or one
+        #    level up) and the LLM's ``Read`` tool would exfiltrate the
+        #    plaintext key — see #184.
+        # 3. ``DOORAE_TOKEN`` — the agent's auth token, always wins.
         env = os.environ.copy()
+        env.update(msg.engine_secrets)
         env["DOORAE_TOKEN"] = msg.agent_token
 
         # The daemon's own server URL is authoritative — it's the address the
