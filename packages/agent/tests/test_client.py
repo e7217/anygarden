@@ -642,3 +642,113 @@ class TestTaskInitResetGuard:
         )
         assert client._agent_turn_count["room-a"] == 2
         assert client._consecutive_task_init["room-a"] == 6
+
+
+class TestRecentMessagesBuffer:
+    """Issue #157 Phase B — ``_process_frame`` records (sender, hash)
+    fingerprints into a per-room ring buffer feeding ``cycle_guard``
+    in ``decide_policy``."""
+
+    def _make_client(self) -> ChatClient:
+        return ChatClient("ws://x", token="t")
+
+    @pytest.mark.asyncio
+    async def test_long_message_recorded(self) -> None:
+        client = self._make_client()
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other",
+                "content": "a sentence long enough to be hashed reliably",
+            },
+        )
+        buf = client._recent_msgs.get("room-a")
+        assert buf is not None
+        assert len(buf) == 1
+        entry = buf[0]
+        assert entry["sender"] == "other"
+        assert isinstance(entry["hash"], str)
+        assert len(entry["hash"]) == 16
+
+    @pytest.mark.asyncio
+    async def test_short_message_not_recorded(self) -> None:
+        """Content < 16 chars is excluded from the buffer."""
+        client = self._make_client()
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other",
+                "content": "ok",
+            },
+        )
+        assert "room-a" not in client._recent_msgs
+
+    @pytest.mark.asyncio
+    async def test_per_room_isolation(self) -> None:
+        client = self._make_client()
+        for rid in ("room-a", "room-b"):
+            await client._process_frame(
+                rid,
+                {
+                    "type": "message",
+                    "seq": 1,
+                    "participant_id": "other",
+                    "content": "this is a long enough content for hashing",
+                },
+            )
+        assert len(client._recent_msgs["room-a"]) == 1
+        assert len(client._recent_msgs["room-b"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_maxlen_caps_at_ten(self) -> None:
+        client = self._make_client()
+        for i in range(15):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "other",
+                    "content": f"long content sample number {i:02d} repeating",
+                },
+            )
+        assert len(client._recent_msgs["room-a"]) == 10
+
+    @pytest.mark.asyncio
+    async def test_welcome_frame_not_recorded(self) -> None:
+        client = self._make_client()
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "welcome",
+                "participant_id": "my-pid",
+                "content": "ignored long enough content to pass hash gate",
+            },
+        )
+        assert "room-a" not in client._recent_msgs
+
+    @pytest.mark.asyncio
+    async def test_room_id_injected_on_handler_message(self) -> None:
+        """Handler sees ``room_id`` on the message dict (for cycle lookup)."""
+        client = self._make_client()
+        seen: list[dict] = []
+
+        @client.on_message
+        async def _h(msg: dict) -> None:
+            seen.append(msg)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other",
+                "content": "long enough content for the gate to pass now",
+            },
+        )
+        assert seen
+        assert seen[0].get("room_id") == "room-a"

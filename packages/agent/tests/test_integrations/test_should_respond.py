@@ -17,6 +17,7 @@ def _make_client(
     my_pids: set | None = None,
     agent_id: str | None = None,
     context_window_opt_out: bool = False,
+    recent_msgs: dict | None = None,
 ):
     client = MagicMock()
     client._agent_name = agent_name
@@ -26,6 +27,11 @@ def _make_client(
     # the pre-#148 INGEST_ONLY behaviour on the ``ingest_only`` flag;
     # tests that exercise opt-out pass ``True``.
     client._context_window_opt_out = context_window_opt_out
+    # #157 Phase B — cycle-detection ring buffer. Default empty dict
+    # keeps legacy tests untouched (cycle rule never fires without
+    # prior history). Tests that exercise the cycle rule pass a dict
+    # with pre-populated deques.
+    client._recent_msgs = recent_msgs if recent_msgs is not None else {}
     return client
 
 
@@ -482,3 +488,110 @@ class TestIngestContextDefault:
             {"content": "x", "metadata": {"ingest_only": True}}
         )
         assert result is None
+
+
+class TestCycleDetectionInDecidePolicy:
+    """Issue #157 Phase B — decide_policy SKIPs on semantic cycles.
+
+    The rule runs between the room_query guard (rule 2b) and the
+    direct-mention rule (rule 3), so a looping (sender, content-hash)
+    pair escapes even a determined @-mention chain.
+    """
+
+    def _with_history(self, sender: str, content: str, times: int) -> dict:
+        """Build a ``_recent_msgs`` dict pre-loaded with ``times``
+        copies of the given (sender, content) fingerprint."""
+        from collections import deque
+        from doorae_agent.integrations.cycle_guard import hash_content
+
+        buf: deque = deque(maxlen=10)
+        for _ in range(times):
+            buf.append({"sender": sender, "hash": hash_content(content)})
+        return {"room-a": buf}
+
+    def test_cycle_triggers_skip_even_when_mentioned(self):
+        """Direct mention normally → RESPOND; cycle rule pre-empts it."""
+        looped_content = (
+            "I have analysed the logs and the issue appears to be X"
+        )
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("other-agent", looped_content, 2),
+        )
+        msg = {
+            "participant_id": "other-agent",
+            "room_id": "room-a",
+            "content": looped_content,
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}]
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_different_sender_same_content_no_cycle(self):
+        """Same content from a different sender doesn't SKIP — fresh voice."""
+        content = "I have analysed the logs and found nothing suspicious here"
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("agent-B", content, 2),
+        )
+        # Now a different sender says the same thing while mentioning us
+        msg = {
+            "participant_id": "agent-C",  # different sender
+            "room_id": "room-a",
+            "content": content,
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}]
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_short_content_no_cycle(self):
+        """Short replies ('네', 'ok') are excluded from hashing."""
+        short = "ok"
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("other-agent", short, 5),
+        )
+        msg = {
+            "participant_id": "other-agent",
+            "room_id": "room-a",
+            "content": short,
+            "metadata": {"_nonce": "n1"},
+        }
+        # 'ok' from another agent without mention → rule 7 SKIP normally
+        # but not because of the cycle guard. Verify by using a human
+        # sender (no nonce) so rule 6 would otherwise RESPOND.
+        msg_human = dict(msg)
+        msg_human["metadata"] = {}  # no nonce → sender_is_agent=False
+        assert decide_policy(msg_human, client) is MessagePolicy.RESPOND
+
+    def test_no_room_id_disables_cycle_rule(self):
+        """Legacy tests don't put room_id on msg — cycle rule is inert."""
+        client = _make_client(my_pids={"my-pid-123"})
+        msg = {
+            "participant_id": "other-agent",
+            "content": "any content long enough for hashing to fire",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}]
+            },
+            # no "room_id"
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_single_prior_match_no_cycle(self):
+        """One prior occurrence isn't a loop — need at least 2."""
+        content = "the message that appeared only once so far today"
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("other-agent", content, 1),
+        )
+        msg = {
+            "participant_id": "other-agent",
+            "room_id": "room-a",
+            "content": content,
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}]
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
