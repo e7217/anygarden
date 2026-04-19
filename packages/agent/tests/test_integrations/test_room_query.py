@@ -40,6 +40,7 @@ class TestParseRoomQuery:
                     "source_room_id": "abc",
                     "query_id": "q-1",
                     "source_participant_id": "user-pid",
+                    "source_participant_name": "Alice",
                 },
             },
         }
@@ -49,14 +50,18 @@ class TestParseRoomQuery:
         assert rq.source_room_id == "abc"
         assert rq.query_id == "q-1"
         assert rq.source_participant_id == "user-pid"
+        # Issue #155 — new field propagated from server so the target-
+        # room forward badge can render the real name instead of hash.
+        assert rq.source_participant_name == "Alice"
 
     def test_parse_legacy_metadata_without_query_id(self):
         """Legacy queue items (pre-#55 broadcast still in flight)
         must not crash. ``query_id`` falls back to empty string and
-        ``source_participant_id`` to ``None`` so downstream code can
-        still send the forward; the UI just won't have the matching
-        token to dismiss the chip — acceptable since the affected
-        window is the single deploy in which the upgrade lands."""
+        ``source_participant_id`` / ``source_participant_name`` to
+        ``None`` so downstream code can still send the forward; the
+        UI just won't have the matching token to dismiss the chip —
+        acceptable since the affected window is the single deploy in
+        which the upgrade lands."""
         msg = {
             "content": "<#room:xyz> 의견?",
             "metadata": {
@@ -67,6 +72,7 @@ class TestParseRoomQuery:
         assert rq is not None
         assert rq.query_id == ""
         assert rq.source_participant_id is None
+        assert rq.source_participant_name is None
 
     def test_parse_without_room_query(self):
         msg = {"content": "hello", "metadata": {}}
@@ -127,6 +133,7 @@ def _make_query(**overrides) -> RoomQuery:
         content="API 설계 의견?",
         query_id="q-test",
         source_participant_id="user-source-pid",
+        source_participant_name="Alice",
     )
     defaults.update(overrides)
     return RoomQuery(**defaults)
@@ -150,14 +157,41 @@ class TestExecuteRoomQuery:
         assert args == ("room-b", "[ROOM_QUERY] API 설계 의견?")
         # Issue #55: forward carries metadata so the target-room
         # bubble can render the ``↪ #source · @author`` badge.
+        # Issue #155 — ``source_participant_name`` is propagated from
+        # the server-issued ``room_query`` meta so the target-room
+        # badge can resolve the real name without having the source
+        # user in its local participants map.
         forward_meta = kwargs["metadata"]["room_query_forward"]
         assert forward_meta == {
             "source_room_id": "room-a",
             "source_participant_id": "user-source-pid",
+            "source_participant_name": "Alice",
             "query_id": "q-test",
         }
         # Should register a message handler
         assert len(client._message_handlers) == 1
+
+    @pytest.mark.asyncio
+    async def test_forward_metadata_omits_source_name_when_absent(self):
+        """Issue #155 — a RoomQuery built from a pre-#155 server (where
+        ``room_query.source_participant_name`` was not populated) has
+        ``source_participant_name is None``. The forward must still be
+        wire-compatible: the key is absent (or None) so the target-room
+        frontend falls through its legacy ``resolveUser`` → hash chain
+        without crashing."""
+        client = _make_client()
+        query = _make_query(source_participant_name=None)
+
+        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        _, kwargs = client.send.call_args
+        forward_meta = kwargs["metadata"]["room_query_forward"]
+        # Either omitted or explicitly None — both are accepted by the
+        # frontend parser's string type guard.
+        assert forward_meta.get("source_participant_name") in (None, "")
 
     @pytest.mark.asyncio
     async def test_forward_strips_room_mention_token(self):

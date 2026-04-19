@@ -48,6 +48,15 @@ class RoomQuery:
     # propagated so the target-room forward can render the
     # ``↪ #room · @user`` badge. ``None`` for legacy messages.
     source_participant_id: str | None = None
+    # Issue #155: the source user's display_name snapshot, resolved
+    # by the server at message-creation time and relayed through
+    # ``room_query_forward`` metadata so the target-room bubble can
+    # render the real name instead of a 6-hex fallback. The target
+    # room's participant map never contains the source-room user, so
+    # ``MessageBubble.resolveUser`` always misses without this value.
+    # ``None`` for legacy (pre-#155) messages — frontend falls through
+    # its legacy chain transparently.
+    source_participant_name: str | None = None
 
 
 def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
@@ -56,12 +65,18 @@ def parse_room_query(msg: dict[str, Any]) -> RoomQuery | None:
     rq = metadata.get("room_query")
     if not rq:
         return None
+    raw_name = rq.get("source_participant_name")
     return RoomQuery(
         target_room_id=rq["target_room_id"],
         source_room_id=rq["source_room_id"],
         content=msg.get("content", ""),
         query_id=rq.get("query_id", ""),
         source_participant_id=rq.get("source_participant_id"),
+        # Empty-string from the server (no display_name resolved) is
+        # treated the same as legacy absence so the frontend short-
+        # circuits on ``|| resolveUser(...)`` without threading an
+        # empty string through the badge.
+        source_participant_name=raw_name if raw_name else None,
     )
 
 
@@ -159,16 +174,23 @@ async def execute_room_query(
     # that triggered the original routing — see the comment on
     # ``_ROOM_MENTION_TOKEN`` for the loop this prevents.
     forwarded = _strip_room_mention(query.content) or query.content
+    forward_meta: dict[str, Any] = {
+        "source_room_id": query.source_room_id,
+        "source_participant_id": query.source_participant_id,
+        "query_id": query.query_id,
+    }
+    # Issue #155 — include the source user's display_name so the
+    # target-room bubble's badge can resolve the real name without
+    # the source user being in its local ``participants`` map. Legacy
+    # (pre-#155) servers don't populate this, in which case
+    # ``source_participant_name`` is ``None`` and we omit the key —
+    # keeping the wire shape identical to pre-#155 forwards.
+    if query.source_participant_name:
+        forward_meta["source_participant_name"] = query.source_participant_name
     await client.send(
         query.target_room_id,
         f"[ROOM_QUERY] {forwarded}",
-        metadata={
-            "room_query_forward": {
-                "source_room_id": query.source_room_id,
-                "source_participant_id": query.source_participant_id,
-                "query_id": query.query_id,
-            }
-        },
+        metadata={"room_query_forward": forward_meta},
     )
 
     # Register multi-reply callback

@@ -42,6 +42,13 @@ export interface RoomQueryForwardMeta {
   query_id: string
   source_room_id: string
   source_participant_id?: string | null
+  /** #155 — sender's display_name snapshot, resolved by the server at
+   * message-creation time. The target room's local ``participants``
+   * map never contains the source-room user, so ``resolveUser`` always
+   * misses and the badge falls back to the last-6-hex of the UUID
+   * without this server-supplied value. ``null`` for legacy (pre-#155)
+   * forwards — the render-side fallback chain handles both. */
+  source_participant_name?: string | null
 }
 
 /** A single agent's reply collected by the representative. */
@@ -117,7 +124,14 @@ export function parseForward(msg: ChatMessage): RoomQueryForwardMeta | null {
   if (!query_id || !source_room_id) return null
   const source_participant_id =
     typeof raw.source_participant_id === 'string' ? raw.source_participant_id : null
-  return { query_id, source_room_id, source_participant_id }
+  // #155 — only accept non-empty strings for the snapshot name. Empty
+  // string from a legacy/guest path falls through to ``null`` so the
+  // render-side ``||`` short-circuits to the ``resolveUser`` → hash
+  // fallback chain instead of rendering an empty badge suffix.
+  const raw_name = raw.source_participant_name
+  const source_participant_name =
+    typeof raw_name === 'string' && raw_name.length > 0 ? raw_name : null
+  return { query_id, source_room_id, source_participant_id, source_participant_name }
 }
 
 /**

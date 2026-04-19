@@ -552,7 +552,7 @@ class TestRoomQueryMetadata:
             await conn.run_sync(Base.metadata.create_all)
 
         async with sf() as db:
-            user = User(email="rq@test.com", password_hash="x")
+            user = User(email="rq@test.com", password_hash="x", display_name="Alice")
             db.add(user)
             await db.flush()
 
@@ -645,12 +645,90 @@ class TestRoomQueryMetadata:
                 assert meta["room_query"]["source_participant_id"] == msg.get(
                     "participant_id"
                 )
+                # Issue #155 — attach the source user's display_name so
+                # the target-room forward badge can render ``↪ #room ·
+                # @Alice`` instead of ``@<last-6-hex>``. Target room's
+                # ``participants`` map never contains the source-room
+                # user, so ``MessageBubble.resolveUser`` always misses
+                # without this server-supplied name.
+                assert meta["room_query"]["source_participant_name"] == "Alice"
                 # Issue #61 — representative_agent_id must be included so
                 # only the designated agent forwards [ROOM_QUERY]. Without
                 # it every agent in the source room fans out the forward.
                 assert meta["room_query"]["representative_agent_id"] == rq_env[
                     "agent"
                 ].id
+
+    @pytest.mark.asyncio
+    async def test_room_mention_source_name_falls_back_to_email_local_part(
+        self, config: DooraeSettings
+    ) -> None:
+        """Issue #155 — when User has no display_name, fall back to the
+        email local-part (mirrors ``rooms/router.py:290-302``)."""
+        from starlette.testclient import TestClient
+
+        engine = build_engine(config.db_url)
+        sf = build_session_factory(engine)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with sf() as db:
+            # No display_name — should fall back to "noname"
+            user = User(email="noname@test.com", password_hash="x")
+            db.add(user)
+            await db.flush()
+
+            project = Project(name="rq-proj")
+            db.add(project)
+            await db.flush()
+
+            source_room = Room(project_id=project.id, name="design-room")
+            db.add(source_room)
+            await db.flush()
+
+            agent = Agent(name="rep-bot", engine="codex", actual_state="running")
+            db.add(agent)
+            await db.flush()
+
+            target_room = Room(
+                project_id=project.id,
+                name="backend-room",
+                representative_agent_id=agent.id,
+            )
+            db.add(target_room)
+            await db.flush()
+
+            db.add(Participant(room_id=target_room.id, agent_id=agent.id, role="member"))
+            db.add(Participant(room_id=source_room.id, user_id=user.id, role="member"))
+            await db.commit()
+            for obj in (user, source_room, target_room):
+                await db.refresh(obj)
+
+            token = create_user_token(
+                user.id, user.email, False, secret=config.jwt_secret
+            )
+
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = sf
+
+            with TestClient(app) as client:
+                with client.websocket_connect(
+                    f"/ws/rooms/{source_room.id}",
+                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                ) as ws:
+                    welcome = json.loads(ws.receive_text())
+                    assert welcome["type"] == "welcome"
+
+                    ws.send_text(json.dumps({
+                        "type": "send",
+                        "content": f"<#room:{target_room.id}> ping",
+                    }))
+                    msg = json.loads(ws.receive_text())
+                    assert msg["type"] == "message"
+                    assert msg["metadata"]["room_query"]["source_participant_name"] == "noname"
+
+        await engine.dispose()
 
     @pytest.mark.asyncio
     async def test_agent_sender_does_not_trigger_room_query(self, rq_env) -> None:

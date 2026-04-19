@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity, get_identity, require_room_member
 from doorae.config import DooraeSettings
-from doorae.db.models import ActivityLog, Agent, Participant, Room
+from doorae.db.models import ActivityLog, Agent, Participant, Room, User
 from doorae.db.repository import append_message, replay_since_seq
 from doorae.rooms.membership import ensure_agent_in_room
 from doorae.observability.metrics import (
@@ -411,12 +411,47 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 # otherwise — the agent SDK only
                                 # sees the routing token, not the
                                 # human author).
+                                # Issue #155 — resolve the source user's
+                                # human-readable name so the target-room
+                                # forward badge can render ``↪ #room ·
+                                # @Alice``. The target room's participant
+                                # map never contains the source-room user,
+                                # so ``MessageBubble.resolveUser`` always
+                                # misses and falls back to the last-6-hex
+                                # of the UUID without this value. Mirror
+                                # of #153's responder-name snapshot, but
+                                # for the forward direction.
+                                #
+                                # Rule must stay in sync with
+                                # ``rooms/router.py:290-302`` — if that
+                                # fallback chain changes, update here too.
+                                source_participant_name = ""
+                                if participant.user_id:
+                                    source_user = (
+                                        await rq_db.execute(
+                                            select(User).where(
+                                                User.id == participant.user_id
+                                            )
+                                        )
+                                    ).scalar_one_or_none()
+                                    if source_user:
+                                        if source_user.display_name:
+                                            source_participant_name = (
+                                                source_user.display_name
+                                            )
+                                        elif source_user.email:
+                                            source_participant_name = (
+                                                source_user.email.split("@")[0]
+                                            )
+                                        else:
+                                            source_participant_name = "Guest"
                                 metadata["room_query"] = {
                                     "target_room_id": target_room_id,
                                     "source_room_id": room_id,
                                     "role": "question",
                                     "query_id": str(uuid4()),
                                     "source_participant_id": participant.id,
+                                    "source_participant_name": source_participant_name,
                                     # Issue #61 — identify which agent
                                     # is responsible for forwarding the
                                     # [ROOM_QUERY]. When multiple agents
