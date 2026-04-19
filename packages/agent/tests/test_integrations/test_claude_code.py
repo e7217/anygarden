@@ -217,3 +217,214 @@ class TestIntegrateWithClaudeCode:
 
         assert len(client._message_handlers) == 1
         assert isinstance(adapter, ClaudeCodeAdapter)
+
+
+class TestIngestContext:
+    """Issue #74 — `ingest_context` absorbs ambient messages into a
+    per-room buffer that the next active turn consumes as a prompt
+    prefix, without triggering an LLM call itself."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_then_on_message_prepends_prefix(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "rep-agent",
+            "content": "대상 방은 GraphQL 선호",
+            "metadata": {"room_query_result": {"target_room_id": "r2"}},
+        })
+        # Buffer should hold one formatted line.
+        assert len(adapter._pending_context["r1"]) == 1
+
+        await adapter.on_message({"content": "어때요?", "room_id": "r1"})
+
+        sent_prompt = fake_sdk[-1]["prompt"]
+        assert "[참고] 룸 r2에서" in sent_prompt
+        assert "어때요?" in sent_prompt
+
+    @pytest.mark.asyncio
+    async def test_prefix_consumed_once(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Drain clears the buffer — re-injecting the same line on
+        turn 2 would duplicate it in both the prompt and the SDK
+        session, wasting tokens and drifting into "the model thinks
+        the same context repeats every turn" confusion."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "agent-a",
+            "content": "참고 발언",
+            "metadata": {},
+        })
+        await adapter.on_message({"content": "질문 1", "room_id": "r1"})
+        await adapter.on_message({"content": "질문 2", "room_id": "r1"})
+
+        assert "[참고]" in fake_sdk[0]["prompt"]
+        assert "[참고]" not in fake_sdk[1]["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_rooms_have_independent_buffers(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "a",
+            "content": "r1-only",
+            "metadata": {},
+        })
+
+        await adapter.on_message({"content": "in r2", "room_id": "r2"})
+
+        # r2's prompt must be clean — r1's buffer leaking across
+        # rooms would mix unrelated conversations into each other.
+        assert "r1-only" not in fake_sdk[-1]["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_empty_content_not_stashed(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Typing indicators and membership events carry empty
+        content on the message frame; they're not conversational and
+        shouldn't take a slot in the limited context buffer."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "a",
+            "content": "",
+            "metadata": {"ingest_only": True},
+        })
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "a",
+            "content": "   ",
+            "metadata": {"ingest_only": True},
+        })
+
+        assert adapter._pending_context.get("r1") is None
+
+    @pytest.mark.asyncio
+    async def test_size_cap_drops_oldest(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Eleventh entry evicts the first so a chatty room can't
+        balloon prompt size unbounded. FIFO gives the freshest
+        messages a consistent guarantee of making it into the
+        prefix."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        from doorae_agent.integrations.claude_code import _PENDING_CONTEXT_MAX
+
+        for i in range(_PENDING_CONTEXT_MAX + 2):
+            await adapter.ingest_context({
+                "room_id": "r1",
+                "participant_id": "a",
+                "content": f"mID{i:02d}",
+                "metadata": {},
+            })
+
+        buf = adapter._pending_context["r1"]
+        assert len(buf) == _PENDING_CONTEXT_MAX
+        rendered = [line for _, line in buf]
+        # First two entries evicted by FIFO. Remaining span is
+        # mID02 .. mID11 inclusive.
+        assert all("mID00" not in line for line in rendered)
+        assert all("mID01" not in line for line in rendered)
+        assert any("mID02" in line for line in rendered)
+        assert any("mID11" in line for line in rendered)
+
+    @pytest.mark.asyncio
+    async def test_format_room_query_result_locator(self) -> None:
+        """The target room id is the locator a reader needs to go
+        look at the original thread — it must survive into the
+        breadcrumb. Without it, 'the other room said X' is
+        ungrounded."""
+        adapter = ClaudeCodeAdapter()
+        line = adapter._format_context_line({
+            "room_id": "r1",
+            "participant_id": "rep",
+            "content": "백엔드 팀 결론 요약",
+            "metadata": {"room_query_result": {"target_room_id": "backend-1"}},
+        })
+        assert line is not None
+        assert "backend-1" in line
+        assert "[참고]" in line
+
+    @pytest.mark.asyncio
+    async def test_handler_routes_ingest_only(
+        self,
+        fake_sdk: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """End-to-end through the handler: an ``ingest_only`` message
+        must land in the buffer AND must not trigger a reply on its
+        own. This is the property the #74 fix is ultimately shipping
+        — one `[취합 결과]` broadcast feeds all listeners' context
+        without N duplicate responses."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Bot")
+        # Prime the client with a participant id so decide_policy's
+        # self-message rule doesn't accidentally match. The rep
+        # that broadcasts `[취합 결과]` is a different agent.
+        client._my_participant_ids = {"me-pid"}
+
+        # Stub the network surface so the handler can reach the
+        # ``send`` / ``sendTyping`` calls without a live WS. The
+        # handler doesn't care about payload delivery here — we're
+        # asserting against the SDK call log.
+        sent: list[tuple[str, str]] = []
+
+        async def _fake_send(room_id: str, content: str, metadata=None):
+            sent.append((room_id, content))
+
+        async def _fake_typing(room_id: str, is_typing: bool):
+            return None
+
+        monkeypatch.setattr(client, "send", _fake_send)
+        monkeypatch.setattr(client, "sendTyping", _fake_typing)
+
+        adapter = await integrate_with_claude_code(client, {"name": "Bot"})
+        handler = client._message_handlers[0]
+
+        ingest_msg = {
+            "room_id": "r1",
+            "participant_id": "rep-pid",
+            "content": "[취합 결과] (3/3명 응답)\n...",
+            "metadata": {
+                "_nonce": "x",
+                "ingest_only": True,
+                "room_query_result": {"target_room_id": "r2"},
+            },
+        }
+        await handler(ingest_msg)
+
+        # No LLM call yet — ingestion is non-responsive.
+        assert fake_sdk == []
+        # The line is buffered for the next active turn.
+        assert len(adapter._pending_context["r1"]) == 1
+        # And nothing was broadcast — single broadcast, no fan-out.
+        assert sent == []
+
+        # Next turn from a human carries the prefix into the SDK.
+        await handler({
+            "room_id": "r1",
+            "participant_id": "human",
+            "content": "앞 내용 참고해서 답변해줘",
+            "metadata": {},
+        })
+
+        assert len(fake_sdk) == 1
+        assert "[참고]" in fake_sdk[0]["prompt"]

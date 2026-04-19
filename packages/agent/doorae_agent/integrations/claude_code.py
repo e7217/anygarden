@@ -26,6 +26,7 @@ to happen; pin it explicitly so future refactors don't strip it.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,18 @@ from doorae_agent.client import ChatClient
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
+
+# Per-room upper bound on cached context lines. Each line is short
+# (200-300 chars, see ``_format_context_line``), so ten entries cap
+# prompt bloat at ~3 KB even in chatty rooms.
+_PENDING_CONTEXT_MAX = 10
+
+# Lines older than this are dropped on the next ingest so stale
+# chatter doesn't bleed into a later unrelated turn. Ten minutes is
+# long enough to cover a ``[취합 결과]`` that lands while the human
+# is still composing a follow-up, short enough that a conversation
+# resumed an hour later starts clean.
+_PENDING_CONTEXT_TTL_SEC = 600
 
 
 class ClaudeCodeAdapter(EngineAdapter):
@@ -62,6 +75,13 @@ class ClaudeCodeAdapter(EngineAdapter):
         # then reuse the same session id for follow-ups so context
         # persists across turns within a room.
         self._sessions: dict[str, str] = {}
+        # Per-room buffer of context lines awaiting injection (#74).
+        # Each entry is ``(monotonic_ts, line)``. ``ingest_context``
+        # appends here; ``on_message`` pops the whole buffer into a
+        # prompt prefix on the next active turn. The engine SDK's
+        # own session history keeps what we inject thereafter, so a
+        # line is meant to be consumed exactly once.
+        self._pending_context: dict[str, list[tuple[float, str]]] = {}
 
     async def start(self) -> None:
         """Import the claude-agent-sdk and cache the query hook."""
@@ -106,16 +126,86 @@ class ClaudeCodeAdapter(EngineAdapter):
 
         room_id = msg.get("room_id", "_default")
 
+        # Drain any queued context lines (#74) into a prompt prefix.
+        # ``[참고]`` labels each absorbed message so the model reads
+        # them as external breadcrumbs, not as new user turns it
+        # must also address. Consumed once — the SDK session keeps
+        # them from the next turn on.
+        prefix = self._drain_pending_context(room_id)
+        prompt = f"{prefix}\n\n{content}" if prefix else content
+
         try:
             options = self._build_options(room_id)
-            reply = await self._collect_reply(content, options)
+            reply = await self._collect_reply(prompt, options)
             return reply
         except Exception as exc:
             logger.error("claude_code.query_failed", error=str(exc))
             return None
 
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Stash a non-addressed message as context for the next turn.
+
+        Called by the handler when ``decide_policy`` returns
+        ``INGEST_ONLY`` — typically a ``[취합 결과]`` broadcast
+        flagged with ``metadata.ingest_only=True``. Dropped silently
+        when the message has no room id or no renderable content.
+        """
+        room_id = msg.get("room_id") or "_default"
+        line = self._format_context_line(msg)
+        if line is None:
+            return
+        now = time.monotonic()
+        buf = self._pending_context.setdefault(room_id, [])
+        # TTL sweep first so stale entries don't count against the
+        # size cap and free slot for the incoming line.
+        cutoff = now - _PENDING_CONTEXT_TTL_SEC
+        buf[:] = [(t, line) for t, line in buf if t >= cutoff]
+        if len(buf) >= _PENDING_CONTEXT_MAX:
+            buf.pop(0)
+        buf.append((now, line))
+
+    def _format_context_line(self, msg: dict[str, Any]) -> str | None:
+        """Render a short one-line breadcrumb for the prompt prefix.
+
+        The ``[참고]`` label lets the model read the text as
+        external information instead of a fresh user turn it must
+        answer. ``room_query_result`` is special-cased because its
+        body is already self-describing and we want to preserve the
+        "which room answered" locator. Other messages are attributed
+        to the sender's participant-id prefix so the model can tell
+        one speaker from another in a multi-party room.
+        """
+        content = (msg.get("content") or "").strip()
+        if not content:
+            return None
+        meta = msg.get("metadata") or {}
+        snippet = content[:300]
+        if "room_query_result" in meta:
+            rq = meta["room_query_result"] or {}
+            target = rq.get("target_room_id") or "?"
+            return f"[참고] 룸 {target}에서 다음 응답이 왔습니다: {snippet}"
+        sender = (msg.get("participant_id") or "unknown")[:8]
+        return f"[참고] @{sender}: {snippet}"
+
+    def _drain_pending_context(self, room_id: str) -> str:
+        """Pop the room's buffer into a joined prefix string.
+
+        Applies the TTL sweep one more time here so a buffer that
+        sat for hours without an active turn doesn't leak expired
+        lines. Returns ``""`` when the buffer is empty or entirely
+        stale — the caller then skips prefix assembly altogether.
+        """
+        buf = self._pending_context.pop(room_id, [])
+        if not buf:
+            return ""
+        now = time.monotonic()
+        cutoff = now - _PENDING_CONTEXT_TTL_SEC
+        lines = [line for ts, line in buf if ts >= cutoff]
+        return "\n".join(lines)
+
     async def stop(self) -> None:
         self._sessions.clear()
+        self._pending_context.clear()
         self._sdk = None
 
     def _build_options(self, room_id: str) -> Any:
@@ -243,9 +333,18 @@ async def integrate_with_claude_code(
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
 
-        # Unified response gate — skip if not addressed to us
-        from doorae_agent.integrations.base import should_respond
-        if not should_respond(msg, client):
+        # 3-state gate (#74). SKIP drops the message; INGEST_ONLY
+        # stashes it for the next active turn's prompt prefix;
+        # RESPOND proceeds to the full LLM flow below. The canonical
+        # INGEST_ONLY case is a ``[취합 결과]`` broadcast flagged
+        # with ``metadata.ingest_only=True`` — listeners absorb it
+        # as room context instead of silently dropping it.
+        from doorae_agent.integrations.base import MessagePolicy, decide_policy
+        policy = decide_policy(msg, client)
+        if policy is MessagePolicy.SKIP:
+            return
+        if policy is MessagePolicy.INGEST_ONLY:
+            await adapter.ingest_context(msg)
             return
 
         # Check for /delegate command before LLM call

@@ -4,10 +4,31 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from doorae_agent.client import ChatClient
+
+
+class MessagePolicy(Enum):
+    """Decision for how an incoming message should be handled.
+
+    ``decide_policy`` returns one of these three states. The two
+    original boolean outcomes (respond / skip) are still present —
+    ``INGEST_ONLY`` is the new third state that lets a message update
+    the agent's LLM-side context without triggering a response turn.
+
+    - ``RESPOND``: generate a reply. The adapter calls ``on_message``.
+    - ``INGEST_ONLY``: do not reply, but do feed this message into
+      the engine's session as context for the next active turn. The
+      adapter calls ``ingest_context``.
+    - ``SKIP``: ignore the message entirely.
+    """
+
+    RESPOND = "respond"
+    INGEST_ONLY = "ingest_only"
+    SKIP = "skip"
 
 
 class EngineAdapter(ABC):
@@ -32,35 +53,56 @@ class EngineAdapter(ABC):
     async def stop(self) -> None:
         """Cleanup resources. Override if the engine needs teardown."""
 
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Absorb a message into the engine's context without replying.
 
-def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
-    """Unified gate: should the agent process this message?
+        Called by the handler when ``decide_policy`` returns
+        ``INGEST_ONLY``. Default is a no-op so adapters that haven't
+        opted in stay source-compatible — they simply drop the
+        ambient message as before.
 
-    Replaces scattered filters with a single decision point.
-    Called at the top of each adapter's ``_handle`` function.
+        Session-based adapters (Claude Code, Gemini CLI, Codex)
+        override this to stash ``msg`` in a per-room buffer and
+        consume it as a prompt prefix on the next ``on_message``
+        call. Raw-SDK adapters that already own the message history
+        can manage ingestion internally and leave this as a no-op.
+        """
+        return
+
+
+def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
+    """Unified 3-state gate: how should the agent handle this message?
+
+    Returns ``MessagePolicy.{RESPOND, INGEST_ONLY, SKIP}``.
 
     Rules (evaluated in order):
-    1. Own message → False (self-echo prevention).
+    1. Own message → SKIP (self-echo prevention).
     2. ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or ``room_query``
-       metadata → True (task initiation / room-routed query
+       metadata → RESPOND (task initiation / room-routed query
        always processed).
-    3. Server-parsed explicit mention matching this agent → True.
+    2c. ``metadata.ingest_only`` flag → INGEST_ONLY. The server or
+        a broadcasting agent (typically the room representative's
+        ``_deliver_result``) marks a message with this flag to say
+        "every other listener should absorb this into their engine
+        session context without replying". The canonical producer is
+        the ``[취합 결과]`` broadcast on issue #74.
+    3. Server-parsed explicit mention matching this agent → RESPOND.
        The server's ``parse_mentions`` (``orchestration/rules.py``)
        drops non-word ``@`` tokens — e.g. ``alice@example.com`` or
        ``@dataclass`` — so we only see addressable mentions here.
        This mirrors how Slack/Discord route via resolved mentions
        instead of having every client re-parse raw text.
-    4. **Explicit mentions present but NOT for us → False.**
+    4. **Explicit mentions present but NOT for us → SKIP.**
        Previously rule 4 ("human message → respond") fired for
        every agent in the room regardless of mention target, so a
        multi-agent room echoed N responses to a single-addressed
        message. When the server saw at least one addressable
        mention, treat the message as targeted and stay out unless
        rule 3 matched.
-    5. No addressable mentions + human sender → True. Covers 1:1
+    5. No addressable mentions + human sender → RESPOND. Covers 1:1
        DMs and "no one in particular" broadcasts where the previous
        behaviour (respond) is still the most useful default.
-    6. Agent sender, no mention → False (ignore unaddressed agent
+    6. Agent sender, no mention → SKIP (ignore unaddressed agent
        chatter so agents don't ping-pong forever).
     """
     content = msg.get("content", "")
@@ -70,11 +112,11 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
     # 1. Self-message — already filtered in _process_frame but
     #    belt-and-suspenders here too.
     if sender and sender in client._my_participant_ids:
-        return False
+        return MessagePolicy.SKIP
 
     # 2. [DELEGATED] or [ROOM_QUERY] task → always respond
     if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
-        return True
+        return MessagePolicy.RESPOND
 
     # 2b. room_query metadata → only the representative agent forwards.
     # Issue #61 — the server now tags the broadcast with
@@ -90,8 +132,11 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
         rep_id = room_query.get("representative_agent_id")
         my_agent_id = getattr(client, "_agent_id", None)
         if rep_id and my_agent_id:
-            return my_agent_id == rep_id
-        return True
+            return (
+                MessagePolicy.RESPOND if my_agent_id == rep_id
+                else MessagePolicy.SKIP
+            )
+        return MessagePolicy.RESPOND
 
     agent_name = client._agent_name
     raw_mentions = metadata.get("mentions") or []
@@ -148,23 +193,45 @@ def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
         if re.search(pattern, content, re.IGNORECASE):
             mentioned_me = True
 
-    # 3. Directly mentioned → respond.
+    # 3. Directly mentioned → respond. Evaluated before the
+    # ingest_only flag check so addressability always wins over
+    # passive ingestion: a broadcast tagged for context that also
+    # happens to mention us is still actionable work.
     if mentioned_me:
-        return True
+        return MessagePolicy.RESPOND
 
-    # 4. Explicit mention list exists and does not include us →
+    # 4. Explicit ingest-only flag (#74 Stage A). Placed *after* the
+    # addressability rule so a direct mention still gets RESPOND.
+    # From this point the legacy gate would return SKIP or RESPOND
+    # based on sender kind; the ingest_only flag short-circuits that
+    # into passive ingestion instead. The canonical producer is
+    # ``room_query._deliver_result`` broadcasting ``[취합 결과]``.
+    if metadata.get("ingest_only"):
+        return MessagePolicy.INGEST_ONLY
+
+    # 5. Explicit mention list exists and does not include us →
     # someone else is being addressed, so we stay out. This is the
-    # fix for the "every agent in the room responds" bug — rule 5
+    # fix for the "every agent in the room responds" bug — rule 6
     # below used to short-circuit it.
     if addressable:
-        return False
+        return MessagePolicy.SKIP
 
-    # 5. No addressable mention. Humans talking generally to the
+    # 6. No addressable mention. Humans talking generally to the
     # room keep the historical "everyone replies" behaviour; this
     # preserves the 1:1 DM UX where no explicit mention is needed.
     sender_is_agent = bool(metadata.get("_nonce"))
     if not sender_is_agent:
-        return True
+        return MessagePolicy.RESPOND
 
-    # 6. Agent sender, no mention → skip
-    return False
+    # 7. Agent sender, no mention → skip
+    return MessagePolicy.SKIP
+
+
+def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:
+    """Back-compat wrapper: does ``decide_policy`` say RESPOND?
+
+    Existing call sites (adapters, tests) keep the boolean contract.
+    New handlers should call ``decide_policy`` directly to access the
+    three-way ``INGEST_ONLY`` state introduced by #74.
+    """
+    return decide_policy(msg, client) == MessagePolicy.RESPOND
