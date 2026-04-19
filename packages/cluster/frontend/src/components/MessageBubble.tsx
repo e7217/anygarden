@@ -194,10 +194,18 @@ export default memo(function MessageBubble({
   if (forwardMeta) {
     const srcRoom = resolveRoom(forwardMeta.source_room_id)
     const srcRoomLabel = srcRoom?.name ?? forwardMeta.source_room_id.slice(-6)
-    const srcUserLabel = forwardMeta.source_participant_id
-      ? (resolveUser(forwardMeta.source_participant_id) ??
-        forwardMeta.source_participant_id.slice(-6))
-      : null
+    // #155 — prefer the server-supplied snapshot name, which the target
+    // room's local ``participants`` map never contains. Fall through to
+    // the legacy ``resolveUser`` path for same-room forwards and pre-
+    // #155 servers, then to the last-6-hex of the UUID as a last
+    // resort. ``||`` (not ``??``) so a selector that ever returns an
+    // empty string still drops into the legacy chain.
+    const srcUserLabel =
+      forwardMeta.source_participant_name ||
+      (forwardMeta.source_participant_id
+        ? (resolveUser(forwardMeta.source_participant_id) ??
+          forwardMeta.source_participant_id.slice(-6))
+        : null)
     const stripped = stripRoomQueryPrefix(message.content)
     return (
       <div className="group flex flex-col items-start">

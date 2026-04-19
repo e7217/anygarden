@@ -81,6 +81,7 @@ describe('parseForward', () => {
       query_id: 'q1',
       source_room_id: 's1',
       source_participant_id: 'user-pid',
+      source_participant_name: null,
     })
   })
 
@@ -96,6 +97,37 @@ describe('parseForward', () => {
   it('returns null when query_id missing', () => {
     const m = msg({ metadata: { room_query_forward: { source_room_id: 's1' } } })
     expect(parseForward(m)).toBeNull()
+  })
+
+  it('preserves source_participant_name when present (issue #155)', () => {
+    const m = msg({
+      metadata: {
+        room_query_forward: {
+          query_id: 'q1',
+          source_room_id: 's1',
+          source_participant_id: 'user-pid',
+          source_participant_name: 'Alice',
+        },
+      },
+    })
+    const result = parseForward(m)
+    expect(result).not.toBeNull()
+    expect(result?.source_participant_name).toBe('Alice')
+  })
+
+  it('sets source_participant_name to null when server omitted it (pre-#155)', () => {
+    const m = msg({
+      metadata: {
+        room_query_forward: {
+          query_id: 'q1',
+          source_room_id: 's1',
+          source_participant_id: 'user-pid',
+        },
+      },
+    })
+    const result = parseForward(m)
+    expect(result).not.toBeNull()
+    expect(result?.source_participant_name).toBeNull()
   })
 })
 

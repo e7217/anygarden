@@ -119,6 +119,57 @@ describe('MessageBubble — room_query forward variant', () => {
     expect(badge).toHaveTextContent('#11abcd')
     expect(badge).toHaveTextContent('@xyzzzz')
   })
+
+  it('prefers source_participant_name over resolveUser when cross-room (issue #155)', () => {
+    // #155 — source user is NOT in this (target) room's participants
+    // map. Without a server-supplied snapshot the badge would render
+    // the last 6 hex of the UUID. The server now ships a snapshot
+    // ``source_participant_name`` so the badge renders the real name.
+    const msg = baseMsg({
+      content: '[ROOM_QUERY] cross-room?',
+      metadata: {
+        room_query_forward: {
+          query_id: 'q1',
+          source_room_id: 'room-src',
+          source_participant_id: 'stranger-pid-123456',
+          source_participant_name: 'Alice',
+        },
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const badge = screen.getByTestId('room-query-forward-badge')
+    expect(badge).toHaveTextContent('#설계팀')
+    expect(badge).toHaveTextContent('@Alice')
+    // Must NOT fall through to the hash slice — that was the bug.
+    expect(badge).not.toHaveTextContent('@123456')
+  })
+
+  it('falls back to resolveUser when server omits source_participant_name (pre-#155)', () => {
+    // Pre-#155 servers don't ship ``source_participant_name``. If the
+    // source user happens to also be in the target room (same-room
+    // forwards, or a user joined both), ``resolveUser`` still works
+    // and the legacy path renders their name.
+    const msg = baseMsg({
+      content: '[ROOM_QUERY] legacy',
+      metadata: {
+        room_query_forward: {
+          query_id: 'q1',
+          source_room_id: 'room-src',
+          source_participant_id: 'user-alice',
+          // no source_participant_name — legacy server payload
+        },
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+    const badge = screen.getByTestId('room-query-forward-badge')
+    // user-alice IS in this room's participants map (see fixture) so
+    // resolveUser succeeds → shows @Alice, not a hash slice.
+    expect(badge).toHaveTextContent('@Alice')
+  })
 })
 
 describe('MessageBubble — room_query result variant', () => {
