@@ -26,28 +26,34 @@ to happen; pin it explicitly so future refactors don't strip it.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from typing import Any
 
 import structlog
 
 from doorae_agent.client import ChatClient
+from doorae_agent.coordination.pending_context import (
+    PENDING_CONTEXT_MAX as _PENDING_CONTEXT_MAX,
+    PENDING_CONTEXT_TTL_SEC as _PENDING_CONTEXT_TTL_SEC,
+    append_context_line,
+    drain_context,
+    format_context_line,
+)
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
 
-# Per-room upper bound on cached context lines. Each line is short
-# (200-300 chars, see ``_format_context_line``), so ten entries cap
-# prompt bloat at ~3 KB even in chatty rooms.
-_PENDING_CONTEXT_MAX = 10
-
-# Lines older than this are dropped on the next ingest so stale
-# chatter doesn't bleed into a later unrelated turn. Ten minutes is
-# long enough to cover a ``[취합 결과]`` that lands while the human
-# is still composing a follow-up, short enough that a conversation
-# resumed an hour later starts clean.
-_PENDING_CONTEXT_TTL_SEC = 600
+# Stage A test modules import ``_PENDING_CONTEXT_MAX`` /
+# ``_PENDING_CONTEXT_TTL_SEC`` directly from this module. The symbols
+# now live in ``coordination.pending_context``; re-exporting them
+# here (and pinning ``__all__``) keeps those tests source-compatible
+# without copying the constants.
+__all__ = [
+    "ClaudeCodeAdapter",
+    "integrate_with_claude_code",
+    "_PENDING_CONTEXT_MAX",
+    "_PENDING_CONTEXT_TTL_SEC",
+]
 
 
 class ClaudeCodeAdapter(EngineAdapter):
@@ -146,62 +152,30 @@ class ClaudeCodeAdapter(EngineAdapter):
         """Stash a non-addressed message as context for the next turn.
 
         Called by the handler when ``decide_policy`` returns
-        ``INGEST_ONLY`` — typically a ``[취합 결과]`` broadcast
-        flagged with ``metadata.ingest_only=True``. Dropped silently
-        when the message has no room id or no renderable content.
+        ``INGEST_ONLY`` — a ``[취합 결과]`` broadcast flagged with
+        ``metadata.ingest_only=True`` (Stage A) or any ambient
+        message when the Stage B accumulator is enabled. Dropped
+        silently when the message has no renderable content.
         """
         room_id = msg.get("room_id") or "_default"
-        line = self._format_context_line(msg)
+        line = format_context_line(msg)
         if line is None:
             return
-        now = time.monotonic()
-        buf = self._pending_context.setdefault(room_id, [])
-        # TTL sweep first so stale entries don't count against the
-        # size cap and free slot for the incoming line.
-        cutoff = now - _PENDING_CONTEXT_TTL_SEC
-        buf[:] = [(t, line) for t, line in buf if t >= cutoff]
-        if len(buf) >= _PENDING_CONTEXT_MAX:
-            buf.pop(0)
-        buf.append((now, line))
+        append_context_line(self._pending_context, room_id, line)
 
     def _format_context_line(self, msg: dict[str, Any]) -> str | None:
-        """Render a short one-line breadcrumb for the prompt prefix.
+        """Back-compat wrapper around the shared helper.
 
-        The ``[참고]`` label lets the model read the text as
-        external information instead of a fresh user turn it must
-        answer. ``room_query_result`` is special-cased because its
-        body is already self-describing and we want to preserve the
-        "which room answered" locator. Other messages are attributed
-        to the sender's participant-id prefix so the model can tell
-        one speaker from another in a multi-party room.
+        Stage A tests exercise this method name directly; Stage B
+        keeps the wrapper so those assertions keep passing while
+        the logic itself lives in ``coordination.pending_context``.
         """
-        content = (msg.get("content") or "").strip()
-        if not content:
-            return None
-        meta = msg.get("metadata") or {}
-        snippet = content[:300]
-        if "room_query_result" in meta:
-            rq = meta["room_query_result"] or {}
-            target = rq.get("target_room_id") or "?"
-            return f"[참고] 룸 {target}에서 다음 응답이 왔습니다: {snippet}"
-        sender = (msg.get("participant_id") or "unknown")[:8]
-        return f"[참고] @{sender}: {snippet}"
+        return format_context_line(msg)
 
     def _drain_pending_context(self, room_id: str) -> str:
-        """Pop the room's buffer into a joined prefix string.
-
-        Applies the TTL sweep one more time here so a buffer that
-        sat for hours without an active turn doesn't leak expired
-        lines. Returns ``""`` when the buffer is empty or entirely
-        stale — the caller then skips prefix assembly altogether.
-        """
-        buf = self._pending_context.pop(room_id, [])
-        if not buf:
-            return ""
-        now = time.monotonic()
-        cutoff = now - _PENDING_CONTEXT_TTL_SEC
-        lines = [line for ts, line in buf if ts >= cutoff]
-        return "\n".join(lines)
+        """Back-compat wrapper around the shared helper. See
+        ``_format_context_line`` note on method-name stability."""
+        return drain_context(self._pending_context, room_id)
 
     async def stop(self) -> None:
         self._sessions.clear()
