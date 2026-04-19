@@ -24,6 +24,10 @@ export interface Agent {
   // the UI falls back to the seed-driven initial from EntityAvatar.
   avatar_kind?: string | null;
   avatar_value?: string | null;
+  // Issue #148 Part 2 — mirrors the DB opt-out flag. AgentSettingsMenu
+  // renders a checked-style toggle that reads this; mutations go
+  // through ``updateAgent``.
+  context_window_opt_out?: boolean;
 }
 
 export interface EngineModel {
@@ -163,6 +167,10 @@ export function useAgents() {
       avatar_kind_set?: boolean;
       avatar_value?: string | null;
       avatar_value_set?: boolean;
+      // Issue #148 Part 2 — mirrors the server's ``_set`` idiom so a
+      // rename PATCH can't accidentally reset the opt-out.
+      context_window_opt_out?: boolean;
+      context_window_opt_out_set?: boolean;
     },
   ) => {
     const resp = await apiFetch(`/api/v1/agents/${id}`, {

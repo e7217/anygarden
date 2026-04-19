@@ -961,6 +961,25 @@ function AgentDMListAdmin({
     fetchAgentDMs()
   }
 
+  // #148 Part 2 — flip agent-side ambient opt-out. ``updateAgent``
+  // already calls ``fetchAgents`` on success, so the next render
+  // reads the fresh flag and the check mark updates without any
+  // extra wiring here.
+  const handleToggleContextWindowOptOut = async (
+    agentId: string,
+    current: boolean,
+  ) => {
+    try {
+      await updateAgent(agentId, {
+        context_window_opt_out: !current,
+        context_window_opt_out_set: true,
+      })
+    } catch {
+      // The Sidebar has no top-level error banner; swallowing keeps
+      // the DM list quiet. The admin can retry by clicking again.
+    }
+  }
+
   return (
     <div className="flex flex-col gap-0.5">
       {dms.map(dm => {
@@ -1020,6 +1039,15 @@ function AgentDMListAdmin({
                   onShowActivity={() => handleShowHistory(agent.id, agent.name)}
                   onCopyId={() => handleCopyAgentId(agent.id)}
                   onDelete={() => { void handleDeleteAgent(agent.id) }}
+                  contextWindowOptOut={
+                    agent.context_window_opt_out ?? false
+                  }
+                  onToggleContextWindowOptOut={() =>
+                    handleToggleContextWindowOptOut(
+                      agent.id,
+                      agent.context_window_opt_out ?? false,
+                    )
+                  }
                 />
               </span>
             )}

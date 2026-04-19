@@ -82,6 +82,11 @@ class AgentUpdate(BaseModel):
     avatar_kind_set: bool = False
     avatar_value: Optional[str] = None
     avatar_value_set: bool = False
+    # Issue #148 Part 2 — agent-side opt-out from ambient context
+    # window. ``_set`` flag mirrors the established pattern so a
+    # rename PATCH can't silently reset the flag back to False.
+    context_window_opt_out: Optional[bool] = None
+    context_window_opt_out_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -109,6 +114,11 @@ class AgentOut(BaseModel):
     # the UI falls back to the seed-driven initial.
     avatar_kind: Optional[str] = None
     avatar_value: Optional[str] = None
+    # Issue #148 Part 2 — mirrors the new DB flag so the admin UI
+    # can render the opt-out toggle without a second query. Part 3
+    # will wire this into the spawn path so agents actually honour
+    # the flag at runtime.
+    context_window_opt_out: bool = False
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -276,6 +286,14 @@ async def update_agent(
     if body.avatar_value_set:
         agent.avatar_value = body.avatar_value
         avatar_changed = True
+    if body.context_window_opt_out_set:
+        # #148 Part 2 — pure server-side policy flag. The agent
+        # subprocess reads its setting at spawn time (Part 3), so a
+        # post-spawn toggle takes effect on the next bump_generation
+        # restart. Counted as non_avatar_changed so the existing
+        # generation-bump path handles the respawn.
+        agent.context_window_opt_out = bool(body.context_window_opt_out)
+        non_avatar_changed = True
 
     if non_avatar_changed or avatar_changed:
         await db.commit()

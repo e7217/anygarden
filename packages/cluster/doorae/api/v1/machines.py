@@ -360,6 +360,11 @@ class MachineAgentOut(BaseModel):
     # lookup against the cluster-wide /agents list.
     avatar_kind: Optional[str] = None
     avatar_value: Optional[str] = None
+    # Issue #148 Part 2 — same reason as the avatar: the detail row's
+    # AgentSettingsMenu surfaces the toggle state, and fetching a
+    # separate /agents/{id} for every row would double the request
+    # count just to draw a check mark.
+    context_window_opt_out: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -406,6 +411,7 @@ async def list_machine_agents(
             rooms=list(room_rows),
             avatar_kind=agent.avatar_kind,
             avatar_value=agent.avatar_value,
+            context_window_opt_out=agent.context_window_opt_out,
         ))
     return results
 

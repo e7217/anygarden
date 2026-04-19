@@ -35,6 +35,9 @@ interface MachineAgent {
   // Issue #101 — mirrors the new MachineAgentOut avatar fields.
   avatar_kind?: string | null
   avatar_value?: string | null
+  // Issue #148 Part 2 — mirrors the new MachineAgentOut flag so the
+  // per-row AgentSettingsMenu can render the check-mark toggle.
+  context_window_opt_out?: boolean
 }
 
 interface MachineEngineInfo {
@@ -258,6 +261,28 @@ export default function AdminMachines() {
     fetchAgentDMs()
   }
 
+  // #148 Part 2 — flip the agent-side ambient opt-out. We read the
+  // current value off the MachineAgent row the menu renders, flip
+  // it, and re-fetch the detail so the check mark reflects truth.
+  // ``_set`` is always true on this code path — the caller chose to
+  // toggle, so "omit = keep previous" never applies here.
+  const handleToggleContextWindowOptOut = async (
+    agentId: string,
+    current: boolean,
+  ) => {
+    try {
+      await updateAgent(agentId, {
+        context_window_opt_out: !current,
+        context_window_opt_out_set: true,
+      })
+      if (selectedId && selectedId !== UNPLACED) fetchDetail(selectedId)
+    } catch {
+      // Swallow — the top-of-page error banner pattern used by the
+      // rest of this file owns fatal surfacing. A transient toggle
+      // failure is fine to retry via the next click.
+    }
+  }
+
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
     setCreating(true)
@@ -423,6 +448,17 @@ export default function AdminMachines() {
                       onShowActivity={() => handleShowHistory(agent.id, agent.name)}
                       onCopyId={() => handleCopyAgentId(agent.id)}
                       onDelete={() => handleDeleteAgent(agent.id)}
+                      contextWindowOptOut={
+                        agents.find(a => a.id === agent.id)
+                          ?.context_window_opt_out ?? false
+                      }
+                      onToggleContextWindowOptOut={() =>
+                        handleToggleContextWindowOptOut(
+                          agent.id,
+                          agents.find(a => a.id === agent.id)
+                            ?.context_window_opt_out ?? false,
+                        )
+                      }
                     />
                   </div>
                 </div>
@@ -599,6 +635,15 @@ export default function AdminMachines() {
                           onShowActivity={() => handleShowHistory(agent.id, agent.name)}
                           onCopyId={() => handleCopyAgentId(agent.id)}
                           onDelete={() => handleDeleteAgent(agent.id)}
+                          contextWindowOptOut={
+                            agent.context_window_opt_out ?? false
+                          }
+                          onToggleContextWindowOptOut={() =>
+                            handleToggleContextWindowOptOut(
+                              agent.id,
+                              agent.context_window_opt_out ?? false,
+                            )
+                          }
                         />
                       </div>
                     </div>
