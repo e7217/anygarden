@@ -62,8 +62,17 @@ class Room(Base):
     __tablename__ = "rooms"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    project_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    # #179 — nullable so agent DM rooms aren't tied to any project's
+    # lifecycle. Regular rooms still require ``project_id`` — enforced at
+    # the API layer (see ``RoomCreate`` in ``rooms/router.py``). DM rooms
+    # created from the agent-creation path use ``project_id=NULL``, which
+    # bypasses the ``ON DELETE CASCADE`` entirely (cascade only fires when
+    # the FK's value matches a deleted row).
+    project_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)

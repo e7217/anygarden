@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.agent_files import AgentFilePathError, validate_agent_file_path
 from doorae.auth.dependencies import Identity
-from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Project, Room
+from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Room
 from doorae.dependencies import get_admin_identity, get_db
 from doorae.engines import get_engine_entry
 
@@ -206,21 +206,21 @@ async def create_agent(
         db.add(Participant(room_id=room_id, agent_id=agent.id, role="member"))
 
     # Auto-create a DM room so the agent always has at least one
-    # room and can be started immediately. The DM is placed under
-    # the first available project (rooms require a project_id FK).
-    first_project = (
-        await db.execute(select(Project).order_by(Project.created_at).limit(1))
-    ).scalar_one_or_none()
-    if first_project:
-        dm_room = Room(
-            project_id=first_project.id,
-            name=f"DM: {agent.name}",
-            is_dm=True,
-        )
-        db.add(dm_room)
-        await db.flush()
-        db.add(Participant(room_id=dm_room.id, user_id=identity.id, role="owner"))
-        db.add(Participant(room_id=dm_room.id, agent_id=agent.id, role="member"))
+    # room and can be started immediately. #179 — DMs live outside
+    # any project (``project_id=NULL``) so a project deletion can
+    # never cascade-kill an agent's DM. Project membership was
+    # always arbitrary for DMs (the old "first_project" heuristic
+    # had no domain meaning), and decoupling removes the data-loss
+    # foot-gun for admins.
+    dm_room = Room(
+        project_id=None,
+        name=f"DM: {agent.name}",
+        is_dm=True,
+    )
+    db.add(dm_room)
+    await db.flush()
+    db.add(Participant(room_id=dm_room.id, user_id=identity.id, role="owner"))
+    db.add(Participant(room_id=dm_room.id, agent_id=agent.id, role="member"))
 
     await db.commit()
     await db.refresh(agent)

@@ -1187,3 +1187,82 @@ class TestAgentAutoDM:
             ).scalars().all()
             assert len(parts) == 2
             assert room_id in parts
+
+    @pytest.mark.asyncio
+    async def test_agent_dm_has_null_project_id(self, agents_env) -> None:
+        """#179 — DM rooms must be decoupled from projects.
+
+        Creating an agent auto-creates its DM with ``project_id=NULL`` so the
+        DM survives when any project is deleted. Previously the DM inherited
+        the oldest project's id and got cascade-deleted alongside it.
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "null-proj-agent"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+
+        async with factory() as db:
+            dm = (
+                await db.execute(
+                    select(Room).where(
+                        Room.is_dm == True,  # noqa: E712
+                        Room.name == "DM: null-proj-agent",
+                    )
+                )
+            ).scalar_one()
+            assert dm.project_id is None
+
+    @pytest.mark.asyncio
+    async def test_project_delete_preserves_dm(self, agents_env) -> None:
+        """#179 — Deleting a project must not cascade-delete agent DM rooms.
+
+        The fixture seeds exactly one project. We create an agent (which
+        auto-creates its DM), then delete the seeded project. The DM must
+        still exist afterwards — the whole point of decoupling.
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "survivor-agent"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+
+        # Snapshot the DM id so we can check it after the project purge.
+        async with factory() as db:
+            dm_id = (
+                await db.execute(
+                    select(Room.id).where(
+                        Room.is_dm == True,  # noqa: E712
+                        Room.name == "DM: survivor-agent",
+                    )
+                )
+            ).scalar_one()
+
+            project_id = (
+                await db.execute(select(Project.id).limit(1))
+            ).scalar_one()
+
+        # Wipe the only project. Under the old (buggy) behaviour this
+        # would also cascade the DM away.
+        resp = await client.delete(
+            f"/api/v1/projects/{project_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 204
+
+        async with factory() as db:
+            survivor = (
+                await db.execute(select(Room).where(Room.id == dm_id))
+            ).scalar_one_or_none()
+            assert survivor is not None, "DM room was cascade-deleted with the project"
+            assert survivor.project_id is None
