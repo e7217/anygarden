@@ -456,3 +456,189 @@ class TestAgentTurnCounter:
         # resets the counter each round.
         reply_contents = [c["content"] for c in handler_calls]
         assert reply_contents == ["reply 1", "reply 2", "reply 3", "reply 4"]
+
+
+class TestTaskInitResetGuard:
+    """Issue #157 Phase A — reset prefix abuse guard.
+
+    Issue #67 reset behaviour (``[ROOM_QUERY]``/``[DELEGATED]`` zero
+    the agent-only turn counter) can be exploited by a runaway agent
+    that keeps emitting task-init prefixes to evade ``max_agent_turns``.
+    Once the same room sees more than ``max_task_init_resets`` (5)
+    consecutive task-init frames without a human message breaking the
+    streak, the reset stops firing — forcing ``max_agent_turns`` to
+    catch the loop.
+    """
+
+    def _make_client(self) -> ChatClient:
+        client = ChatClient("ws://x", token="t")
+        client._my_participant_ids.add("self-pid")
+        return client
+
+    def test_default_max_task_init_resets(self) -> None:
+        """New clients default to 5 consecutive resets."""
+        client = self._make_client()
+        assert client.max_task_init_resets == 5
+        assert client._consecutive_task_init == {}
+
+    @pytest.mark.asyncio
+    async def test_first_five_self_task_inits_reset_normally(self) -> None:
+        """First five consecutive self-emitted task-inits each reset."""
+        client = self._make_client()
+        for i in range(5):
+            client._agent_turn_count["room-a"] = 3  # force non-zero
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "self-pid",
+                    "content": "[ROOM_QUERY] round",
+                },
+            )
+            assert client._agent_turn_count["room-a"] == 0
+        assert client._consecutive_task_init["room-a"] == 5
+
+    @pytest.mark.asyncio
+    async def test_sixth_self_task_init_guard_fires(self) -> None:
+        """Sixth consecutive task-init no longer resets the counter."""
+        client = self._make_client()
+        for i in range(5):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "self-pid",
+                    "content": "[ROOM_QUERY] round",
+                },
+            )
+        # After 5 resets, counter is 0. Force non-zero to detect guard.
+        client._agent_turn_count["room-a"] = 4
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 6,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY] sixth attempt",
+            },
+        )
+        # Guard fires: counter unchanged (NOT reset to 0).
+        assert client._agent_turn_count["room-a"] == 4
+        assert client._consecutive_task_init["room-a"] == 6
+
+    @pytest.mark.asyncio
+    async def test_human_message_resets_consecutive_counter(self) -> None:
+        """Human message (no nonce, foreign pid) clears the streak."""
+        client = self._make_client()
+        for i in range(3):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "self-pid",
+                    "content": "[ROOM_QUERY] round",
+                },
+            )
+        assert client._consecutive_task_init["room-a"] == 3
+
+        # Human message: not self, no nonce
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 4,
+                "participant_id": "human-pid",
+                "content": "thanks team",
+            },
+        )
+        assert client._consecutive_task_init["room-a"] == 0
+
+    @pytest.mark.asyncio
+    async def test_per_room_isolation(self) -> None:
+        """Consecutive counter tracks per-room, not globally."""
+        client = self._make_client()
+        for i in range(5):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "self-pid",
+                    "content": "[ROOM_QUERY]",
+                },
+            )
+        # room-b unaffected
+        await client._process_frame(
+            "room-b",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "self-pid",
+                "content": "[ROOM_QUERY]",
+            },
+        )
+        assert client._consecutive_task_init["room-b"] == 1
+        assert client._consecutive_task_init["room-a"] == 5
+
+    @pytest.mark.asyncio
+    async def test_guard_fires_on_nonce_echo_path(self) -> None:
+        """Soft-filter (nonce echo) path also honours the guard."""
+        client = self._make_client()
+        for i in range(5):
+            client._sent_nonces.add(f"n-{i}")
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "other-pid",
+                    "content": "[DELEGATED] subtask",
+                    "metadata": {"_nonce": f"n-{i}"},
+                },
+            )
+        client._sent_nonces.add("n-6")
+        client._agent_turn_count["room-a"] = 3
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 6,
+                "participant_id": "other-pid",
+                "content": "[DELEGATED] sixth",
+                "metadata": {"_nonce": "n-6"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 3
+        assert client._consecutive_task_init["room-a"] == 6
+
+    @pytest.mark.asyncio
+    async def test_guard_fires_on_foreign_agent_path(self) -> None:
+        """Normal path (foreign agent with its own nonce) honours guard."""
+        client = self._make_client()
+        for i in range(5):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": i + 1,
+                    "participant_id": "other-agent",
+                    "content": "[ROOM_QUERY]",
+                    "metadata": {"_nonce": f"f-{i}"},
+                },
+            )
+        client._agent_turn_count["room-a"] = 2
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 6,
+                "participant_id": "other-agent",
+                "content": "[ROOM_QUERY]",
+                "metadata": {"_nonce": "f-6"},
+            },
+        )
+        assert client._agent_turn_count["room-a"] == 2
+        assert client._consecutive_task_init["room-a"] == 6
