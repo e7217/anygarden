@@ -9,6 +9,7 @@ from typing import Any
 import click
 import structlog
 
+from doorae_agent import secrets as agent_secrets
 from doorae_agent.auth.token import load_token
 from doorae_agent.integrations import ENGINES
 from doorae_agent.profile.loader import load_profile
@@ -46,6 +47,14 @@ def agent_main(
     reasoning_effort: str | None,
 ) -> None:
     """Run a Doorae agent with the specified engine."""
+    # Consume engine_secrets piped by the machine daemon over stdin
+    # BEFORE any engine setup — keeps API keys out of the agent's
+    # ``/proc/self/environ`` while still making them available via
+    # ``doorae_agent.secrets`` for adapters that need them (#184).
+    # Safe in interactive dev runs too: ``load_from_stdin`` short-
+    # circuits on a tty-backed stdin.
+    agent_secrets.load_from_stdin()
+
     # If --profile is given, load defaults from the YAML profile
     if profile:
         try:
