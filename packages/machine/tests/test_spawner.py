@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
 from pathlib import Path
@@ -41,15 +42,42 @@ def spawn_msg() -> SpawnManifest:
     )
 
 
+def _mock_proc(pid: int = 42) -> MagicMock:
+    """Build a MagicMock subprocess with a properly async-compatible
+    stdin. The spawner now writes the engine_secrets JSON payload to
+    stdin via ``write`` → ``drain`` → ``close`` → ``wait_closed``, so
+    naked ``MagicMock()`` procs fail on ``await drain()`` with a
+    ``TypeError`` (#184 follow-up). Tests that don't care about the
+    stdin payload still need the coroutine methods wired up.
+    """
+    proc = MagicMock()
+    proc.pid = pid
+    proc.wait = AsyncMock(return_value=0)
+    proc.stderr = None
+    stdin = MagicMock()
+    stdin.write = MagicMock()
+    stdin.drain = AsyncMock()
+    stdin.close = MagicMock()
+    stdin.wait_closed = AsyncMock()
+    proc.stdin = stdin
+    return proc
+
+
 class TestSpawnEnvSecrets:
-    """#184: engine_secrets must be injected into the subprocess env
-    rather than rendered to a disk `.env` file that the agent sandbox
-    can read.
+    """#184 follow-up: engine_secrets must NOT end up in the agent
+    process env (``/proc/self/environ``). They are delivered via
+    stdin instead and the agent's ``doorae_agent.secrets`` module
+    stores them in private memory.
     """
 
-    async def test_engine_secrets_forwarded_to_subprocess_env(
+    async def test_engine_secrets_absent_from_subprocess_env(
         self, spawner: Spawner
     ) -> None:
+        """Security regression guard: the agent subprocess must never
+        receive engine_secrets in its initial env — otherwise an LLM
+        tool call can dump ``/proc/self/environ`` and exfiltrate
+        every API key.
+        """
         msg = SpawnManifest(
             agent_id="agent-secret",
             engine="claude-code",
@@ -57,17 +85,23 @@ class TestSpawnEnvSecrets:
             profile_yaml="",
             rooms=["r"],
             server_url="wss://localhost:8000/ws/agent",
-            engine_secrets={"ANTHROPIC_API_KEY": "sk-shh", "ANOTHER": "v"},
+            engine_secrets={"ANTHROPIC_API_KEY": "sk-shh", "OTHER": "v"},
         )
 
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdin.write = MagicMock()
+        mock_proc.stdin.drain = AsyncMock()
+        mock_proc.stdin.close = MagicMock()
+        mock_proc.stdin.wait_closed = AsyncMock()
         captured: dict = {}
 
         async def capture_exec(*args, **kwargs):
             captured["env"] = kwargs.get("env")
+            captured["stdin"] = kwargs.get("stdin")
             return mock_proc
 
         with patch(
@@ -82,49 +116,115 @@ class TestSpawnEnvSecrets:
         assert result.success is True
         env = captured["env"]
         assert env is not None
-        assert env["ANTHROPIC_API_KEY"] == "sk-shh"
-        assert env["ANOTHER"] == "v"
-        # DOORAE_TOKEN survives — must not be clobbered by the merge
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "OTHER" not in env
+        # DOORAE_TOKEN (agent identity) stays in env by design —
+        # ``load_token`` on the agent side reads it from env.
         assert env["DOORAE_TOKEN"] == "tok-xyz"
+        # stdin PIPE must be requested so the secrets payload can be
+        # written. A value of ``None`` would mean inherit, which would
+        # both fail to deliver secrets and potentially leak the
+        # daemon's stdin into the agent.
+        assert captured["stdin"] == asyncio.subprocess.PIPE
 
-    async def test_engine_secrets_cannot_override_doorae_token(
+    async def test_engine_secrets_piped_to_stdin_as_json(
         self, spawner: Spawner
     ) -> None:
-        """A manifest that (accidentally or maliciously) sets
-        ``DOORAE_TOKEN`` inside engine_secrets must not win over the
-        real agent token — the agent's identity with the server is
-        non-negotiable.
+        """The agent's startup hook reads ``sys.stdin`` once and parses
+        a single JSON object. The spawner must write exactly that
+        payload and close stdin so ``sys.stdin.read()`` returns cleanly.
         """
         msg = SpawnManifest(
             agent_id="agent-secret",
             engine="claude-code",
-            agent_token="tok-real",
+            agent_token="tok-xyz",
             profile_yaml="",
             rooms=["r"],
             server_url="wss://localhost:8000/ws/agent",
-            engine_secrets={"DOORAE_TOKEN": "tok-hijack"},
+            engine_secrets={"GEMINI_API_KEY": "sk-abc"},
         )
 
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
-        captured: dict = {}
+        mock_proc.stdin = AsyncMock()
 
-        async def capture_exec(*args, **kwargs):
-            captured["env"] = kwargs.get("env")
-            return mock_proc
+        captured_stdin_writes: list[bytes] = []
+        close_called = {"flag": False}
+
+        class FakeStdin:
+            def write(self, data: bytes) -> None:
+                captured_stdin_writes.append(data)
+
+            async def drain(self) -> None:
+                return None
+
+            def close(self) -> None:
+                close_called["flag"] = True
+
+            async def wait_closed(self) -> None:
+                return None
+
+        mock_proc.stdin = FakeStdin()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
-            side_effect=capture_exec,
+            return_value=mock_proc,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert close_called["flag"] is True
+        # Exactly one payload, well-formed JSON with only the secrets
+        # (and nothing else — no token, no DOORAE_*, etc.)
+        assert len(captured_stdin_writes) == 1
+        payload = json.loads(captured_stdin_writes[0].decode("utf-8"))
+        assert payload == {"GEMINI_API_KEY": "sk-abc"}
+
+    async def test_empty_engine_secrets_still_pipes_empty_object(
+        self, spawner: Spawner
+    ) -> None:
+        """The agent's bootstrap always reads stdin. When there are
+        no secrets, the spawner must still write ``{}`` + close so the
+        agent's ``read`` returns cleanly instead of blocking on an
+        empty pipe.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-secret",
+            engine="claude-code",
+            agent_token="tok-xyz",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            engine_secrets={},
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdin.drain = AsyncMock()
+        mock_proc.stdin.wait_closed = AsyncMock()
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
         ), patch(
             "doorae_machine.spawner.shutil.which",
             return_value="/usr/local/bin/doorae-agent",
         ):
             await spawner.spawn(msg)
 
-        assert captured["env"]["DOORAE_TOKEN"] == "tok-real"
+        write_calls = mock_proc.stdin.write.call_args_list
+        assert len(write_calls) == 1
+        payload = json.loads(write_calls[0].args[0].decode("utf-8"))
+        assert payload == {}
+        mock_proc.stdin.close.assert_called_once()
 
 
 class TestSpawn:
@@ -136,6 +236,7 @@ class TestSpawn:
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -156,6 +257,7 @@ class TestSpawn:
         mock_proc.pid = 50
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
         captured_cmd = []
 
         async def capture_exec(*args, **kwargs):
@@ -185,6 +287,7 @@ class TestSpawn:
         mock_proc.pid = 60
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -213,6 +316,7 @@ class TestSpawn:
         mock_proc.pid = 61
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -239,6 +343,7 @@ class TestSpawn:
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
         mock_proc.send_signal = MagicMock()
 
         with patch(
@@ -266,6 +371,7 @@ class TestSpawn:
             proc.pid = 99
             proc.wait = AsyncMock(return_value=0)
             proc.stderr = None
+            proc.stdin = AsyncMock()
             return proc
 
         with patch(
@@ -295,6 +401,7 @@ class TestSpawn:
             proc.pid = 71
             proc.wait = AsyncMock(return_value=0)
             proc.stderr = None
+            proc.stdin = AsyncMock()
             return proc
 
         def fake_which(name: str):
@@ -330,6 +437,7 @@ class TestSpawn:
             proc.pid = 72
             proc.wait = AsyncMock(return_value=0)
             proc.stderr = None
+            proc.stdin = AsyncMock()
             return proc
 
         spawn_msg.runtime = "typescript"
@@ -358,6 +466,7 @@ class TestSpawn:
         mock_proc.pid = 73
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         spawn_msg.runtime = "typescript"
 
@@ -394,6 +503,7 @@ class TestSpawn:
             proc.pid = 74
             proc.wait = AsyncMock(return_value=0)
             proc.stderr = None
+            proc.stdin = AsyncMock()
             return proc
 
         def fake_which(name: str):
@@ -429,6 +539,7 @@ class TestSpawn:
         mock_proc.pid = 55
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with (
             patch("doorae_machine.spawner.os.chmod", side_effect=track_chmod),
@@ -459,6 +570,7 @@ class TestGetRunning:
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -489,6 +601,7 @@ class TestKill:
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.send_signal = MagicMock()
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -519,6 +632,7 @@ class TestCleanup:
         mock_proc.pid = 77
         mock_proc.wait = AsyncMock(return_value=0)
         mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",

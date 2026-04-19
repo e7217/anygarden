@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import json
 import os
 import shutil
 import signal
@@ -581,21 +582,22 @@ class Spawner:
                 error=f"Failed to write profile: {exc}",
             )
 
-        # Build environment: inherit current env + merge engine_secrets
-        # + set DOORAE_TOKEN. Order matters:
+        # Build environment: inherit current env + set DOORAE_TOKEN.
         #
-        # 1. ``os.environ.copy()`` — daemon's own env (PATH, HOME, etc.)
-        # 2. ``engine_secrets`` — per-agent API keys (ANTHROPIC_API_KEY,
-        #    OPENAI_API_KEY, GEMINI_API_KEY …). Merged BEFORE DOORAE_TOKEN
-        #    so a malicious or buggy manifest that tries to override the
-        #    agent's identity can't. ``engine_secrets`` was historically
-        #    written to disk as an engine-local ``.env`` file, but that
-        #    path was readable from the agent's tool sandbox (cwd or one
-        #    level up) and the LLM's ``Read`` tool would exfiltrate the
-        #    plaintext key — see #184.
-        # 3. ``DOORAE_TOKEN`` — the agent's auth token, always wins.
+        # ``engine_secrets`` are deliberately NOT merged into this env.
+        # ``doorae-agent`` would inherit them and an LLM tool call
+        # inside the agent (Bash, Read) could then exfiltrate every
+        # API key by dumping ``/proc/self/environ`` or running ``env``.
+        # Instead the secrets are piped via stdin below and consumed
+        # by ``doorae_agent.secrets.load_from_stdin()`` at startup —
+        # the agent process's /proc/self/environ stays clean (#184).
+        #
+        # ``DOORAE_TOKEN`` stays in env because the agent's auth
+        # identity token is a single doorae-internal credential with
+        # a much smaller blast radius than third-party API keys, and
+        # the existing agent bootstrap reads it from env via
+        # ``load_token``.
         env = os.environ.copy()
-        env.update(msg.engine_secrets)
         env["DOORAE_TOKEN"] = msg.agent_token
 
         # The daemon's own server URL is authoritative — it's the address the
@@ -697,11 +699,19 @@ class Spawner:
         # up without any per-engine flag.
         workspace_cwd = str(agent_root / "workspace") if agent_root else None
 
+        # Pipe ``msg.engine_secrets`` to the agent via stdin. The agent
+        # reads the JSON payload once at startup (``doorae_agent.secrets
+        # .load_from_stdin``) and stores it in a private module rather
+        # than ``os.environ``. Closing stdin after the write signals EOF
+        # so the agent's ``sys.stdin.read`` returns cleanly. Empty dicts
+        # still get piped (as ``"{}"``) so the agent always runs the
+        # same bootstrap path.
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 env=env,
                 cwd=workspace_cwd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -711,6 +721,27 @@ class Spawner:
                 success=False,
                 agent_id=agent_id,
                 error=f"Failed to start process: {exc}",
+            )
+
+        secrets_payload = json.dumps(msg.engine_secrets or {}).encode("utf-8")
+        try:
+            assert proc.stdin is not None  # PIPE guarantees it
+            proc.stdin.write(secrets_payload)
+            await proc.stdin.drain()
+            proc.stdin.close()
+            try:
+                await proc.stdin.wait_closed()
+            except AttributeError:
+                # Python <3.11 asyncio has no wait_closed on StreamWriter;
+                # the close() above is best-effort in that case.
+                pass
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            # Agent died before consuming stdin. Let the watch task
+            # surface the exit code; don't mask the real failure here.
+            log.warning(
+                "secrets_stdin_pipe_broken",
+                agent_id=agent_id,
+                error=str(exc),
             )
 
         agent = RunningAgent(
