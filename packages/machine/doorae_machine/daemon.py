@@ -423,6 +423,17 @@ class MachineDaemon:
                     f"crashes in {manifest.restart_window_seconds}s)",
                 )
                 await self._send(replacement.model_dump())
+                # Mirror the restart_on_same_machine branch below: relinquish
+                # local responsibility by marking the manifest stopped. Without
+                # this, a daemon restart would ``load_all_running()`` the same
+                # manifest and re-spawn an agent the server has already placed
+                # elsewhere — split-brain ghost (#182).
+                try:
+                    self._manifest_store.update_desired_state(
+                        agent_id, "stopped"
+                    )
+                except FileNotFoundError:
+                    pass
             else:
                 # restart_on_same_machine but budget exhausted — stop
                 try:
