@@ -101,8 +101,12 @@ class TestLifecycleOverlay:
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
-        assert ".claude/settings.json" in frame["files"]
-        data = json.loads(frame["files"][".claude/settings.json"])
+        # Issue #142 — Claude Code 2.x reads project-local MCP config
+        # from ``.mcp.json`` at the workspace root, not from
+        # ``.claude/settings.json``'s mcpServers section (which 2.x
+        # silently ignores).
+        assert ".mcp.json" in frame["files"]
+        data = json.loads(frame["files"][".mcp.json"])
         # Credential gets rendered as plaintext in the settings file —
         # that's intentional: the DB has the ciphertext, the on-disk
         # manifest (which the machine materialises inside the agent's
@@ -136,8 +140,8 @@ class TestLifecycleOverlay:
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
-        # Disabled → overlay skipped → no settings file produced.
-        assert ".claude/settings.json" not in frame["files"]
+        # Disabled → overlay skipped → no .mcp.json produced.
+        assert ".mcp.json" not in frame["files"]
 
     @pytest.mark.asyncio
     async def test_admin_agent_file_is_merged_with_overlay(self, env):
@@ -161,11 +165,17 @@ class TestLifecycleOverlay:
             )
             db.add_all([agent, template])
             await db.flush()
+            # Issue #142 — admin overrides for MCP live in ``.mcp.json``
+            # at the workspace root (same file Claude Code 2.x reads).
+            # Non-MCP admin settings like ``permissions.allow`` stay
+            # in ``.claude/settings.json`` and don't participate in the
+            # MCP merge path; this test focuses on the MCP merge so we
+            # keep the admin file in the new registry location.
             db.add(AgentFile(
                 agent_id=agent.id,
-                path=".claude/settings.json",
+                path=".mcp.json",
                 content=json.dumps({
-                    "permissions": {"allow": ["Read"]},
+                    "custom_key": "kept",
                     "mcpServers": {"github": {"command": "admin-gh"}},
                 }),
             ))
@@ -176,9 +186,9 @@ class TestLifecycleOverlay:
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
-        data = json.loads(frame["files"][".claude/settings.json"])
-        # Admin's permissions preserved.
-        assert data["permissions"] == {"allow": ["Read"]}
+        data = json.loads(frame["files"][".mcp.json"])
+        # Admin's non-mcp keys preserved verbatim.
+        assert data["custom_key"] == "kept"
         # Admin's github entry preserved (admin wins on collision).
         assert data["mcpServers"]["github"] == {"command": "admin-gh"}
         # Overlay's slack entry added on top.

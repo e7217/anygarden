@@ -2,8 +2,9 @@
 
 Builtin + admin-authored MCP server definitions, per-agent attachments
 with Fernet-encrypted credentials, and spawn-time overlay of
-engine-native settings files (``.claude/settings.json``,
-``.codex/config.toml``, ``.gemini/settings.json``).
+engine-native settings files (``.mcp.json`` for claude-code,
+``.codex/config.toml`` for codex, ``.gemini/settings.json`` for
+gemini-cli).
 
 The package splits along clear seams:
 

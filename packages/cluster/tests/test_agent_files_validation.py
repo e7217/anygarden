@@ -33,6 +33,11 @@ class TestAllowedPaths:
             "skills/coder/scripts/runner.js",
             "skills/coder/scripts/tool.ts",
             "skills/coder/scripts/module.mjs",
+            # Issue #142 — workspace-root ``.mcp.json`` is the path
+            # Claude Code 2.x reads for project-local MCP config.
+            # Gets materialized by merge_for_engine(engine="claude-code")
+            # and occasionally uploaded by admins to override overlays.
+            ".mcp.json",
         ],
     )
     def test_valid_paths_pass(self, path: str) -> None:
@@ -70,6 +75,11 @@ class TestRejectedPaths:
             "random.md",
             "skills.md",
             "other/file.md",
+            # Issue #142 — only the root ``.mcp.json`` is admitted.
+            # A nested ``.mcp.json`` would bypass the intended single
+            # registry location and confuse admins; reject it.
+            "nested/.mcp.json",
+            ".mcp.json.bak",
         ],
     )
     def test_paths_outside_whitelist_rejected(self, path: str) -> None:
