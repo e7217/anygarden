@@ -125,6 +125,14 @@ class ChatClient:
         self._consecutive_task_init: dict[str, int] = {}
         self.max_task_init_resets: int = 5
 
+        # Issue #159 Phase A — room-scoped speaker strategy caches.
+        # The server sets these on every welcome frame so the SDK can
+        # dispatch in ``decide_policy``. Defaults preserve the legacy
+        # behaviour for rooms that predate the schema.
+        self._speaker_strategy: dict[str, str] = {}
+        self._orchestrator_agent_id: dict[str, str | None] = {}
+        self._next_speaker_participant_id: dict[str, str | None] = {}
+
         # Issue #157 Phase B — per-room ring buffer of recent message
         # fingerprints (sender, hash). Feeds ``cycle_guard`` in
         # ``decide_policy``: when the same (sender, hash) pair has
@@ -459,6 +467,18 @@ class ChatClient:
                 self._context_window_opt_out = bool(
                     data.get("context_window_opt_out")
                 )
+            # Issue #159 Phase A — cache the room's speaker-strategy
+            # fields so ``decide_policy`` can dispatch on them. Default
+            # 'mentioned_only' keeps pre-#159 rooms on the legacy path.
+            self._speaker_strategy[room_id] = data.get(
+                "speaker_strategy", "mentioned_only"
+            )
+            self._orchestrator_agent_id[room_id] = data.get(
+                "orchestrator_agent_id"
+            )
+            self._next_speaker_participant_id[room_id] = data.get(
+                "next_speaker_participant_id"
+            )
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:

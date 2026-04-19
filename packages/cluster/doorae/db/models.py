@@ -83,6 +83,44 @@ class Room(Base):
     context_window_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
     )
+    # Issue #159 Phase A — speaker-selection strategy for the room.
+    # ``mentioned_only`` (default) preserves the current decide_policy
+    # behaviour; ``round_robin`` and ``orchestrator`` are activated in
+    # Phase B/C. The value feeds ``decide_policy``'s strategy
+    # dispatcher via the welcome frame.
+    speaker_strategy: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="mentioned_only",
+        server_default=sa_text("'mentioned_only'"),
+    )
+    # Issue #159 Phase A — the agent that drives handoffs when
+    # ``speaker_strategy='orchestrator'``. Kept separate from
+    # ``representative_agent_id`` (cross-room query role) so the two
+    # responsibilities stay legible; the same Agent can hold both.
+    orchestrator_agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # Issue #159 Phase A — the participant the orchestrator most
+    # recently handed off to. Read by the orchestrator branch of
+    # decide_policy to decide who RESPONDs next.
+    next_speaker_participant_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # Issue #159 Phase A — round-robin cursor. Advances per-turn in
+    # the ``round_robin`` strategy; unused by other strategies.
+    current_speaker_index: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=sa_text("0"),
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="rooms")
@@ -94,11 +132,16 @@ class Room(Base):
     # it the ORM tries to UPDATE the child's room_id to NULL before
     # cascade fires, which violates NOT NULL. Same pattern as the
     # Machine.engines / Machine.tokens relationships.
+    # ``foreign_keys`` is load-bearing after #159 Phase A — adding
+    # ``Room.next_speaker_participant_id`` introduced a second FK
+    # between rooms and participants, so SQLAlchemy can no longer
+    # infer the join condition for this collection implicitly.
     participants: Mapped[list["Participant"]] = relationship(
         "Participant",
         back_populates="room",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        foreign_keys="Participant.room_id",
     )
     messages: Mapped[list["Message"]] = relationship(
         "Message",
@@ -405,7 +448,14 @@ class Participant(Base):
         Integer, nullable=True, default=None
     )
 
-    room: Mapped["Room"] = relationship("Room", back_populates="participants")
+    # ``foreign_keys`` disambiguates the join after #159 Phase A
+    # introduced ``Room.next_speaker_participant_id`` — otherwise
+    # SQLAlchemy can't tell which FK column carries the relationship.
+    room: Mapped["Room"] = relationship(
+        "Room",
+        back_populates="participants",
+        foreign_keys=[room_id],
+    )
     user: Mapped[Optional["User"]] = relationship("User")
     agent: Mapped[Optional["Agent"]] = relationship("Agent")
     messages: Mapped[list["Message"]] = relationship(

@@ -167,6 +167,19 @@ class WelcomeOut(BaseModel):
     # the agent returns ``SKIP`` instead of ``INGEST_ONLY``. Default
     # False so user/guest welcome frames stay unchanged.
     context_window_opt_out: bool = False
+    # Issue #159 Phase A — room-scoped speaker strategy. Agents cache
+    # these from the welcome and dispatch in ``decide_policy``. Defaults
+    # preserve the legacy behaviour for rooms that haven't opted in.
+    # - ``speaker_strategy``: 'mentioned_only' (default) | 'round_robin'
+    #   | 'orchestrator'. Phase B/C wire the non-default branches.
+    # - ``orchestrator_agent_id``: agent that issues handoffs under the
+    #   ``orchestrator`` strategy. Distinct from ``representative_agent_id``
+    #   (cross-room query role) — same Agent may hold both.
+    # - ``next_speaker_participant_id``: orchestrator's latest handoff
+    #   target; read by the agent to decide whether to RESPOND.
+    speaker_strategy: str = "mentioned_only"
+    orchestrator_agent_id: Optional[str] = None
+    next_speaker_participant_id: Optional[str] = None
 
 
 class ErrorOut(BaseModel):
