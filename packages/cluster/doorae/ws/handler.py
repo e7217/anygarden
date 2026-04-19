@@ -66,7 +66,11 @@ def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
     "should I act on the stamp?" never drift. A contract test lives
     alongside the migration work plan (#148 §6).
     """
-    if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
+    if (
+        content.startswith("[DELEGATED]")
+        or content.startswith("[ROOM_QUERY]")
+        or content.startswith("[HANDOFF]")
+    ):
         return False
     if metadata.get("room_query"):
         return False
@@ -75,6 +79,89 @@ def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
         if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
             return False
     return True
+
+
+async def _apply_orchestrator_handoff(
+    db: AsyncSession,
+    *,
+    room_id: str,
+    content: str,
+    metadata: dict[str, Any],
+    orchestrator_agent_id: str | None,
+    sender_agent_id: str | None,
+) -> str | None:
+    """Parse a ``[HANDOFF]`` message and flip the room's next-speaker
+    pointer (#159 Phase C).
+
+    Returns the new ``next_speaker_participant_id`` when the handoff
+    was accepted, or ``None`` when it was ignored.
+
+    Acceptance rules (every one must hold):
+
+    1. ``content`` starts with ``[HANDOFF]``. Other prefixes short-
+       circuit immediately — this helper is a no-op on ordinary
+       messages so the caller can always invoke it.
+    2. The sender is this room's orchestrator. Workers can't hijack
+       turn order even if they emit the prefix.
+    3. The message carries a ``type: user`` mention in its metadata
+       whose ``id`` is an existing participant of this room.
+
+    On success the helper:
+
+    - Updates ``Room.next_speaker_participant_id`` in the same DB
+      transaction as the message persist (caller owns the commit).
+    - Mutates ``metadata`` in place to add
+      ``next_speaker_participant_id``. The broadcast carries this
+      stamp so agent-side ``decide_policy``'s O2 rule fires on the
+      target.
+
+    Structural mirror of ``_compute_round_robin_next`` — both are
+    strategy-specific hooks that the main SendFrame pipeline
+    delegates to, so each strategy owns its next-speaker logic in
+    one place.
+    """
+    if not content.startswith("[HANDOFF]"):
+        return None
+    if not orchestrator_agent_id:
+        return None
+    if sender_agent_id != orchestrator_agent_id:
+        return None
+
+    # Pull the first ``type=user`` mention as the target. We trust
+    # the server's ``parse_mentions`` output here because it's
+    # already been run upstream of this helper in the SendFrame
+    # path (see ``ws/handler.py`` where ``metadata["mentions"]`` is
+    # populated).
+    mentions = metadata.get("mentions") or []
+    target_pid: str | None = None
+    for m in mentions:
+        if isinstance(m, dict) and m.get("type") == "user":
+            candidate = m.get("id")
+            if isinstance(candidate, str) and candidate:
+                target_pid = candidate
+                break
+    if target_pid is None:
+        return None
+
+    # Confirm the target is actually a participant of this room.
+    # Catches LLM hallucinations before they poison the pointer.
+    participant_id = (
+        await db.execute(
+            select(Participant.id)
+            .where(Participant.room_id == room_id)
+            .where(Participant.id == target_pid)
+        )
+    ).scalar_one_or_none()
+    if participant_id is None:
+        return None
+
+    await db.execute(
+        sa_update(Room)
+        .where(Room.id == room_id)
+        .values(next_speaker_participant_id=target_pid)
+    )
+    metadata["next_speaker_participant_id"] = target_pid
+    return target_pid
 
 
 async def _compute_round_robin_next(
@@ -560,6 +647,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 Room.context_window_enabled,
                                 Room.speaker_strategy,
                                 Room.current_speaker_index,
+                                Room.orchestrator_agent_id,
                             ).where(Room.id == room_id)
                         )
                     ).first()
@@ -568,6 +656,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         room_row[1] if room_row else "mentioned_only"
                     )
                     current_speaker_index = int(room_row[2]) if room_row else 0
+                    orchestrator_agent_id = (
+                        room_row[3] if room_row else None
+                    )
 
                     if (
                         context_window_enabled
@@ -604,6 +695,31 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     next_speaker_participant_id=next_pid,
                                 )
                             )
+
+                    # Issue #159 Phase C — orchestrator handoff.
+                    # When the orchestrator emits a ``[HANDOFF]``
+                    # message, flip ``Room.next_speaker_participant_id``
+                    # and stamp the outgoing metadata so the target
+                    # agent wakes up under ``decide_policy`` rule O2.
+                    # Non-orchestrator senders and messages that don't
+                    # parse cleanly are silently ignored — see
+                    # ``_apply_orchestrator_handoff`` for the trust
+                    # rules. Runs regardless of the strategy so a room
+                    # that was just flipped back to ``mentioned_only``
+                    # still processes in-flight handoffs consistently.
+                    sender_agent_id = (
+                        identity.id
+                        if identity is not None and identity.kind == "agent"
+                        else None
+                    )
+                    await _apply_orchestrator_handoff(
+                        db,
+                        room_id=room_id,
+                        content=frame_in.content,
+                        metadata=metadata,
+                        orchestrator_agent_id=orchestrator_agent_id,
+                        sender_agent_id=sender_agent_id,
+                    )
 
                     msg = await append_message(
                         db,

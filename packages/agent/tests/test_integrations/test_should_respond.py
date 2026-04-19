@@ -19,6 +19,7 @@ def _make_client(
     context_window_opt_out: bool = False,
     recent_msgs: dict | None = None,
     speaker_strategy: dict | None = None,
+    orchestrator_agent_id: dict | None = None,
 ):
     client = MagicMock()
     client._agent_name = agent_name
@@ -38,6 +39,13 @@ def _make_client(
     # legacy test in this suite expects.
     client._speaker_strategy = (
         speaker_strategy if speaker_strategy is not None else {}
+    )
+    # #159 Phase C — per-room orchestrator pointer. Kept separate from
+    # ``_speaker_strategy`` because a room may be in ``orchestrator``
+    # mode but have no orchestrator set yet (client falls back to
+    # mentioned_only-ish semantics in that case).
+    client._orchestrator_agent_id = (
+        orchestrator_agent_id if orchestrator_agent_id is not None else {}
     )
     return client
 
@@ -694,16 +702,38 @@ class TestRoundRobinStrategy:
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
 
 
-class TestOrchestratorStrategyStub:
-    """Issue #159 Phase B stub — until Phase C fills in the real
-    handoff path, ``orchestrator`` rooms fall back to
-    ``mentioned_only`` semantics (direct mention → RESPOND,
-    unaddressed human → RESPOND, unaddressed agent → SKIP)."""
+class TestOrchestratorStrategy:
+    """Issue #159 Phase C — ``orchestrator`` strategy O1/O2/O3.
 
-    def test_unaddressed_human_responds_like_legacy(self):
+    Rules:
+
+    - **O1**: I am this room's orchestrator → RESPOND. The
+      orchestrator agent always sees every turn; it's the one
+      making the next-speaker call via ``handoff_to``.
+    - **O2**: ``metadata.next_speaker_participant_id`` points at me
+      (stamped by the server after the orchestrator's last
+      ``[HANDOFF]``) → RESPOND.
+    - **O3**: otherwise SKIP — even for unaddressed human messages.
+      This is the structural change vs. Phase B's fallthrough: a
+      non-orchestrator worker in an orchestrator room stays silent
+      until handed off to, so the orchestrator genuinely controls
+      turn order instead of every agent racing on every human turn.
+
+    The pre-strategy base rules (self-echo, ``[DELEGATED]`` /
+    ``[ROOM_QUERY]`` / explicit mention, cycle detection) still fire
+    upstream of this dispatcher, so a handoff tool call that lands
+    as ``[HANDOFF] <@user:{pid}> …`` is handled by the mention rule,
+    not the orchestrator branch. O3 only fires when no other rule
+    has already decided."""
+
+    def test_o1_orchestrator_responds_to_unaddressed_human(self):
+        """The orchestrator owns turn selection, so every human turn
+        is actionable for it even without a direct mention."""
         client = _make_client(
             my_pids={"my-pid-123"},
+            agent_id="agent-alpha",
             speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
         )
         msg = {
             "participant_id": "human-pid",
@@ -713,15 +743,144 @@ class TestOrchestratorStrategyStub:
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
 
-    def test_unaddressed_agent_skips_like_legacy(self):
+    def test_o2_next_speaker_match_responds(self):
+        """``metadata.next_speaker_participant_id`` matches one of my
+        participant ids → RESPOND. This is the handoff target path."""
         client = _make_client(
             my_pids={"my-pid-123"},
+            agent_id="agent-beta",
             speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
         )
         msg = {
-            "participant_id": "other-agent",
+            "participant_id": "agent-alpha-pid",
             "room_id": "room-a",
-            "content": "talking to no one in particular",
-            "metadata": {"_nonce": "n1"},
+            "content": "[HANDOFF] <@user:my-pid-123> take it from here",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}],
+                "next_speaker_participant_id": "my-pid-123",
+                "_nonce": "n1",
+            },
+        }
+        # Direct mention rule 3 actually fires before O2 in this
+        # specific case — the HANDOFF message mentions the target.
+        # Either way the decision is RESPOND; the test asserts the
+        # target agent does act.
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_o2_next_speaker_match_without_mention(self):
+        """If the server stamps ``next_speaker_participant_id`` on a
+        plain ambient message (no handoff prefix, no mention), the
+        target agent still wakes up under O2. Defends against the
+        case where a future server-side path pushes the pointer
+        without re-sending the full ``[HANDOFF]`` message."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "agent-alpha-pid",
+            "room_id": "room-a",
+            "content": "let's keep moving",
+            "metadata": {
+                "next_speaker_participant_id": "my-pid-123",
+                "_nonce": "n1",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_o3_non_orchestrator_non_target_skips(self):
+        """Unaddressed human message, I'm neither the orchestrator nor
+        the next speaker → SKIP. This is the core behavioural change
+        from Phase B: regular workers stay silent until called."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "hello",
+            "metadata": {},
         }
         assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_o3_next_speaker_points_elsewhere_skips(self):
+        """Server routed the next turn to a peer agent → SKIP."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "agent-alpha-pid",
+            "room_id": "room-a",
+            "content": "[HANDOFF] <@user:other-pid> your turn",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "other-pid"}],
+                "next_speaker_participant_id": "other-pid",
+                "_nonce": "n1",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_orchestrator_unset_falls_back_to_mentioned_only(self):
+        """Strategy is 'orchestrator' but ``orchestrator_agent_id`` is
+        unset (admin flipped the knob but never picked an agent).
+        Graceful fallback: unaddressed human still wakes every agent,
+        so the room stays usable even when misconfigured."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-alpha",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": None},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "hello",
+            "metadata": {},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_direct_mention_still_wins(self):
+        """Direct mention is evaluated BEFORE the strategy dispatcher,
+        so an orchestrator room with an explicit ``<@user:me>`` still
+        routes through rule 3 regardless of O1/O2/O3."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "<@user:my-pid-123> direct question",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_delegated_still_wins(self):
+        """``[DELEGATED]`` is also upstream of the strategy dispatcher,
+        so it always RESPONDs regardless of orchestrator routing."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "agent-gamma",
+            "room_id": "room-a",
+            "content": "[DELEGATED] do the thing",
+            "metadata": {"_nonce": "n1"},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND

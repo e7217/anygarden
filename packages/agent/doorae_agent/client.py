@@ -34,14 +34,22 @@ def _is_task_init_content(content: str) -> bool:
     rounds therefore drives the counter past ``max_agent_turns`` and
     later replies are dropped.
 
-    The two recognised task-init prefixes are:
+    The three recognised task-init prefixes are:
 
     - ``[ROOM_QUERY]`` — the representative agent forwards a room
       query to another room. Each forward is an independent task.
     - ``[DELEGATED]``  — a user/agent delegates a subtask to another
       agent. Each delegation is an independent task.
+    - ``[HANDOFF]`` (#159 Phase C) — the orchestrator passes turn
+      control to another participant via the ``handoff_to`` tool.
+      The receiving agent treats this as a fresh task so the
+      per-room agent-turn counter doesn't age out mid-collaboration.
     """
-    return content.startswith("[ROOM_QUERY]") or content.startswith("[DELEGATED]")
+    return (
+        content.startswith("[ROOM_QUERY]")
+        or content.startswith("[DELEGATED]")
+        or content.startswith("[HANDOFF]")
+    )
 
 
 class ChatClient:

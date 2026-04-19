@@ -72,9 +72,41 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
         yield AssistantMessage()
         yield ResultMessage()
 
+    # Issue #159 Phase C — the real SDK exposes ``tool`` /
+    # ``create_sdk_mcp_server`` for in-process MCP servers. The
+    # adapter builds a ``handoff_to`` tool on top of them, so the
+    # fake SDK has to mimic the decorator + server-config shape.
+    from types import SimpleNamespace
+
+    def fake_tool(name: str, description: str, input_schema: Any,
+                  annotations: Any = None):
+        def decorator(handler):
+            return SimpleNamespace(
+                name=name,
+                description=description,
+                input_schema=input_schema,
+                handler=handler,
+                annotations=annotations,
+            )
+        return decorator
+
+    def fake_create_sdk_mcp_server(
+        name: str, version: str = "1.0.0", tools: list | None = None,
+    ):
+        # The real shape is an ``McpSdkServerConfig`` TypedDict; for
+        # tests we just return a plain dict that preserves identity.
+        return {
+            "type": "sdk",
+            "name": name,
+            "version": version,
+            "tools": tools or [],
+        }
+
     fake_module = types.ModuleType("claude_agent_sdk")
     fake_module.ClaudeAgentOptions = FakeOptions  # type: ignore[attr-defined]
     fake_module.query = fake_query  # type: ignore[attr-defined]
+    fake_module.tool = fake_tool  # type: ignore[attr-defined]
+    fake_module.create_sdk_mcp_server = fake_create_sdk_mcp_server  # type: ignore[attr-defined]
     fake_module.__version__ = "0.1.58-fake"
 
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_module)
@@ -254,6 +286,166 @@ class TestIntegrateWithClaudeCode:
 
         assert len(client._message_handlers) == 1
         assert isinstance(adapter, ClaudeCodeAdapter)
+
+
+class TestHandoffTool:
+    """Issue #159 Phase C — ``handoff_to`` custom tool exposed by the
+    Claude Code adapter when the agent is the orchestrator of the
+    current room.
+
+    The tool is *conditionally* wired: only orchestrator rooms get
+    the MCP server registration. Worker agents (and rooms under
+    ``mentioned_only`` / ``round_robin``) must not see it, otherwise
+    the LLM is tempted to use it outside its designed scope.
+    """
+
+    @pytest.mark.asyncio
+    async def test_handoff_tool_exposed_when_orchestrator(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Client's orchestrator map points at me → options carry an
+        ``mcp_servers`` entry and ``allowed_tools`` with the handoff
+        tool name prefixed as ``mcp__<server>__<tool>``."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+
+        adapter = ClaudeCodeAdapter(client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert "mcp_servers" in opts
+        assert "doorae" in opts["mcp_servers"]
+        assert "mcp__doorae__handoff_to" in opts.get("allowed_tools", [])
+
+    @pytest.mark.asyncio
+    async def test_handoff_tool_hidden_when_not_orchestrator(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Worker agent in an orchestrator room → no ``mcp_servers``
+        stamp. The tool is strictly orchestrator-scoped."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Worker")
+        client._agent_id = "agent-beta"  # not the orchestrator
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+
+        adapter = ClaudeCodeAdapter(client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert "mcp_servers" not in opts
+        assert "allowed_tools" not in opts
+
+    @pytest.mark.asyncio
+    async def test_handoff_tool_hidden_without_client(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Adapter constructed without a ChatClient reference (legacy
+        call site) must still function — just without the tool. This
+        preserves source-compat for any caller not yet updated."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert "mcp_servers" not in opts
+
+    @pytest.mark.asyncio
+    async def test_handoff_handler_sends_marker_to_client(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Invoking the tool handler directly calls ``client.send``
+        with the ``[HANDOFF] <@user:pid> reason`` marker. The server
+        picks this up and updates ``Room.next_speaker_participant_id``
+        (tested separately in cluster suite)."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+
+        sent: list[dict[str, Any]] = []
+
+        async def fake_send(room_id, content, metadata=None, **kwargs):
+            sent.append({"room_id": room_id, "content": content, "metadata": metadata})
+
+        client.send = fake_send  # type: ignore[method-assign]
+
+        adapter = ClaudeCodeAdapter(client=client)
+        await adapter.start()
+        # Drive one on_message so the SDK options capture the
+        # ``mcp_servers`` entry (and the MCP server config is built).
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        # Fish the handoff tool out of the fake SDK server config and
+        # invoke its handler directly. In production the SDK calls
+        # this callback *during* the ``query()`` iteration, while
+        # ``_current_room_id`` is still set — we simulate that by
+        # re-setting it before invoking the handler.
+        opts = fake_sdk[-1]["options"].kwargs
+        server_cfg = opts["mcp_servers"]["doorae"]
+        handoff_tool = next(
+            t for t in server_cfg["tools"] if t.name == "handoff_to"
+        )
+        adapter._current_room_id = "room-a"
+        result = await handoff_tool.handler(
+            {"participant_id": "worker-pid-123", "reason": "logs expert"}
+        )
+
+        assert len(sent) == 1
+        assert sent[0]["room_id"] == "room-a"
+        assert sent[0]["content"].startswith("[HANDOFF] <@user:worker-pid-123>")
+        assert "logs expert" in sent[0]["content"]
+        assert sent[0]["metadata"] == {
+            "handoff": {
+                "target_participant_id": "worker-pid-123",
+                "reason": "logs expert",
+            }
+        }
+        # Tool must return a non-error MCP response shape so the
+        # LLM sees a confirmation rather than a retry prompt.
+        assert result.get("is_error") is not True
+        content = result.get("content") or []
+        assert content and content[0].get("type") == "text"
+
+    @pytest.mark.asyncio
+    async def test_handoff_handler_reports_error_on_missing_args(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Tool called without a participant id → tool returns an
+        ``is_error`` MCP response so the LLM can retry."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        sent: list[Any] = []
+
+        async def fake_send(*args, **kwargs):
+            sent.append((args, kwargs))
+
+        client.send = fake_send  # type: ignore[method-assign]
+
+        adapter = ClaudeCodeAdapter(client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        handoff_tool = next(
+            t for t in opts["mcp_servers"]["doorae"]["tools"]
+            if t.name == "handoff_to"
+        )
+        adapter._current_room_id = "room-a"
+        result = await handoff_tool.handler({"reason": "no target"})
+
+        assert result.get("is_error") is True
+        assert len(sent) == 0
 
 
 class TestIngestContext:
