@@ -214,6 +214,13 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     # fix for the "every agent in the room responds" bug — rule 6
     # below used to short-circuit it.
     if addressable:
+        # Stage B promotion (#74): a mention aimed at a peer is the
+        # canonical "ambient but informative" case. If the window
+        # is enabled, the peer's response will be relevant to us
+        # shortly — keep it available as context instead of
+        # dropping it on the floor.
+        if _ambient_capture_enabled(msg, client):
+            return MessagePolicy.INGEST_ONLY
         return MessagePolicy.SKIP
 
     # 6. No addressable mention. Humans talking generally to the
@@ -223,8 +230,30 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if not sender_is_agent:
         return MessagePolicy.RESPOND
 
-    # 7. Agent sender, no mention → skip
+    # 7. Agent sender, no mention → skip. Stage B promotion: agent-
+    # to-agent chatter (e.g. another agent replying to the human in
+    # a shared room) is exactly the ambient signal the window is
+    # meant to capture when enabled.
+    if _ambient_capture_enabled(msg, client):
+        return MessagePolicy.INGEST_ONLY
     return MessagePolicy.SKIP
+
+
+def _ambient_capture_enabled(
+    msg: dict[str, Any], client: ChatClient
+) -> bool:
+    """Ask the Stage B accumulator whether this would-be-SKIP
+    message should be promoted to INGEST_ONLY instead.
+
+    Import is local so the Python agent can start up even if the
+    coordination module ever fails to load: we'd rather ship the
+    original 2-state behaviour than crash every adapter.
+    """
+    try:
+        from doorae_agent.coordination.accumulator import get_accumulator
+    except ImportError:  # pragma: no cover - defensive
+        return False
+    return get_accumulator().should_capture(msg, client)
 
 
 def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:

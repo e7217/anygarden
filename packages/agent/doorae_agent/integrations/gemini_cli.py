@@ -43,6 +43,11 @@ from typing import Any
 import structlog
 
 from doorae_agent.client import ChatClient
+from doorae_agent.coordination.pending_context import (
+    append_context_line,
+    drain_context,
+    format_context_line,
+)
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
@@ -76,6 +81,11 @@ class GeminiCliAdapter(EngineAdapter):
         # we rebuild the prompt from history each call (same approach
         # CodexAdapter uses).
         self._conversations: dict[str, list[dict[str, str]]] = {}
+        # Per-room pending context buffer (#74 Stage B). Populated by
+        # ``ingest_context`` and drained as a prompt prefix on the
+        # next active turn — see ``coordination.pending_context`` for
+        # the shared policy.
+        self._pending_context: dict[str, list[tuple[float, str]]] = {}
 
     async def start(self) -> None:
         """Verify that the gemini CLI is installed and reachable."""
@@ -119,8 +129,16 @@ class GeminiCliAdapter(EngineAdapter):
         room_id = msg.get("room_id", "_default")
         conversation = self._conversations.setdefault(room_id, [])
 
+        # #74: drain any pending context lines into a prefix before
+        # the user's own content. Gemini's stateless-per-invocation
+        # model means the prefix flows into this turn's transcript
+        # and also stays in the per-room ``_conversations`` history,
+        # so subsequent turns keep the breadcrumb as prior context.
+        prefix = drain_context(self._pending_context, room_id)
+        turn_content = f"{prefix}\n\n{content}" if prefix else content
+
         # Build prompt with per-room conversation context.
-        conversation.append({"role": "user", "content": content})
+        conversation.append({"role": "user", "content": turn_content})
         prompt = self._build_prompt(conversation)
 
         try:
@@ -137,8 +155,23 @@ class GeminiCliAdapter(EngineAdapter):
             conversation.pop()
             return None
 
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Buffer an ``INGEST_ONLY`` message for the next active turn.
+
+        Gemini owns no persistent session between CLI invocations,
+        so the breadcrumb only survives as long as this adapter
+        instance. Stashed in ``_pending_context``; rendered into
+        the next ``on_message`` prompt prefix.
+        """
+        room_id = msg.get("room_id") or "_default"
+        line = format_context_line(msg)
+        if line is None:
+            return
+        append_context_line(self._pending_context, room_id, line)
+
     async def stop(self) -> None:
         self._conversations.clear()
+        self._pending_context.clear()
 
     def _build_prompt(self, conversation: list[dict[str, str]]) -> str:
         """Build a single prompt string from per-room conversation history.
@@ -284,9 +317,17 @@ async def integrate_with_gemini_cli(
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
 
-        # Unified response gate — skip if not addressed to us
-        from doorae_agent.integrations.base import should_respond
-        if not should_respond(msg, client):
+        # 3-state gate (#74). SKIP drops the message; INGEST_ONLY
+        # stashes it for the next active turn's prompt prefix;
+        # RESPOND proceeds below. Stage B promotion runs inside
+        # ``decide_policy`` via the accumulator env flag — no extra
+        # wiring needed here.
+        from doorae_agent.integrations.base import MessagePolicy, decide_policy
+        policy = decide_policy(msg, client)
+        if policy is MessagePolicy.SKIP:
+            return
+        if policy is MessagePolicy.INGEST_ONLY:
+            await adapter.ingest_context(msg)
             return
 
         # Check for /delegate command before LLM call

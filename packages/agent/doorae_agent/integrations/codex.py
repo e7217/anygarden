@@ -14,6 +14,11 @@ from typing import Any
 import structlog
 
 from doorae_agent.client import ChatClient
+from doorae_agent.coordination.pending_context import (
+    append_context_line,
+    drain_context,
+    format_context_line,
+)
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
@@ -40,6 +45,12 @@ class CodexAdapter(EngineAdapter):
         self._sandbox = sandbox
         self._codex: Any = None  # Codex instance
         self._threads: dict[str, Any] = {}  # room_id → Thread
+        # Per-room pending context buffer (#74 Stage B). Stashed by
+        # ``ingest_context``; rendered into the next ``on_message``
+        # prompt prefix so the Codex thread picks it up as user
+        # context for the turn. Since each thread carries its own
+        # history natively, one-shot prefix is enough.
+        self._pending_context: dict[str, list[tuple[float, str]]] = {}
         # Issue #134 — ThreadStartOptions class is resolved at start()
         # time (not import time) so tests can stub the ``codex`` module
         # with a MagicMock without needing to also stub the nested
@@ -118,8 +129,14 @@ class CodexAdapter(EngineAdapter):
                     sandbox=self._sandbox,
                 )
 
+            # #74: drain pending context into a prefix so ingested
+            # breadcrumbs land in this turn's user content before
+            # the actual question.
+            prefix = drain_context(self._pending_context, room_id)
+            turn_content = f"{prefix}\n\n{content}" if prefix else content
+
             # run_text returns the response as a string directly
-            response = await asyncio.to_thread(thread.run_text, content)
+            response = await asyncio.to_thread(thread.run_text, turn_content)
             return response if response else None
         except Exception as exc:
             logger.error("codex.turn_failed", room_id=room_id, error=str(exc))
@@ -127,9 +144,23 @@ class CodexAdapter(EngineAdapter):
             self._threads.pop(room_id, None)
             return None
 
+    async def ingest_context(self, msg: dict[str, Any]) -> None:
+        """Buffer an ``INGEST_ONLY`` message for the next active turn.
+
+        Codex threads already persist history natively, so we only
+        need to make sure the breadcrumb lands as part of the next
+        ``thread.run_text`` call. Prepended in ``on_message``.
+        """
+        room_id = msg.get("room_id") or "_default"
+        line = format_context_line(msg)
+        if line is None:
+            return
+        append_context_line(self._pending_context, room_id, line)
+
     async def stop(self) -> None:
         """Shut down the Codex client."""
         self._threads.clear()
+        self._pending_context.clear()
         if self._codex is not None:
             try:
                 self._codex.close()
@@ -156,9 +187,16 @@ async def integrate_with_codex(
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
 
-        # Unified response gate — skip if not addressed to us
-        from doorae_agent.integrations.base import should_respond
-        if not should_respond(msg, client):
+        # 3-state gate (#74). SKIP drops; INGEST_ONLY stashes for
+        # next-turn prefix; RESPOND proceeds. Stage B promotion is
+        # decided inside ``decide_policy`` via the accumulator env
+        # flag — no extra wiring here.
+        from doorae_agent.integrations.base import MessagePolicy, decide_policy
+        policy = decide_policy(msg, client)
+        if policy is MessagePolicy.SKIP:
+            return
+        if policy is MessagePolicy.INGEST_ONLY:
+            await adapter.ingest_context(msg)
             return
 
         # Check for /delegate command before LLM call
