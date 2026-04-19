@@ -911,3 +911,154 @@ class TestRoomQueryMetadata:
                 err = json.loads(ws.receive_text())
                 assert err["type"] == "error"
                 assert "오프라인" in err["detail"]
+
+
+class TestContextWindowBroadcast:
+    """#148 Part 3 — server-side ingest_only stamping."""
+
+    @pytest.mark.asyncio
+    async def test_ambient_broadcast_is_stamped_when_enabled(
+        self, ws_env
+    ) -> None:
+        """Ambient user message in a context_window-enabled room gets
+        ``metadata.ingest_only=True`` so peer agents absorb it as
+        context instead of replying."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room = ws_env["room"]
+        sf = ws_env["session_factory"]
+
+        # Flip the room flag on.
+        async with sf() as db:
+            r = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            r.context_window_enabled = True
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(
+                    json.dumps({"type": "send", "content": "잡담 한마디"})
+                )
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                meta = msg.get("metadata") or {}
+                assert meta.get("ingest_only") is True
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_when_flag_off(self, ws_env) -> None:
+        """Default (flag off) rooms behave exactly as pre-#148: no
+        ``ingest_only`` metadata is attached."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room = ws_env["room"]
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()
+                ws.send_text(
+                    json.dumps({"type": "send", "content": "hi"})
+                )
+                msg = json.loads(ws.receive_text())
+                meta = msg.get("metadata") or {}
+                assert "ingest_only" not in meta
+
+    @pytest.mark.asyncio
+    async def test_direct_mention_bypasses_stamp(self, ws_env) -> None:
+        """A direct ``@name`` targets a specific participant — that's
+        not ambient, so the stamp must NOT fire even if the flag is
+        on. Prevents an addressable message from being silently
+        demoted to passive ingestion."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room = ws_env["room"]
+        sf = ws_env["session_factory"]
+
+        async with sf() as db:
+            r = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            r.context_window_enabled = True
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()
+                ws.send_text(
+                    json.dumps(
+                        {"type": "send", "content": "@bot 핑"}
+                    )
+                )
+                msg = json.loads(ws.receive_text())
+                meta = msg.get("metadata") or {}
+                # parse_mentions resolves ``@bot`` as a legacy
+                # mention → direct addressing → no stamp.
+                assert "ingest_only" not in meta
+
+    @pytest.mark.asyncio
+    async def test_welcome_carries_agent_opt_out(self, ws_env) -> None:
+        """Agent connecting to the WS must receive its own
+        ``context_window_opt_out`` in the welcome frame so the SDK
+        can cache it for ``decide_policy``."""
+        from starlette.testclient import TestClient
+
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+
+        async with sf() as db:
+            agent = Agent(
+                name="optout-bot",
+                engine="codex",
+                actual_state="running",
+                context_window_opt_out=True,
+            )
+            db.add(agent)
+            await db.flush()
+            db.add(
+                Participant(
+                    room_id=room.id, agent_id=agent.id, role="member"
+                )
+            )
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(
+                AgentToken(
+                    agent_id=agent.id,
+                    token_hash=token_hash,
+                    lookup_hint=lookup_hint,
+                )
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=[
+                    "doorae.v1",
+                    f"bearer.{agent_token_plain}",
+                ],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                assert welcome.get("context_window_opt_out") is True

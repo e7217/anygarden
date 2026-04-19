@@ -95,6 +95,15 @@ class ChatClient:
         # duplicates to the target room.
         self._agent_id: str | None = None
 
+        # Issue #148 Part 3 — cached agent-side opt-out from ambient
+        # context ingestion. Refreshed from every welcome frame the
+        # server sends, so toggling the flag via the admin UI plus a
+        # ``bump_generation`` (which respawns the agent subprocess)
+        # propagates on the next ws connect. ``decide_policy`` reads
+        # this to demote ``ingest_only`` broadcasts to ``SKIP`` for
+        # opt-out agents.
+        self._context_window_opt_out: bool = False
+
         # Per-room agent-only consecutive message counter.
         # Counts how many messages in a row came from agents (non-human)
         # without a human message in between.  When the count exceeds
@@ -344,6 +353,14 @@ class ChatClient:
             aid = data.get("agent_id")
             if aid:
                 self._agent_id = aid
+            # Issue #148 Part 3 — refresh the opt-out cache on every
+            # welcome. Absent field (older servers, non-agent sessions)
+            # leaves the default False in place, which preserves the
+            # pre-#148 ingest behaviour exactly.
+            if "context_window_opt_out" in data:
+                self._context_window_opt_out = bool(
+                    data.get("context_window_opt_out")
+                )
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:

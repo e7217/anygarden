@@ -200,13 +200,21 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if mentioned_me:
         return MessagePolicy.RESPOND
 
-    # 4. Explicit ingest-only flag (#74 Stage A). Placed *after* the
-    # addressability rule so a direct mention still gets RESPOND.
-    # From this point the legacy gate would return SKIP or RESPOND
-    # based on sender kind; the ingest_only flag short-circuits that
-    # into passive ingestion instead. The canonical producer is
-    # ``room_query._deliver_result`` broadcasting ``[취합 결과]``.
+    # 4. Explicit ingest-only flag (#74 Stage A, #148 Part 3). Placed
+    # *after* the addressability rule so a direct mention still gets
+    # RESPOND. From this point the legacy gate would return SKIP or
+    # RESPOND based on sender kind; the ingest_only flag short-
+    # circuits that into passive ingestion instead. Producers:
+    # - ``room_query._deliver_result`` (``[취합 결과]``)
+    # - #148 Part 3: cluster ``ws/handler.py`` on ambient broadcasts
+    #   in rooms where ``context_window_enabled`` is True.
+    # #148 Part 3 opt-out: when this agent has the DB flag set, even
+    # an ingest_only broadcast is dropped. The flag is refreshed on
+    # every welcome frame (client.py) so a UI toggle + respawn
+    # propagates without a protocol round-trip.
     if metadata.get("ingest_only"):
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
         return MessagePolicy.INGEST_ONLY
 
     # 5. Explicit mention list exists and does not include us →
