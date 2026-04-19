@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.auth.dependencies import Identity, get_identity, require_room_member
@@ -75,6 +75,46 @@ def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
         if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
             return False
     return True
+
+
+async def _compute_round_robin_next(
+    db: AsyncSession,
+    *,
+    room_id: str,
+    current_index: int,
+    sender_is_human: bool,
+) -> tuple[int, str] | None:
+    """Return ``(new_index, next_speaker_participant_id)`` for the
+    round_robin strategy, or ``None`` if the room has no agents yet.
+
+    Rules (Issue #159 Phase B):
+
+    - Agent participants are ordered by ``joined_at`` then ``id`` for
+      a stable rotation across connects.
+    - Human messages reset rotation to index 0 — right after a user
+      speaks we want *some* agent to respond immediately, not whoever
+      the cursor happened to point at.
+    - Agent messages advance one step (modulo the agent count).
+    """
+    agent_participant_ids: list[str] = (
+        (
+            await db.execute(
+                select(Participant.id)
+                .where(Participant.room_id == room_id)
+                .where(Participant.agent_id.isnot(None))
+                .order_by(Participant.joined_at.asc(), Participant.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not agent_participant_ids:
+        return None
+    if sender_is_human:
+        new_index = 0
+    else:
+        new_index = (current_index + 1) % len(agent_participant_ids)
+    return new_index, agent_participant_ids[new_index]
 
 
 def _extract_since_seq(query_string: str | None) -> int:
@@ -499,17 +539,54 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 async with session_factory() as db:
                     room_row = (
                         await db.execute(
-                            select(Room.context_window_enabled).where(
-                                Room.id == room_id,
-                            )
+                            select(
+                                Room.context_window_enabled,
+                                Room.speaker_strategy,
+                                Room.current_speaker_index,
+                            ).where(Room.id == room_id)
                         )
-                    ).scalar_one_or_none()
+                    ).first()
+                    context_window_enabled = bool(room_row[0]) if room_row else False
+                    speaker_strategy = (
+                        room_row[1] if room_row else "mentioned_only"
+                    )
+                    current_speaker_index = int(room_row[2]) if room_row else 0
+
                     if (
-                        room_row
+                        context_window_enabled
                         and _is_ambient_candidate(frame_in.content, metadata)
                         and "ingest_only" not in metadata
                     ):
                         metadata["ingest_only"] = True
+
+                    # Issue #159 Phase B — round_robin dispatcher.
+                    # Server picks the next speaker; agents just check
+                    # whether they match. Human senders reset rotation
+                    # to the first agent so the next turn responds
+                    # immediately, rather than wherever the cursor
+                    # happened to stop before. See
+                    # ``_compute_round_robin_next`` for the details.
+                    if speaker_strategy == "round_robin":
+                        sender_is_human = (
+                            identity is not None and identity.kind == "user"
+                        )
+                        next_info = await _compute_round_robin_next(
+                            db,
+                            room_id=room_id,
+                            current_index=current_speaker_index,
+                            sender_is_human=sender_is_human,
+                        )
+                        if next_info is not None:
+                            new_index, next_pid = next_info
+                            metadata["next_speaker_participant_id"] = next_pid
+                            await db.execute(
+                                sa_update(Room)
+                                .where(Room.id == room_id)
+                                .values(
+                                    current_speaker_index=new_index,
+                                    next_speaker_participant_id=next_pid,
+                                )
+                            )
 
                     msg = await append_message(
                         db,

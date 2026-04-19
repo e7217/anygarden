@@ -255,6 +255,34 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if addressable:
         return MessagePolicy.SKIP
 
+    # Rules 6/7 — strategy dispatcher (#159 Phase B).
+    # Up to this point every rule is strategy-independent (self-echo,
+    # task-init, room_query, cycle, mention, ingest_only, mention-not-us
+    # are all sacred across strategies). Below we branch on the room's
+    # ``speaker_strategy`` — default ``mentioned_only`` preserves the
+    # pre-#159 behaviour for every existing room.
+    strategy_cache = getattr(client, "_speaker_strategy", None)
+    strategy = (
+        strategy_cache.get(room_id, "mentioned_only")
+        if isinstance(strategy_cache, dict) and room_id
+        else "mentioned_only"
+    )
+
+    if strategy == "round_robin":
+        # Round-robin: server pre-computes the next speaker for the
+        # room and stamps it on each broadcast's metadata. The agent
+        # just checks whether it matches our participant id.
+        next_speaker = metadata.get("next_speaker_participant_id")
+        if next_speaker and next_speaker in client._my_participant_ids:
+            return MessagePolicy.RESPOND
+        return MessagePolicy.SKIP
+
+    if strategy == "orchestrator":
+        # #159 Phase C fills in the real handoff handling. For Phase B
+        # we behave like mentioned_only so an orchestrator room with
+        # no handoff data stays addressable via explicit @-mentions.
+        pass
+
     # 6. No addressable mention. Humans talking generally to the
     # room keep the historical "everyone replies" behaviour; this
     # preserves the 1:1 DM UX where no explicit mention is needed.
