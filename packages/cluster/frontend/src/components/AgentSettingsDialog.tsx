@@ -1,20 +1,16 @@
 /**
- * AgentSettingsDialog — unified agent settings (#158).
+ * AgentSettingsDialog — unified agent settings (#158, restructured #165).
  *
- * Collapses four previously-separate dialogs (Avatar / Manifest /
- * Rooms / Activity) into a single Dialog with a left-rail nav.
+ * Renders all four sections (Overview / Manifest / Rooms / Activity)
+ * stacked vertically inside a single scrollable dialog body. The
+ * earlier left-rail nav was removed in #165: with only four
+ * destinations, the nav hid three of them behind a click without
+ * much payoff. Stacking the sections lets the admin scan the whole
+ * agent at a glance and scroll to whichever section matters.
  *
- * Layout: a 200px vertical nav on the left, the active panel's body
- * on the right. max-w-5xl gives the manifest panel's 2-column
- * tree+editor grid room to breathe next to the nav.
- *
- * Panel lifecycle: sections are conditionally rendered, so each
- * panel mounts/unmounts with its selection. The trade-off is that
- * unsaved in-progress edits in Manifest are lost if the admin
- * switches away — acceptable today because the common path is
- * "open → edit manifest → save → close". If usage patterns change
- * we can hoist Manifest's working copy up to the dialog or keep
- * panels mounted via ``display: none``.
+ * Panel lifecycle: every panel is always mounted when the dialog is
+ * open. Unsaved Manifest edits therefore survive scrolling to other
+ * sections (the earlier conditional-render design discarded them).
  *
  * Save semantics are section-scoped: Overview auto-saves on blur
  * (name) and on pick (avatar), Rooms mutates on click, Activity is
@@ -22,9 +18,8 @@
  * itself has no footer bar.
  *
  * Style: follows DESIGN.md (warm neutral palette, whisper borders,
- * single-accent brand color for the active nav pill).
+ * single-accent brand color).
  */
-import { useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -32,7 +27,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { FileCog, History, DoorOpen, User } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
@@ -40,9 +34,7 @@ import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
-import { cn } from '@/lib/utils'
-
-export type SettingsSection = 'overview' | 'manifest' | 'rooms' | 'activity'
+import type { ReactNode } from 'react'
 
 interface Props {
   agent: Agent | null
@@ -71,18 +63,31 @@ interface Props {
   onRoomsChange?: () => void
 }
 
-interface NavItem {
-  id: SettingsSection
-  label: string
-  icon: typeof FileCog
+function Section({
+  id,
+  title,
+  children,
+}: {
+  id: string
+  title: string
+  children: ReactNode
+}) {
+  return (
+    <section
+      aria-labelledby={`agent-settings-heading-${id}`}
+      data-testid={`agent-settings-section-${id}`}
+      className="space-y-3"
+    >
+      <h3
+        id={`agent-settings-heading-${id}`}
+        className="text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]"
+      >
+        {title}
+      </h3>
+      {children}
+    </section>
+  )
 }
-
-const NAV_ITEMS: readonly NavItem[] = [
-  { id: 'overview', label: 'Overview', icon: User },
-  { id: 'manifest', label: 'Manifest', icon: FileCog },
-  { id: 'rooms', label: 'Rooms', icon: DoorOpen },
-  { id: 'activity', label: 'Activity', icon: History },
-]
 
 export default function AgentSettingsDialog({
   agent,
@@ -96,11 +101,9 @@ export default function AgentSettingsDialog({
   fetchSkillPreview,
   onRoomsChange,
 }: Props) {
-  const [section, setSection] = useState<SettingsSection>('overview')
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2">
             <span>Agent settings</span>
@@ -126,45 +129,17 @@ export default function AgentSettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-[200px_1fr] flex-1 min-h-0">
-          {/* Left rail — section nav */}
-          <nav
-            className="border-r border-[var(--color-border)] bg-[var(--color-surface-alt)] py-3 overflow-y-auto"
-            aria-label="Agent settings sections"
-          >
-            <ul className="space-y-0.5 px-2">
-              {NAV_ITEMS.map(item => {
-                const Icon = item.icon
-                const isActive = section === item.id
-                return (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSection(item.id)}
-                      aria-current={isActive ? 'page' : undefined}
-                      data-testid={`agent-settings-nav-${item.id}`}
-                      className={cn(
-                        'w-full flex items-center gap-2 rounded-[var(--radius-md)] px-3 py-2 text-sm text-left transition-colors cursor-pointer',
-                        isActive
-                          ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] font-medium'
-                          : 'text-[var(--color-foreground)] hover:bg-black/5',
-                      )}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                      <span>{item.label}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-          </nav>
-
-          {/* Right pane — section body */}
-          <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4">
-            {section === 'overview' && (
+        {/* Single scrollable body — sections stack top-to-bottom. The
+            ``divide-y`` separator between sections doubles as the
+            visual seam so each heading doesn't need its own top
+            border. */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="px-6 py-5 divide-y divide-[var(--color-border)] [&>section]:py-5 first:[&>section]:pt-0 last:[&>section]:pb-0">
+            <Section id="overview" title="Overview">
               <OverviewPanel agent={agent} updateAgent={updateAgent} />
-            )}
-            {section === 'manifest' && (
+            </Section>
+
+            <Section id="manifest" title="Manifest">
               <ManifestPanel
                 agent={agent}
                 fetchAgentFiles={fetchAgentFiles}
@@ -175,13 +150,15 @@ export default function AgentSettingsDialog({
                 fetchSkillPreview={fetchSkillPreview}
                 onNavigateAway={() => onOpenChange(false)}
               />
-            )}
-            {section === 'rooms' && (
+            </Section>
+
+            <Section id="rooms" title="Rooms">
               <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
-            )}
-            {section === 'activity' && (
+            </Section>
+
+            <Section id="activity" title="Activity">
               <ActivityPanel agentId={agent?.id ?? null} />
-            )}
+            </Section>
           </div>
         </div>
       </DialogContent>
