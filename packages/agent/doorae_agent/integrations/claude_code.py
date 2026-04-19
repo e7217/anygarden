@@ -256,7 +256,26 @@ class ClaudeCodeAdapter(EngineAdapter):
             if msg_type == "AssistantMessage":
                 content = getattr(message, "content", None) or []
                 for block in content:
-                    if type(block).__name__ != "TextBlock":
+                    block_type = type(block).__name__
+                    # Issue #144 — observability: emit which tools
+                    # Claude actually invokes so MCP wiring issues are
+                    # diagnosable from structlog alone. ``input`` keys
+                    # only (no values) because MCP tool arguments
+                    # routinely carry secrets / PII (tokens, emails,
+                    # repo names) — a full dump would leak credentials
+                    # into log aggregators. Key names are enough to
+                    # confirm the call happened and the shape was
+                    # correct.
+                    if block_type == "ToolUseBlock":
+                        logger.info(
+                            "claude_code.tool_use",
+                            tool_name=getattr(block, "name", None),
+                            input_keys=list(
+                                (getattr(block, "input", None) or {}).keys()
+                            ),
+                        )
+                        continue
+                    if block_type != "TextBlock":
                         continue
                     text = getattr(block, "text", None)
                     if isinstance(text, str) and text.strip():

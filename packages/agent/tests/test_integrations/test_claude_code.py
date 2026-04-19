@@ -45,7 +45,12 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
             # Real SDK puts the skill name and tool args here. We
             # give it a ``text`` attribute too so the adapter has
             # a chance to leak it — good regression target.
+            # Issue #144 — ``name`` and ``input`` are what the
+            # observability log reads; we keep the values distinct
+            # from anything that would show up as a leaked reply.
             text = "TOOL USE: activate_skill"
+            name = "mcp__github__get_me"
+            input = {"reason": "debug"}
 
         class ToolResultBlock:
             # Same deal — skill activation returns the SKILL.md
@@ -201,6 +206,38 @@ class TestOnMessage:
         await adapter.on_message({"content": "room 2", "room_id": "r2"})
 
         assert fake_sdk[1]["options"].kwargs.get("resume") is None
+
+    @pytest.mark.asyncio
+    async def test_tool_use_emits_structlog_entry(
+        self, fake_sdk: list[dict[str, Any]], capfd: pytest.CaptureFixture[str]
+    ) -> None:
+        """Issue #144 — every ToolUseBlock in the stream should fire a
+        ``claude_code.tool_use`` log entry carrying the tool name and
+        the *keys* of the input payload (values are omitted to avoid
+        leaking tokens / PII that MCP tools often carry).
+
+        structlog writes to stdout directly (not through the stdlib
+        logging root), so ``capfd`` is the right capture fixture.
+        """
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+        await adapter.on_message({"content": "Hi", "room_id": "r1"})
+
+        out = capfd.readouterr().out
+        tool_use_lines = [
+            line for line in out.splitlines() if "claude_code.tool_use" in line
+        ]
+        assert tool_use_lines, (
+            f"expected tool_use log entry in stdout, got:\n{out}"
+        )
+        line = tool_use_lines[0]
+        assert "tool_name=mcp__github__get_me" in line
+        # Input *keys* must be logged, *values* must not.
+        assert "'reason'" in line  # the key name
+        # The value ("debug") must not appear in the tool_use line.
+        # (Note: the substring "debug" as a log level name can appear
+        # in other lines, so we scope the check to this line only.)
+        assert "debug" not in line
 
 
 class TestIntegrateWithClaudeCode:
