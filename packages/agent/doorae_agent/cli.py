@@ -91,20 +91,8 @@ async def _run_agent(
     reasoning_effort: str | None = None,
 ) -> None:
     from doorae_agent.client import ChatClient
-    from doorae_agent.coordination.accumulator import get_accumulator
 
     client = ChatClient(server, token=token, agent_name=name)
-
-    # #74 Stage B — log the ambient-context-window configuration so
-    # operators can confirm the env flags landed. First access here
-    # initialises the singleton from env; subsequent uses across
-    # adapters reuse the same instance.
-    accumulator = get_accumulator()
-    logger.info(
-        "context_window.configured",
-        enabled=accumulator.enabled,
-        window_size=accumulator.window_size,
-    )
 
     # Build kwargs for the integration function based on engine
     await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)

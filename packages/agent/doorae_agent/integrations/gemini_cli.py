@@ -317,11 +317,11 @@ async def integrate_with_gemini_cli(
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
 
-        # 3-state gate (#74). SKIP drops the message; INGEST_ONLY
-        # stashes it for the next active turn's prompt prefix;
-        # RESPOND proceeds below. Stage B promotion runs inside
-        # ``decide_policy`` via the accumulator env flag — no extra
-        # wiring needed here.
+        # 3-state gate (#74, #148). SKIP drops the message;
+        # INGEST_ONLY stashes it for the next active turn's prompt
+        # prefix; RESPOND proceeds below. The server decides ambient
+        # candidacy via ``metadata.ingest_only`` (#148 Part 3); the
+        # adapter just reacts to ``decide_policy``'s output.
         from doorae_agent.integrations.base import MessagePolicy, decide_policy
         policy = decide_policy(msg, client)
         if policy is MessagePolicy.SKIP:

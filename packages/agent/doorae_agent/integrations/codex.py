@@ -187,10 +187,10 @@ async def integrate_with_codex(
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
 
-        # 3-state gate (#74). SKIP drops; INGEST_ONLY stashes for
-        # next-turn prefix; RESPOND proceeds. Stage B promotion is
-        # decided inside ``decide_policy`` via the accumulator env
-        # flag — no extra wiring here.
+        # 3-state gate (#74, #148). SKIP drops; INGEST_ONLY stashes
+        # for next-turn prefix; RESPOND proceeds. The server decides
+        # ambient candidacy via ``metadata.ingest_only`` (#148 Part
+        # 3); the adapter just reacts to ``decide_policy``'s output.
         from doorae_agent.integrations.base import MessagePolicy, decide_policy
         policy = decide_policy(msg, client)
         if policy is MessagePolicy.SKIP:

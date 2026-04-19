@@ -52,24 +52,28 @@ unified response gate is a three-way decision:
   a `[참고] …` prefix on the next active turn, without generating a reply.
 - `SKIP` — ignore entirely.
 
-**Stage A (always on)**: broadcasts with `metadata.ingest_only=True` route
-to `INGEST_ONLY`. The room representative's `[취합 결과]` broadcast uses
-this path so every peer agent in the source room absorbs the cross-room
-synthesis without duplicate replies.
+**Server-driven stamping (#74 Stage A + #148)**: broadcasts with
+`metadata.ingest_only=True` route to `INGEST_ONLY`. Producers are:
 
-**Stage B (opt-in)**: sliding-window ambient capture. Promote would-be-SKIP
-messages (peer agents replying, humans addressing someone else in the room)
-to `INGEST_ONLY` so the window also covers unflagged ambient chatter.
-Default off — enable per-agent via environment variables:
+- The room representative's `[취합 결과]` broadcast (cross-room synthesis).
+- The cluster itself for ambient messages in rooms where
+  `context_window_enabled=True` (#148 Part 3). Admins toggle the flag per
+  room from the Edit room dialog.
 
-- `DOORAE_CONTEXT_WINDOW_ENABLED=1` — turn the ambient window on
-  (also accepts `true`/`yes`/`on`).
-- `DOORAE_CONTEXT_WINDOW_SIZE=N` — advisory window size (default 10).
+Agents can opt out per-agent via the `agents.context_window_opt_out` flag
+(surfaced as "대화 맥락 공유 제외" in `AgentSettingsMenu`); opted-out agents
+turn a received `ingest_only` broadcast into `SKIP` in `decide_policy`.
+
+**Deprecated**: the former `DOORAE_CONTEXT_WINDOW_ENABLED` /
+`DOORAE_CONTEXT_WINDOW_SIZE` environment variables from Stage B (#74 Part
+B) are removed as of #148 Part 4. The decision now lives in the cluster DB
+and takes effect the next time the agent reconnects (Part 2's UI toggle
+triggers a `bump_generation` respawn so the refresh is automatic).
 
 Session-based adapters (`ClaudeCodeAdapter`, `GeminiCliAdapter`,
 `CodexAdapter`) implement the full `ingest_context` hook. Raw-SDK adapters
 (OpenAI, Anthropic, OpenHands, Deep Agents) keep their own history
-management and inherit the base no-op; Stage B is a no-op for them.
+management and inherit the base no-op.
 
 See `docs/research/2026-04-19-multi-agent-context-injection.md` for the
 research (Intrinsic Memory Agents arXiv 2508.08997, MCP Observer/Pub-Sub
