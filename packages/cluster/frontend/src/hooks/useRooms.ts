@@ -15,7 +15,10 @@ interface Project { id: string; name: string; description?: string; }
 export interface Room {
   id: string;
   name: string;
-  project_id: string;
+  // #179 — ``null`` for DM rooms: they are no longer tied to any
+  // project so a project-delete cannot cascade them away. Regular
+  // rooms always carry a project id.
+  project_id: string | null;
   is_dm: boolean;
   // Self-referential FK into the same table. ``null`` means top-
   // level room (directly under its project); a non-null value

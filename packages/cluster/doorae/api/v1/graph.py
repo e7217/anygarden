@@ -360,7 +360,10 @@ async def _build_personal_graph(
             ).scalars().all()
         )
 
-    project_ids = {r.project_id for r in rooms_list}
+    # #179 — DM rooms carry ``project_id=NULL``; exclude them from the
+    # project fan-out so ``Project.id.in_({..., None})`` doesn't degrade
+    # into an always-false SQL predicate on some dialects.
+    project_ids = {r.project_id for r in rooms_list if r.project_id is not None}
     projects_list: list[Project] = []
     if project_ids:
         projects_list = list(

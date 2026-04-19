@@ -95,6 +95,26 @@ class TestRoomCRUD:
             assert data["is_dm"] is False
 
     @pytest.mark.asyncio
+    async def test_create_room_requires_project_id(self, room_env) -> None:
+        """#179 — Regular room creation via ``POST /api/v1/rooms`` must keep
+        ``project_id`` mandatory even after DMs can live without one.
+
+        DMs are made through the agent-creation path (``project_id=NULL``);
+        the public rooms endpoint still refuses an unowned room.
+        """
+        app = room_env["app"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/rooms",
+                json={"name": "orphan-room"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_list_rooms(self, room_env) -> None:
         app = room_env["app"]
         project = room_env["project"]

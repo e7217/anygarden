@@ -58,7 +58,10 @@ class SubRoomCreate(BaseModel):
 
 class RoomOut(BaseModel):
     id: str
-    project_id: str
+    # #179 — DM rooms live outside any project (``project_id=NULL``) so
+    # they cannot be cascade-deleted alongside an arbitrary project.
+    # Regular rooms always carry a project id; this is only None for DMs.
+    project_id: Optional[str] = None
     name: str
     description: Optional[str] = None
     parent_room_id: Optional[str] = None

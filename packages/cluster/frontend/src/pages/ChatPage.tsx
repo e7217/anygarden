@@ -105,7 +105,13 @@ export default function ChatPage() {
   const parentBreadcrumb = useMemo(() => {
     if (!currentRoom || !currentRoom.parent_room_id) return []
     const byId = new Map<string, Room>()
-    for (const r of (rooms[currentRoom.project_id] ?? [])) byId.set(r.id, r)
+    // #179 — DM rooms live outside any project (``project_id === null``).
+    // Their parent chain, if any, cannot be resolved through the
+    // project-scoped ``rooms`` map — fall through to "no breadcrumb"
+    // rather than crashing on a null index.
+    if (currentRoom.project_id) {
+      for (const r of (rooms[currentRoom.project_id] ?? [])) byId.set(r.id, r)
+    }
     const chain: { id: string; name: string }[] = []
     let cursor: string | null | undefined = currentRoom.parent_room_id
     // Cap the walk at 32 levels as a cycle-safety belt — the
@@ -195,7 +201,10 @@ export default function ChatPage() {
     return ids
   }, [participants])
 
-  const currentProjectId = currentRoom ? currentRoom.project_id : undefined
+  // #179 — DMs have ``project_id === null``; collapse null→undefined so
+  // downstream dialogs keyed on ``string | undefined`` (SearchDialog)
+  // treat a DM room the same as "no project scope".
+  const currentProjectId = currentRoom?.project_id ?? undefined
 
   const mentionUsers = useMemo<MentionOption[]>(
     () => Object.values(participants).map(p => ({
@@ -363,9 +372,11 @@ export default function ChatPage() {
       method: 'PUT',
       body: JSON.stringify({ agent_id: agentId }),
     })
-    // Refresh rooms to get updated representative_agent_id
+    // Refresh rooms to get updated representative_agent_id.
+    // #179 — DMs (project_id=null) refresh via ``fetchAgentDMs`` only;
+    // the project-scoped ``fetchRooms`` would need a non-null id.
     if (currentRoom) {
-      await fetchRooms(currentRoom.project_id)
+      if (currentRoom.project_id) await fetchRooms(currentRoom.project_id)
       if (currentRoom.is_dm) await fetchAgentDMs()
     }
   }, [selectedRoom, currentRoom, fetchRooms, fetchAgentDMs])
@@ -561,7 +572,8 @@ export default function ChatPage() {
               onOpenChange={setSubRoomDialogOpen}
               onCreated={async (newRoom) => {
                 if (currentRoom) {
-                  await fetchRooms(currentRoom.project_id)
+                  // #179 — DMs (project_id=null) refresh via fetchAgentDMs.
+                  if (currentRoom.project_id) await fetchRooms(currentRoom.project_id)
                   if (currentRoom.is_dm) await fetchAgentDMs()
                 }
                 navigate(`/rooms/${newRoom.id}`)
@@ -573,7 +585,8 @@ export default function ChatPage() {
               onOpenChange={setRoomEditOpen}
               onSaved={() => {
                 if (currentRoom) {
-                  fetchRooms(currentRoom.project_id)
+                  // #179 — DMs (project_id=null) refresh via fetchAgentDMs.
+                  if (currentRoom.project_id) fetchRooms(currentRoom.project_id)
                   if (currentRoom.is_dm) fetchAgentDMs()
                 }
               }}
