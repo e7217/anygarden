@@ -273,17 +273,56 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # surface the mismatch on every restart. Production deployments
     # that actually use MCP credentials must set the key.
     if not getattr(app.state, "mcp_template_service", None):
+        from cryptography.fernet import Fernet
+
         from doorae.mcp_templates.encryption import MCPSecrets
         from doorae.mcp_templates.service import MCPTemplateService
-        # dev_mode=True here means "accept missing key, generate
-        # ephemeral, warn loudly" — same behaviour as the JWT
-        # secret fallback above. Tests don't set the key and don't
-        # care, production operators see the warning in logs.
+
+        # Issue #138 — mirror the jwt_secret persistence pattern so
+        # local installs don't lose their MCP credentials on every
+        # restart.
+        #
+        # Resolution order:
+        #
+        # 1. ``config.mcp_secrets_key`` (from ``DOORAE_MCP_SECRETS_KEY``)
+        #    — explicit operator configuration wins.
+        # 2. ``~/.doorae/mcp_secrets_key`` file — auto-created on first
+        #    boot, reused on subsequent boots. 0o600 so the key stays
+        #    readable only by the server process's user.
+        # 3. ``from_config_key(dev_mode=config.dev)`` fallback. In dev
+        #    this generates an ephemeral key (and logs a warning); in
+        #    prod it raises ``MCPSecretsUnavailable`` so the operator
+        #    sees the problem immediately instead of on the first MCP
+        #    tool call after a restart.
+        #
+        # The file write is wrapped in ``try/except`` so a locked-down
+        # HOME (e.g. a containerized run with no writable user home)
+        # degrades to the ``from_config_key`` fallback instead of
+        # crashing.
+        mcp_key_file = doorae_dir / "mcp_secrets_key"
+        resolved_key = config.mcp_secrets_key
+        if not resolved_key:
+            try:
+                if mcp_key_file.exists():
+                    resolved_key = mcp_key_file.read_text().strip()
+                else:
+                    resolved_key = Fernet.generate_key().decode("ascii")
+                    mcp_key_file.write_text(resolved_key)
+                    mcp_key_file.chmod(0o600)
+            except OSError:
+                # Can't read or write the persistence file — let the
+                # configured fallback handle it based on ``dev`` mode.
+                resolved_key = ""
+
+        # ``dev_mode=config.dev`` — prod boot refuses a missing key.
+        # Tests default to ``dev=False`` but always pre-set
+        # ``mcp_secrets_key`` in conftest, so this path stays green
+        # for them.
         # Name this ``mcp_secrets`` (not ``secrets``) to avoid
         # shadowing the stdlib ``secrets`` module imported at the
         # top of the file.
         mcp_secrets = MCPSecrets.from_config_key(
-            config.mcp_secrets_key, dev_mode=True,
+            resolved_key, dev_mode=config.dev,
         )
         app.state.mcp_template_service = MCPTemplateService(
             app.state.session_factory,
