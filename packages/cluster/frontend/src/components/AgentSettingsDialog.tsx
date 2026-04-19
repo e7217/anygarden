@@ -64,11 +64,18 @@ interface Props {
   onRoomsChange?: () => void
 }
 
-// Small uppercase label used for every section heading. Kept as a
-// constant so the collapsible `<summary>` and the plain `<h3>` look
+// Shared heading label (11px uppercase muted). Same classes are
+// reused for the collapsible `<summary>` so both section types look
 // identical.
 const SECTION_HEADING_CLASS =
   'text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]'
+
+// Card chrome per DESIGN.md §4 "Cards & Containers": white surface,
+// whisper-weight border, 12px radius, 4-layer soft shadow, 20px
+// padding. The dialog body sits on warm-white
+// (`--color-surface-alt`) so these white cards visibly lift.
+const SECTION_CARD_CLASS =
+  'bg-white rounded-[var(--radius-lg)] border border-[var(--color-border)] shadow-card p-5'
 
 function Section({
   id,
@@ -83,7 +90,7 @@ function Section({
     <section
       aria-labelledby={`agent-settings-heading-${id}`}
       data-testid={`agent-settings-section-${id}`}
-      className="space-y-3"
+      className={`${SECTION_CARD_CLASS} space-y-3`}
     >
       <h3 id={`agent-settings-heading-${id}`} className={SECTION_HEADING_CLASS}>
         {title}
@@ -94,7 +101,7 @@ function Section({
 }
 
 /**
- * Same visual shape as `<Section>` but the body is collapsed behind a
+ * Same card chrome as `<Section>` but the body is collapsed behind a
  * native `<details>` so low-frequency sections (e.g. Activity) don't
  * steal scroll real estate from Manifest/Rooms by default. A rotating
  * chevron signals the collapsible affordance.
@@ -113,7 +120,7 @@ function CollapsibleSection({
   return (
     <details
       data-testid={`agent-settings-section-${id}`}
-      className="group"
+      className={`${SECTION_CARD_CLASS} group`}
       open={defaultOpen}
     >
       <summary
@@ -171,19 +178,14 @@ export default function AgentSettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Single scrollable body — sections stack top-to-bottom.
-            DESIGN.md §2 lists the whisper border as the primitive for
-            "cards, dividers, sections", so each section is separated
-            by a 1px seam. Inside a bounded dialog the pure-gap rhythm
-            from §6.1 reads as "sections blending together" because
-            the ambient color alternation that carries that rule on
-            full-page layouts isn't available here. Each section gets
-            py-4 (16px top + bottom) → 32px of visual spacing between
-            section contents, with the seam in the middle. First/last
-            sections drop their outer padding so the dialog edges
-            stay clean. */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="px-6 py-5 divide-y divide-[var(--color-border)] [&>section]:py-4 [&>details]:py-4 first:[&>*]:pt-0 last:[&>*]:pb-0">
+        {/* Single scrollable body — each section is a standalone
+            card (DESIGN.md §4) floating on a warm-white body
+            (DESIGN.md §5.3 "Warm alternation"). The color step
+            between white cards and the `#f6f5f4` body does the heavy
+            lifting for section separation; the 1px whisper seam tried
+            in #170 was too subtle on its own. */}
+        <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
+          <div className="px-6 py-5 space-y-3">
             <Section id="overview" title="Overview">
               <OverviewPanel agent={agent} updateAgent={updateAgent} />
             </Section>
