@@ -278,10 +278,41 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         return MessagePolicy.SKIP
 
     if strategy == "orchestrator":
-        # #159 Phase C fills in the real handoff handling. For Phase B
-        # we behave like mentioned_only so an orchestrator room with
-        # no handoff data stays addressable via explicit @-mentions.
-        pass
+        # #159 Phase C — O1/O2/O3.
+        # Base rules above already handled self-echo, [DELEGATED] /
+        # [ROOM_QUERY], ingest_only, direct mention, cycle detection,
+        # and mention-targeted-at-someone-else. So the orchestrator
+        # branch only decides the "no other rule fired" case.
+        orc_map = getattr(client, "_orchestrator_agent_id", None)
+        orc_for_room = (
+            orc_map.get(room_id)
+            if isinstance(orc_map, dict) and room_id
+            else None
+        )
+        my_agent_id = getattr(client, "_agent_id", None)
+
+        # O1: I am this room's orchestrator → RESPOND. The orchestrator
+        # owns next-speaker selection, so every turn is actionable for
+        # it — including unaddressed human messages that other workers
+        # would skip under O3.
+        if orc_for_room and my_agent_id and orc_for_room == my_agent_id:
+            return MessagePolicy.RESPOND
+
+        # O2: server stamped me as the next speaker (handoff landed
+        # successfully) → RESPOND.
+        next_speaker = metadata.get("next_speaker_participant_id")
+        if next_speaker and next_speaker in client._my_participant_ids:
+            return MessagePolicy.RESPOND
+
+        # Graceful fallback — strategy is 'orchestrator' but nobody is
+        # pinned as one yet (admin flipped the knob without picking an
+        # agent). Behave like mentioned_only so the room stays usable:
+        # fall through to rule 6/7 below.
+        if orc_for_room:
+            # O3: orchestrator is set, I'm not it, next_speaker isn't
+            # me → stay silent. This is the structural change that
+            # lets the orchestrator genuinely sequence the room.
+            return MessagePolicy.SKIP
 
     # 6. No addressable mention. Humans talking generally to the
     # room keep the historical "everyone replies" behaviour; this

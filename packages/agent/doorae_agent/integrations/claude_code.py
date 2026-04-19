@@ -64,6 +64,7 @@ class ClaudeCodeAdapter(EngineAdapter):
         agent_name: str = "ClaudeCode",
         system_prompt: str | None = None,
         model: str | None = None,
+        client: ChatClient | None = None,
     ) -> None:
         self._agent_name = agent_name
         # When ``system_prompt`` is None we leave it unset on the
@@ -88,6 +89,23 @@ class ClaudeCodeAdapter(EngineAdapter):
         # own session history keeps what we inject thereafter, so a
         # line is meant to be consumed exactly once.
         self._pending_context: dict[str, list[tuple[float, str]]] = {}
+        # Issue #159 Phase C — reference to the owning ChatClient so
+        # the in-process ``handoff_to`` tool can emit ``[HANDOFF]``
+        # markers back to the room. ``None`` preserves source-compat
+        # for call sites that construct the adapter before
+        # ``integrate_with_claude_code`` wires the client in.
+        self._client = client
+        # The ``handoff_to`` tool needs to know which room the
+        # current LLM turn belongs to, but the SDK tool_use callback
+        # fires after ``on_message`` has already returned. We stash
+        # the room id on the instance for the duration of each turn
+        # and clear it in ``finally`` so a later stray tool call
+        # can't leak cross-room.
+        self._current_room_id: str | None = None
+        # Lazily-built MCP server config — built once after ``start``
+        # imports the SDK. Kept as ``None`` when the SDK is missing
+        # so ``_build_options`` can skip the handoff wiring entirely.
+        self._handoff_server_config: Any = None
 
     async def start(self) -> None:
         """Import the claude-agent-sdk and cache the query hook."""
@@ -140,6 +158,10 @@ class ClaudeCodeAdapter(EngineAdapter):
         prefix = self._drain_pending_context(room_id)
         prompt = f"{prefix}\n\n{content}" if prefix else content
 
+        # Issue #159 Phase C — expose the current room to the
+        # ``handoff_to`` tool closure. Cleared in ``finally`` so a
+        # delayed tool_use callback can't hijack a later turn.
+        self._current_room_id = room_id
         try:
             options = self._build_options(room_id)
             reply = await self._collect_reply(prompt, options)
@@ -147,6 +169,8 @@ class ClaudeCodeAdapter(EngineAdapter):
         except Exception as exc:
             logger.error("claude_code.query_failed", error=str(exc))
             return None
+        finally:
+            self._current_room_id = None
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Stash a non-addressed message as context for the next turn.
@@ -204,6 +228,11 @@ class ClaudeCodeAdapter(EngineAdapter):
           yolo``) and codex (``approval_policy="never"``).
         - ``resume`` carries the per-room session id forward so
           follow-up messages stay in the same conversation.
+        - ``mcp_servers`` / ``allowed_tools`` (#159 Phase C) ship
+          the in-process ``handoff_to`` MCP server only when this
+          agent is the orchestrator of ``room_id``. Exposing it
+          universally would tempt the LLM to forge turn-order
+          decisions in rooms where it has no standing.
         """
         kwargs: dict[str, Any] = {
             "cwd": str(Path.cwd()),
@@ -217,7 +246,112 @@ class ClaudeCodeAdapter(EngineAdapter):
         session_id = self._sessions.get(room_id)
         if session_id is not None:
             kwargs["resume"] = session_id
+
+        if self._is_orchestrator_of(room_id):
+            self._ensure_handoff_server_config()
+            if self._handoff_server_config is not None:
+                kwargs["mcp_servers"] = {"doorae": self._handoff_server_config}
+                # Tool names route through ``mcp__<server>__<tool>``
+                # in the SDK's allow-list. Pin only what we actually
+                # register so a future addition is explicit.
+                kwargs["allowed_tools"] = ["mcp__doorae__handoff_to"]
         return self._options_cls(**kwargs)
+
+    def _is_orchestrator_of(self, room_id: str) -> bool:
+        """Check whether the owning client is the room's orchestrator.
+
+        Reads the client's ``_orchestrator_agent_id`` cache populated
+        on every welcome frame (see ``ChatClient`` in client.py).
+        Returns ``False`` when any link in the chain is missing so a
+        partially-initialised client never accidentally ships the
+        tool.
+        """
+        client = self._client
+        if client is None:
+            return False
+        my_agent_id = getattr(client, "_agent_id", None)
+        if not my_agent_id:
+            return False
+        orc_map = getattr(client, "_orchestrator_agent_id", None)
+        if not isinstance(orc_map, dict):
+            return False
+        return orc_map.get(room_id) == my_agent_id
+
+    def _ensure_handoff_server_config(self) -> None:
+        """Build the in-process MCP server config on first use.
+
+        The Claude Agent SDK ships ``tool`` / ``create_sdk_mcp_server``
+        only when the package is installed. Guarding behind
+        ``self._sdk`` keeps fallback paths (no SDK, monkeypatched
+        module) honest — absence of either helper leaves the config
+        as ``None`` and ``_build_options`` never stamps the server.
+        """
+        if self._handoff_server_config is not None:
+            return
+        sdk = self._sdk
+        if sdk is None:
+            return
+        tool_fn = getattr(sdk, "tool", None)
+        create_server_fn = getattr(sdk, "create_sdk_mcp_server", None)
+        if tool_fn is None or create_server_fn is None:
+            return
+
+        @tool_fn(
+            "handoff_to",
+            (
+                "Transfer the conversation to another room participant. "
+                "Use this when another participant is better suited to "
+                "respond next. The server converts the tool call into a "
+                "[HANDOFF] message with an <@user:{participant_id}> "
+                "mention; that participant will then take the next turn."
+            ),
+            {"participant_id": str, "reason": str},
+        )
+        async def _handoff_to(args: dict[str, Any]) -> dict[str, Any]:
+            target_pid = args.get("participant_id") if isinstance(args, dict) else None
+            reason = args.get("reason", "") if isinstance(args, dict) else ""
+            client = self._client
+            room_id = self._current_room_id
+            if (
+                not target_pid
+                or not isinstance(target_pid, str)
+                or client is None
+                or room_id is None
+            ):
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "handoff_to failed: missing participant_id or room context",
+                        }
+                    ],
+                    "is_error": True,
+                }
+            reason_str = reason if isinstance(reason, str) else ""
+            marker = f"[HANDOFF] <@user:{target_pid}> {reason_str}".rstrip()
+            await client.send(
+                room_id,
+                marker,
+                metadata={
+                    "handoff": {
+                        "target_participant_id": target_pid,
+                        "reason": reason_str,
+                    }
+                },
+            )
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Handed off to {target_pid}.",
+                    }
+                ]
+            }
+
+        self._handoff_server_config = create_server_fn(
+            name="doorae",
+            tools=[_handoff_to],
+        )
 
     async def _collect_reply(self, prompt: str, options: Any) -> str | None:
         """Drain ``query()`` and return the final user-facing reply.
@@ -320,6 +454,10 @@ async def integrate_with_claude_code(
         agent_name=config.get("name", "ClaudeCode"),
         system_prompt=config.get("system_prompt"),
         model=config.get("model"),
+        # #159 Phase C — wire the adapter to its owning client so
+        # the ``handoff_to`` tool closure can emit ``[HANDOFF]``
+        # markers when the orchestrator invokes it.
+        client=client,
     )
     await adapter.start()
 

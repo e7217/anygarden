@@ -75,6 +75,15 @@ class RoomOut(BaseModel):
     # text as background context. Part 1 only surfaces storage; Part 3
     # wires the broadcast-side logic.
     context_window_enabled: bool = False
+    # #159 Phase A — room-scoped speaker strategy. ``mentioned_only``
+    # (default) is the pre-#159 behaviour; ``round_robin`` rotates
+    # across agents; ``orchestrator`` delegates next-speaker choice to
+    # ``orchestrator_agent_id`` via the ``handoff_to`` tool call. The
+    # orchestrator pointer is a separate column from
+    # ``representative_agent_id`` so cross-room and in-room roles stay
+    # legible (decisions §3.2 A).
+    speaker_strategy: str = "mentioned_only"
+    orchestrator_agent_id: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -229,6 +238,8 @@ async def list_rooms(
                 pinned=pinned,
                 sort_order=sort_order,
                 context_window_enabled=r.context_window_enabled,
+                speaker_strategy=r.speaker_strategy,
+                orchestrator_agent_id=r.orchestrator_agent_id,
             )
         )
     return out
@@ -339,6 +350,8 @@ async def get_room(
         is_dm=room.is_dm,
         representative_agent_id=room.representative_agent_id,
         context_window_enabled=room.context_window_enabled,
+        speaker_strategy=room.speaker_strategy,
+        orchestrator_agent_id=room.orchestrator_agent_id,
         participants=participant_outs,
     )
 
@@ -525,6 +538,21 @@ class RoomUpdate(BaseModel):
     # accidentally reset the ambient-sharing flag. Explicit ``True``/
     # ``False`` toggles it.
     context_window_enabled: bool | None = None
+    # #159 Phase C — room-scoped speaker strategy. Admin-only: the
+    # handler rejects non-admin callers when either of these fields
+    # is present so a member rename PATCH still works. ``None`` means
+    # "don't touch" following the context_window pattern above.
+    speaker_strategy: str | None = None
+    orchestrator_agent_id: str | None = None
+
+
+# Strategy names accepted by the dispatcher in
+# ``doorae_agent.integrations.base.decide_policy``. The ``bidding``
+# and ``llm_judge`` values listed in plan-159 §1 are intentionally
+# excluded here — they're future work with uncertain cost profiles.
+_VALID_SPEAKER_STRATEGIES: frozenset[str] = frozenset(
+    {"mentioned_only", "round_robin", "orchestrator"}
+)
 
 
 @router.patch("/{room_id}", response_model=RoomOut)
@@ -535,17 +563,84 @@ async def update_room(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update room name, description, and/or context-window flag."""
+    """Update room metadata.
+
+    Fields split by permission tier:
+
+    - Open to every member: ``name``, ``description``,
+      ``context_window_enabled``.
+    - Admin-only (#159 Phase C): ``speaker_strategy``,
+      ``orchestrator_agent_id``. Touching either field requires
+      ``identity.is_admin`` — mirrors the DESIGN.md guidance that
+      dispatch-mode controls stay on the admin surface because a
+      mistaken flip silently reroutes who replies.
+
+    The admin gate is enforced inside the handler (not via
+    ``get_admin_identity``) so a member PATCH that only renames the
+    room stays open. Sending an admin-only field as a non-admin
+    returns ``403`` with no partial write.
+    """
     result = await db.execute(select(Room).where(Room.id == room_id))
     room = result.scalar_one_or_none()
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+
+    admin_only_fields_present = (
+        body.speaker_strategy is not None
+        or body.orchestrator_agent_id is not None
+    )
+    if admin_only_fields_present:
+        # Mirror ``get_admin_identity``'s shape but as an inline gate —
+        # using the dep directly would reject every non-admin rename
+        # too, and we want the rename surface to stay open.
+        is_admin = (
+            identity.kind == "user"
+            and identity.claims is not None
+            and getattr(identity.claims, "is_admin", False)
+        )
+        if not is_admin:
+            raise HTTPException(
+                status_code=403,
+                detail="Admin required to change speaker_strategy or orchestrator_agent_id",
+            )
+
+    if body.speaker_strategy is not None:
+        if body.speaker_strategy not in _VALID_SPEAKER_STRATEGIES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Unknown speaker_strategy — expected one of "
+                    + ", ".join(sorted(_VALID_SPEAKER_STRATEGIES))
+                ),
+            )
+
+    # Validate orchestrator agent membership up front — matches the
+    # ``set_representative`` contract so an admin can't point
+    # ``orchestrator_agent_id`` at an agent that isn't actually in
+    # the room. A ``None`` payload clears the pointer (strategy can
+    # fall back to mentioned_only behaviour downstream).
+    if body.orchestrator_agent_id is not None:
+        stmt = select(Participant).where(
+            Participant.room_id == room_id,
+            Participant.agent_id == body.orchestrator_agent_id,
+        )
+        part = (await db.execute(stmt)).scalar_one_or_none()
+        if part is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Agent is not a participant of this room",
+            )
+
     if body.name is not None:
         room.name = body.name
     if body.description is not None:
         room.description = body.description
     if body.context_window_enabled is not None:
         room.context_window_enabled = body.context_window_enabled
+    if body.speaker_strategy is not None:
+        room.speaker_strategy = body.speaker_strategy
+    if body.orchestrator_agent_id is not None:
+        room.orchestrator_agent_id = body.orchestrator_agent_id
     await db.commit()
     await db.refresh(room)
     return room
