@@ -7,8 +7,11 @@ testable in isolation.
 
 Engine formats:
 
-- **claude-code**: ``.claude/settings.json``, shape
-  ``{"mcpServers": {<name>: {command, args, env}}}``.
+- **claude-code**: ``.mcp.json`` at the workspace root, shape
+  ``{"mcpServers": {<name>: {command, args, env}}}``. Claude Code
+  2.x picks this up automatically as a project-local MCP config;
+  the legacy ``.claude/settings.json`` "mcpServers" section is
+  silently ignored and was the root cause of Issue #142.
 - **codex**: ``.codex/config.toml``, shape
   ``[mcp_servers.<name>] command = ... args = [...] [mcp_servers.<name>.env] ...``.
 - **gemini-cli**: ``.gemini/settings.json``, same JSON shape as
@@ -33,7 +36,12 @@ import tomli_w
 
 # ── Engine → file path ────────────────────────────────────────────
 
-CLAUDE_SETTINGS_PATH = ".claude/settings.json"
+# Issue #142 — workspace-root ``.mcp.json`` is the path Claude Code
+# 2.x recognizes as a project-local MCP registry. Earlier versions
+# of doorae wrote into ``.claude/settings.json`` which is only read
+# for non-MCP settings (permissions, sandbox, etc.) in 2.x, so
+# attached MCP servers were never exposed to the Claude subprocess.
+CLAUDE_SETTINGS_PATH = ".mcp.json"
 CODEX_CONFIG_PATH = ".codex/config.toml"
 GEMINI_SETTINGS_PATH = ".gemini/settings.json"
 

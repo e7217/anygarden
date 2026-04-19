@@ -24,6 +24,15 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
     ".openhands/",
 )
 
+# Issue #142 — workspace-root files that are admitted by exact
+# match (not prefix). Kept small on purpose: each entry is a path
+# engine CLIs look for at a specific location in the workspace
+# root. New entries should come with a concrete reason tied to an
+# engine requirement.
+_ALLOWED_EXACT_PATHS: frozenset[str] = frozenset({
+    ".mcp.json",  # Claude Code 2.x project-local MCP registry
+})
+
 _ALLOWED_EXTENSIONS: frozenset[str] = frozenset(
     {
         ".md", ".json", ".toml", ".txt", ".yaml", ".yml", ".env",
@@ -91,9 +100,13 @@ def validate_agent_file_path(path: str) -> None:
             f"extension {suffix!r} is not in the allowed set"
         )
 
-    if not any(path.startswith(prefix) for prefix in _ALLOWED_PREFIXES):
+    if (
+        not any(path.startswith(prefix) for prefix in _ALLOWED_PREFIXES)
+        and path not in _ALLOWED_EXACT_PATHS
+    ):
         raise AgentFilePathError(
-            f"path must start with one of {_ALLOWED_PREFIXES}"
+            f"path must start with one of {_ALLOWED_PREFIXES} "
+            f"or be an exact match of {sorted(_ALLOWED_EXACT_PATHS)}"
         )
 
     if parts[0] == "workspace":

@@ -191,7 +191,11 @@ class TestDispatcher:
 
 class TestSettingsPath:
     def test_maps_engines_to_paths(self):
-        assert settings_path_for_engine("claude-code") == ".claude/settings.json"
+        # Issue #142 — Claude Code 2.x reads project-local MCP config
+        # from .mcp.json at the workspace root, not from the
+        # .claude/settings.json "mcpServers" section (which is
+        # silently ignored). Pin the file name.
+        assert settings_path_for_engine("claude-code") == ".mcp.json"
         assert settings_path_for_engine("codex") == ".codex/config.toml"
         assert settings_path_for_engine("gemini-cli") == ".gemini/settings.json"
 
