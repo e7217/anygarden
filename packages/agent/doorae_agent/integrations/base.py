@@ -218,17 +218,13 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         return MessagePolicy.INGEST_ONLY
 
     # 5. Explicit mention list exists and does not include us →
-    # someone else is being addressed, so we stay out. This is the
-    # fix for the "every agent in the room responds" bug — rule 6
-    # below used to short-circuit it.
+    # someone else is being addressed, so we stay out. Stage B
+    # (#74) promoted peer-mention messages here to INGEST_ONLY when
+    # the local env accumulator opted in; with #148 Part 3 that
+    # decision is made server-side via ``metadata.ingest_only``
+    # (handled in rule 4 above), so we no longer need a second
+    # agent-side gate.
     if addressable:
-        # Stage B promotion (#74): a mention aimed at a peer is the
-        # canonical "ambient but informative" case. If the window
-        # is enabled, the peer's response will be relevant to us
-        # shortly — keep it available as context instead of
-        # dropping it on the floor.
-        if _ambient_capture_enabled(msg, client):
-            return MessagePolicy.INGEST_ONLY
         return MessagePolicy.SKIP
 
     # 6. No addressable mention. Humans talking generally to the
@@ -238,30 +234,11 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if not sender_is_agent:
         return MessagePolicy.RESPOND
 
-    # 7. Agent sender, no mention → skip. Stage B promotion: agent-
-    # to-agent chatter (e.g. another agent replying to the human in
-    # a shared room) is exactly the ambient signal the window is
-    # meant to capture when enabled.
-    if _ambient_capture_enabled(msg, client):
-        return MessagePolicy.INGEST_ONLY
+    # 7. Agent sender, no mention → skip. The ambient-ingestion
+    # promotion that Stage B performed here has moved to the
+    # server-side ``ingest_only`` stamp (see rule 4 and cluster
+    # ``ws/handler.py::_is_ambient_candidate``).
     return MessagePolicy.SKIP
-
-
-def _ambient_capture_enabled(
-    msg: dict[str, Any], client: ChatClient
-) -> bool:
-    """Ask the Stage B accumulator whether this would-be-SKIP
-    message should be promoted to INGEST_ONLY instead.
-
-    Import is local so the Python agent can start up even if the
-    coordination module ever fails to load: we'd rather ship the
-    original 2-state behaviour than crash every adapter.
-    """
-    try:
-        from doorae_agent.coordination.accumulator import get_accumulator
-    except ImportError:  # pragma: no cover - defensive
-        return False
-    return get_accumulator().should_capture(msg, client)
 
 
 def should_respond(msg: dict[str, Any], client: ChatClient) -> bool:

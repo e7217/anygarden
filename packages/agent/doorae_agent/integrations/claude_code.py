@@ -152,10 +152,11 @@ class ClaudeCodeAdapter(EngineAdapter):
         """Stash a non-addressed message as context for the next turn.
 
         Called by the handler when ``decide_policy`` returns
-        ``INGEST_ONLY`` — a ``[취합 결과]`` broadcast flagged with
-        ``metadata.ingest_only=True`` (Stage A) or any ambient
-        message when the Stage B accumulator is enabled. Dropped
-        silently when the message has no renderable content.
+        ``INGEST_ONLY`` — a message carrying ``metadata.ingest_only
+        =True``. Canonical producers are ``[취합 결과]`` (room_query
+        representative) and server-side ambient stamping when the
+        room has ``context_window_enabled=True`` (#148 Part 3).
+        Dropped silently when the message has no renderable content.
         """
         room_id = msg.get("room_id") or "_default"
         line = format_context_line(msg)
