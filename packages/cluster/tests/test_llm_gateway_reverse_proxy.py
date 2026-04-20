@@ -277,3 +277,151 @@ async def test_unauthenticated_request_is_rejected(gateway_env) -> None:
 
     assert resp.status_code in (401, 403)
     assert reached_upstream["flag"] is False
+
+
+# ── 6. identity-kind gate: only agent + machine reach the upstream ─────
+
+
+async def _seed_user(factory, *, is_admin: bool) -> str:
+    """Create a User row and return its id."""
+    from doorae.db.models import User
+
+    async with factory() as db:
+        user = User(
+            email=f"{'admin' if is_admin else 'regular'}@test",
+            password_hash="x",
+            is_admin=is_admin,
+        )
+        db.add(user)
+        await db.commit()
+        return user.id
+
+
+async def test_user_token_cannot_traverse_proxy(gateway_env) -> None:
+    """Issue: ``/api/v1/llm/*`` was passing any authenticated caller
+    through to the gateway, including plain users and guests, which
+    turned a leaked account into a cost-amplification vector. Admin
+    health checks use ``/api/v1/llm-gateway/models/{id}/test`` —
+    never this relay — so user tokens have no reason to reach here.
+    """
+    from doorae.auth.jwt import create_user_token
+
+    app = gateway_env["app"]
+    reached_upstream = {"flag": False}
+
+    async def handler(request: httpx.Request) -> Response:
+        reached_upstream["flag"] = True
+        return Response(200)
+
+    _install_fake_upstream(app, handler)
+
+    user_id = await _seed_user(gateway_env["factory"], is_admin=False)
+    user_jwt = create_user_token(
+        user_id=user_id, email="regular@test", is_admin=False,
+        secret=gateway_env["app"].state.config.jwt_secret,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm/v1/messages",
+            json={"model": "claude-sonnet-4-6"},
+            headers={"Authorization": f"Bearer {user_jwt}"},
+        )
+
+    assert resp.status_code == 403
+    assert reached_upstream["flag"] is False
+
+
+async def test_admin_user_token_still_cannot_traverse_proxy(gateway_env) -> None:
+    """Even admin user tokens are rejected — admin model-health checks
+    go through the dedicated ``/api/v1/llm-gateway/models/{id}/test``
+    endpoint which uses the gateway master key directly, not this
+    relay."""
+    from doorae.auth.jwt import create_user_token
+
+    app = gateway_env["app"]
+    reached_upstream = {"flag": False}
+
+    async def handler(request: httpx.Request) -> Response:
+        reached_upstream["flag"] = True
+        return Response(200)
+
+    _install_fake_upstream(app, handler)
+
+    admin_id = await _seed_user(gateway_env["factory"], is_admin=True)
+    admin_jwt = create_user_token(
+        user_id=admin_id, email="admin@test", is_admin=True,
+        secret=gateway_env["app"].state.config.jwt_secret,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm/v1/messages",
+            json={"model": "claude-sonnet-4-6"},
+            headers={"Authorization": f"Bearer {admin_jwt}"},
+        )
+
+    assert resp.status_code == 403
+    assert reached_upstream["flag"] is False
+
+
+async def test_guest_token_cannot_traverse_proxy(gateway_env) -> None:
+    """Guests are scoped to a single room chat — they have no reason
+    to issue LLM calls through the gateway. Allowing them would turn
+    a shared invite link into an open billing vector for whoever
+    picks it up."""
+    from doorae.auth.jwt import create_guest_token
+
+    app = gateway_env["app"]
+    reached_upstream = {"flag": False}
+
+    async def handler(request: httpx.Request) -> Response:
+        reached_upstream["flag"] = True
+        return Response(200)
+
+    _install_fake_upstream(app, handler)
+
+    # Create a guest JWT bound to any room id (the proxy shouldn't
+    # care which room; it rejects before inspecting claims). The
+    # guest token factory requires a matching User row because
+    # ``get_identity`` looks the guest user up by id on every call.
+    from datetime import datetime, timedelta, timezone
+    from doorae.db.models import User
+
+    async with gateway_env["factory"]() as db:
+        # Guests are users with email=NULL / password_hash=NULL per
+        # the §11 design; the JWT ``is_guest`` claim is what makes the
+        # identity resolver classify them as guests.
+        guest_user = User(
+            email=None,
+            password_hash=None,
+            display_name="Guest Alice",
+        )
+        db.add(guest_user)
+        await db.commit()
+        guest_id = guest_user.id
+
+    guest_jwt = create_guest_token(
+        user_id=guest_id,
+        room_id="any-room",
+        invite_id="invite-xyz",
+        display_name="Guest Alice",
+        secret=gateway_env["app"].state.config.jwt_secret,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm/v1/messages",
+            json={"model": "claude-sonnet-4-6"},
+            headers={"Authorization": f"Bearer {guest_jwt}"},
+        )
+
+    assert resp.status_code == 403
+    assert reached_upstream["flag"] is False
