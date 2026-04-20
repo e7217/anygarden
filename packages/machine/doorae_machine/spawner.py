@@ -420,26 +420,6 @@ class Spawner:
                     mode=0o600,
                 )
 
-        # --- Ensure .codex/ directory exists for codex engine ---------
-        # The codex CLI / app-server reads its config exclusively from
-        # ``$CODEX_HOME/config.toml`` (default ``~/.codex/config.toml``)
-        # — it does NOT walk cwd looking for a project-local
-        # ``.codex/config.toml`` the way claude-code does with
-        # ``.mcp.json`` or gemini-cli does with ``.gemini/settings.json``.
-        # ``Spawner.spawn`` redirects ``CODEX_HOME`` at the per-agent
-        # ``.codex/`` path so the MCP server overlay the cluster wrote
-        # to ``.codex/config.toml`` is actually picked up. For agents
-        # with no MCP templates attached the file-write loop above
-        # didn't create the directory, so we do it here to keep
-        # ``CODEX_HOME`` pointing at an existing directory — codex
-        # writes auth.json, history.jsonl, and session state into this
-        # dir during the turn, and a missing dir would cause the
-        # app-server to fail opaquely at first-turn time.
-        if msg.engine == "codex":
-            codex_home = agent_root / ".codex"
-            codex_home.mkdir(parents=True, exist_ok=True)
-            os.chmod(codex_home, 0o700)
-
         # engine_secrets is NOT rendered to disk — it flows into the
         # subprocess environment via ``Spawner.spawn`` (#184). Writing
         # an ``.env`` file here would re-expose the plaintext keys to
@@ -647,17 +627,34 @@ class Spawner:
         env = os.environ.copy()
         env["DOORAE_TOKEN"] = msg.agent_token
 
-        # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` so the
-        # codex app-server picks up the MCP server overlay doorae
-        # materialized at ``<agent_root>/.codex/config.toml``. Codex
-        # resolves config exclusively from ``$CODEX_HOME`` and does
-        # NOT fall back to cwd-local ``.codex/`` discovery the way
-        # claude-code (``.mcp.json``) and gemini-cli (``.gemini/``)
-        # do — without this redirect, the MCP templates attached in
-        # the admin UI are silently ignored because codex reads the
-        # host's ``~/.codex/config.toml`` instead. Each agent also
-        # gets isolated auth.json / session state as a side benefit.
-        if msg.engine == "codex" and agent_root is not None:
+        # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` ONLY when
+        # the manifest actually carries a codex overlay (MCP templates
+        # or admin-authored ``.codex/config.toml``). Codex resolves its
+        # config exclusively from ``$CODEX_HOME/config.toml`` and does
+        # NOT walk cwd for a project-local ``.codex/`` the way
+        # claude-code (``.mcp.json``) and gemini-cli (``.gemini/``) do,
+        # so without this redirect the MCP overlay is silently ignored.
+        #
+        # BUT unconditional redirection regresses the supported
+        # host-auth startup path: a codex agent with no overlay and no
+        # ``engine_secrets`` API key relies on the host user's
+        # ``~/.codex/auth.json`` (codex ChatGPT login) plus any
+        # host-level config. Pointing ``CODEX_HOME`` at an empty
+        # per-agent ``.codex/`` strips both and makes the agent fail
+        # to authenticate at first-turn time. Scoping the redirect to
+        # "overlay present" preserves host-auth for agents that never
+        # needed per-agent config in the first place, while agents
+        # that opt into MCP implicitly also opt into per-agent auth
+        # (typically via ``engine_secrets``/LLM gateway — the usual
+        # doorae model for MCP-enabled agents).
+        has_codex_overlay = any(
+            path.startswith(".codex/") for path in msg.files
+        )
+        if (
+            msg.engine == "codex"
+            and agent_root is not None
+            and has_codex_overlay
+        ):
             env["CODEX_HOME"] = str(agent_root / ".codex")
 
         # The daemon's own server URL is authoritative — it's the address the

@@ -357,34 +357,17 @@ class TestMaterializeFresh:
         assert not (agent_root / ".codex" / ".env").exists()
         assert not (agent_root / ".claude" / ".env").exists()
 
-    def test_codex_engine_always_has_codex_dir(self, spawner: Spawner) -> None:
-        """MCP 템플릿이 없어도 codex 엔진은 per-agent ``.codex/``
-        디렉토리를 가져야 한다. spawner가 이 경로를 ``CODEX_HOME``
-        으로 주입하기 때문에, 디렉토리가 없으면 codex app-server가
-        사용자 홈의 ``~/.codex/`` 로 fallback 해버려 doorae가 materialize
-        한 MCP 설정을 무시하게 된다 (이슈: agent01-codex MCP 미연동).
+    def test_codex_engine_does_not_create_empty_codex_dir(
+        self, spawner: Spawner
+    ) -> None:
+        """codex 엔진이라도 ``.codex/*`` 오버레이가 없으면 빈
+        디렉토리를 남기지 않는다. ``CODEX_HOME`` 리다이렉트는
+        오버레이 유무로 스코핑되기 때문에(``spawn()`` 참조), 빈
+        디렉토리를 강제 생성하면 host ``~/.codex/auth.json`` 기반
+        스타트업 경로를 일관적으로 깨뜨리게 된다.
         """
         agent_root = spawner._materialize_agent_dir(
             _msg(engine="codex", files={})
-        )
-
-        codex_home = agent_root / ".codex"
-        assert codex_home.is_dir()
-        # 0o700 — engine_secrets나 codex auth 토큰이 여기에 떨어지므로
-        # 다른 호스트 사용자로부터 격리해야 한다.
-        assert codex_home.stat().st_mode & 0o777 == 0o700
-
-    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli", "openhands"])
-    def test_non_codex_engines_do_not_get_empty_codex_dir(
-        self, spawner: Spawner, engine: str
-    ) -> None:
-        """``.codex/`` 디렉토리는 codex 엔진 전용 시그널이다. 다른
-        엔진에서 빈 ``.codex/`` 가 남으면 prune 일관성이 깨지고
-        ``CODEX_HOME`` 주입 로직이 엔진별로 갈라지는 것에 대한
-        디스크 레벨의 가드 역할을 한다.
-        """
-        agent_root = spawner._materialize_agent_dir(
-            _msg(engine=engine, files={})
         )
         assert not (agent_root / ".codex").exists()
 
@@ -511,13 +494,6 @@ class TestMaterializePrune:
     def test_prune_wipes_engine_config_when_removed(
         self, spawner: Spawner
     ) -> None:
-        """MCP 템플릿이 떨어져 나가면 해당 ``.codex/config.toml`` 은
-        사라져야 한다. 단, ``.codex/`` 디렉토리 자체는 codex 엔진에
-        대해 ``CODEX_HOME`` 목적지로 남아있어야 한다 (빈 채로라도).
-        다른 엔진에 대해서는 디렉토리까지 통째로 사라져야 한다 —
-        ``test_prune_wipes_codex_dir_for_non_codex_engine`` 참조.
-        """
-        # 기본 엔진은 codex (``_msg`` default)
         spawner._materialize_agent_dir(
             _msg(files={".codex/config.toml": "old"})
         )
@@ -525,24 +501,9 @@ class TestMaterializePrune:
         agent_root = spawner._materialize_agent_dir(_msg(files={}))
 
         assert not (agent_root / ".codex" / "config.toml").exists()
-        # codex 엔진이므로 빈 디렉토리는 재생성되어야 한다
-        assert (agent_root / ".codex").is_dir()
-
-    def test_prune_wipes_codex_dir_for_non_codex_engine(
-        self, spawner: Spawner
-    ) -> None:
-        """codex 엔진이 아니라면 ``.codex/`` 디렉토리는 흔적 없이
-        사라져야 한다. prune 일관성 + 디스크 노이즈 방지.
-        """
-        spawner._materialize_agent_dir(
-            _msg(engine="claude-code", files={".codex/config.toml": "old"})
-        )
-
-        agent_root = spawner._materialize_agent_dir(
-            _msg(engine="claude-code", files={})
-        )
-
-        assert not (agent_root / ".codex" / "config.toml").exists()
+        # The empty .codex/ dir is also gone — no engine-specific
+        # re-seed keeps it around, which is important so codex agents
+        # without an overlay can fall back to host ``~/.codex/``.
         assert not (agent_root / ".codex").exists()
 
     def test_prune_removes_stale_symlinks(self, spawner: Spawner) -> None:
