@@ -339,6 +339,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             machine_bus=app.state.machine_bus,
             server_url=server_url,
             mcp_template_service=app.state.mcp_template_service,
+            llm_gateway_enabled=config.llm_gateway_enabled,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state

@@ -37,6 +37,7 @@ class AgentLifecycle:
         server_url: str = "",
         *,
         mcp_template_service=None,
+        llm_gateway_enabled: bool = False,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -47,6 +48,15 @@ class AgentLifecycle:
         # skips the MCP overlay step entirely (no-op for agents that
         # have no instances attached anyway).
         self._mcp_template_service = mcp_template_service
+        # #197 — When true, ``_build_sync_frame`` injects
+        # ``ANTHROPIC_BASE_URL`` / ``OPENAI_BASE_URL`` (pointing at this
+        # server's ``/api/v1/llm`` reverse proxy) plus a sentinel for
+        # the agent's own doorae token under ``engine_secrets``. The
+        # machine daemon substitutes the sentinel with the live agent
+        # token before piping to the agent's stdin, so the server
+        # doesn't have to know the plaintext token (which it cannot
+        # — only the hash is stored after grant).
+        self._llm_gateway_enabled = llm_gateway_enabled
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -470,6 +480,8 @@ class AgentLifecycle:
             for name, desc in sub_result.all():
                 sub_rooms_info.append({"name": name, "description": desc})
 
+        engine_secrets = self._build_gateway_engine_secrets(agent.engine)
+
         return {
             "type": "sync_desired_state",
             "agent_id": agent.id,
@@ -481,7 +493,7 @@ class AgentLifecycle:
             "rooms": rooms,
             "agents_md": agent.agents_md,
             "files": files_map,
-            "engine_secrets": {},
+            "engine_secrets": engine_secrets,
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
             "sub_rooms": sub_rooms_info,
@@ -494,3 +506,62 @@ class AgentLifecycle:
             # SpawnManifest default of ``"python"``.
             "runtime": getattr(agent, "runtime", "python") or "python",
         }
+
+    # Sentinel the machine spawner expands to the agent's own doorae
+    # token just before piping engine_secrets to the agent's stdin.
+    # Kept as a module-level constant so the machine-side test can
+    # import and assert on the exact value rather than duplicating a
+    # literal string. See packages/machine/doorae_machine/spawner.py.
+    AGENT_TOKEN_SENTINEL = "@DOORAE_AGENT_TOKEN"
+
+    def _build_gateway_engine_secrets(self, engine: str) -> dict[str, str]:
+        """Populate ``engine_secrets`` for the LLM gateway when enabled.
+
+        Returns ``{}`` when the feature flag is off so machines running
+        against the pre-gateway contract see no behaviour change.
+        When on, returns the env vars the per-engine SDK / CLI reads
+        for credential discovery — plus the sentinel value
+        ``@DOORAE_AGENT_TOKEN`` for the auth header, which the machine
+        spawner substitutes with the live plaintext agent token. The
+        server can't supply that plaintext itself because tokens are
+        stored as argon2 hashes after grant.
+        """
+        if not self._llm_gateway_enabled:
+            return {}
+
+        base = self._http_base_url()
+        if not base:
+            # Without a reachable HTTP base we can't point agents at the
+            # gateway. Leave engine_secrets empty so the agent falls
+            # back to whatever it had before the flag got flipped on.
+            return {}
+
+        if engine == "claude-code":
+            return {
+                "ANTHROPIC_BASE_URL": f"{base}/api/v1/llm",
+                "ANTHROPIC_AUTH_TOKEN": self.AGENT_TOKEN_SENTINEL,
+            }
+        if engine == "codex":
+            return {
+                "OPENAI_BASE_URL": f"{base}/api/v1/llm/v1",
+                "OPENAI_API_KEY": self.AGENT_TOKEN_SENTINEL,
+            }
+        # Engines without a known env-var contract (openhands,
+        # deepagents, gemini-cli) keep using their existing host-level
+        # credential paths until follow-up wiring lands.
+        return {}
+
+    def _http_base_url(self) -> str:
+        """Return the gateway's http(s) URL derived from ``_server_url``.
+
+        ``_server_url`` is the WebSocket dial URL the server tells
+        daemons to reconnect through (e.g. ``ws://host:8000``). Strip
+        the ``ws`` prefix so agents can reach ``/api/v1/llm/*`` over
+        plain HTTP.
+        """
+        url = self._server_url or ""
+        if url.startswith("ws://"):
+            return "http://" + url[len("ws://"):]
+        if url.startswith("wss://"):
+            return "https://" + url[len("wss://"):]
+        return url
