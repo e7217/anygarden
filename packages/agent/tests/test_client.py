@@ -140,6 +140,49 @@ class TestChatClientSend:
         assert "_nonce" in sent["metadata"]  # Self-echo filter nonce
 
 
+class TestWebSocketKeepalive:
+    """Issue #190 — codex turns can legitimately run 5+ minutes; the
+    websockets library's default ``ping_interval=20, ping_timeout=20``
+    closed the connection mid-run, so the adapter's post-turn
+    ``client.send`` hit a dead socket and the answer was silently
+    dropped. Regression: lock the adapter's ws_connect call to values
+    that tolerate a full ``_CODEX_TURN_TIMEOUT`` (600s) turn."""
+
+    @pytest.mark.asyncio
+    async def test_room_loop_passes_extended_keepalive_kwargs(self) -> None:
+        client = ChatClient("ws://localhost:8000", token="t")
+        # ``_running=False`` lets the reconnect loop break immediately
+        # after the first ws_connect attempt raises — the production
+        # code keeps reconnecting forever, which is exactly what we
+        # don't want in a unit test.
+        client._running = False
+
+        captured: dict[str, object] = {}
+
+        def fake_ws_connect(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            # Any raised exception works: the reconnect loop catches
+            # all exceptions, logs, then checks ``_running`` to decide
+            # whether to retry. Raising ensures we never try to iterate
+            # a fake socket.
+            raise RuntimeError("stop-loop")
+
+        with patch("doorae_agent.client.ws_connect", side_effect=fake_ws_connect):
+            # Should return cleanly because _running is False.
+            await client._room_loop("room-1")
+
+        assert captured, "ws_connect was never called — loop didn't run"
+        assert captured["kwargs"].get("ping_interval") == 60, (
+            "ping_interval must be >=60s so codex's multi-minute turns don't "
+            "trip the websockets client keepalive"
+        )
+        assert captured["kwargs"].get("ping_timeout") == 600, (
+            "ping_timeout must cover the adapter's _CODEX_TURN_TIMEOUT so a "
+            "slow server pong doesn't tear down a still-working connection"
+        )
+
+
 class TestIsTaskInitContent:
     """Issue #67 — ``_is_task_init_content`` identifies task boundaries
     that should reset the agent-only turn counter."""

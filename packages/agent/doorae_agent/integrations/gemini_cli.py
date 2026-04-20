@@ -55,9 +55,11 @@ from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
 
-# Gemini CLI call timeout. Matches the codex adapter (120s) so long
-# tool runs don't get chopped; shorter timeouts bite under real tool
-# use where retrieval + reasoning can take a minute.
+# Gemini CLI call timeout. The codex adapter (Issue #190) uses 600s
+# because its tool turns can reason for several minutes; gemini's
+# shorter 120s fits its faster turn profile. Shorter timeouts than
+# this bite under real tool use where retrieval + reasoning can take
+# a minute.
 _GEMINI_TIMEOUT = 120
 
 
