@@ -15,6 +15,7 @@ from typing import Any
 
 import structlog
 
+from doorae_agent import secrets as agent_secrets
 from doorae_agent.client import ChatClient
 from doorae_agent.coordination.pending_context import (
     append_context_line,
@@ -24,6 +25,18 @@ from doorae_agent.coordination.pending_context import (
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
+
+
+# #197 — OpenAI-SDK env var names the codex SDK and its app-server
+# subprocess consume during construction. When doorae's LLM gateway
+# is enabled, the manifest carries per-agent values for these under
+# ``engine_secrets`` (see :mod:`doorae_agent.secrets`); we surface
+# them into ``os.environ`` around ``Codex()`` construction so both
+# the Python client and the spawned app-server pick them up.
+_OPENAI_SDK_ENV_KEYS = (
+    "OPENAI_BASE_URL",
+    "OPENAI_API_KEY",
+)
 
 
 # Issue #190 — upper bound on a single codex turn. The SDK's
@@ -197,7 +210,16 @@ class CodexAdapter(EngineAdapter):
             )
             return
 
-        self._codex = Codex()
+        # #197 — ``Codex()`` reads ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``
+        # at construction and also spawns the codex app-server subprocess
+        # which inherits the current env. Surfacing the gateway values
+        # only for this call keeps them out of the long-running agent's
+        # ``/proc/self/environ`` while still letting both the client and
+        # its spawned app-server discover them. When ``engine_secrets``
+        # carries no such keys, ``secrets_in_env`` is a no-op and the
+        # SDK falls back to the host's default env / auth file discovery.
+        with agent_secrets.secrets_in_env(list(_OPENAI_SDK_ENV_KEYS)):
+            self._codex = Codex()
         self._thread_options_cls = ThreadStartOptions
 
         # Issue #190 — install the parse_notification shim *after* the

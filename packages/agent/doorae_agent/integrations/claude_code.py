@@ -31,6 +31,7 @@ from typing import Any
 
 import structlog
 
+from doorae_agent import secrets as agent_secrets
 from doorae_agent.client import ChatClient
 from doorae_agent.coordination.pending_context import (
     PENDING_CONTEXT_MAX as _PENDING_CONTEXT_MAX,
@@ -40,6 +41,19 @@ from doorae_agent.coordination.pending_context import (
     format_context_line,
 )
 from doorae_agent.integrations.base import EngineAdapter
+
+
+# #197 — Anthropic-SDK env var names the claude-agent-sdk reads when
+# discovering credentials. When the admin has configured doorae's LLM
+# gateway, the manifest carries per-agent values for these under
+# ``engine_secrets``; we bridge them into ``os.environ`` only for the
+# duration of the SDK call so a stray tool (Bash, Read) inside the
+# agent can't read them off ``/proc/self/environ`` between turns.
+_ANTHROPIC_SDK_ENV_KEYS = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -379,47 +393,59 @@ class ClaudeCodeAdapter(EngineAdapter):
         result_field: str | None = None
         session_id: str | None = None
 
-        async for message in self._query_fn(prompt=prompt, options=options):
-            msg_type = type(message).__name__
+        # #197 — Place the gateway env vars in ``os.environ`` only for
+        # the duration of the SDK call. The claude-agent-sdk reads
+        # ``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_AUTH_TOKEN`` /
+        # ``ANTHROPIC_API_KEY`` from the environment when it constructs
+        # its HTTP client; outside this context manager they stay in
+        # the private ``agent_secrets`` module so tool invocations
+        # (Bash, Read) can't exfiltrate them via ``/proc/self/environ``.
+        # If ``engine_secrets`` carried no such keys (operator hasn't
+        # enabled the gateway for this agent), ``secrets_in_env`` is a
+        # no-op and the SDK falls through to its default env / Bedrock
+        # / Vertex discovery as before.
+        with agent_secrets.secrets_in_env(list(_ANTHROPIC_SDK_ENV_KEYS)):
+            async for message in self._query_fn(prompt=prompt, options=options):
+                msg_type = type(message).__name__
 
-            sid = getattr(message, "session_id", None)
-            if sid is not None:
-                session_id = sid
+                sid = getattr(message, "session_id", None)
+                if sid is not None:
+                    session_id = sid
 
-            # Only harvest text from AssistantMessage content blocks,
-            # and only from TextBlock (skip tool use/result/thinking).
-            if msg_type == "AssistantMessage":
-                content = getattr(message, "content", None) or []
-                for block in content:
-                    block_type = type(block).__name__
-                    # Issue #144 — observability: emit which tools
-                    # Claude actually invokes so MCP wiring issues are
-                    # diagnosable from structlog alone. ``input`` keys
-                    # only (no values) because MCP tool arguments
-                    # routinely carry secrets / PII (tokens, emails,
-                    # repo names) — a full dump would leak credentials
-                    # into log aggregators. Key names are enough to
-                    # confirm the call happened and the shape was
-                    # correct.
-                    if block_type == "ToolUseBlock":
-                        logger.info(
-                            "claude_code.tool_use",
-                            tool_name=getattr(block, "name", None),
-                            input_keys=list(
-                                (getattr(block, "input", None) or {}).keys()
-                            ),
-                        )
-                        continue
-                    if block_type != "TextBlock":
-                        continue
-                    text = getattr(block, "text", None)
-                    if isinstance(text, str) and text.strip():
-                        text_parts.append(text)
+                # Only harvest text from AssistantMessage content blocks,
+                # and only from TextBlock (skip tool use/result/thinking).
+                if msg_type == "AssistantMessage":
+                    content = getattr(message, "content", None) or []
+                    for block in content:
+                        block_type = type(block).__name__
+                        # Issue #144 — observability: emit which tools
+                        # Claude actually invokes so MCP wiring issues are
+                        # diagnosable from structlog alone. ``input`` keys
+                        # only (no values) because MCP tool arguments
+                        # routinely carry secrets / PII (tokens, emails,
+                        # repo names) — a full dump would leak credentials
+                        # into log aggregators. Key names are enough to
+                        # confirm the call happened and the shape was
+                        # correct.
+                        if block_type == "ToolUseBlock":
+                            logger.info(
+                                "claude_code.tool_use",
+                                tool_name=getattr(block, "name", None),
+                                input_keys=list(
+                                    (getattr(block, "input", None) or {}).keys()
+                                ),
+                            )
+                            continue
+                        if block_type != "TextBlock":
+                            continue
+                        text = getattr(block, "text", None)
+                        if isinstance(text, str) and text.strip():
+                            text_parts.append(text)
 
-            elif msg_type == "ResultMessage":
-                result = getattr(message, "result", None)
-                if isinstance(result, str) and result.strip():
-                    result_field = result
+                elif msg_type == "ResultMessage":
+                    result = getattr(message, "result", None)
+                    if isinstance(result, str) and result.strip():
+                        result_field = result
 
         if session_id is not None:
             # Caller (integrate_with_claude_code) promotes this
