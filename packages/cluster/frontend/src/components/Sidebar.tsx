@@ -21,7 +21,7 @@ import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug,
+  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug, Waypoints,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -724,6 +724,17 @@ export default function Sidebar({
             >
               <Plug className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
               MCP Servers
+            </button>
+            <button
+              onClick={() => go('/admin/llm-gateway')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname.startsWith('/admin/llm-gateway')
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <Waypoints className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              LLM Gateway
             </button>
             <button
               onClick={() => go('/topology')}
