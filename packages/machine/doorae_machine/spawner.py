@@ -627,6 +627,36 @@ class Spawner:
         env = os.environ.copy()
         env["DOORAE_TOKEN"] = msg.agent_token
 
+        # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` ONLY when
+        # the manifest actually carries a codex overlay (MCP templates
+        # or admin-authored ``.codex/config.toml``). Codex resolves its
+        # config exclusively from ``$CODEX_HOME/config.toml`` and does
+        # NOT walk cwd for a project-local ``.codex/`` the way
+        # claude-code (``.mcp.json``) and gemini-cli (``.gemini/``) do,
+        # so without this redirect the MCP overlay is silently ignored.
+        #
+        # BUT unconditional redirection regresses the supported
+        # host-auth startup path: a codex agent with no overlay and no
+        # ``engine_secrets`` API key relies on the host user's
+        # ``~/.codex/auth.json`` (codex ChatGPT login) plus any
+        # host-level config. Pointing ``CODEX_HOME`` at an empty
+        # per-agent ``.codex/`` strips both and makes the agent fail
+        # to authenticate at first-turn time. Scoping the redirect to
+        # "overlay present" preserves host-auth for agents that never
+        # needed per-agent config in the first place, while agents
+        # that opt into MCP implicitly also opt into per-agent auth
+        # (typically via ``engine_secrets``/LLM gateway — the usual
+        # doorae model for MCP-enabled agents).
+        has_codex_overlay = any(
+            path.startswith(".codex/") for path in msg.files
+        )
+        if (
+            msg.engine == "codex"
+            and agent_root is not None
+            and has_codex_overlay
+        ):
+            env["CODEX_HOME"] = str(agent_root / ".codex")
+
         # The daemon's own server URL is authoritative — it's the address the
         # daemon is connected to right now, so it's guaranteed reachable from
         # this host. Fall back to the frame-supplied URL only if the daemon

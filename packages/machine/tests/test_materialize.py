@@ -357,6 +357,20 @@ class TestMaterializeFresh:
         assert not (agent_root / ".codex" / ".env").exists()
         assert not (agent_root / ".claude" / ".env").exists()
 
+    def test_codex_engine_does_not_create_empty_codex_dir(
+        self, spawner: Spawner
+    ) -> None:
+        """codex 엔진이라도 ``.codex/*`` 오버레이가 없으면 빈
+        디렉토리를 남기지 않는다. ``CODEX_HOME`` 리다이렉트는
+        오버레이 유무로 스코핑되기 때문에(``spawn()`` 참조), 빈
+        디렉토리를 강제 생성하면 host ``~/.codex/auth.json`` 기반
+        스타트업 경로를 일관적으로 깨뜨리게 된다.
+        """
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="codex", files={})
+        )
+        assert not (agent_root / ".codex").exists()
+
 
 class TestMaterializePrune:
     """Re-running materialize with a different manifest must converge
@@ -487,7 +501,9 @@ class TestMaterializePrune:
         agent_root = spawner._materialize_agent_dir(_msg(files={}))
 
         assert not (agent_root / ".codex" / "config.toml").exists()
-        # The empty .codex/ dir is also gone
+        # The empty .codex/ dir is also gone — no engine-specific
+        # re-seed keeps it around, which is important so codex agents
+        # without an overlay can fall back to host ``~/.codex/``.
         assert not (agent_root / ".codex").exists()
 
     def test_prune_removes_stale_symlinks(self, spawner: Spawner) -> None:

@@ -386,6 +386,137 @@ class TestSpawn:
         assert result.success is True
         assert captured_env.get("DOORAE_TOKEN") == "secret-token-xyz"
 
+    async def test_spawn_sets_codex_home_when_codex_overlay_present(
+        self, spawner: Spawner, tmp_path: Path
+    ) -> None:
+        """codex 엔진 + ``.codex/*`` 오버레이(MCP 템플릿 또는 admin
+        커스텀 config) 조합에서는 ``CODEX_HOME`` 을 per-agent
+        ``.codex/`` 로 리다이렉트해야 한다. 빼먹으면 codex app-server
+        가 호스트 ``~/.codex/config.toml`` 로 fallback 하고 doorae 가
+        쓴 MCP 오버레이가 silently 무시된다.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-codex",
+            engine="codex",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={
+                ".codex/config.toml": (
+                    "[mcp_servers.demo]\ncommand = \"npx\"\nargs = [\"x\"]\n"
+                ),
+            },
+        )
+
+        captured_env: dict[str, str] = {}
+
+        async def mock_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return _mock_proc()
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        expected = str(spawner._agent_dirs_root / "agent-codex" / ".codex")
+        assert captured_env.get("CODEX_HOME") == expected
+        # materialize 의 파일-쓰기 루프가 ``.codex/config.toml`` 을
+        # 쓰면서 부모 디렉토리까지 함께 생성한다. CODEX_HOME 이
+        # 가리키는 디렉토리에 codex 가 런타임에 auth.json/history
+        # 를 쓸 수 있어야 하므로 존재 가드.
+        assert Path(expected).is_dir()
+
+    async def test_spawn_does_not_set_codex_home_without_codex_overlay(
+        self, spawner: Spawner
+    ) -> None:
+        """회귀 가드: codex 엔진이라도 ``.codex/*`` 오버레이가
+        없으면 ``CODEX_HOME`` 을 건드리지 않아야 한다. 이 경우 codex
+        는 호스트 ``~/.codex/config.toml`` + ``~/.codex/auth.json``
+        (ChatGPT 로그인) 에 의존하는 정상 스타트업 경로를 타야 한다.
+        무조건 리다이렉트는 auth 없는 빈 per-agent ``.codex/`` 로
+        codex 를 밀어넣어 인증 실패를 유발한다.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-codex-hostauth",
+            engine="codex",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={},
+        )
+
+        captured_env: dict[str, str] = {}
+
+        async def mock_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return _mock_proc()
+
+        # Strip ambient CODEX_HOME so the test does not false-pass by
+        # inheriting a host-level value.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CODEX_HOME", None)
+            with patch(
+                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                side_effect=mock_exec,
+            ), patch(
+                "doorae_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/doorae-agent",
+            ):
+                result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert "CODEX_HOME" not in captured_env
+
+    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli", "openhands"])
+    async def test_spawn_does_not_set_codex_home_for_other_engines(
+        self, spawner: Spawner, engine: str
+    ) -> None:
+        """``CODEX_HOME`` 리다이렉트는 codex 엔진에서만 발생해야 한다.
+        다른 엔진에 대해 주입되면 사용자 호스트의 ``~/.codex/`` 를
+        우연히 건드리거나, 존재하지 않는 디렉토리를 가리켜 해당 엔진의
+        동작에 간섭할 수 있다. 오버레이가 있든 없든 non-codex 엔진
+        이면 무조건 스킵.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-other",
+            engine=engine,
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={".codex/config.toml": "[x]\n"} if engine != "openhands" else {},
+        )
+
+        captured_env: dict[str, str] = {}
+
+        async def mock_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return _mock_proc()
+
+        # Strip ambient CODEX_HOME so the test does not false-pass by
+        # inheriting a host-level value.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CODEX_HOME", None)
+            with patch(
+                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                side_effect=mock_exec,
+            ), patch(
+                "doorae_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/doorae-agent",
+            ):
+                result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert "CODEX_HOME" not in captured_env
+
     async def test_spawn_typescript_runtime_uses_doorae_agent_ts_when_on_path(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:
