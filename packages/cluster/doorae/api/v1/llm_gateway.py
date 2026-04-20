@@ -9,7 +9,8 @@ concerns share the router:
   relying on it.
 - **Secrets** (``/secrets``) — CRUD over ``LLMGatewaySecret`` with
   Fernet-at-rest (shared ``DOORAE_MCP_SECRETS_KEY``, see ADR-004).
-  List responses mask the plaintext; rotate overwrites in place.
+  List responses mask the plaintext; PATCH overwrites the stored
+  value in place (UI labels this action "Edit").
 - **Runtime** (``/status``, ``/apply``, ``/restart``, ``/usage``) —
   inspect and control the supervised LiteLLM subprocess and query
   the usage table the reverse proxy writes to.
@@ -399,7 +400,7 @@ async def create_secret(
     if existing is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"Secret '{body.env_var_name}' already exists — use PATCH to rotate",
+            detail=f"Secret '{body.env_var_name}' already exists — use PATCH to update the value",
         )
 
     secrets_svc = _get_gateway_secrets(request)
@@ -421,20 +422,28 @@ async def create_secret(
 
 
 @router.patch("/secrets/{env_var_name}", response_model=SecretOut)
-async def rotate_secret(
+async def update_secret(
     env_var_name: str,
     body: SecretUpdate,
     request: Request,
     identity: Identity = Depends(get_admin_identity),  # noqa: ARG001
     db: AsyncSession = Depends(get_db),
 ) -> SecretOut:
+    """Overwrite the stored value for ``env_var_name``.
+
+    The UI surfaces this as an "Edit" action. Any previous test
+    result is invalidated since the new value has not been verified
+    against the upstream provider yet.
+    """
     row = await db.get(LLMGatewaySecret, env_var_name)
     if row is None:
         raise HTTPException(status_code=404, detail="Secret not found")
 
     secrets_svc = _get_gateway_secrets(request)
     row.encrypted_value = secrets_svc.encrypt_dict({"v": body.value})
-    # Rotation invalidates the previous test result.
+    # The previous test result described a different value — drop it
+    # so the UI doesn't show a stale green "Valid" badge against a
+    # key that has not actually been tried.
     row.last_tested_at = None
     row.last_test_status = None
     await db.commit()
