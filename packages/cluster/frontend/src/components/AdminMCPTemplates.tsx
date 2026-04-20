@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
-import { Plug, Plus, Trash2, RefreshCw, Link as LinkIcon, X } from 'lucide-react'
+import { Plug, Plus, Trash2, RefreshCw, Link as LinkIcon, X, Eye, EyeOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
 import {
@@ -333,6 +333,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
     eligibleAgents[0]?.id ?? null,
   )
   const [envValues, setEnvValues] = useState<Record<string, string>>({})
+  const [showValues, setShowValues] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -426,18 +427,35 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
                 </div>
               )}
 
-              {template.required_env_vars.map(varName => (
-                <div key={varName}>
-                  <Label htmlFor={`mcp-env-${varName}`}>{varName}</Label>
-                  <Input
-                    id={`mcp-env-${varName}`}
-                    type="password"
-                    autoComplete="off"
-                    value={envValues[varName] ?? ''}
-                    onChange={(e) => setEnvValues(v => ({ ...v, [varName]: e.target.value }))}
-                  />
-                </div>
-              ))}
+              {template.required_env_vars.map(varName => {
+                const visible = showValues[varName] ?? false
+                return (
+                  <div key={varName}>
+                    <Label htmlFor={`mcp-env-${varName}`}>{varName}</Label>
+                    <div className="relative">
+                      <Input
+                        id={`mcp-env-${varName}`}
+                        type={visible ? 'text' : 'password'}
+                        autoComplete="off"
+                        className="pr-9 font-mono"
+                        value={envValues[varName] ?? ''}
+                        onChange={(e) => setEnvValues(v => ({ ...v, [varName]: e.target.value }))}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowValues(v => ({ ...v, [varName]: !visible }))}
+                        aria-label={visible ? `Hide ${varName}` : `Show ${varName}`}
+                        aria-pressed={visible}
+                        className="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-[var(--color-foreground-subtle)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:text-[var(--color-foreground)]"
+                      >
+                        {visible
+                          ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
+                          : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
 
               {error && (
                 <p className="text-xs text-[var(--color-danger)]">{error}</p>
