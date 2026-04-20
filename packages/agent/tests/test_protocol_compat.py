@@ -54,6 +54,7 @@ class TestProtocolCompat:
             "TypingFrame",
             "CreateRoomFrame",
             "JoinRoomFrame",
+            "LifecycleFrame",
             "MessageOut",
             "RoomCreatedOut",
             "JoinRoomOut",
@@ -62,3 +63,55 @@ class TestProtocolCompat:
         ]
         for name in expected_classes:
             assert hasattr(sdk_frames, name), f"Missing frame class: {name}"
+
+
+class TestLifecycleFrame:
+    def test_parse_handler_started(self) -> None:
+        f = sdk_frames.parse_incoming({
+            "type": "lifecycle",
+            "request_id": "req-1",
+            "room_id": "room-1",
+            "event": "handler_started",
+        })
+        assert isinstance(f, sdk_frames.LifecycleFrame)
+        assert f.event == "handler_started"
+        assert f.request_id == "req-1"
+        assert f.room_id == "room-1"
+
+    def test_parse_engine_call_finished_with_outcome(self) -> None:
+        f = sdk_frames.parse_incoming({
+            "type": "lifecycle",
+            "request_id": "req-2",
+            "room_id": "room-1",
+            "event": "engine_call_finished",
+            "engine": "codex",
+            "outcome": "ok",
+            "duration_ms": 1234,
+        })
+        assert isinstance(f, sdk_frames.LifecycleFrame)
+        assert f.outcome == "ok"
+        assert f.duration_ms == 1234
+        assert f.engine == "codex"
+
+    def test_outcome_enum_accepts_all_designed_values(self) -> None:
+        for outcome in ("ok", "failed", "timeout", "cancelled", "rejected"):
+            f = sdk_frames.LifecycleFrame(
+                request_id="r",
+                room_id="room-1",
+                event="handler_finished",
+                outcome=outcome,
+            )
+            assert f.outcome == outcome
+
+    def test_dump_excludes_none(self) -> None:
+        f = sdk_frames.LifecycleFrame(
+            request_id="req-3",
+            room_id="room-1",
+            event="handler_started",
+        )
+        payload = f.model_dump(exclude_none=True)
+        assert "outcome" not in payload
+        assert "duration_ms" not in payload
+        assert "engine" not in payload
+        assert "error" not in payload
+        assert payload["event"] == "handler_started"
