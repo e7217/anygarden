@@ -532,16 +532,14 @@ async def integrate_with_claude_code(
         request_id = (msg.get("metadata") or {}).get("request_id")
 
         async def run_engine() -> str:
-            import asyncio as _asyncio  # local alias, stdlib
-
             typing_active = True
 
             async def _typing_loop() -> None:
                 while typing_active:
                     await client.sendTyping(room_id, True)
-                    await _asyncio.sleep(2)
+                    await asyncio.sleep(2)
 
-            typing_task = _asyncio.create_task(_typing_loop())
+            typing_task = asyncio.create_task(_typing_loop())
             try:
                 response = await adapter.on_message(msg)
                 # Promote the last session id captured during query back
