@@ -8,6 +8,8 @@ preserved without rebuilding prompt history every message.
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,131 @@ from doorae_agent.coordination.pending_context import (
 from doorae_agent.integrations.base import EngineAdapter
 
 logger = structlog.get_logger(__name__)
+
+
+# Issue #190 — upper bound on a single codex turn. The SDK's
+# ``thread.run_text`` otherwise waits forever on ``stream.wait()``,
+# which serialises the room's WS receive loop in ``_handle`` and can
+# lock a room on a stuck turn. 10 minutes matches the observed P95 of
+# legitimate tool-heavy queries while still guaranteeing the room
+# recovers if the SDK or the app-server hangs.
+_CODEX_TURN_TIMEOUT = 600
+
+
+# Guards ``_install_parse_notification_shim`` against double-wrapping
+# when ``start()`` runs more than once in the same process (tests,
+# reconnects, etc). A boolean flag is sufficient — once the patched
+# function is installed into the SDK module it stays installed for
+# the life of the interpreter.
+_PARSE_NOTIFICATION_PATCHED = False
+
+
+def _make_lenient_parse_notification(
+    original: Callable[..., Any],
+    generic_notification_cls: type,
+    error_cls: type[BaseException],
+) -> Callable[..., Any]:
+    """Return a wrapper around codex SDK's ``parse_notification``.
+
+    Issue #190 — the bundled codex-cli Rust binary emits notifications
+    (e.g. ``item/completed`` with new ``ThreadItem`` variants) whose
+    payload shape the Python SDK's pydantic union doesn't recognise.
+    The SDK's strict check then raises ``AppServerProtocolError`` even
+    when ``strict_protocol=False``, because the *method* is known —
+    killing the whole turn mid-stream and losing the final text.
+
+    The wrapper always calls the original in non-strict mode. If that
+    still raises our specific error class, we salvage the frame by
+    returning a ``GenericNotification`` with the raw ``method`` and
+    ``params``. Truly malformed frames (non-string method, non-dict
+    params) still raise — the goal is only to tolerate payload-shape
+    drift, not to silently drop garbage.
+
+    Exposed as a top-level factory (rather than a nested closure) so
+    the logic can be unit-tested without patching codex internals.
+    """
+
+    def lenient(message: Any, *, strict: bool) -> Any:
+        # We deliberately ignore ``strict`` from the caller: the SDK's
+        # strict mode is exactly what surfaces the protocol drift we
+        # want to mask. Forcing ``strict=False`` lets the original
+        # fallback path handle unknown *methods* generically; the
+        # except-block below handles known-method / unknown-payload.
+        try:
+            return original(message, strict=False)
+        except error_cls:
+            method = (message or {}).get("method") if isinstance(message, Mapping) else None
+            params = (message or {}).get("params") if isinstance(message, Mapping) else None
+            if isinstance(method, str) and (params is None or isinstance(params, Mapping)):
+                logger.debug(
+                    "codex.unknown_notification_tolerated",
+                    method=method,
+                    param_keys=list(params.keys())[:8] if isinstance(params, Mapping) else [],
+                )
+                return generic_notification_cls(
+                    method=method,
+                    params=dict(params) if params else None,
+                )
+            raise
+
+    return lenient
+
+
+def _install_parse_notification_shim() -> None:
+    """Patch ``codex.app_server._protocol_helpers.parse_notification``.
+
+    Issue #190 — idempotent: the module-level
+    ``_PARSE_NOTIFICATION_PATCHED`` flag ensures we only wrap the
+    original function once even if ``start()`` is called repeatedly.
+
+    The shim is defensive about SDK shape changes: if any of the
+    internal attributes disappear in a future release the function
+    silently no-ops so the adapter still starts (the underlying bug
+    would then resurface, but visibly — not as a startup crash).
+
+    The codex SDK's ``_session`` module imports ``parse_notification``
+    at import time via ``from codex.app_server._protocol_helpers
+    import parse_notification``, which binds the *original* function
+    into ``_session`` as a local name. Monkey-patching only the
+    ``_protocol_helpers`` attribute therefore doesn't affect the
+    call site that actually runs during turn processing. We patch
+    both module namespaces so the notification read loop picks up
+    the lenient wrapper.
+    """
+    global _PARSE_NOTIFICATION_PATCHED
+    if _PARSE_NOTIFICATION_PATCHED:
+        return
+    try:
+        from codex.app_server import _protocol_helpers as ph
+        from codex.app_server import _session as session_mod
+        from codex.app_server.errors import AppServerProtocolError
+    except Exception as exc:
+        # Non-fatal: the real bug won't be masked, but the adapter
+        # still boots. Emit a single warning so an upstream SDK layout
+        # change is visible in logs.
+        logger.warning("codex.shim_import_failed", error=str(exc))
+        return
+    if not hasattr(ph, "parse_notification") or not hasattr(ph, "GenericNotification"):
+        logger.warning(
+            "codex.shim_missing_symbols",
+            has_parse=hasattr(ph, "parse_notification"),
+            has_generic=hasattr(ph, "GenericNotification"),
+        )
+        return
+
+    lenient = _make_lenient_parse_notification(
+        ph.parse_notification,
+        ph.GenericNotification,
+        AppServerProtocolError,
+    )
+    ph.parse_notification = lenient
+    # Replace the local binding in ``_session`` that the read-loop
+    # actually calls. Guarded against SDK refactors that inline or
+    # rename the import.
+    if hasattr(session_mod, "parse_notification"):
+        session_mod.parse_notification = lenient
+    _PARSE_NOTIFICATION_PATCHED = True
+    logger.info("codex.parse_notification_shim_installed")
 
 
 class CodexAdapter(EngineAdapter):
@@ -72,6 +199,12 @@ class CodexAdapter(EngineAdapter):
 
         self._codex = Codex()
         self._thread_options_cls = ThreadStartOptions
+
+        # Issue #190 — install the parse_notification shim *after* the
+        # SDK has been imported (so the target module definitely
+        # exists) and only for adapters that actually booted the codex
+        # client. Guarded against double-wrap by a module-level flag.
+        _install_parse_notification_shim()
 
         logger.info("codex.client_started")
 
@@ -135,8 +268,30 @@ class CodexAdapter(EngineAdapter):
             prefix = drain_context(self._pending_context, room_id)
             turn_content = f"{prefix}\n\n{content}" if prefix else content
 
-            # run_text returns the response as a string directly
-            response = await asyncio.to_thread(thread.run_text, turn_content)
+            # Issue #190 — bound the turn with an explicit timeout so
+            # a stuck codex call doesn't freeze the room's WS receive
+            # loop indefinitely. ``threading.Event`` implements
+            # ``SupportsIsSet`` which the SDK's ``_SignalWatcher``
+            # polls to interrupt the stream cleanly on abort.
+            abort_signal = threading.Event()
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        thread.run_text, turn_content, signal=abort_signal
+                    ),
+                    timeout=_CODEX_TURN_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                abort_signal.set()
+                logger.error(
+                    "codex.timeout",
+                    room_id=room_id,
+                    timeout=_CODEX_TURN_TIMEOUT,
+                )
+                # Drop the thread so the next message starts a fresh
+                # turn rather than piling onto the aborted one.
+                self._threads.pop(room_id, None)
+                return None
             return response if response else None
         except Exception as exc:
             logger.error("codex.turn_failed", room_id=room_id, error=str(exc))

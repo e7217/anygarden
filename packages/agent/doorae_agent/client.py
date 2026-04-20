@@ -513,9 +513,24 @@ class ChatClient:
 
                 subprotocols = build_subprotocols(self._token)
 
+                # Issue #190 — codex turns can legitimately run 5+
+                # minutes while the SDK waits on tool chains, and the
+                # ``websockets`` library default
+                # ``ping_interval=20, ping_timeout=20`` closed the
+                # connection mid-turn (``sent 1011 keepalive ping
+                # timeout``). The adapter produced a full response
+                # from ``thread.run_text`` but the subsequent
+                # ``client.send`` hit a closed socket, silently
+                # dropping the answer. We still ping periodically so
+                # a dead agent is detectable, but the timeout has to
+                # tolerate the adapter's turn cap
+                # (``_CODEX_TURN_TIMEOUT = 600s``) plus tool-call
+                # reasoning slack.
                 async with ws_connect(
                     ws_url,
                     subprotocols=subprotocols,
+                    ping_interval=60,
+                    ping_timeout=600,
                 ) as ws:
                     self._connections[room_id] = ws
                     delay = 1.0  # Reset backoff on successful connect

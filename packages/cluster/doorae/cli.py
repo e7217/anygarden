@@ -128,6 +128,16 @@ def _run_server(host: str, port: int, db_url: str | None, log_level: str) -> Non
         host=host,
         port=port,
         log_level=log_level.lower(),
+        # Issue #190 — codex agents can legitimately hold a turn for
+        # 5+ minutes while the SDK waits on tool chains. uvicorn's
+        # default ``ws_ping_interval=20, ws_ping_timeout=20`` closes
+        # the connection mid-turn from the server side, so the
+        # agent's post-turn ``send`` hits a dead socket and the
+        # answer is silently lost. These values need to match the
+        # client-side keepalive extension in
+        # ``doorae_agent.client.ChatClient._room_loop``.
+        ws_ping_interval=60,
+        ws_ping_timeout=600,
     )
 
 

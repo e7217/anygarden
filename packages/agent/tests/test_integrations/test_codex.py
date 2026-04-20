@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from doorae_agent.integrations.codex import CodexAdapter, integrate_with_codex
+from doorae_agent.integrations.codex import (
+    CodexAdapter,
+    _make_lenient_parse_notification,
+    integrate_with_codex,
+)
+import doorae_agent.integrations.codex as codex_mod
 
 
 def _make_fake_codex_module():
@@ -79,7 +87,13 @@ class TestCodexAdapter:
             assert result == "Hello from codex"
             assert "room-1" in adapter._threads
             mock_codex.start_thread.assert_called_once()
-            mock_thread.run_text.assert_called_once_with("Hello")
+            # Issue #190 — run_text is now always called with a
+            # ``signal`` kwarg (threading.Event) so the timeout path
+            # can abort stuck turns. Assert content + signal presence
+            # without pinning the event instance.
+            call = mock_thread.run_text.call_args
+            assert call.args == ("Hello",)
+            assert isinstance(call.kwargs.get("signal"), threading.Event)
 
     @pytest.mark.asyncio
     async def test_start_thread_passes_bypass_options(self) -> None:
@@ -176,3 +190,264 @@ class TestIntegrateWithCodex:
 
             assert len(client._message_handlers) == 1
             assert isinstance(adapter, CodexAdapter)
+
+
+class _FakeProtocolError(Exception):
+    """Stand-in for ``codex.app_server.errors.AppServerProtocolError``.
+
+    Lets the shim's error path be exercised without importing codex-python
+    internals in the test environment."""
+
+
+class _FakeGenericNotification:
+    def __init__(self, method=None, params=None) -> None:
+        self.method = method
+        self.params = params
+
+
+class TestInstallShim:
+    """Issue #190 — the shim must patch every module that holds a
+    reference to ``parse_notification``. The SDK's ``_session`` reads
+    via ``from codex.app_server._protocol_helpers import
+    parse_notification`` at import time, so patching only
+    ``_protocol_helpers`` leaves the hot path unchanged and the bug
+    stays live. Regression test pins this explicitly."""
+
+    def test_patches_both_protocol_helpers_and_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Reset the idempotency flag so this test actually runs the
+        # install logic even if a prior test booted an adapter.
+        monkeypatch.setattr(codex_mod, "_PARSE_NOTIFICATION_PATCHED", False)
+
+        original_parse = MagicMock(name="original_parse_notification")
+
+        class _FakePh:
+            parse_notification = original_parse
+            GenericNotification = _FakeGenericNotification
+
+        class _FakeSession:
+            # Import-time local binding to the original, exactly like
+            # the real SDK: ``from ... import parse_notification``.
+            parse_notification = original_parse
+
+        fake_app_server = MagicMock()
+        fake_app_server._protocol_helpers = _FakePh
+        fake_app_server._session = _FakeSession
+        fake_app_server.errors = MagicMock()
+        fake_app_server.errors.AppServerProtocolError = _FakeProtocolError
+
+        with patch.dict(sys.modules, {
+            "codex": MagicMock(),
+            "codex.app_server": fake_app_server,
+            "codex.app_server._protocol_helpers": _FakePh,
+            "codex.app_server._session": _FakeSession,
+            "codex.app_server.errors": fake_app_server.errors,
+        }):
+            codex_mod._install_parse_notification_shim()
+
+        assert codex_mod._PARSE_NOTIFICATION_PATCHED is True
+        # Original should be replaced in both modules.
+        assert _FakePh.parse_notification is not original_parse
+        assert _FakeSession.parse_notification is not original_parse
+        # And both must point at the *same* wrapper so the hot-path in
+        # _session and any diagnostic use via helpers stay in sync.
+        assert _FakePh.parse_notification is _FakeSession.parse_notification
+
+    def test_install_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(codex_mod, "_PARSE_NOTIFICATION_PATCHED", False)
+
+        original = MagicMock(return_value="ok")
+
+        class _FakePh:
+            parse_notification = original
+            GenericNotification = _FakeGenericNotification
+
+        class _FakeSession:
+            parse_notification = original
+
+        fake_app_server = MagicMock()
+        fake_app_server._protocol_helpers = _FakePh
+        fake_app_server._session = _FakeSession
+        fake_app_server.errors = MagicMock()
+        fake_app_server.errors.AppServerProtocolError = _FakeProtocolError
+
+        with patch.dict(sys.modules, {
+            "codex": MagicMock(),
+            "codex.app_server": fake_app_server,
+            "codex.app_server._protocol_helpers": _FakePh,
+            "codex.app_server._session": _FakeSession,
+            "codex.app_server.errors": fake_app_server.errors,
+        }):
+            codex_mod._install_parse_notification_shim()
+            first_wrapper = _FakePh.parse_notification
+            codex_mod._install_parse_notification_shim()
+            second_wrapper = _FakePh.parse_notification
+
+        assert first_wrapper is second_wrapper, (
+            "second install must not double-wrap — idempotent flag guards it"
+        )
+
+
+class TestLenientParseNotification:
+    """Issue #190 — SDK raises ``AppServerProtocolError`` on known-method /
+    unknown-payload combinations (e.g. ``item/completed`` with new
+    ``ThreadItem`` variants from the bundled codex-cli binary). The shim
+    downgrades those to a generic notification so the SDK's stream loop
+    keeps flowing and ``task_complete`` still reaches the adapter."""
+
+    def test_passthrough_when_original_succeeds(self) -> None:
+        sentinel = object()
+        original = MagicMock(return_value=sentinel)
+
+        lenient = _make_lenient_parse_notification(
+            original,
+            _FakeGenericNotification,
+            _FakeProtocolError,
+        )
+
+        msg = {"method": "item/completed", "params": {"item": {"type": "webSearch"}}}
+        assert lenient(msg, strict=True) is sentinel
+        # Shim downgrades to non-strict regardless of the caller's strict flag:
+        # the SDK's strict mode is what surfaces the bug we're masking.
+        original.assert_called_once_with(msg, strict=False)
+
+    def test_falls_back_to_generic_on_protocol_error(self) -> None:
+        original = MagicMock(side_effect=_FakeProtocolError("schema mismatch"))
+        lenient = _make_lenient_parse_notification(
+            original,
+            _FakeGenericNotification,
+            _FakeProtocolError,
+        )
+
+        msg = {
+            "method": "item/completed",
+            "params": {"item": {"type": "webSearchFuture"}, "threadId": "t"},
+        }
+        result = lenient(msg, strict=True)
+
+        assert isinstance(result, _FakeGenericNotification)
+        assert result.method == "item/completed"
+        # params should be forwarded verbatim (copied, not aliased).
+        assert result.params == msg["params"]
+        assert result.params is not msg["params"]
+
+    def test_reraises_when_method_not_string(self) -> None:
+        """Completely malformed frames still raise — we only mask the
+        known-method-unknown-payload case, not every validation failure."""
+        err = _FakeProtocolError("bad frame")
+        original = MagicMock(side_effect=err)
+        lenient = _make_lenient_parse_notification(
+            original,
+            _FakeGenericNotification,
+            _FakeProtocolError,
+        )
+
+        with pytest.raises(_FakeProtocolError):
+            lenient({"method": 123, "params": {}}, strict=True)
+
+    def test_reraises_when_params_not_mapping(self) -> None:
+        err = _FakeProtocolError("bad frame")
+        original = MagicMock(side_effect=err)
+        lenient = _make_lenient_parse_notification(
+            original,
+            _FakeGenericNotification,
+            _FakeProtocolError,
+        )
+
+        with pytest.raises(_FakeProtocolError):
+            lenient({"method": "item/completed", "params": "not-a-dict"}, strict=True)
+
+
+class TestCodexTurnTimeout:
+    """Issue #190 — ``thread.run_text`` has no intrinsic timeout. A hung
+    turn used to lock the room's WS receive loop indefinitely. The
+    adapter now wraps the call in ``asyncio.wait_for`` + a
+    ``threading.Event`` signal so the SDK can abort cleanly on timeout
+    and the room stays responsive."""
+
+    @pytest.mark.asyncio
+    async def test_on_message_timeout_aborts_and_evicts_thread(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+
+        captured: dict[str, object] = {}
+
+        def slow_run_text(content: str, *, signal: threading.Event | None = None):
+            """Blocks until the signal fires or ~1s elapses.
+
+            Mirrors how the codex SDK's signal watcher interrupts a stuck
+            turn — polling the event keeps the worker thread from leaking
+            after the test times out."""
+            captured["content"] = content
+            captured["signal"] = signal
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                if signal is not None and signal.is_set():
+                    captured["aborted"] = True
+                    return ""
+                time.sleep(0.02)
+            captured["aborted"] = False
+            return "should-not-be-returned"
+
+        mock_thread.run_text = slow_run_text
+
+        # Drive the timeout below the worker's deadline so the wait_for
+        # path fires deterministically without making the suite slow.
+        monkeypatch.setattr(codex_mod, "_CODEX_TURN_TIMEOUT", 0.2)
+
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+
+            result = await adapter.on_message(
+                {"content": "slow-question", "room_id": "room-1"}
+            )
+
+        assert result is None, "timeout path must not deliver a reply"
+        assert "room-1" not in adapter._threads, (
+            "broken thread must be evicted so the next turn starts fresh"
+        )
+        # The signal must have been created and set so the SDK can abort.
+        signal = captured.get("signal")
+        assert isinstance(signal, threading.Event)
+        assert signal.is_set(), "timeout handler must flip the abort signal"
+
+        # The worker thread runs in a ThreadPoolExecutor and polls the
+        # signal every 20ms. Yield to the loop long enough for the
+        # worker to observe the abort and exit cleanly. Without this
+        # the test races the polling loop.
+        deadline = time.time() + 1.0
+        while time.time() < deadline and captured.get("aborted") is None:
+            await asyncio.sleep(0.02)
+        assert captured.get("aborted") is True, (
+            "worker did not observe abort signal within 1s"
+        )
+
+    @pytest.mark.asyncio
+    async def test_on_message_passes_signal_to_run_text(self) -> None:
+        """The timeout relies on the SDK's ``signal`` parameter — if the
+        kwarg is ever dropped we want the tests to notice before prod."""
+        fake_mod, options_mod, _, mock_thread = _make_fake_codex_module()
+
+        captured: dict[str, object] = {}
+
+        def fast_run_text(content: str, *, signal: threading.Event | None = None):
+            captured["signal"] = signal
+            return "ok"
+
+        mock_thread.run_text = fast_run_text
+
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+            result = await adapter.on_message(
+                {"content": "fast", "room_id": "room-1"}
+            )
+
+        assert result == "ok"
+        assert isinstance(captured.get("signal"), threading.Event)
+        assert not captured["signal"].is_set(), (
+            "happy path must not fire the abort signal"
+        )
