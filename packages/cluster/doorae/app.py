@@ -26,6 +26,7 @@ from doorae.api.v1.graph import router as graph_router
 from doorae.api.v1.skills import router as skills_api_router
 from doorae.api.v1.mcp_templates import router as mcp_templates_router
 from doorae.api.v1.projects import router as projects_router
+from doorae.llm_gateway.reverse_proxy import router as llm_proxy_router
 from doorae.mcp import router as mcp_rpc_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
@@ -75,7 +76,6 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
        an operator to baseline the DB explicitly.
     """
     import structlog
-    from sqlalchemy import text
 
     log = structlog.get_logger()
 
@@ -429,7 +429,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 name="skill_stale_cron",
             )
 
+    # #197 — Bootstrap the embedded LLM gateway (optional). Pre-wired
+    # supervisor on app.state (e.g. tests) wins — if something is
+    # already there we leave it alone.
+    if (
+        config.llm_gateway_enabled
+        and getattr(app.state, "llm_gateway_supervisor", None) is None
+    ):
+        from doorae.llm_gateway.bootstrap import bootstrap_gateway
+        # MCPSecrets was already built above for MCP templates; the
+        # llm_gateway reuses the same Fernet key per ADR-004. Fetch it
+        # from the service (which stores it as ``_secrets``) so this
+        # works both when we built the service here and when a test
+        # pre-set ``app.state.mcp_template_service``.
+        gateway_secrets = getattr(
+            app.state.mcp_template_service, "_secrets", None
+        )
+        if gateway_secrets is None:
+            import structlog
+            structlog.get_logger().warning(
+                "llm_gateway.bootstrap_skipped",
+                reason="mcp_template_service has no _secrets attribute",
+            )
+        else:
+            try:
+                await bootstrap_gateway(
+                    app,
+                    config,
+                    app.state.session_factory,
+                    gateway_secrets,
+                )
+            except Exception as exc:  # noqa: BLE001
+                import structlog
+                structlog.get_logger().warning(
+                    "llm_gateway.bootstrap_failed",
+                    error=str(exc),
+                )
+
     yield
+
+    # #197 — Tear down the gateway before the engine / session factory
+    # go away. ``shutdown_gateway`` is safe to call even if bootstrap
+    # never ran (no-op when app.state lacks the supervisor).
+    from doorae.llm_gateway.bootstrap import shutdown_gateway
+    await shutdown_gateway(app)
 
     # Shutdown: cancel the stale cron (if we spawned it) and wait for
     # it to actually stop before the event loop tears down. A gather
@@ -522,6 +565,11 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(saved_router)
     app.include_router(search_router)
     app.include_router(tasks_router)
+    # #197 — LLM gateway reverse proxy. The handler checks
+    # ``app.state.llm_gateway_{client,supervisor}`` at request time and
+    # responds 503 when the gateway is not wired (feature flag off),
+    # so including the router unconditionally is safe.
+    app.include_router(llm_proxy_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

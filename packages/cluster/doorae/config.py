@@ -33,6 +33,22 @@ class DooraeSettings(BaseSettings):
     # warning); production deployments MUST set this explicitly or the
     # MCPSecrets initializer will refuse to boot.
     mcp_secrets_key: str = ""
+    # #197 — Embedded LiteLLM gateway. When enabled, doorae-server
+    # supervises a ``litellm`` subprocess listening on
+    # ``127.0.0.1:<llm_gateway_port>`` and exposes ``/api/v1/llm/*``
+    # as a reverse proxy. See docs/design/12-llm-gateway.md.
+    #
+    # Off by default — the existing "agent calls upstream directly"
+    # path remains canonical until Phase 5 flips per-agent wiring.
+    llm_gateway_enabled: bool = False
+    # Port the LiteLLM subprocess listens on (loopback only). Picked
+    # above LiteLLM's default 4000 so local dev setups that already
+    # have LiteLLM running don't collide with the embedded one.
+    llm_gateway_port: int = 4001
+    # Rendered config.yaml location. Empty string defaults to
+    # ``~/.doorae/litellm.yaml`` — resolved lazily in the gateway
+    # code so tests can point at a temp dir without poisoning home.
+    llm_gateway_config_path: str = ""
 
     model_config = SettingsConfigDict(env_prefix="DOORAE_")
 
