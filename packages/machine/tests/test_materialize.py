@@ -697,6 +697,178 @@ class TestClaudeCodeDefaultSettings:
         assert not link.is_symlink()
 
 
+# ── Codex host-auth bridge (post-#213 follow-up) ────────────────────
+
+
+class TestCodexHostAuthSymlink:
+    """#213 made ``Spawner.spawn`` redirect ``CODEX_HOME`` at the
+    per-agent ``.codex/`` when the manifest carries a codex overlay.
+    Deployments that authenticate codex via ``codex auth login``
+    (host ``~/.codex/auth.json``, no ``OPENAI_API_KEY`` in
+    ``engine_secrets``) then broke because codex could no longer find
+    the host credentials — the first turn started and then completed
+    with an empty assistant message, appearing stuck.
+
+    The materializer restores pre-#213 auth discovery by symlinking
+    the host ``~/.codex/auth.json`` into the per-agent codex home
+    when the redirect is about to fire.
+    """
+
+    @pytest.fixture
+    def fake_host_codex(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Point ``Path.home()`` at a tmp dir with a populated
+        ``.codex/auth.json`` so tests don't touch the real host."""
+        home = tmp_path / "home-user"
+        codex_dir = home / ".codex"
+        codex_dir.mkdir(parents=True)
+        auth = codex_dir / "auth.json"
+        auth.write_text('{"auth_mode":"chatgpt","tokens":{"fake":"fake"}}')
+        os.chmod(auth, 0o600)
+        monkeypatch.setenv("HOME", str(home))
+        return auth
+
+    def test_symlink_created_when_codex_overlay_present(
+        self,
+        spawner: Spawner,
+        fake_host_codex: Path,
+    ) -> None:
+        """오버레이 있는 codex 에이전트는 host auth.json 을 가리키는
+        symlink 를 ``.codex/auth.json`` 에 받아야 한다. 없으면 codex
+        app-server가 auth 없이 구동되어 LLM 응답이 빈 값으로 완료됨.
+        """
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine="codex",
+                files={".codex/config.toml": "[mcp_servers.x]\n"},
+            )
+        )
+
+        link = agent_root / ".codex" / "auth.json"
+        assert link.is_symlink()
+        # 링크 타겟은 host ``~/.codex/auth.json`` — Path.home() 이
+        # 가리키는 곳. 실제 경로 비교로 검증.
+        assert Path(os.readlink(link)) == fake_host_codex
+        # 링크를 따라가면 auth 컨텐츠가 읽혀야 한다
+        assert "chatgpt" in link.read_text()
+
+    def test_no_symlink_when_host_auth_missing(
+        self,
+        spawner: Spawner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """host 에 ``~/.codex/auth.json`` 이 아예 없는 설치(fresh host,
+        codex 로그인 안 됨)에서는 symlink 생성을 건너뛰어야 한다.
+        dead link 를 남기면 codex 가 "read permission denied" 같은
+        혼란스러운 에러를 내게 된다.
+        """
+        home = tmp_path / "home-nohost-auth"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine="codex",
+                files={".codex/config.toml": "[mcp_servers.x]\n"},
+            )
+        )
+
+        link = agent_root / ".codex" / "auth.json"
+        assert not link.is_symlink()
+        assert not link.exists()
+
+    def test_no_symlink_when_no_codex_overlay(
+        self,
+        spawner: Spawner,
+        fake_host_codex: Path,
+    ) -> None:
+        """``.codex/*`` 오버레이가 없는 codex 에이전트는 ``CODEX_HOME``
+        이 리다이렉트되지 않으므로 auth symlink 도 불필요하다. 빈
+        ``.codex/`` 디렉토리가 남지도 말아야 한다.
+        """
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="codex", files={})
+        )
+
+        assert not (agent_root / ".codex").exists()
+
+    def test_admin_authored_auth_preserved(
+        self,
+        spawner: Spawner,
+        fake_host_codex: Path,
+    ) -> None:
+        """admin 이 manifest 로 ``.codex/auth.json`` 을 명시하면 그
+        파일이 호스트 symlink 를 이긴다. 서비스 계정 토큰을 per-
+        agent 로 주입하는 운영 시나리오. 파일-쓰기 루프가 먼저
+        실행되어 파일이 존재하므로 symlink 블록이 건드리지 않는다.
+        """
+        admin_auth = '{"auth_mode":"api","OPENAI_API_KEY":"sk-admin"}'
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine="codex",
+                files={
+                    ".codex/config.toml": "[mcp_servers.x]\n",
+                    ".codex/auth.json": admin_auth,
+                },
+            )
+        )
+
+        path = agent_root / ".codex" / "auth.json"
+        assert path.is_file()
+        assert not path.is_symlink()
+        assert path.read_text() == admin_auth
+
+    @pytest.mark.parametrize(
+        "engine", ["claude-code", "gemini-cli", "openhands"]
+    )
+    def test_non_codex_engines_do_not_get_auth_symlink(
+        self,
+        spawner: Spawner,
+        fake_host_codex: Path,
+        engine: str,
+    ) -> None:
+        """host auth 다리 로직은 codex 엔진에서만 발동. 다른 엔진에
+        ``.codex/*`` 파일이 어쩌다 실려도 symlink 를 만들어선 안 된다.
+        """
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine=engine,
+                files={".codex/config.toml": "[x]\n"},
+            )
+        )
+
+        link = agent_root / ".codex" / "auth.json"
+        assert not link.is_symlink()
+        assert not link.exists()
+
+    def test_stale_auth_symlink_refreshed_across_spawns(
+        self,
+        spawner: Spawner,
+        fake_host_codex: Path,
+    ) -> None:
+        """prune 이 ``.codex/`` 를 통째로 날린 뒤 두 번째 spawn 에서도
+        symlink 가 정확히 재생성돼야 한다. 호스트 ``~/.codex/auth.json``
+        이 rotate 되어도 다음 spawn 에서 fresh 타겟을 가리키게 된다.
+        """
+        spawner._materialize_agent_dir(
+            _msg(
+                engine="codex",
+                files={".codex/config.toml": "[mcp_servers.x]\n"},
+            )
+        )
+        # 두 번째 spawn — prune 후 재생성
+        agent_root = spawner._materialize_agent_dir(
+            _msg(
+                engine="codex",
+                files={".codex/config.toml": "[mcp_servers.y]\n"},
+            )
+        )
+
+        link = agent_root / ".codex" / "auth.json"
+        assert link.is_symlink()
+        assert Path(os.readlink(link)) == fake_host_codex
+
+
 # ── Symlink follow-refusal (Issue #186) ─────────────────────────────
 
 
