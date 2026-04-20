@@ -796,6 +796,7 @@ class ActivityLog(Base):
     __tablename__ = "activity_logs"
     __table_args__ = (
         Index("ix_activity_logs_agent_ts", "agent_id", "timestamp"),
+        Index("ix_activity_logs_request", "request_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -804,6 +805,9 @@ class ActivityLog(Base):
     )
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    request_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
 
 
