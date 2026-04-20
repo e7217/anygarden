@@ -1,7 +1,7 @@
 """Add activity_logs.request_id column + index.
 
-Revision ID: 026
-Revises: 025
+Revision ID: 027
+Revises: 026
 Create Date: 2026-04-20
 
 Rationale
@@ -27,8 +27,8 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "026"
-down_revision: str = "025"
+revision: str = "027"
+down_revision: str = "026"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 
