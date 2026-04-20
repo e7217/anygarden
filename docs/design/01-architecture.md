@@ -37,15 +37,18 @@ graph TB
         SCHED["scheduler/<br/>placement · lifecycle<br/>MachineBus"]
         ORCH["orchestration.rules"]
         METRIC["observability<br/>Prometheus · structlog"]
+        LLM_GW["litellm subprocess<br/>(ADR-004 · 선택적)<br/>127.0.0.1:4001"]
         DB[("SQLite / PostgreSQL")]
 
         APP --> WS_ROOM
         APP --> WS_MACHINE
         APP --> REST
         APP --> METRIC
+        APP -.->|lifespan supervise| LLM_GW
         WS_ROOM --> AUTH
         WS_MACHINE --> AUTH
         REST --> AUTH
+        REST -.->|"/api/v1/llm/*<br/>reverse proxy"| LLM_GW
         WS_ROOM --> MANAGER
         WS_MACHINE --> SCHED
         SCHED --> DB
@@ -82,6 +85,12 @@ graph TB
         JIRA["Jira MCP"]
     end
 
+    subgraph LLMProv["LLM 제공자 (외부)"]
+        ANT["api.anthropic.com"]
+        OAI["api.openai.com"]
+        BED["Bedrock / Vertex / ..."]
+    end
+
     %% 유저 → 서버 (데이터 평면)
     Browser -->|"WS /ws/rooms/{id}<br/>bearer.user_token"| WS_ROOM
     CLI_User -->|"WS /ws/rooms/{id}<br/>bearer.user_token"| WS_ROOM
@@ -103,11 +112,21 @@ graph TB
     B1 -.->|MCP| FS
     C1 -.->|MCP| JIRA
 
+    %% LLM 호출 경로 (기본 vs 게이트웨이 경유)
+    %% - 기본: 에이전트가 직접 업스트림 API 호출 (머신에 API 키)
+    %% - 게이트웨이: Phase 5에서 flag on 시 /api/v1/llm/* 를 경유
+    A1 -.->|LLM 직접 호출 · 기본| ANT
+    B1 -.->|LLM 직접 호출 · 기본| OAI
+    LLM_GW -->|HTTPS · 게이트웨이 경로| ANT
+    LLM_GW -->|HTTPS · 게이트웨이 경로| OAI
+    LLM_GW -->|HTTPS · 게이트웨이 경로| BED
+
     style ServerHost fill:#2563eb,stroke:#1e40af,color:#fff
     style MachineA fill:#059669,stroke:#065f46,color:#fff
     style MachineB fill:#ea580c,stroke:#9a3412,color:#fff
     style MachineC fill:#7c3aed,stroke:#5b21b6,color:#fff
     style Ext fill:#be185d,stroke:#831843,color:#fff
+    style LLMProv fill:#0891b2,stroke:#0e7490,color:#fff
     style Users fill:#f59e0b,stroke:#b45309,color:#fff
 ```
 
@@ -127,6 +146,7 @@ graph TB
 2. **Machine은 N개**. 같은 머신에 여럿 올려도 되고, 여러 VPS에 분산해도 된다. 서버는 호스트 구분을 모른다.
 3. **MCP 화살표는 점선**. 서버 박스를 관통하지 않는다는 점이 시각적으로 중요하다. MCP는 각 에이전트 엔진이 자체 처리한다.
 4. **TS SDK는 Phase 2**. Phase 1에서는 Python SDK만 구현한다 (OpenHands/Deep Agents 필수 지원을 위해).
+5. **LLM 경로는 두 가지**. 기본은 에이전트가 업스트림을 직접 호출(점선). `DOORAE_LLM_GATEWAY_ENABLED=true` + 매니페스트 설정 시 `/api/v1/llm/*` 역프록시를 경유해 내장 LiteLLM subprocess 를 타고 나감(실선). 자세한 설계는 [§12 LLM Gateway](12-llm-gateway.md), [ADR-004](../decisions/004-embedded-litellm-gateway.md) 참조.
 
 ---
 
