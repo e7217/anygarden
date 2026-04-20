@@ -845,3 +845,144 @@ class Task(Base):
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+# ── LLM Gateway (#197) ─────────────────────────────────────────────────
+#
+# A LiteLLM subprocess supervised by doorae-server routes every agent
+# LLM call through `/api/v1/llm/*`. These three tables back the admin
+# CRUD surface and usage telemetry. See docs/design/12-llm-gateway.md
+# and docs/decisions/004-embedded-litellm-gateway.md for rationale.
+
+
+class LLMGatewayModel(Base):
+    """One entry in the gateway's ``model_list`` (config.yaml).
+
+    Admin-managed. Each row renders to a single ``litellm_params`` block
+    when the config writer serialises the DB state. Secrets never land
+    in the rendered yaml — only a reference (``api_key_ref``) to the
+    ``LLMGatewaySecret`` row whose decrypted value is injected into the
+    LiteLLM subprocess env at spawn time.
+    """
+
+    __tablename__ = "llm_gateway_models"
+    __table_args__ = (
+        UniqueConstraint("model_name", name="uq_llm_gateway_models_name"),
+        Index("ix_llm_gateway_models_provider", "provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # User-facing identifier ("claude-sonnet-4-6"). Unique within the
+    # gateway — an agent's ``model`` request maps to exactly one row.
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    # "anthropic" / "openai" / "bedrock" / "vertex" / "azure" / "ollama" /
+    # "custom". Used by the UI for grouping and preset prefill only; the
+    # actual routing is determined by ``upstream_model``.
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # LiteLLM-native routing identifier ("anthropic/claude-sonnet-4-6",
+    # "openai/gpt-5.4", "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0").
+    upstream_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    # The env var name (not value!) LiteLLM should read for this model's
+    # credentials. Matches the PK of a ``LLMGatewaySecret`` row. The
+    # config writer emits ``api_key: os.environ/DOORAE_LITELLM_<ref>`` and
+    # the supervisor injects ``DOORAE_LITELLM_<ref>=<decrypted>`` at spawn.
+    api_key_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Optional extras passed through to ``litellm_params`` verbatim —
+    # temperature, max_tokens, custom headers, etc. JSON dict.
+    extra_params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class LLMGatewaySecret(Base):
+    """Encrypted API key for a LiteLLM upstream provider.
+
+    Stored separately from ``LLMGatewayModel`` so one secret can back
+    multiple models (e.g. two Anthropic models sharing one key), and so
+    rotating a key does not touch model rows. Ciphertext is opaque
+    bytes produced by the existing ``MCPSecrets`` Fernet — reusing the
+    operator-managed ``DOORAE_MCP_SECRETS_KEY`` keeps KMS surface a
+    single key to rotate.
+
+    ``env_var_name`` is the natural PK (matches ``api_key_ref`` on model
+    rows) so a model row lookup does not need to carry an extra foreign
+    key column.
+    """
+
+    __tablename__ = "llm_gateway_secrets"
+
+    env_var_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    last_tested_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    # "ok" / "invalid" / "timeout" / "error:<short>". Free-form string so
+    # the UI can render the raw status without an enum migration every
+    # time a new failure mode appears.
+    last_test_status: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class LLMGatewayUsage(Base):
+    """One row per LLM request relayed through ``/api/v1/llm/*``.
+
+    Written by the reverse-proxy layer after the response completes
+    (streaming or not). A 30-day TTL cron prunes stale rows so the
+    table stays bounded. Admin UI's Usage section queries this via
+    ``GROUP BY`` at read time — on-the-fly aggregation is cheap enough
+    for the initial scale and keeps per-request detail available for
+    debugging.
+
+    ``identity_kind`` / ``identity_id`` capture the *caller* rather than
+    tying to ``agent_id`` only, because user and machine tokens can
+    also hit the proxy (admin test pings, machine-scoped calls).
+    When the caller is an agent, ``agent_id`` is populated for the
+    common-case aggregation path; ``identity_id`` always reflects the
+    same value so queries that don't need the agent join work too.
+    """
+
+    __tablename__ = "llm_gateway_usage"
+    __table_args__ = (
+        Index("ix_llm_gateway_usage_timestamp", "timestamp"),
+        Index("ix_llm_gateway_usage_agent_ts", "agent_id", "timestamp"),
+        Index("ix_llm_gateway_usage_model_ts", "model_name", "timestamp"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    timestamp: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    # Nullable so user/machine callers (admin test pings etc.) don't
+    # require a fake agent row. Populated for agent-initiated calls.
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    room_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # "agent" / "user" / "machine". Matches ``auth.Identity.kind``.
+    identity_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Raw identity id from the auth layer (agent_id / user_id /
+    # machine_id depending on kind). Kept as a plain string — no FK so
+    # a deleted caller's history is preserved.
+    identity_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Populated only on non-2xx. Short message from upstream or proxy
+    # for debug views; never user-facing.
+    error: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
