@@ -41,7 +41,17 @@ def parse_json_usage(body: dict[str, Any]) -> ParsedUsage:
     ``ParsedUsage()`` (all ``None``) if neither pattern matches — the
     caller still records the request, just without token counts.
     """
-    raise NotImplementedError  # Phase 2 — TDD implementation
+    usage = body.get("usage") or {}
+    return ParsedUsage(
+        # Anthropic uses ``input_tokens`` / ``output_tokens``; OpenAI
+        # uses ``prompt_tokens`` / ``completion_tokens``. Check the
+        # Anthropic field first since it's unambiguous, then fall back
+        # so a response carrying both keys prefers the native one.
+        prompt_tokens=usage.get("input_tokens") or usage.get("prompt_tokens"),
+        completion_tokens=(
+            usage.get("output_tokens") or usage.get("completion_tokens")
+        ),
+    )
 
 
 def parse_stream_event(event: dict[str, Any]) -> Optional[ParsedUsage]:
@@ -52,4 +62,33 @@ def parse_stream_event(event: dict[str, Any]) -> Optional[ParsedUsage]:
     OpenAI final chunk with ``usage`` included) returns the parsed
     counters. The reverse proxy keeps the last non-None result.
     """
-    raise NotImplementedError
+    # Anthropic ``message_start`` carries ``input_tokens`` inside a
+    # nested ``message.usage`` object.
+    event_type = event.get("type")
+    if event_type == "message_start":
+        inner = (event.get("message") or {}).get("usage") or {}
+        if inner:
+            return ParsedUsage(
+                prompt_tokens=inner.get("input_tokens"),
+                completion_tokens=inner.get("output_tokens") or None,
+            )
+    # Anthropic ``message_delta`` carries ``output_tokens`` at the
+    # event root just before ``message_stop``.
+    if event_type == "message_delta":
+        usage = event.get("usage") or {}
+        if usage:
+            return ParsedUsage(
+                prompt_tokens=usage.get("input_tokens"),
+                completion_tokens=usage.get("output_tokens"),
+            )
+    # OpenAI's final chunk (when include_usage=True) and any other
+    # shape that simply carries a root-level ``usage`` field.
+    usage = event.get("usage")
+    if isinstance(usage, dict):
+        return ParsedUsage(
+            prompt_tokens=usage.get("input_tokens") or usage.get("prompt_tokens"),
+            completion_tokens=(
+                usage.get("output_tokens") or usage.get("completion_tokens")
+            ),
+        )
+    return None

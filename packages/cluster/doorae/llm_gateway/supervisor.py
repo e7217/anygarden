@@ -183,6 +183,13 @@ class LLMGatewaySupervisor:
         self._lock = asyncio.Lock()
         self._proc: Any = None  # asyncio.subprocess.Process in prod
         self._watch_task: Optional[asyncio.Task] = None
+        # Current spawn params — retained after a successful spawn so
+        # the reverse proxy can read ``master_key`` / ``port`` without
+        # having to poke into the child's env. Cleared on stop() and
+        # during restart(); the supervisor writes it, the proxy reads.
+        # ``master_key`` is deliberately excluded from ``GatewayStatus``
+        # so admin status responses can't accidentally serialize it.
+        self._current_params: Optional[_SpawnParams] = None
 
     # ── Public API ────────────────────────────────────────────────
 
@@ -234,6 +241,7 @@ class LLMGatewaySupervisor:
             await self._cancel_watch()
             await self._graceful_terminate()
             self._proc = None
+            self._current_params = None
 
     def status(self) -> GatewayStatus:
         """Immutable snapshot for the Status admin endpoint."""
@@ -243,6 +251,25 @@ class LLMGatewaySupervisor:
     def state(self) -> GatewayState:
         """Shorthand for ``status().state``."""
         return self._state
+
+    @property
+    def master_key(self) -> Optional[str]:
+        """Current LiteLLM master key, or ``None`` when not RUNNING.
+
+        Read by the reverse proxy to swap into outgoing ``Authorization``
+        headers. Kept off ``GatewayStatus`` to avoid leaking it into
+        admin-facing status responses.
+        """
+        if self._state != GatewayState.RUNNING or self._current_params is None:
+            return None
+        return self._current_params.master_key
+
+    @property
+    def port(self) -> Optional[int]:
+        """Current LiteLLM listen port, or ``None`` when not RUNNING."""
+        if self._state != GatewayState.RUNNING or self._current_params is None:
+            return None
+        return self._current_params.port
 
     # ── Internals ─────────────────────────────────────────────────
 
@@ -295,6 +322,8 @@ class LLMGatewaySupervisor:
             self._set_state(GatewayState.FAILED)
             return
 
+        # Record params so reverse_proxy can read master_key/port.
+        self._current_params = params
         self._set_state(GatewayState.RUNNING)
         self._watch_task = asyncio.create_task(
             self._watch_loop(proc), name="llm_gateway_watch"

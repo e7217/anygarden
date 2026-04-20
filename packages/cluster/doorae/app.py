@@ -26,6 +26,7 @@ from doorae.api.v1.graph import router as graph_router
 from doorae.api.v1.skills import router as skills_api_router
 from doorae.api.v1.mcp_templates import router as mcp_templates_router
 from doorae.api.v1.projects import router as projects_router
+from doorae.llm_gateway.reverse_proxy import router as llm_proxy_router
 from doorae.mcp import router as mcp_rpc_router
 from doorae.auth.routes import router as auth_router
 from doorae.api.v1.invites import router as invites_router
@@ -522,6 +523,11 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(saved_router)
     app.include_router(search_router)
     app.include_router(tasks_router)
+    # #197 — LLM gateway reverse proxy. The handler checks
+    # ``app.state.llm_gateway_{client,supervisor}`` at request time and
+    # responds 503 when the gateway is not wired (feature flag off),
+    # so including the router unconditionally is safe.
+    app.include_router(llm_proxy_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
