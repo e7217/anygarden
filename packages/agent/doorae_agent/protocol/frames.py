@@ -37,7 +37,39 @@ class JoinRoomFrame(BaseModel):
     room_id: str
 
 
-IncomingFrame = SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame
+class LifecycleFrame(BaseModel):
+    """Agent-emitted handler/engine lifecycle event.
+
+    Sent over the per-room WS when the agent-side supervisor enters
+    or exits a phase. The cluster persists these verbatim into
+    ``ActivityLog`` so a single ``request_id`` can be traced end to
+    end: ``message_received`` (cluster) → ``handler_started`` →
+    ``engine_call_started`` → ``engine_call_finished`` →
+    ``handler_finished`` → ``response_sent`` (cluster).
+
+    Design reference: docs/plans/2026-04-20-agent-observability-design.md
+    §2 "Wire protocol".
+    """
+    type: Literal["lifecycle"] = "lifecycle"
+    request_id: str
+    room_id: str
+    event: Literal[
+        "handler_started",
+        "handler_finished",
+        "engine_call_started",
+        "engine_call_finished",
+    ]
+    outcome: Optional[
+        Literal["ok", "failed", "timeout", "cancelled", "rejected"]
+    ] = None
+    duration_ms: Optional[int] = None
+    engine: Optional[str] = None
+    error: Optional[str] = None
+
+
+IncomingFrame = (
+    SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame | LifecycleFrame
+)
 
 
 def parse_incoming(data: dict[str, Any]) -> IncomingFrame:
@@ -52,6 +84,8 @@ def parse_incoming(data: dict[str, Any]) -> IncomingFrame:
             return CreateRoomFrame.model_validate(data)
         case "join_room":
             return JoinRoomFrame.model_validate(data)
+        case "lifecycle":
+            return LifecycleFrame.model_validate(data)
         case _:
             raise ValueError(f"Unknown frame type: {frame_type!r}")
 

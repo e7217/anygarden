@@ -468,6 +468,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     error=str(exc),
                 )
 
+    # #204 — orphan sweeper. Writes ``handler_orphaned`` rows when a
+    # ``handler_started`` has no matching ``handler_finished`` after
+    # 20 min (engine_timeout 15 min + 5 min slack). Disabled when
+    # ``DOORAE_ORPHAN_SWEEPER_INTERVAL_SEC=0`` (tests) or when a test
+    # double has already populated ``app.state.orphan_sweeper_task``.
+    orphan_task = getattr(app.state, "orphan_sweeper_task", None)
+    if orphan_task is None:
+        interval_env = os.environ.get(
+            "DOORAE_ORPHAN_SWEEPER_INTERVAL_SEC", "60"
+        )
+        try:
+            orphan_interval = float(interval_env)
+        except ValueError:
+            orphan_interval = 60.0
+        if orphan_interval > 0:
+            app.state.orphan_sweeper_task = asyncio.create_task(
+                _run_orphan_sweeper(app, orphan_interval),
+                name="orphan_sweeper",
+            )
+
     yield
 
     # #197 — Tear down the gateway before the engine / session factory
@@ -476,17 +496,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from doorae.llm_gateway.bootstrap import shutdown_gateway
     await shutdown_gateway(app)
 
-    # Shutdown: cancel the stale cron (if we spawned it) and wait for
-    # it to actually stop before the event loop tears down. A gather
-    # with return_exceptions keeps the shutdown path from being
+    # Shutdown: cancel background crons and wait for them to actually
+    # stop before the event loop tears down. ``return_exceptions``
+    # via the explicit try/except keeps the shutdown path from being
     # poisoned by CancelledError or a late task exception.
-    task: asyncio.Task | None = getattr(app.state, "skill_stale_task", None)
-    if task is not None and not task.done():
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+    for attr in ("skill_stale_task", "orphan_sweeper_task"):
+        task: asyncio.Task | None = getattr(app.state, attr, None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
     if not engine_provided:
         await app.state.engine.dispose()
@@ -537,6 +558,45 @@ async def _run_skill_stale_cron(app: FastAPI, interval_seconds: float) -> None:
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("skill_library.stale_sweep_error", error=str(exc))
+
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            return
+
+
+async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
+    """Periodically promote stuck ``handler_started`` rows to
+    ``handler_orphaned``.
+
+    See ``doorae.scheduler.lifecycle.sweep_orphaned_requests`` for
+    the semantics. This wrapper only handles scheduling, error
+    containment (one bad sweep must not kill the loop), and
+    warm-up delay so a freshly-booted server doesn't do DB work in
+    the first second of lifespan.
+    """
+    import structlog
+
+    from doorae.scheduler.lifecycle import sweep_orphaned_requests
+
+    log = structlog.get_logger("orphan_sweeper")
+
+    warmup = min(15.0, interval_seconds)
+    try:
+        await asyncio.sleep(warmup)
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        try:
+            factory = app.state.session_factory
+            n = await sweep_orphaned_requests(factory)
+            if n:
+                log.info("orphan_sweeper.marked", count=n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("orphan_sweeper.error", error=str(exc))
 
         try:
             await asyncio.sleep(interval_seconds)

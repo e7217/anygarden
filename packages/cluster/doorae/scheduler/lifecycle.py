@@ -9,9 +9,9 @@ tokens or replacement placement as needed.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -565,3 +565,104 @@ class AgentLifecycle:
         if url.startswith("wss://"):
             return "https://" + url[len("wss://"):]
         return url
+
+
+# ── Issue #204 — orphan sweeper ──────────────────────────────────────
+
+
+#: Default age at which a ``handler_started`` without a matching
+#: ``handler_finished`` is promoted to ``handler_orphaned``. Sized
+#: as the agent-side engine timeout (15 min) plus 5 min of slack
+#: for reconnects/cluster hops. Overridable per call for tests.
+ORPHAN_THRESHOLD_SEC_DEFAULT = 1200
+
+
+async def sweep_orphaned_requests(
+    session_factory,
+    *,
+    threshold_sec: int = ORPHAN_THRESHOLD_SEC_DEFAULT,
+) -> int:
+    """Mark stalled handlers as ``handler_orphaned``.
+
+    For every ``request_id`` whose earliest ``handler_started`` is
+    older than *threshold_sec* and which has no terminal event
+    (``handler_finished`` or prior ``handler_orphaned``) yet,
+    insert a single ``handler_orphaned`` row.
+
+    Idempotent by construction: the ``HAVING`` clause excludes
+    already-orphaned requests. Returns the number of new orphan
+    rows written.
+    """
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=threshold_sec)
+
+    started_expr = func.sum(
+        case((ActivityLog.event_type == "handler_started", 1), else_=0)
+    ).label("n_started")
+    terminal_expr = func.sum(
+        case(
+            (
+                ActivityLog.event_type.in_(
+                    ["handler_finished", "handler_orphaned"]
+                ),
+                1,
+            ),
+            else_=0,
+        )
+    ).label("n_terminal")
+    earliest_ts = func.min(ActivityLog.timestamp).label("started_at")
+
+    async with session_factory() as db:
+        stmt = (
+            select(
+                ActivityLog.request_id,
+                ActivityLog.agent_id,
+                earliest_ts,
+            )
+            .where(
+                ActivityLog.request_id.isnot(None),
+                ActivityLog.timestamp < threshold,
+            )
+            .group_by(ActivityLog.request_id, ActivityLog.agent_id)
+            .having(and_(started_expr > 0, terminal_expr == 0))
+        )
+
+        rows = (await db.execute(stmt)).all()
+
+        # ``room_id`` lives inside the JSON ``details`` and varies
+        # across dialects' JSON path syntax; fetch it with a second
+        # pass by looking up one handler_started row per group.
+        # This is fine at orphan scale — orphans are rare by design
+        # (engine_timeout already closes the common case).
+        new_rows = 0
+        for req_id, agent_id, started_at in rows:
+            started_row = (
+                await db.execute(
+                    select(ActivityLog.details)
+                    .where(
+                        ActivityLog.request_id == req_id,
+                        ActivityLog.event_type == "handler_started",
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            room_id = None
+            if isinstance(started_row, dict):
+                room_id = started_row.get("room_id")
+
+            db.add(
+                ActivityLog(
+                    agent_id=agent_id,
+                    event_type="handler_orphaned",
+                    request_id=req_id,
+                    details={
+                        "room_id": room_id,
+                        "started_at": started_at.isoformat()
+                        if started_at is not None
+                        else None,
+                        "threshold_sec": threshold_sec,
+                    },
+                )
+            )
+            new_rows += 1
+        await db.commit()
+        return new_rows

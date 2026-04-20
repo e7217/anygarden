@@ -8,6 +8,7 @@ preserved without rebuilding prompt history every message.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -23,6 +24,7 @@ from doorae_agent.coordination.pending_context import (
     format_context_line,
 )
 from doorae_agent.integrations.base import EngineAdapter
+from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 
 logger = structlog.get_logger(__name__)
 
@@ -360,6 +362,13 @@ async def integrate_with_codex(
     adapter = CodexAdapter(model=model, system_prompt=system_prompt, reasoning_effort=reasoning_effort)
     await adapter.start()
 
+    engine_timeout = float(
+        os.environ.get("DOORAE_AGENT_ENGINE_TIMEOUT_SEC", "900")
+    )
+    supervisor = RoomHandlerSupervisor(
+        client=client, engine_name="codex", engine_timeout=engine_timeout
+    )
+
     @client.on_message
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
@@ -390,26 +399,39 @@ async def integrate_with_codex(
             await execute_room_query(client, msg, rq)
             return
 
-        # Keep typing indicator alive while codex processes
-        typing_active = True
+        # #204 — route through the supervisor: one handler per room
+        # (second concurrent dispatch is rejected), lifecycle events
+        # emitted per phase, engine call wrapped in wait_for so a
+        # hung subprocess can't loop forever. The typing loop stays
+        # in the local closure so the "…typing" UX survives, but it
+        # no longer drives the DB log — lifecycle events do.
+        request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def _typing_loop() -> None:
-            while typing_active:
-                await client.sendTyping(room_id, True)
-                await asyncio.sleep(2)
+        async def run_engine() -> str:
+            typing_active = True
 
-        typing_task = asyncio.create_task(_typing_loop())
-        try:
-            response = await adapter.on_message(msg)
-            if response:
-                await client.send(room_id, response)
-        finally:
-            typing_active = False
-            typing_task.cancel()
+            async def _typing_loop() -> None:
+                while typing_active:
+                    await client.sendTyping(room_id, True)
+                    await asyncio.sleep(2)
+
+            typing_task = asyncio.create_task(_typing_loop())
             try:
-                await typing_task
-            except asyncio.CancelledError:
-                pass
-            await client.sendTyping(room_id, False)
+                response = await adapter.on_message(msg)
+                return response or ""
+            finally:
+                typing_active = False
+                typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
+                await client.sendTyping(room_id, False)
+
+        await supervisor.dispatch(
+            room_id=room_id,
+            request_id=request_id,
+            run_engine=run_engine,
+        )
 
     return adapter

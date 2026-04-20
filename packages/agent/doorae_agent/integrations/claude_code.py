@@ -26,6 +26,7 @@ to happen; pin it explicitly so future refactors don't strip it.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,7 @@ from doorae_agent.coordination.pending_context import (
     format_context_line,
 )
 from doorae_agent.integrations.base import EngineAdapter
+from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 
 
 # #197 — Anthropic-SDK env var names the claude-agent-sdk reads when
@@ -487,6 +489,13 @@ async def integrate_with_claude_code(
     )
     await adapter.start()
 
+    engine_timeout = float(
+        os.environ.get("DOORAE_AGENT_ENGINE_TIMEOUT_SEC", "900")
+    )
+    supervisor = RoomHandlerSupervisor(
+        client=client, engine_name="claude-code", engine_timeout=engine_timeout
+    )
+
     @client.on_message
     async def _handle(msg: dict[str, Any]) -> None:
         room_id = msg.get("room_id", "")
@@ -519,29 +528,37 @@ async def integrate_with_claude_code(
             await execute_room_query(client, msg, rq)
             return
 
-        # Keep the typing indicator alive while Claude Code thinks.
-        typing_active = True
+        # #204 — supervisor-routed path; see codex.py for rationale.
+        request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def _typing_loop() -> None:
-            while typing_active:
-                await client.sendTyping(room_id, True)
-                await asyncio.sleep(2)
+        async def run_engine() -> str:
+            typing_active = True
 
-        typing_task = asyncio.create_task(_typing_loop())
-        try:
-            response = await adapter.on_message(msg)
-            # Promote the last session id captured during query back
-            # into the per-room session map, so the next turn can
-            # resume the conversation.
-            sid = getattr(adapter, "_last_session_id", None)
-            if sid is not None and room_id:
-                adapter._sessions[room_id] = sid
-                adapter._last_session_id = None
-            if response:
-                await client.send(room_id, response)
-        finally:
-            typing_active = False
-            typing_task.cancel()
-            await client.sendTyping(room_id, False)
+            async def _typing_loop() -> None:
+                while typing_active:
+                    await client.sendTyping(room_id, True)
+                    await asyncio.sleep(2)
+
+            typing_task = asyncio.create_task(_typing_loop())
+            try:
+                response = await adapter.on_message(msg)
+                # Promote the last session id captured during query back
+                # into the per-room session map, so the next turn can
+                # resume the conversation.
+                sid = getattr(adapter, "_last_session_id", None)
+                if sid is not None and room_id:
+                    adapter._sessions[room_id] = sid
+                    adapter._last_session_id = None
+                return response or ""
+            finally:
+                typing_active = False
+                typing_task.cancel()
+                await client.sendTyping(room_id, False)
+
+        await supervisor.dispatch(
+            room_id=room_id,
+            request_id=request_id,
+            run_engine=run_engine,
+        )
 
     return adapter
