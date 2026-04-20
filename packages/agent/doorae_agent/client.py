@@ -14,7 +14,7 @@ import websockets
 from websockets.asyncio.client import connect as ws_connect
 
 from doorae_agent.integrations.cycle_guard import hash_content
-from doorae_agent.protocol.frames import MessageOut, SendFrame
+from doorae_agent.protocol.frames import LifecycleFrame, MessageOut, SendFrame
 from doorae_agent.protocol.versioning import build_subprotocols
 
 logger = structlog.get_logger(__name__)
@@ -213,6 +213,40 @@ class ChatClient:
             return
         try:
             await ws.send(json.dumps({"type": "typing", "is_typing": is_typing}))
+        except Exception:
+            pass
+
+    async def sendLifecycle(
+        self,
+        room_id: str,
+        request_id: str | None,
+        event: str,
+        **details: Any,
+    ) -> None:
+        """Emit a LifecycleFrame over the room's WS (best-effort).
+
+        No-ops when there is no active subscription for *room_id*
+        or when *request_id* is None (proactive sends without a
+        triggering user message are not tracked through the
+        lifecycle). Transport errors are swallowed — lifecycle
+        emission failing must never kill the handler, since an
+        already-fragile network path is the original source of the
+        bug we're trying to diagnose.
+        """
+        if request_id is None:
+            return
+        ws = self._connections.get(room_id)
+        if ws is None:
+            return
+        payload = {k: v for k, v in details.items() if v is not None}
+        frame = LifecycleFrame(
+            request_id=request_id,
+            room_id=room_id,
+            event=event,
+            **payload,
+        )
+        try:
+            await ws.send(frame.model_dump_json(exclude_none=True))
         except Exception:
             pass
 
