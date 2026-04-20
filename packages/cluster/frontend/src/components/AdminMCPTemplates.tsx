@@ -6,9 +6,18 @@ import { Label } from '@/components/ui/label'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
-import { Plug, Plus, Trash2, RefreshCw, Link as LinkIcon } from 'lucide-react'
+import { Plug, Plus, Trash2, RefreshCw, Link as LinkIcon, X } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
+import {
+  slugify,
+  extractPlaceholders,
+  buildTemplatePayload,
+  parseTemplateIntoForm,
+  SUPPORTED_ENGINE_IDS,
+  type TemplateFormState,
+  type EnvRow,
+} from '@/lib/mcpTemplateForm'
 
 /**
  * MCP server template catalog admin page (#124).
@@ -473,89 +482,263 @@ interface CustomEditorProps {
   onSaved: () => Promise<void>
 }
 
-function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
-  const isCreate = template.id === ''
-  const [name, setName] = useState(template.name)
-  const [displayName, setDisplayName] = useState(template.display_name)
-  const [description, setDescription] = useState(template.description ?? '')
-  const [requiredEnvText, setRequiredEnvText] = useState(
-    template.required_env_vars.join(', '),
-  )
-  const [supportedEngines, setSupportedEngines] = useState<Set<EngineId>>(
-    new Set(template.supported_engines as EngineId[]),
-  )
-  const [configText, setConfigText] = useState(
-    JSON.stringify(
+// ── Advanced fallback state ──────────────────────────────────────
+
+interface AdvancedState {
+  slug: string
+  requiredEnvText: string
+  supportedEngines: Set<EngineId>
+  configText: string
+}
+
+function makeInitialSimpleForm(): TemplateFormState {
+  return {
+    slug: '',
+    displayName: '',
+    description: '',
+    command: 'npx',
+    args: [''],
+    envRows: [],
+  }
+}
+
+function makeAdvancedStateFromTemplate(template: Template): AdvancedState {
+  return {
+    slug: template.name,
+    requiredEnvText: template.required_env_vars.join(', '),
+    supportedEngines: new Set(template.supported_engines as EngineId[]),
+    configText: JSON.stringify(
       template.config_per_engine && Object.keys(template.config_per_engine).length > 0
         ? template.config_per_engine
         : { 'claude-code': { command: 'npx', args: [], env: {} } },
-      null, 2,
+      null,
+      2,
     ),
+  }
+}
+
+function makeAdvancedStateFromForm(form: TemplateFormState): AdvancedState {
+  const payload = buildTemplatePayload(form)
+  return {
+    slug: form.slug,
+    requiredEnvText: payload.required_env_vars.join(', '),
+    supportedEngines: new Set(SUPPORTED_ENGINE_IDS as readonly EngineId[]),
+    configText: JSON.stringify(payload.config_per_engine, null, 2),
+  }
+}
+
+function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
+  const isCreate = template.id === ''
+
+  const initial = useMemo(() => {
+    if (isCreate) {
+      return {
+        mode: 'simple' as const,
+        form: { ...makeInitialSimpleForm(), displayName: template.display_name },
+        advanced: undefined,
+      }
+    }
+    const parsed = parseTemplateIntoForm({
+      name: template.name,
+      display_name: template.display_name,
+      description: template.description,
+      config_per_engine: template.config_per_engine,
+      required_env_vars: template.required_env_vars,
+      supported_engines: template.supported_engines,
+    })
+    if (parsed.mode === 'simple') {
+      return { mode: 'simple' as const, form: parsed.state, advanced: undefined }
+    }
+    return {
+      mode: 'advanced' as const,
+      form: { ...makeInitialSimpleForm(), slug: template.name, displayName: template.display_name },
+      advanced: makeAdvancedStateFromTemplate(template),
+    }
+  }, [isCreate, template])
+
+  const [mode, setMode] = useState<'simple' | 'advanced'>(initial.mode)
+  const [form, setForm] = useState<TemplateFormState>(initial.form)
+  const [advanced, setAdvanced] = useState<AdvancedState>(
+    initial.advanced ?? makeAdvancedStateFromTemplate(template),
   )
+  const [slugTouched, setSlugTouched] = useState<boolean>(!isCreate)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const toggleEngine = (engine: EngineId) => {
-    setSupportedEngines(prev => {
-      const next = new Set(prev)
+  // Create 모드에서 display name 변경 시 slug 자동 유도 (사용자가 직접 편집한 적 없을 때만).
+  useEffect(() => {
+    if (!isCreate || slugTouched) return
+    setForm(prev => ({ ...prev, slug: slugify(prev.displayName) }))
+  }, [form.displayName, isCreate, slugTouched])
+
+  const placeholders = useMemo(
+    () => extractPlaceholders([
+      ...form.args,
+      Object.fromEntries(
+        form.envRows
+          .filter(r => r.key.trim())
+          .map(r => [r.key.trim(), r.secret ? `\${${r.key.trim()}}` : r.value]),
+      ),
+    ]),
+    [form.args, form.envRows],
+  )
+
+  const updateArg = (i: number, value: string) => {
+    setForm(prev => ({ ...prev, args: prev.args.map((a, idx) => (idx === i ? value : a)) }))
+  }
+  const addArg = () => setForm(prev => ({ ...prev, args: [...prev.args, ''] }))
+  const removeArg = (i: number) => {
+    setForm(prev => ({ ...prev, args: prev.args.filter((_, idx) => idx !== i) }))
+  }
+
+  const updateEnv = (i: number, patch: Partial<EnvRow>) => {
+    setForm(prev => ({
+      ...prev,
+      envRows: prev.envRows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)),
+    }))
+  }
+  const addEnv = () => {
+    setForm(prev => ({ ...prev, envRows: [...prev.envRows, { key: '', secret: true, value: '' }] }))
+  }
+  const removeEnv = (i: number) => {
+    setForm(prev => ({ ...prev, envRows: prev.envRows.filter((_, idx) => idx !== i) }))
+  }
+
+  const toggleAdvanced = () => {
+    if (mode === 'simple') {
+      // simple → advanced: 현재 form을 fan-out한 결과를 advanced state로 시드.
+      setAdvanced(makeAdvancedStateFromForm(form))
+      setMode('advanced')
+    } else {
+      // advanced → simple: parseTemplateIntoForm으로 복원 시도.
+      try {
+        const parsed = JSON.parse(advanced.configText) as Record<string, Record<string, unknown>>
+        const out = parseTemplateIntoForm({
+          name: advanced.slug,
+          display_name: form.displayName,
+          description: form.description,
+          config_per_engine: parsed,
+          required_env_vars: advanced.requiredEnvText
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean),
+          supported_engines: Array.from(advanced.supportedEngines),
+        })
+        if (out.mode === 'advanced') {
+          setError('Current advanced config cannot be represented in simple mode (engine divergence or non-stdio keys).')
+          return
+        }
+        setForm(out.state)
+        setError(null)
+        setMode('simple')
+      } catch (e) {
+        setError(`config_per_engine is not valid JSON: ${(e as Error).message}`)
+      }
+    }
+  }
+
+  const toggleAdvancedEngine = (engine: EngineId) => {
+    setAdvanced(prev => {
+      const next = new Set(prev.supportedEngines)
       if (next.has(engine)) next.delete(engine)
       else next.add(engine)
-      return next
+      return { ...prev, supportedEngines: next }
     })
   }
+
+  const saveOnce = useCallback(async (slugOverride: string): Promise<{ ok: true } | { ok: false; status: number; detail: string }> => {
+    let body: Record<string, unknown>
+    if (mode === 'simple') {
+      const payload = buildTemplatePayload({ ...form, slug: slugOverride })
+      body = {
+        name: payload.name,
+        display_name: payload.display_name,
+        description: payload.description,
+        icon: payload.icon,
+        config_per_engine: payload.config_per_engine,
+        required_env_vars: payload.required_env_vars,
+        supported_engines: payload.supported_engines,
+      }
+    } else {
+      let configParsed: Record<string, Record<string, unknown>>
+      try {
+        configParsed = JSON.parse(advanced.configText)
+      } catch (e) {
+        return { ok: false, status: 0, detail: `config_per_engine is not valid JSON: ${(e as Error).message}` }
+      }
+      body = {
+        name: slugOverride,
+        display_name: form.displayName.trim(),
+        description: form.description.trim() || null,
+        icon: null,
+        config_per_engine: configParsed,
+        required_env_vars: advanced.requiredEnvText.split(',').map(s => s.trim()).filter(Boolean),
+        supported_engines: Array.from(advanced.supportedEngines),
+      }
+    }
+    const resp = isCreate
+      ? await apiFetch('/api/v1/admin/mcp-templates', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        })
+      : await apiFetch(`/api/v1/admin/mcp-templates/${template.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            display_name: body.display_name,
+            description: body.description,
+            config_per_engine: body.config_per_engine,
+            required_env_vars: body.required_env_vars,
+            supported_engines: body.supported_engines,
+          }),
+        })
+    if (resp.ok) return { ok: true }
+    let detail = `Save failed (${resp.status})`
+    try {
+      const j = await resp.json()
+      if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    } catch { /* ignore */ }
+    return { ok: false, status: resp.status, detail }
+  }, [mode, form, advanced, isCreate, template.id])
 
   const handleSave = useCallback(async () => {
     setBusy(true)
     setError(null)
     try {
-      let configParsed: Record<string, Record<string, unknown>>
-      try {
-        configParsed = JSON.parse(configText)
-      } catch (e) {
-        throw new Error(`config_per_engine is not valid JSON: ${(e as Error).message}`)
+      const initialSlug = (mode === 'simple' ? form.slug : advanced.slug).trim()
+      if (!initialSlug) {
+        setError('Slug cannot be empty.')
+        return
       }
-      const body = {
-        name: name.trim(),
-        display_name: displayName.trim(),
-        description: description.trim() || null,
-        icon: null as string | null,
-        config_per_engine: configParsed,
-        required_env_vars: requiredEnvText
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean),
-        supported_engines: Array.from(supportedEngines),
+      if (!form.displayName.trim()) {
+        setError('Display name cannot be empty.')
+        return
       }
-      const resp = isCreate
-        ? await apiFetch('/api/v1/admin/mcp-templates', {
-            method: 'POST', body: JSON.stringify(body),
-          })
-        : await apiFetch(`/api/v1/admin/mcp-templates/${template.id}`, {
-            method: 'PUT',
-            body: JSON.stringify({
-              display_name: body.display_name,
-              description: body.description,
-              config_per_engine: body.config_per_engine,
-              required_env_vars: body.required_env_vars,
-              supported_engines: body.supported_engines,
-            }),
-          })
-      if (!resp.ok) {
-        let detail = `Save failed (${resp.status})`
-        try {
-          const j = await resp.json()
-          if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
-        } catch { /* ignore */ }
-        throw new Error(detail)
+      // Create 모드에서만 slug 충돌 시 suffix 재시도. Edit 모드는 slug 불변.
+      const maxAttempts = isCreate ? 3 : 1
+      let candidate = initialSlug
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const result = await saveOnce(candidate)
+        if (result.ok) {
+          await onSaved()
+          return
+        }
+        if (result.status === 409 && attempt < maxAttempts && isCreate) {
+          candidate = `${initialSlug}-${attempt + 1}`
+          continue
+        }
+        setError(result.detail + (result.status === 409
+          ? ' (Try a different display name or set a custom slug in Advanced mode.)'
+          : ''))
+        return
       }
-      await onSaved()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
-  }, [isCreate, template.id, name, displayName, description, configText,
-      requiredEnvText, supportedEngines, onSaved])
+  }, [mode, form.slug, form.displayName, advanced.slug, isCreate, saveOnce, onSaved])
+
+  const saveDisabled = busy
+    || !form.displayName.trim()
+    || (mode === 'simple' ? !form.slug.trim() || !form.command.trim() : !advanced.slug.trim())
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
@@ -565,85 +748,238 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
             {isCreate ? 'New MCP template' : `Edit ${template.name}`}
           </DialogTitle>
           <DialogDescription>
-            Define a custom MCP server. The <code>config_per_engine</code> JSON
-            is the engine-native body (<code>mcpServers.&lt;name&gt;</code> for
-            Claude / Gemini, <code>[mcp_servers.&lt;name&gt;]</code> for Codex).
+            Register a stdio MCP server. Use <code>${'${VAR}'}</code> in args or
+            env values for placeholders that admins will fill in per agent.
           </DialogDescription>
         </DialogHeader>
+
         <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto">
-          <div>
-            <Label htmlFor="mcp-name">Name (slug)</Label>
-            <Input
-              id="mcp-name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="internal-kb"
-              disabled={!isCreate}
-            />
-          </div>
-          <div>
-            <Label htmlFor="mcp-display">Display name</Label>
-            <Input
-              id="mcp-display"
-              value={displayName}
-              onChange={e => setDisplayName(e.target.value)}
-              placeholder="Internal Knowledge Base"
-            />
-          </div>
-          <div>
-            <Label htmlFor="mcp-desc">Description</Label>
-            <Input
-              id="mcp-desc"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label>Supported engines</Label>
-            <div className="flex flex-wrap gap-2 pt-1">
-              {SUPPORTED_ENGINES.map(engine => (
-                <label
-                  key={engine}
-                  className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-2 py-1 text-xs cursor-pointer"
-                >
-                  <input
-                    type="checkbox"
-                    checked={supportedEngines.has(engine)}
-                    onChange={() => toggleEngine(engine)}
-                  />
-                  {engine}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div>
-            <Label htmlFor="mcp-env">Required env vars (comma-separated)</Label>
-            <Input
-              id="mcp-env"
-              value={requiredEnvText}
-              onChange={e => setRequiredEnvText(e.target.value)}
-              placeholder="API_KEY, ORG_ID"
-            />
-          </div>
-          <div>
-            <Label htmlFor="mcp-config">config_per_engine (JSON)</Label>
-            <textarea
-              id="mcp-config"
-              value={configText}
-              onChange={e => setConfigText(e.target.value)}
-              className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 font-mono text-xs"
-            />
-          </div>
-          {error && (
-            <p className="text-xs text-[var(--color-danger)] whitespace-pre-wrap">{error}</p>
+          {mode === 'simple' ? (
+            <>
+              <div>
+                <Label htmlFor="mcp-display">Display name</Label>
+                <Input
+                  id="mcp-display"
+                  value={form.displayName}
+                  onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))}
+                  placeholder="Internal Knowledge Base"
+                />
+              </div>
+              <div>
+                <Label htmlFor="mcp-slug">
+                  Slug
+                  {isCreate && !slugTouched && (
+                    <span className="ml-1 text-[10px] font-normal text-[var(--color-foreground-subtle)]">
+                      (auto)
+                    </span>
+                  )}
+                </Label>
+                <Input
+                  id="mcp-slug"
+                  value={form.slug}
+                  onChange={e => {
+                    setSlugTouched(true)
+                    setForm(prev => ({ ...prev, slug: e.target.value }))
+                  }}
+                  placeholder="internal-knowledge-base"
+                  disabled={!isCreate}
+                />
+              </div>
+              <div>
+                <Label htmlFor="mcp-desc">Description</Label>
+                <Input
+                  id="mcp-desc"
+                  value={form.description}
+                  onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>Transport</Label>
+                <div className="mt-1 inline-flex rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-background)] px-2 py-1 text-xs text-[var(--color-foreground-muted)]">
+                  stdio
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="mcp-command">Command</Label>
+                <Input
+                  id="mcp-command"
+                  value={form.command}
+                  onChange={e => setForm(prev => ({ ...prev, command: e.target.value }))}
+                  placeholder="npx"
+                />
+              </div>
+              <div>
+                <Label>Args</Label>
+                <div className="space-y-1.5 pt-1">
+                  {form.args.map((arg, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        value={arg}
+                        onChange={e => updateArg(i, e.target.value)}
+                        placeholder={i === 0 ? '-y' : '@modelcontextprotocol/server-*'}
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeArg(i)}
+                        aria-label={`Remove arg ${i + 1}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button variant="ghost" size="sm" onClick={addArg}>
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add arg
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Label>Environment variables</Label>
+                <div className="space-y-1.5 pt-1">
+                  {form.envRows.map((row, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input
+                        value={row.key}
+                        onChange={e => updateEnv(i, { key: e.target.value })}
+                        placeholder="GITHUB_TOKEN"
+                        className="flex-1 font-mono text-xs"
+                      />
+                      <label className="flex shrink-0 items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                        <input
+                          type="checkbox"
+                          checked={row.secret}
+                          onChange={e => updateEnv(i, { secret: e.target.checked })}
+                        />
+                        Secret
+                      </label>
+                      {!row.secret && (
+                        <Input
+                          value={row.value}
+                          onChange={e => updateEnv(i, { value: e.target.value })}
+                          placeholder="value"
+                          className="flex-1 text-xs"
+                        />
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeEnv(i)}
+                        aria-label={`Remove env ${i + 1}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button variant="ghost" size="sm" onClick={addEnv}>
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add env
+                  </Button>
+                </div>
+              </div>
+              <div>
+                <Label className="text-[var(--color-foreground-muted)]">
+                  Required placeholders (auto)
+                </Label>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {placeholders.length === 0 ? (
+                    <span className="text-xs text-[var(--color-foreground-subtle)]">
+                      None detected.
+                    </span>
+                  ) : (
+                    placeholders.map(p => (
+                      <Badge key={p} variant="outline" className="font-mono text-[10px]">
+                        {p}
+                      </Badge>
+                    ))
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <Label htmlFor="mcp-slug-adv">Slug</Label>
+                <Input
+                  id="mcp-slug-adv"
+                  value={advanced.slug}
+                  onChange={e => setAdvanced(prev => ({ ...prev, slug: e.target.value }))}
+                  placeholder="internal-kb"
+                  disabled={!isCreate}
+                />
+              </div>
+              <div>
+                <Label htmlFor="mcp-display-adv">Display name</Label>
+                <Input
+                  id="mcp-display-adv"
+                  value={form.displayName}
+                  onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label htmlFor="mcp-desc-adv">Description</Label>
+                <Input
+                  id="mcp-desc-adv"
+                  value={form.description}
+                  onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>Supported engines</Label>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {SUPPORTED_ENGINES.map(engine => (
+                    <label
+                      key={engine}
+                      className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-2 py-1 text-xs cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={advanced.supportedEngines.has(engine)}
+                        onChange={() => toggleAdvancedEngine(engine)}
+                      />
+                      {engine}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="mcp-env-adv">Required env vars (comma-separated)</Label>
+                <Input
+                  id="mcp-env-adv"
+                  value={advanced.requiredEnvText}
+                  onChange={e => setAdvanced(prev => ({ ...prev, requiredEnvText: e.target.value }))}
+                  placeholder="API_KEY, ORG_ID"
+                />
+              </div>
+              <div>
+                <Label htmlFor="mcp-config-adv">config_per_engine (JSON)</Label>
+                <textarea
+                  id="mcp-config-adv"
+                  value={advanced.configText}
+                  onChange={e => setAdvanced(prev => ({ ...prev, configText: e.target.value }))}
+                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 font-mono text-xs"
+                />
+              </div>
+            </>
           )}
         </div>
+
+        {error && (
+          <p className="px-1 pb-2 text-xs text-[var(--color-danger)] whitespace-pre-wrap">
+            {error}
+          </p>
+        )}
+
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
           <Button
-            onClick={() => void handleSave()}
-            disabled={busy || !name.trim() || !displayName.trim()}
+            variant="ghost"
+            size="sm"
+            onClick={toggleAdvanced}
+            className="mr-auto text-[var(--color-foreground-muted)]"
           >
+            {mode === 'simple' ? 'Advanced ▸' : '◂ Simple'}
+          </Button>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={() => void handleSave()} disabled={saveDisabled}>
             {busy ? 'Saving…' : isCreate ? 'Create' : 'Save'}
           </Button>
         </DialogFooter>
