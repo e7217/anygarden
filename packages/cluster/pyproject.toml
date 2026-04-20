@@ -31,6 +31,10 @@ dependencies = [
     # mcp_templates package has an explicit dependency contract.
     "cryptography>=42",
     "tomli-w>=1.0",
+    # #197 — LiteLLM gateway config.yaml rendering. Was previously
+    # available only transitively via doorae-machine; pinned directly
+    # now that llm_gateway/config_writer.py consumes it.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
