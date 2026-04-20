@@ -166,6 +166,33 @@ class ConnectionManager:
                 # Connection already closed — will be cleaned up on next unsubscribe.
                 pass
 
+    async def broadcast_tailored(
+        self,
+        room_id: str,
+        make_frame,
+    ) -> None:
+        """Broadcast to a room with a per-recipient frame factory.
+
+        ``make_frame(participant_id) -> OutgoingFrame`` is invoked
+        once per subscriber. Used when the outgoing payload must
+        vary per recipient — specifically, fan-out of a user
+        message where each agent gets its own
+        ``metadata.request_id`` so subsequent lifecycle events can
+        be linked to this particular invocation.
+
+        Per-subscriber errors are swallowed (same semantics as
+        ``broadcast``); dead connections are cleaned up on their
+        next unsubscribe.
+        """
+        async with self._lock:
+            subs = list(self._rooms.get(room_id, []))
+        for sub in subs:
+            try:
+                frame = make_frame(sub.participant_id)
+                await sub.ws.send_text(frame.model_dump_json())
+            except Exception:
+                pass
+
     async def connected_participant_ids(self) -> set[str]:
         """Return the set of participant IDs that have an active subscription."""
         async with self._lock:

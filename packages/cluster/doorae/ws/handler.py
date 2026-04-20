@@ -29,6 +29,7 @@ from doorae.orchestration.rules import (
 )
 from doorae.ws.protocol import (
     ErrorOut,
+    LifecycleFrame,
     MessageOut,
     TypingOut,
     WelcomeOut,
@@ -40,6 +41,39 @@ from doorae.ws.protocol import (
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+
+def _lifecycle_details(frame: LifecycleFrame) -> dict[str, Any]:
+    """Extract the JSON details payload from a LifecycleFrame.
+
+    All optional fields are included only when set (mirrors the wire
+    format's ``exclude_none`` dump). ``room_id`` is always present.
+    """
+    out: dict[str, Any] = {"room_id": frame.room_id}
+    if frame.engine is not None:
+        out["engine"] = frame.engine
+    if frame.outcome is not None:
+        out["outcome"] = frame.outcome
+    if frame.duration_ms is not None:
+        out["duration_ms"] = frame.duration_ms
+    if frame.error is not None:
+        out["error"] = frame.error
+    return out
+
+
+async def _persist_lifecycle_event(
+    db: AsyncSession, *, agent_id: str, frame: LifecycleFrame
+) -> None:
+    """Write a LifecycleFrame as an ActivityLog row.
+
+    Commit is the caller's responsibility.
+    """
+    db.add(ActivityLog(
+        agent_id=agent_id,
+        event_type=frame.event,
+        request_id=frame.request_id,
+        details=_lifecycle_details(frame),
+    ))
 
 
 def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
@@ -729,38 +763,73 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         metadata=metadata or None,
                     )
 
-                    # Log message events for agents (same transaction)
+                    # Log message events for agents (same transaction).
+                    # On user sends we mint a fresh ``request_id`` per
+                    # target agent (keyed by that agent's participant_id
+                    # so the tailored broadcast below can look it up).
+                    # On agent sends we echo the request_id back onto
+                    # ``response_sent`` so the full lifecycle chain
+                    # resolves under one identifier.
+                    request_id_by_participant: dict[str, str] = {}
                     if identity and identity.kind == "agent":
+                        echoed_rid = None
+                        if isinstance(metadata, dict):
+                            raw = metadata.get("request_id")
+                            if isinstance(raw, str):
+                                echoed_rid = raw
                         db.add(ActivityLog(
                             agent_id=identity.id,
                             event_type="response_sent",
+                            request_id=echoed_rid,
                             details={"room_id": room_id},
                         ))
                     elif identity and identity.kind == "user":
                         agent_parts = (await db.execute(
-                            select(Participant.agent_id).where(
+                            select(Participant.id, Participant.agent_id).where(
                                 Participant.room_id == room_id,
                                 Participant.agent_id.isnot(None),
                             )
-                        )).scalars().all()
-                        for aid in agent_parts:
+                        )).all()
+                        for pid, aid in agent_parts:
+                            rid = str(uuid4())
+                            request_id_by_participant[pid] = rid
                             db.add(ActivityLog(
                                 agent_id=aid,
                                 event_type="message_received",
-                                details={"room_id": room_id, "from_participant_id": participant.id},
+                                request_id=rid,
+                                details={
+                                    "room_id": room_id,
+                                    "from_participant_id": participant.id,
+                                },
                             ))
 
                     await db.commit()
-                    out = MessageOut(
+                    base_metadata = msg.extra_metadata
+
+                def _make_out(pid: str) -> MessageOut:
+                    """Per-recipient MessageOut.
+
+                    Agents receive ``metadata.request_id`` so they can
+                    thread their LifecycleFrame emissions back to this
+                    particular invocation. Non-agent subscribers see
+                    the stored metadata unchanged — ``request_id``
+                    never persists on the message row itself.
+                    """
+                    rid = request_id_by_participant.get(pid)
+                    meta = dict(base_metadata) if base_metadata else {}
+                    if rid is not None:
+                        meta["request_id"] = rid
+                    return MessageOut(
                         id=msg.id,
                         room_id=msg.room_id,
                         participant_id=msg.participant_id,
                         content=msg.content,
                         seq=msg.seq,
                         created_at=msg.created_at,
-                        metadata=msg.extra_metadata,
+                        metadata=meta or None,
                     )
-                await manager.broadcast(room_id, out)
+
+                await manager.broadcast_tailored(room_id, _make_out)
 
                 # Send system message if representative agent is offline
                 if metadata.get("_rep_offline"):
@@ -778,15 +847,23 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 )
                 await manager.broadcast(room_id, out_typing)
 
-                # Agent typing → log processing_started
-                if identity and identity.kind == "agent" and frame_in.is_typing:
+            elif isinstance(frame_in, LifecycleFrame):
+                # Agents only. Other identity kinds can't produce valid
+                # lifecycle events — drop silently rather than crash
+                # the session.
+                if identity and identity.kind == "agent":
                     async with session_factory() as db:
-                        db.add(ActivityLog(
-                            agent_id=identity.id,
-                            event_type="processing_started",
-                            details={"room_id": room_id},
-                        ))
+                        await _persist_lifecycle_event(
+                            db, agent_id=identity.id, frame=frame_in
+                        )
                         await db.commit()
+                else:
+                    logger.warning(
+                        "ws.lifecycle.dropped",
+                        reason="non-agent identity",
+                        room_id=room_id,
+                        identity_kind=(identity.kind if identity else None),
+                    )
 
             else:
                 await websocket.send_text(
