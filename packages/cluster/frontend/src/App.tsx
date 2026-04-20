@@ -8,8 +8,13 @@ import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
 import AdminSkillsPage from '@/pages/AdminSkillsPage'
 import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
+import AdminLLMGatewayPage from '@/pages/AdminLLMGatewayPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
+import { ModelsSection } from '@/components/admin-llm-gateway/ModelsSection'
+import { SecretsSection } from '@/components/admin-llm-gateway/SecretsSection'
+import { StatusSection } from '@/components/admin-llm-gateway/StatusSection'
+import { UsageSection } from '@/components/admin-llm-gateway/UsageSection'
 
 // Topology view is code-split. Pulls in @xyflow/react + dagre
 // (~110KB gzip combined) only when the route is actually visited.
@@ -60,6 +65,21 @@ export default function App() {
             <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
             <Route path="/admin/skills" element={<AdminRoute><AdminSkillsPage /></AdminRoute>} />
             <Route path="/admin/mcp-templates" element={<AdminRoute><AdminMCPTemplatesPage /></AdminRoute>} />
+            {/* #197 — LLM Gateway admin. Nested route: the shell owns the
+                secondary sidebar + Apply footer, each section is an
+                <Outlet/> child. The bare /admin/llm-gateway URL redirects
+                to /models so the shell always has a concrete section to
+                render. */}
+            <Route
+              path="/admin/llm-gateway"
+              element={<AdminRoute><AdminLLMGatewayPage /></AdminRoute>}
+            >
+              <Route index element={<Navigate to="models" replace />} />
+              <Route path="models" element={<ModelsSection />} />
+              <Route path="secrets" element={<SecretsSection />} />
+              <Route path="status" element={<StatusSection />} />
+              <Route path="usage" element={<UsageSection />} />
+            </Route>
             <Route
               path="/topology"
               element={
