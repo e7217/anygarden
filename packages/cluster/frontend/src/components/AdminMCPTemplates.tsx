@@ -753,7 +753,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3 py-2 max-h-[60vh] overflow-y-auto">
+        <div className="space-y-3 py-2 px-1 max-h-[60vh] overflow-y-auto">
           {mode === 'simple' ? (
             <>
               <div>
