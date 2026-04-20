@@ -135,7 +135,10 @@ class RoomHandlerSupervisor:
         )
 
         send_metadata = {"request_id": request_id} if request_id else None
-        if response is not None:
+        # Truthiness check: an empty string is a legitimate
+        # "no-reply" signal from the engine (e.g. ambient ingestion
+        # paths where the adapter deliberately returns "").
+        if response:
             await self._client.send(room_id, response, metadata=send_metadata)
         elif outcome == "timeout":
             await self._client.send(

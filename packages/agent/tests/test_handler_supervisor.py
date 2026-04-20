@@ -168,3 +168,22 @@ async def test_no_request_id_skips_user_metadata():
     await sup.dispatch(room_id="r1", request_id=None, run_engine=run_engine)
 
     assert client.sends == [("r1", "proactive", None)]
+
+
+@pytest.mark.asyncio
+async def test_empty_response_skips_send():
+    """An engine that returns '' (e.g. ambient-only turn) must not
+    be auto-sent as an empty message. Lifecycle still completes ok."""
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return ""
+
+    await sup.dispatch(room_id="r1", request_id="req-empty", run_engine=run_engine)
+
+    assert client.sends == []
+    outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert outcomes == ["ok"]
