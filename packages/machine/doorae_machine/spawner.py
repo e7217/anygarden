@@ -420,6 +420,41 @@ class Spawner:
                     mode=0o600,
                 )
 
+        # --- Symlink host codex auth into per-agent CODEX_HOME --------
+        # When ``Spawner.spawn`` is about to redirect ``CODEX_HOME`` at
+        # ``<agent_root>/.codex/`` (triggered by a ``.codex/*`` overlay
+        # on the manifest — MCP template or admin config), codex no
+        # longer reads the host user's ``~/.codex/auth.json`` that
+        # carries the ChatGPT-login / OAuth tokens. Deployments that
+        # rely on ``codex auth login`` (i.e. do NOT supply
+        # ``OPENAI_API_KEY`` via ``engine_secrets``) would then fail to
+        # authenticate at first turn — the task starts but the LLM
+        # call silently returns empty and the agent appears stuck.
+        #
+        # Symlinking the host auth.json into the per-agent codex home
+        # restores pre-#213 auth discovery semantics while keeping the
+        # per-agent config overlay and session isolation. Admin-
+        # authored ``.codex/auth.json`` in the manifest still wins
+        # because the file-write loop already ran, so
+        # ``per_agent_auth.exists()`` short-circuits the symlink.
+        #
+        # Multi-agent deployments end up sharing the host auth token
+        # via N symlinks pointing at the same file, which mirrors the
+        # pre-#213 behaviour where every codex agent read
+        # ``~/.codex/auth.json`` directly — no regression.
+        has_codex_overlay = any(
+            path.startswith(".codex/") for path in msg.files
+        )
+        if msg.engine == "codex" and has_codex_overlay:
+            per_agent_auth = agent_root / ".codex" / "auth.json"
+            host_auth = Path.home() / ".codex" / "auth.json"
+            if (
+                host_auth.is_file()
+                and not per_agent_auth.is_symlink()
+                and not per_agent_auth.exists()
+            ):
+                per_agent_auth.symlink_to(host_auth)
+
         # engine_secrets is NOT rendered to disk — it flows into the
         # subprocess environment via ``Spawner.spawn`` (#184). Writing
         # an ``.env`` file here would re-expose the plaintext keys to
