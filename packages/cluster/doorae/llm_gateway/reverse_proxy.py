@@ -143,6 +143,20 @@ _EXCLUDE_RESPONSE_HEADERS = frozenset(
 )
 
 
+# Identity kinds allowed to traverse the LLM gateway reverse proxy.
+# Agents are the expected caller for production traffic; machines are
+# kept on the allowlist so future system-initiated calls (operational
+# probes, gateway self-tests from the daemon) work without another
+# auth layer. User tokens — even admin ones — are rejected: admin
+# model-health checks go through ``/api/v1/llm-gateway/models/{id}/test``
+# which uses the gateway master key directly and never enters this
+# relay. Guest tokens never belong here at all: they are scoped to a
+# single room chat and have no reason to issue LLM calls directly,
+# so allowing them opens a cost-amplification path for anyone with
+# an invite link.
+_GATEWAY_IDENTITY_KINDS = frozenset({"agent", "machine"})
+
+
 @router.api_route(
     "/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -156,6 +170,16 @@ async def proxy(
     supervisor: Any = Depends(get_supervisor),
     db: AsyncSession = Depends(get_db),  # noqa: ARG001 - usage logging needs factory
 ) -> Response:
+    if identity.kind not in _GATEWAY_IDENTITY_KINDS:
+        # Hide the existence of the proxy surface from unauthorized
+        # callers by reusing the same 403 as other admin gates; the
+        # detail message is intentionally generic so a user can't
+        # enumerate which kinds are allowed.
+        raise HTTPException(
+            status_code=403,
+            detail="LLM gateway is not available to this identity",
+        )
+
     master_key = supervisor.master_key
     if master_key is None:
         raise HTTPException(status_code=503, detail="LLM gateway not ready")
