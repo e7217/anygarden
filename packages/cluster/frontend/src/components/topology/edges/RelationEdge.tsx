@@ -14,10 +14,10 @@ import { edgeStyleFor } from '../constants'
  * Reads ``data.kind`` + ``data.actor`` + ``data.is_representative`` and
  * dispatches to the correct path algorithm + style:
  *   - smoothstep for ``owns``, ``places``, ``parent_of``
- *   - smoothstep + Notion Blue 2px for ``participates`` with
- *     ``is_representative === true`` (formerly the ``represents`` edge
- *     kind — merged per #226 to eliminate duplicate overlapping lines)
- *   - straight + dashed for ``participates`` otherwise
+ *   - straight + dashed for ``participates`` — color-only differentiation
+ *     between representative (full Notion Blue) and non-representative
+ *     (semi-transparent), so the merged ``represents``/``participates``
+ *     model from #226/#228 reads as one kind visually (see #231).
  *
  * Dimming for hover-focus is applied externally via ``style.opacity``
  * on the Edge object, so this component only needs to honor whatever
