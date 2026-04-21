@@ -271,7 +271,52 @@ class ClaudeCodeAdapter(EngineAdapter):
                 # in the SDK's allow-list. Pin only what we actually
                 # register so a future addition is explicit.
                 kwargs["allowed_tools"] = ["mcp__doorae__handoff_to"]
+            # Issue #221 — inject the room roster so the LLM can call
+            # ``handoff_to`` with a valid participant UUID instead of
+            # guessing a display name. Pre-#221 servers leave the
+            # roster empty; the suffix helper returns "" in that case,
+            # so the original prompt flows through unchanged.
+            roster_suffix = self._build_roster_suffix(room_id)
+            if roster_suffix:
+                existing = kwargs.get("system_prompt")
+                kwargs["system_prompt"] = (
+                    f"{existing}\n\n{roster_suffix}" if existing else roster_suffix
+                )
         return self._options_cls(**kwargs)
+
+    def _build_roster_suffix(self, room_id: str) -> str:
+        """Compose the participants roster appended to the LLM prompt.
+
+        Lines are formatted as ``- <@user:{uuid}> {name} ({kind})`` so
+        the LLM's mention-syntax pattern matching keeps the UUID
+        intact when it echoes or reasons about the roster. Self is
+        excluded — an orchestrator handing off to itself would be a
+        no-op cycle. Returns an empty string when the roster cache
+        is absent (pre-#221 server) or contains only self, letting
+        the caller skip the ``system_prompt`` rewrite entirely.
+        """
+        client = self._client
+        if client is None:
+            return ""
+        roster = getattr(client, "_participants_by_room", {}).get(room_id) or {}
+        if not roster:
+            return ""
+        my_pids = getattr(client, "_my_participant_ids", set()) or set()
+        lines: list[str] = []
+        for pid, brief in roster.items():
+            if pid in my_pids:
+                continue
+            if not isinstance(brief, dict):
+                continue
+            name = brief.get("display_name") or "?"
+            kind = brief.get("kind") or "user"
+            lines.append(f"- <@user:{pid}> {name} ({kind})")
+        if not lines:
+            return ""
+        return (
+            "Room participants (use the UUID verbatim when calling handoff_to):\n"
+            + "\n".join(lines)
+        )
 
     def _is_orchestrator_of(self, room_id: str) -> bool:
         """Check whether the owning client is the room's orchestrator.

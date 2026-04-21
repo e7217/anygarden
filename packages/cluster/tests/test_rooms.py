@@ -1017,6 +1017,95 @@ class TestRoomSpeakerStrategy:
             assert resp.status_code == 200
             assert resp.json()["name"] == "renamed-by-member"
 
+    @pytest.mark.asyncio
+    async def test_patch_broadcasts_room_settings_changed(self, rep_env) -> None:
+        """Issue #221 — admin PATCH on speaker_strategy /
+        orchestrator_agent_id / context_window_enabled must broadcast a
+        ``room_settings_changed`` frame so online agents refresh their
+        cached dispatch mode without a full reconnect. Before this
+        frame was wired, the settings lived only in the welcome frame,
+        so a mid-session change silently left connected agents on the
+        old strategy until they reconnected."""
+        from doorae.ws.manager import ConnectionManager
+        from doorae.ws.protocol import RoomSettingsChangedOut
+
+        app, room, agent, token = (
+            rep_env["app"],
+            rep_env["room"],
+            rep_env["agent"],
+            rep_env["token"],
+        )
+        # rep_env doesn't run lifespan so connection_manager is absent.
+        # Install a real one and spy on ``broadcast`` to verify both
+        # the call and the frame payload.
+        app.state.connection_manager = ConnectionManager()
+        captured: list[object] = []
+        original_broadcast = app.state.connection_manager.broadcast
+
+        async def spy(room_id, frame, exclude_participant_id=None):
+            captured.append(frame)
+            return await original_broadcast(
+                room_id, frame, exclude_participant_id=exclude_participant_id
+            )
+
+        app.state.connection_manager.broadcast = spy  # type: ignore[method-assign]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={
+                    "speaker_strategy": "orchestrator",
+                    "orchestrator_agent_id": agent.id,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+
+        settings_frames = [
+            f for f in captured if isinstance(f, RoomSettingsChangedOut)
+        ]
+        assert len(settings_frames) == 1
+        f = settings_frames[0]
+        assert f.room_id == room.id
+        assert f.speaker_strategy == "orchestrator"
+        assert f.orchestrator_agent_id == agent.id
+        # ``None`` on fields not touched by the PATCH — matches the
+        # "partial update" semantics the agent SDK expects.
+        assert f.context_window_enabled is None
+
+    @pytest.mark.asyncio
+    async def test_patch_rename_only_does_not_broadcast(self, rep_env) -> None:
+        """Rename-only PATCH stays silent — no cached agent state
+        depends on ``name``/``description``, so emitting a frame would
+        be wasted traffic."""
+        from doorae.ws.manager import ConnectionManager
+        from doorae.ws.protocol import RoomSettingsChangedOut
+
+        app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
+        app.state.connection_manager = ConnectionManager()
+        captured: list[object] = []
+        original_broadcast = app.state.connection_manager.broadcast
+
+        async def spy(room_id, frame, exclude_participant_id=None):
+            captured.append(frame)
+            return await original_broadcast(
+                room_id, frame, exclude_participant_id=exclude_participant_id
+            )
+
+        app.state.connection_manager.broadcast = spy  # type: ignore[method-assign]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"name": "renamed"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+
+        assert not any(isinstance(f, RoomSettingsChangedOut) for f in captured)
+
 
 class TestRoomContextWindow:
     """Tests for the #148 per-room ``context_window_enabled`` flag."""

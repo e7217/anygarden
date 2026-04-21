@@ -141,6 +141,18 @@ class ChatClient:
         self._orchestrator_agent_id: dict[str, str | None] = {}
         self._next_speaker_participant_id: dict[str, str | None] = {}
 
+        # Issue #221 — per-room participant roster stamped by the
+        # server on every welcome. ``room_id -> {participant_id: brief}``
+        # where ``brief`` mirrors ``ParticipantBrief`` on the wire
+        # (keys: ``id``, ``display_name``, ``kind``, ``agent_id``).
+        # The orchestrator Claude Code adapter reads this to inject a
+        # UUID-annotated roster into its LLM system prompt so the
+        # model can call ``handoff_to`` with a valid participant UUID
+        # instead of guessing a display name. Pre-#221 servers omit
+        # ``participants`` entirely — those rooms cache an empty dict
+        # so the adapter's iteration stays safe.
+        self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
+
         # Issue #157 Phase B — per-room ring buffer of recent message
         # fingerprints (sender, hash). Feeds ``cycle_guard`` in
         # ``decide_policy``: when the same (sender, hash) pair has
@@ -521,12 +533,43 @@ class ChatClient:
             self._next_speaker_participant_id[room_id] = data.get(
                 "next_speaker_participant_id"
             )
+            # Issue #221 — stash the participants roster the server
+            # stamped on this welcome. Absent on pre-#221 servers; use
+            # an empty dict so adapter iteration stays safe.
+            roster_list = data.get("participants") or []
+            self._participants_by_room[room_id] = {
+                entry["id"]: entry
+                for entry in roster_list
+                if isinstance(entry, dict) and entry.get("id")
+            }
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:
                 if pending not in self._tasks:
                     logger.info("ws.pending_room_join", room_id=pending, via=room_id)
                     await self.join_room(pending)
+        elif msg_type == "room_settings_changed":
+            # Issue #221 — admin PATCH on room-level settings. Only
+            # non-None fields overwrite cached values so a partial
+            # update doesn't accidentally reset unrelated caches
+            # (mirrors the server's "None = not touched" semantics).
+            # ``room_id`` may differ from the WS room id in theory;
+            # prefer the frame's value so cross-room routing stays
+            # honest if that ever happens.
+            target_room = data.get("room_id") or room_id
+            new_strategy = data.get("speaker_strategy")
+            if new_strategy is not None:
+                self._speaker_strategy[target_room] = new_strategy
+            new_orc = data.get("orchestrator_agent_id")
+            if new_orc is not None:
+                self._orchestrator_agent_id[target_room] = new_orc
+            logger.info(
+                "ws.room_settings_changed",
+                room_id=target_room,
+                speaker_strategy=new_strategy,
+                orchestrator_agent_id=new_orc,
+                context_window_enabled=data.get("context_window_enabled"),
+            )
         elif msg_type == "join_room":
             new_room = data.get("room_id")
             if new_room and new_room not in self._tasks:

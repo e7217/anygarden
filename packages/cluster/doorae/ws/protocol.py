@@ -179,6 +179,23 @@ class PresenceUpdateOut(BaseModel):
     last_seen_at: Optional[datetime] = None
 
 
+class ParticipantBrief(BaseModel):
+    """Lightweight participant identity for WS payloads (#221).
+
+    Slimmer than the REST ``ParticipantOut`` — only the fields an
+    agent needs to populate a handoff roster or render a presence
+    marker. ``display_name`` is the resolved human-readable label
+    (user email/display_name or agent name) so consumers don't have
+    to cross-reference a separate lookup. ``agent_id`` is set only
+    for agent participants; user/guest participants leave it ``None``.
+    """
+
+    id: str
+    display_name: str
+    kind: Literal["user", "agent", "guest"]
+    agent_id: Optional[str] = None
+
+
 class WelcomeOut(BaseModel):
     type: Literal["welcome"] = "welcome"
     participant_id: str
@@ -212,6 +229,33 @@ class WelcomeOut(BaseModel):
     speaker_strategy: str = "mentioned_only"
     orchestrator_agent_id: Optional[str] = None
     next_speaker_participant_id: Optional[str] = None
+    # Issue #221 — room participants roster, stamped at welcome time.
+    # Orchestrator agents inject this list into their LLM system
+    # prompt so the model can call ``handoff_to`` with a valid
+    # ``participant_id`` (UUID) instead of guessing a display name.
+    # Defaults to an empty list so pre-#221 clients see no change in
+    # semantics when the server is rolled forward first.
+    participants: list[ParticipantBrief] = []
+
+
+class RoomSettingsChangedOut(BaseModel):
+    """Notify a room's subscribers that admin-editable settings changed (#221).
+
+    Emitted by ``PATCH /api/v1/rooms/{room_id}`` when any of the
+    cached-at-welcome fields is updated. Fields left ``None`` mean
+    "not part of this change" so a rename-only PATCH doesn't
+    accidentally reset other settings in client caches. Agents read
+    this to refresh their per-room ``speaker_strategy`` /
+    ``orchestrator_agent_id`` / ``context_window_opt_out`` without
+    requiring a reconnection — before #221 those values were only
+    delivered in the initial ``welcome`` frame.
+    """
+
+    type: Literal["room_settings_changed"] = "room_settings_changed"
+    room_id: str
+    speaker_strategy: Optional[str] = None
+    orchestrator_agent_id: Optional[str] = None
+    context_window_enabled: Optional[bool] = None
 
 
 class ErrorOut(BaseModel):
@@ -229,5 +273,6 @@ OutgoingFrame = (
     | TypingOut
     | PresenceUpdateOut
     | WelcomeOut
+    | RoomSettingsChangedOut
     | ErrorOut
 )

@@ -10,6 +10,7 @@ import structlog
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from doorae.auth.dependencies import Identity, get_identity, require_room_member
 from doorae.config import DooraeSettings
@@ -31,6 +32,7 @@ from doorae.ws.protocol import (
     ErrorOut,
     LifecycleFrame,
     MessageOut,
+    ParticipantBrief,
     TypingOut,
     WelcomeOut,
     parse_incoming,
@@ -238,6 +240,61 @@ async def _compute_round_robin_next(
     return new_index, agent_participant_ids[new_index]
 
 
+async def _build_participants_brief(
+    db: AsyncSession, *, room_id: str
+) -> list[ParticipantBrief]:
+    """Collect a room's roster for the welcome frame (#221).
+
+    Orchestrator agents inject this list into their LLM system prompt
+    so the model can call ``handoff_to`` with a valid ``participant_id``
+    (UUID) instead of guessing a display name. Ordered by ``joined_at``
+    then ``id`` to match ``_compute_round_robin_next``'s stable order.
+
+    ``selectinload`` keeps this to a small fixed number of queries
+    regardless of roster size. Orphaned participants (both FK relations
+    empty — the transient state between a user deletion and the
+    cascaded participant row cleanup) fall back to a generic label
+    rather than raising, because welcome must succeed even for a
+    temporarily inconsistent row.
+    """
+    stmt = (
+        select(Participant)
+        .where(Participant.room_id == room_id)
+        .options(
+            selectinload(Participant.user),
+            selectinload(Participant.agent),
+        )
+        .order_by(Participant.joined_at.asc(), Participant.id.asc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    briefs: list[ParticipantBrief] = []
+    for p in rows:
+        if p.user is not None:
+            user = p.user
+            if user.display_name:
+                name = user.display_name
+            elif user.email:
+                name = user.email.split("@")[0]
+            else:
+                name = "Guest"
+            kind = "guest" if user.is_anonymous else "user"
+            briefs.append(ParticipantBrief(id=p.id, display_name=name, kind=kind))
+        elif p.agent is not None:
+            briefs.append(
+                ParticipantBrief(
+                    id=p.id,
+                    display_name=p.agent.name or "",
+                    kind="agent",
+                    agent_id=p.agent_id,
+                )
+            )
+        else:
+            briefs.append(
+                ParticipantBrief(id=p.id, display_name="Unknown", kind="user")
+            )
+    return briefs
+
+
 def _extract_since_seq(query_string: str | None) -> int:
     """Parse ``since_seq`` from raw query string."""
     if not query_string:
@@ -357,6 +414,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # fields in every welcome frame so both agents and UIs know how
     # the room dispatches turns. Separate session so any failure
     # stays out of the opt-out read path above.
+    # Issue #221 — collect the participant roster here too so
+    # orchestrator agents can inject it into their LLM system prompt
+    # (see ``claude_code.py``). Same session as the Room row to keep
+    # welcome to a single round-trip pair.
+    participants_brief: list[ParticipantBrief] = []
     async with session_factory() as db:
         row = (
             await db.execute(
@@ -369,6 +431,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         ).first()
         if row is not None:
             speaker_strategy, orchestrator_agent_id, next_speaker_participant_id = row
+        participants_brief = await _build_participants_brief(db, room_id=room_id)
 
     welcome = WelcomeOut(
         participant_id=participant.id,
@@ -381,6 +444,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         speaker_strategy=speaker_strategy,
         orchestrator_agent_id=orchestrator_agent_id,
         next_speaker_participant_id=next_speaker_participant_id,
+        participants=participants_brief,
     )
     # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
     # try/except (which starts at the ``try:`` on the Subscribe block
