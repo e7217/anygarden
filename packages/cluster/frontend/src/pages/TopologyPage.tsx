@@ -13,6 +13,10 @@ import FilterPanel, {
 import DetailPanel from '@/components/topology/DetailPanel'
 import { useGraphData } from '@/components/topology/useGraphData'
 import { useGraphLayout } from '@/components/topology/useGraphLayout'
+import {
+  useTopologyLayoutOverrides,
+  type Scope,
+} from '@/components/topology/useTopologyLayoutOverrides'
 import type { GraphEdge, GraphNode, NodeKind } from '@/components/topology/types'
 import { TEXT_MUTED, TEXT_PRIMARY } from '@/components/topology/constants'
 
@@ -201,7 +205,16 @@ export default function TopologyPage() {
     return edgesIn.filter(e => visibleIds.has(e.source) && visibleIds.has(e.target))
   }, [edgesIn, filteredNodes])
 
-  const layouted = useGraphLayout(filteredNodes, filteredEdges)
+  // Per-user, per-scope position overrides (#234). ``scope`` is the
+  // server-resolved value from ``useGraphData('auto')``, so we can only
+  // scope storage correctly after the first successful fetch. The hook
+  // gracefully no-ops while either ``userId`` or ``scope`` is null.
+  const scope: Scope | null =
+    data?.scope === 'global' || data?.scope === 'personal' ? data.scope : null
+  const { overrides, setPosition, reset, hasOverrides } =
+    useTopologyLayoutOverrides(user?.id ?? null, scope)
+
+  const layouted = useGraphLayout(filteredNodes, filteredEdges, overrides)
 
   // Translate a selected RF Node back to the original GraphNode shape
   // so the DetailPanel can speak kind-based branches.
@@ -292,6 +305,9 @@ export default function TopologyPage() {
                     edges={layouted.edges as Edge[]}
                     onSelect={handleSelect}
                     selectedId={selected?.id ?? null}
+                    onPositionChange={setPosition}
+                    onResetLayout={reset}
+                    hasOverrides={hasOverrides}
                   />
                 </div>
                 {selected && (
