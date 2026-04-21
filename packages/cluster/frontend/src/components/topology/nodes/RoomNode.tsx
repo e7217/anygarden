@@ -15,9 +15,9 @@ import './RoomNode.css'
  *
  * Channels use ``#`` prefix; DMs use ``@``. Representative-agent rooms
  * get a leading star rendered in Notion Blue to flag the relationship
- * at a glance (the actual "represents" edge is also drawn agent → room,
- * flowing downward with the rest of the TB layout; the star
- * disambiguates without needing to hover).
+ * at a glance (the representative agent's ``participates`` edge is also
+ * drawn in Notion Blue via ``data.is_representative``; the star
+ * disambiguates without needing to hover, see #226).
  *
  * When ``data.is_typing`` is true, the pill gets a subtle pulse via
  * the ``.room-node--active`` class (see RoomNode.css). Backed by

@@ -283,11 +283,13 @@ class TestGraphSchema:
             "places",
             "participates",
             "parent_of",
-            "represents",
         }
         for edge in body["edges"]:
             assert set(edge.keys()) >= {"id", "source", "target", "kind"}
             assert edge["kind"] in valid_edge_kinds
+        # ``represents`` was merged into a flag on the ``participates``
+        # edge — the API must no longer emit it as a distinct kind.
+        assert "represents" not in {edge["kind"] for edge in body["edges"]}
 
     @pytest.mark.asyncio
     async def test_global_contains_all_owners(self, graph_env) -> None:
@@ -314,8 +316,29 @@ class TestGraphSchema:
         places_pairs = {(e["source"], e["target"]) for e in edges if e["kind"] == "places"}
         assert (f"m_{ids['m_alice']}", f"a_{ids['a1']}") in places_pairs
 
-        represents_pairs = {(e["source"], e["target"]) for e in edges if e["kind"] == "represents"}
-        assert (f"a_{ids['a2']}", f"r_{ids['r3']}") in represents_pairs
+        # Representative relation is now a flag on the agent's
+        # ``participates`` edge rather than a separate ``represents``
+        # edge kind. The representative for r3 is a2.
+        rep_edges = [
+            e
+            for e in edges
+            if e["kind"] == "participates"
+            and e.get("data", {}).get("actor") == "agent"
+            and e.get("data", {}).get("is_representative") is True
+        ]
+        rep_pairs = {(e["source"], e["target"]) for e in rep_edges}
+        assert (f"a_{ids['a2']}", f"r_{ids['r3']}") in rep_pairs
+
+        # Non-representative agent participants must still emit their
+        # ``participates`` edge, with the flag explicitly set to False.
+        non_rep_agent_edges = [
+            e
+            for e in edges
+            if e["kind"] == "participates"
+            and e.get("data", {}).get("actor") == "agent"
+            and e.get("data", {}).get("is_representative") is False
+        ]
+        assert non_rep_agent_edges, "expected at least one non-representative agent participates edge"
 
         parent_pairs = {(e["source"], e["target"]) for e in edges if e["kind"] == "parent_of"}
         assert (f"r_{ids['r1']}", f"r_{ids['r2']}") in parent_pairs

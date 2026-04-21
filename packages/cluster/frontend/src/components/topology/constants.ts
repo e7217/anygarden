@@ -70,6 +70,7 @@ export interface EdgeStyle {
 export function edgeStyleFor(
   kind: string,
   actor?: 'user' | 'agent',
+  isRepresentative?: boolean,
 ): EdgeStyle {
   switch (kind) {
     case 'owns':
@@ -77,6 +78,13 @@ export function edgeStyleFor(
     case 'places':
       return { stroke: 'rgba(0,0,0,0.28)', strokeWidth: 1.5, type: 'smoothstep' }
     case 'participates':
+      // Representative agent gets the single saturated accent per
+      // DESIGN.md §2 so "this agent speaks for the room" is visually
+      // unmissable. Collapses what used to be a separate ``represents``
+      // edge into a flag on the same agent→room line (see #226).
+      if (isRepresentative) {
+        return { stroke: ACCENT, strokeWidth: 2, type: 'smoothstep' }
+      }
       if (actor === 'agent') {
         return {
           stroke: ACCENT_SOFT,
@@ -97,8 +105,6 @@ export function edgeStyleFor(
         strokeWidth: 1.5,
         type: 'smoothstep',
       }
-    case 'represents':
-      return { stroke: ACCENT, strokeWidth: 2, type: 'smoothstep' }
     default:
       return { stroke: 'rgba(0,0,0,0.2)', strokeWidth: 1, type: 'smoothstep' }
   }

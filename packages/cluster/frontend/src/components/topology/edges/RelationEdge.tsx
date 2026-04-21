@@ -11,10 +11,13 @@ import { edgeStyleFor } from '../constants'
 /**
  * Polymorphic relation edge.
  *
- * Reads ``data.kind`` + ``data.actor`` and dispatches to the correct
- * path algorithm + style per the table in the plan §3.2.4:
- *   - smoothstep for ``owns``, ``places``, ``parent_of``, ``represents``
- *   - straight + dashed for ``participates``
+ * Reads ``data.kind`` + ``data.actor`` + ``data.is_representative`` and
+ * dispatches to the correct path algorithm + style:
+ *   - smoothstep for ``owns``, ``places``, ``parent_of``
+ *   - smoothstep + Notion Blue 2px for ``participates`` with
+ *     ``is_representative === true`` (formerly the ``represents`` edge
+ *     kind — merged per #226 to eliminate duplicate overlapping lines)
+ *   - straight + dashed for ``participates`` otherwise
  *
  * Dimming for hover-focus is applied externally via ``style.opacity``
  * on the Edge object, so this component only needs to honor whatever
@@ -24,7 +27,8 @@ function RelationEdgeInner(props: EdgeProps) {
   const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, style: externalStyle } = props
   const kind = (data?.kind as string | undefined) ?? 'owns'
   const actor = data?.actor as 'user' | 'agent' | undefined
-  const s = edgeStyleFor(kind, actor)
+  const isRepresentative = Boolean(data?.is_representative)
+  const s = edgeStyleFor(kind, actor, isRepresentative)
 
   // Pick path generator. Fall back to bezier if a future edge kind
   // arrives without a mapping so nothing crashes mid-render.
