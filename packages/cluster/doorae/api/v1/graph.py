@@ -36,7 +36,7 @@ router = APIRouter(prefix="/api/v1/graph", tags=["graph"])
 
 
 NodeKind = Literal["user", "machine", "agent", "room", "project"]
-EdgeKind = Literal["owns", "places", "participates", "parent_of", "represents"]
+EdgeKind = Literal["owns", "places", "participates", "parent_of"]
 ScopeKind = Literal["personal", "global", "auto"]
 
 
@@ -550,6 +550,17 @@ def _assemble_edges(
             )
 
     # participates: user|agent -> room
+    #
+    # The agent-flavored edge folds in the "representative" relation via
+    # ``data.is_representative``. This replaces the previous standalone
+    # ``represents`` edge kind, which duplicated the same source/target
+    # pair and forced the frontend to stack two overlapping lines on the
+    # same agent→room connection (see #226).
+    rep_by_room: dict[str, str] = {
+        r.id: r.representative_agent_id
+        for r in rooms
+        if r.representative_agent_id
+    }
     for p in participants:
         if p.room_id not in known_room_ids:
             continue
@@ -564,13 +575,14 @@ def _assemble_edges(
                 )
             )
         elif p.agent_id is not None and p.agent_id in known_agent_ids:
+            is_representative = rep_by_room.get(p.room_id) == p.agent_id
             edges.append(
                 EdgeOut(
                     id=_next_id("epa"),
                     source=_aid(p.agent_id),
                     target=_rid(p.room_id),
                     kind="participates",
-                    data={"actor": "agent"},
+                    data={"actor": "agent", "is_representative": is_representative},
                 )
             )
 
@@ -584,27 +596,6 @@ def _assemble_edges(
                     source=_rid(r.parent_room_id),
                     target=_rid(r.id),
                     kind="parent_of",
-                )
-            )
-
-    # represents: representative agent -> room
-    #
-    # Direction follows the dagre TB layout (User → Machine → Agent →
-    # Room) so the edge flows downward like every other kind. The
-    # previous ``room → agent`` direction forced a horseshoe-shaped
-    # detour through ``getSmoothStepPath`` that overlapped the
-    # ``participates`` edge on the same pair. Reading "agent represents
-    # room" also matches the DB schema (``Room.representative_agent_id``
-    # points from room to agent, but the *relation* is naturally
-    # expressed with the agent as the actor).
-    for r in rooms:
-        if r.representative_agent_id and r.representative_agent_id in known_agent_ids:
-            edges.append(
-                EdgeOut(
-                    id=_next_id("er"),
-                    source=_aid(r.representative_agent_id),
-                    target=_rid(r.id),
-                    kind="represents",
                 )
             )
 

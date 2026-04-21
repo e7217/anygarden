@@ -10,7 +10,6 @@ export type EdgeKind =
   | 'places'
   | 'participates'
   | 'parent_of'
-  | 'represents'
 
 export type Scope = 'personal' | 'global' | 'auto'
 
@@ -79,7 +78,16 @@ export interface GraphEdge {
   source: string
   target: string
   kind: EdgeKind
-  data?: { actor?: 'user' | 'agent' } & Record<string, unknown>
+  data?: {
+    actor?: 'user' | 'agent'
+    /**
+     * Set on ``participates`` edges where ``actor === 'agent'`` and the
+     * agent is the room's representative. Merges what used to be a
+     * separate ``represents`` edge kind into an attribute on the same
+     * agent→room line to eliminate overlapping duplicates (see #226).
+     */
+    is_representative?: boolean
+  } & Record<string, unknown>
 }
 
 export interface GraphResponse {
