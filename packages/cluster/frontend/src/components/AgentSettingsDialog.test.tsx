@@ -45,6 +45,10 @@ function setup(open: boolean = true) {
   const fetchAgentFiles = vi.fn().mockResolvedValue([])
   const upsertAgentFile = vi.fn()
   const deleteAgentFile = vi.fn()
+  // #217 — Overview panel now consumes this to populate Model/Reasoning
+  // dropdowns. ``null`` keeps the rows hidden so this suite (which
+  // asserts section presence, not dropdown wiring) stays focused.
+  const fetchEngineCatalog = vi.fn().mockResolvedValue(null)
   const onOpenChange = vi.fn()
   render(
     <MemoryRouter>
@@ -56,10 +60,11 @@ function setup(open: boolean = true) {
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
         deleteAgentFile={deleteAgentFile}
+        fetchEngineCatalog={fetchEngineCatalog}
       />
     </MemoryRouter>,
   )
-  return { updateAgent, fetchAgentFiles, onOpenChange }
+  return { updateAgent, fetchAgentFiles, fetchEngineCatalog, onOpenChange }
 }
 
 describe('AgentSettingsDialog', () => {

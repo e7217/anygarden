@@ -171,6 +171,13 @@ export function useAgents() {
       // rename PATCH can't accidentally reset the opt-out.
       context_window_opt_out?: boolean;
       context_window_opt_out_set?: boolean;
+      // Issue #217 — post-creation editing of model / reasoning_effort
+      // on the Overview panel. Backend PUT already supports these via
+      // the same ``_set`` idiom.
+      model?: string | null;
+      model_set?: boolean;
+      reasoning_effort?: string | null;
+      reasoning_effort_set?: boolean;
     },
   ) => {
     const resp = await apiFetch(`/api/v1/agents/${id}`, {

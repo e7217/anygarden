@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
-import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
+import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
@@ -52,12 +52,21 @@ interface Props {
       avatar_kind_set?: boolean
       avatar_value?: string | null
       avatar_value_set?: boolean
+      model?: string | null
+      model_set?: boolean
+      reasoning_effort?: string | null
+      reasoning_effort_set?: boolean
     },
   ) => Promise<Agent>
   upsertAgentFile: (id: string, path: string, content: string) => Promise<AgentFile>
   deleteAgentFile: (id: string, path: string) => Promise<void>
   fetchAttachedSkills?: (id: string) => Promise<AttachedSkill[]>
   fetchSkillPreview?: (skillId: string) => Promise<SkillPreview | null>
+  /** Issue #217 — lets the Overview panel populate Model / Reasoning
+   *  dropdowns. Returns ``null`` for engines the catalog doesn't
+   *  know about (e.g. ``echo`` dev-only); OverviewPanel hides the
+   *  dropdowns in that case. */
+  fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
   /** Fired when Rooms panel mutates so the caller can refresh its
    *  own derived state (e.g. comma-joined room names in a machine
    *  detail view). */
@@ -148,6 +157,7 @@ export default function AgentSettingsDialog({
   deleteAgentFile,
   fetchAttachedSkills,
   fetchSkillPreview,
+  fetchEngineCatalog,
   onRoomsChange,
 }: Props) {
   return (
@@ -187,7 +197,11 @@ export default function AgentSettingsDialog({
         <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
           <div className="px-6 py-5 space-y-3">
             <Section id="overview" title="Overview">
-              <OverviewPanel agent={agent} updateAgent={updateAgent} />
+              <OverviewPanel
+                agent={agent}
+                updateAgent={updateAgent}
+                fetchEngineCatalog={fetchEngineCatalog}
+              />
             </Section>
 
             <Section id="manifest" title="Manifest">
