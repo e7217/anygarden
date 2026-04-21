@@ -884,3 +884,112 @@ class TestOrchestratorStrategy:
             "metadata": {"_nonce": "n1"},
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+
+class TestStrategyForcedRespondBeatsIngestOnly:
+    """#233 — belt-and-suspenders for the orchestrator-silence bug.
+
+    Rule 5a ("strategy-forced RESPOND") sits between the mention
+    rules and the ``ingest_only`` short-circuit so that an agent the
+    server has explicitly nominated (orchestrator of the room, or
+    ``next_speaker_participant_id`` target) still answers even if
+    some upstream path mis-stamps ``ingest_only=True`` on the frame.
+
+    The server-side fix (#233 in ``ws/handler.py``) already skips
+    the stamp on human sends, so under normal operation these code
+    paths wouldn't collide. These tests guard the reverse direction:
+    if a future regression re-introduces the wrong stamp, the
+    orchestrator must still run.
+    """
+
+    def test_orchestrator_responds_even_with_ingest_only(self):
+        """I am this room's orchestrator and the frame happens to
+        carry ``ingest_only=True``. Rule 5a fires before rule 5, so
+        I still RESPOND."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-alpha",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "status?",
+            "metadata": {"ingest_only": True},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_non_orchestrator_still_ingests(self):
+        """I am NOT the orchestrator; rule 5a does not fire for me,
+        so rule 5 (ingest_only) stands and I absorb the message as
+        context."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-beta",
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "status?",
+            "metadata": {"ingest_only": True},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_round_robin_next_speaker_responds_with_ingest_only(self):
+        """Round-robin target picked by the server. Rule 5a lets the
+        nominated speaker respond regardless of the stamp."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "team, go",
+            "metadata": {
+                "ingest_only": True,
+                "next_speaker_participant_id": "my-pid-123",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_round_robin_other_speaker_still_ingests(self):
+        """Round-robin pointer targets somebody else — 5a doesn't
+        fire for me, ``ingest_only`` wins."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            speaker_strategy={"room-a": "round_robin"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "team, go",
+            "metadata": {
+                "ingest_only": True,
+                "next_speaker_participant_id": "other-pid-456",
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_orchestrator_opt_out_still_responds(self):
+        """An agent configured as the orchestrator is logically the
+        opposite of "context-only listener". If ``context_window_opt_out``
+        is also set (a misconfiguration), rule 5a still wins — the
+        orchestrator must run for the room to be usable."""
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            agent_id="agent-alpha",
+            context_window_opt_out=True,
+            speaker_strategy={"room-a": "orchestrator"},
+            orchestrator_agent_id={"room-a": "agent-alpha"},
+        )
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "status?",
+            "metadata": {"ingest_only": True},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND

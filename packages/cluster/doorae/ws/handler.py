@@ -78,13 +78,25 @@ async def _persist_lifecycle_event(
     ))
 
 
-def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
+def _is_ambient_candidate(
+    content: str,
+    metadata: dict[str, Any],
+    *,
+    sender_is_agent: bool,
+) -> bool:
     """Decide whether a new message is a candidate for the ambient
     context window (#148 Part 3).
 
-    A message is "ambient" when it isn't directly aimed at anyone
-    specific and isn't carrying a task-initiation payload. Rules:
+    A message is "ambient" when it's agent-to-agent chatter that
+    isn't directly aimed at anyone specific and isn't carrying a
+    task-initiation payload. Rules:
 
+    0. Sender is an agent (#233). Human and guest messages are
+       never ambient — users always expect their input to be
+       actionable. The stamp was originally designed to dampen
+       agent-to-agent chatter, and missing this gate caused
+       orchestrator rooms to go silent once #225 flipped
+       ``context_window_enabled`` on by default.
     1. No user / legacy mention already parsed into metadata.
        ``parse_mentions`` runs upstream, so seeing an addressable
        mention means "someone is being targeted" — not ambient.
@@ -102,6 +114,8 @@ def _is_ambient_candidate(content: str, metadata: dict[str, Any]) -> bool:
     "should I act on the stamp?" never drift. A contract test lives
     alongside the migration work plan (#148 §6).
     """
+    if not sender_is_agent:
+        return False
     if (
         content.startswith("[DELEGATED]")
         or content.startswith("[ROOM_QUERY]")
@@ -758,9 +772,22 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         room_row[3] if room_row else None
                     )
 
+                    # #233 — only stamp agent-to-agent chatter. Human
+                    # sends always reach peers as actionable even when
+                    # ``context_window_enabled`` is on; without this
+                    # guard orchestrator rooms short-circuit to
+                    # ``INGEST_ONLY`` before rule 5a in
+                    # ``decide_policy`` can let the orchestrator reply.
+                    sender_is_agent = (
+                        identity is not None and identity.kind == "agent"
+                    )
                     if (
                         context_window_enabled
-                        and _is_ambient_candidate(frame_in.content, metadata)
+                        and _is_ambient_candidate(
+                            frame_in.content,
+                            metadata,
+                            sender_is_agent=sender_is_agent,
+                        )
                         and "ingest_only" not in metadata
                     ):
                         metadata["ingest_only"] = True

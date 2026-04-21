@@ -86,29 +86,43 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     2. ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or ``room_query``
        metadata → RESPOND (task initiation / room-routed query
        always processed).
-    2c. ``metadata.ingest_only`` flag → INGEST_ONLY. The server or
-        a broadcasting agent (typically the room representative's
-        ``_deliver_result``) marks a message with this flag to say
-        "every other listener should absorb this into their engine
-        session context without replying". The canonical producer is
-        the ``[취합 결과]`` broadcast on issue #74.
+    2d. Cycle detection (#157 Phase B) → SKIP when the same
+        (sender, content_hash) repeats within a small window.
     3. Server-parsed explicit mention matching this agent → RESPOND.
        The server's ``parse_mentions`` (``orchestration/rules.py``)
        drops non-word ``@`` tokens — e.g. ``alice@example.com`` or
        ``@dataclass`` — so we only see addressable mentions here.
        This mirrors how Slack/Discord route via resolved mentions
        instead of having every client re-parse raw text.
-    4. **Explicit mentions present but NOT for us → SKIP.**
-       Previously rule 4 ("human message → respond") fired for
-       every agent in the room regardless of mention target, so a
-       multi-agent room echoed N responses to a single-addressed
-       message. When the server saw at least one addressable
-       mention, treat the message as targeted and stay out unless
-       rule 3 matched.
-    5. No addressable mentions + human sender → RESPOND. Covers 1:1
-       DMs and "no one in particular" broadcasts where the previous
-       behaviour (respond) is still the most useful default.
-    6. Agent sender, no mention → SKIP (ignore unaddressed agent
+    4a. Strategy-forced RESPOND (#233). The server has singled us
+        out as the rightful speaker: either this room's
+        ``orchestrator_agent_id`` matches us, or the frame carries
+        ``next_speaker_participant_id`` pointing at one of our
+        participant ids. Evaluated *before* rule 4 so that a
+        mis-stamped ``ingest_only=True`` (server bug, race, or
+        future code path) can't silence the nominated speaker.
+    4. ``metadata.ingest_only`` flag → INGEST_ONLY. The server or
+       a broadcasting agent (typically the room representative's
+       ``_deliver_result``) marks a message with this flag to say
+       "every other listener should absorb this into their engine
+       session context without replying". The canonical producers
+       are the ``[취합 결과]`` broadcast on issue #74 and the ambient
+       chatter stamp on #148 Part 3.
+    5. **Explicit mentions present but NOT for us → SKIP.**
+       Previously this rule fired for every agent in the room
+       regardless of mention target, so a multi-agent room echoed N
+       responses to a single-addressed message. When the server saw
+       at least one addressable mention, treat the message as
+       targeted and stay out unless rule 3 matched.
+    6a. Strategy dispatcher tail (#159 Phase B/C). For
+        ``round_robin`` / ``orchestrator`` rooms the "I speak"
+        branches already ran in rule 4a; reaching here means we
+        sit out (``round_robin`` SKIP, ``orchestrator`` O3 SKIP
+        when an orchestrator exists).
+    6. No addressable mentions + human sender → RESPOND. Covers 1:1
+       DMs and "no one in particular" broadcasts on
+       ``mentioned_only`` rooms, which was the pre-#159 default.
+    7. Agent sender, no mention → SKIP (ignore unaddressed agent
        chatter so agents don't ping-pong forever).
     """
     content = msg.get("content", "")
@@ -228,6 +242,49 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if mentioned_me:
         return MessagePolicy.RESPOND
 
+    # 4a. Strategy-forced RESPOND (#233). The server has already
+    # singled this agent out as the rightful speaker for this frame
+    # — either by pinning us as the room's orchestrator (O1 path)
+    # or by stamping ``next_speaker_participant_id`` on us
+    # (round_robin / orchestrator O2 path). Both cases MUST win
+    # over rule 4's ``ingest_only`` short-circuit below, otherwise
+    # an orchestrator that happens to receive a stamped frame
+    # (server bug, race, or future feature) silently demotes its
+    # own turn to passive ingestion and the room goes quiet. Moved
+    # ahead of the stamp check as belt-and-suspenders to the server
+    # fix in ``ws/handler.py::_is_ambient_candidate``: even if the
+    # stamp sneaks through, the explicitly-nominated speaker still
+    # acts. See ``_dispatch_strategy`` below for the full O2/O3
+    # fallthrough that only fires when 4a/4 didn't decide.
+    strategy_cache = getattr(client, "_speaker_strategy", None)
+    strategy = (
+        strategy_cache.get(room_id, "mentioned_only")
+        if isinstance(strategy_cache, dict) and room_id
+        else "mentioned_only"
+    )
+    if strategy == "orchestrator":
+        orc_map = getattr(client, "_orchestrator_agent_id", None)
+        orc_for_room_4a = (
+            orc_map.get(room_id)
+            if isinstance(orc_map, dict) and room_id
+            else None
+        )
+        my_agent_id = getattr(client, "_agent_id", None)
+        # O1: I am this room's orchestrator → RESPOND. Hoisted from
+        # the strategy dispatcher below so it beats ``ingest_only``.
+        if (
+            orc_for_room_4a
+            and my_agent_id
+            and orc_for_room_4a == my_agent_id
+        ):
+            return MessagePolicy.RESPOND
+    if strategy in ("round_robin", "orchestrator"):
+        # next_speaker stamp points at me → RESPOND. Hoisted so a
+        # mis-stamped frame can't silence the designated speaker.
+        next_speaker = metadata.get("next_speaker_participant_id")
+        if next_speaker and next_speaker in client._my_participant_ids:
+            return MessagePolicy.RESPOND
+
     # 4. Explicit ingest-only flag (#74 Stage A, #148 Part 3). Placed
     # *after* the addressability rule so a direct mention still gets
     # RESPOND. From this point the legacy gate would return SKIP or
@@ -240,6 +297,9 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     # an ingest_only broadcast is dropped. The flag is refreshed on
     # every welcome frame (client.py) so a UI toggle + respawn
     # propagates without a protocol round-trip.
+    # Note: rule 4a above deliberately runs *first* so that
+    # strategy-nominated speakers (orchestrator / round_robin
+    # target) don't get short-circuited into INGEST_ONLY — #233.
     if metadata.get("ingest_only"):
         if getattr(client, "_context_window_opt_out", False):
             return MessagePolicy.SKIP
@@ -260,49 +320,28 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     # task-init, room_query, cycle, mention, ingest_only, mention-not-us
     # are all sacred across strategies). Below we branch on the room's
     # ``speaker_strategy`` — default ``mentioned_only`` preserves the
-    # pre-#159 behaviour for every existing room.
-    strategy_cache = getattr(client, "_speaker_strategy", None)
-    strategy = (
-        strategy_cache.get(room_id, "mentioned_only")
-        if isinstance(strategy_cache, dict) and room_id
-        else "mentioned_only"
-    )
+    # pre-#159 behaviour for every existing room. ``strategy`` was
+    # already resolved above for rule 4a (#233); re-used here.
 
     if strategy == "round_robin":
-        # Round-robin: server pre-computes the next speaker for the
-        # room and stamps it on each broadcast's metadata. The agent
-        # just checks whether it matches our participant id.
-        next_speaker = metadata.get("next_speaker_participant_id")
-        if next_speaker and next_speaker in client._my_participant_ids:
-            return MessagePolicy.RESPOND
+        # Round-robin: the "my turn" branch was evaluated as part of
+        # rule 4a above. Reaching here means next_speaker is absent
+        # or points elsewhere → this agent sits out the turn. No
+        # fallthrough to rule 6 — round_robin is strictly
+        # server-dispatched, see ``TestRoundRobinStrategy``.
         return MessagePolicy.SKIP
 
     if strategy == "orchestrator":
-        # #159 Phase C — O1/O2/O3.
-        # Base rules above already handled self-echo, [DELEGATED] /
-        # [ROOM_QUERY], ingest_only, direct mention, cycle detection,
-        # and mention-targeted-at-someone-else. So the orchestrator
-        # branch only decides the "no other rule fired" case.
+        # #159 Phase C — O1/O2/O3. O1 ("I am this room's orchestrator")
+        # and O2 ("next_speaker_participant_id points at me") were
+        # hoisted to rule 4a so they beat ``ingest_only``. Reaching
+        # this branch means neither condition fired.
         orc_map = getattr(client, "_orchestrator_agent_id", None)
         orc_for_room = (
             orc_map.get(room_id)
             if isinstance(orc_map, dict) and room_id
             else None
         )
-        my_agent_id = getattr(client, "_agent_id", None)
-
-        # O1: I am this room's orchestrator → RESPOND. The orchestrator
-        # owns next-speaker selection, so every turn is actionable for
-        # it — including unaddressed human messages that other workers
-        # would skip under O3.
-        if orc_for_room and my_agent_id and orc_for_room == my_agent_id:
-            return MessagePolicy.RESPOND
-
-        # O2: server stamped me as the next speaker (handoff landed
-        # successfully) → RESPOND.
-        next_speaker = metadata.get("next_speaker_participant_id")
-        if next_speaker and next_speaker in client._my_participant_ids:
-            return MessagePolicy.RESPOND
 
         # Graceful fallback — strategy is 'orchestrator' but nobody is
         # pinned as one yet (admin flipped the knob without picking an

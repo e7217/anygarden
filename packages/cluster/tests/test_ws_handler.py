@@ -1047,12 +1047,17 @@ class TestContextWindowBroadcast:
     """#148 Part 3 — server-side ingest_only stamping."""
 
     @pytest.mark.asyncio
-    async def test_ambient_broadcast_is_stamped_when_enabled(
+    async def test_user_ambient_broadcast_is_not_stamped(
         self, ws_env
     ) -> None:
-        """Ambient user message in a context_window-enabled room gets
-        ``metadata.ingest_only=True`` so peer agents absorb it as
-        context instead of replying."""
+        """#233 — a human-sent ambient message must NOT be stamped
+        with ``ingest_only``. The stamp was originally meant for
+        agent-to-agent chatter (#148 Part 3), but a missing sender
+        check caused human messages to be demoted to passive
+        ingestion, which in turn caused orchestrator rooms to go
+        silent once #225 flipped ``context_window_enabled`` on by
+        default. Users always expect their plain messages to be
+        actionable regardless of the context-window flag."""
         from starlette.testclient import TestClient
 
         app = ws_env["app"]
@@ -1072,6 +1077,75 @@ class TestContextWindowBroadcast:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
                 subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(
+                    json.dumps({"type": "send", "content": "잡담 한마디"})
+                )
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                meta = msg.get("metadata") or {}
+                # Was previously ``True`` before #233 — the stamp is
+                # agent-only now.
+                assert "ingest_only" not in meta
+
+    @pytest.mark.asyncio
+    async def test_agent_ambient_broadcast_is_stamped_when_enabled(
+        self, ws_env
+    ) -> None:
+        """#148 Part 3 original intent — agent-to-agent ambient
+        chatter still picks up ``ingest_only=True`` so peer agents
+        absorb it as context instead of replying. This is the
+        narrower sender-kind=agent path kept alive after #233 cut
+        off the human-sender path.
+        """
+        from starlette.testclient import TestClient
+
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken
+
+        app = ws_env["app"]
+        room = ws_env["room"]
+        sf = ws_env["session_factory"]
+
+        # Flip the flag on and seed a chatty agent participant with
+        # its own WS token.
+        async with sf() as db:
+            r = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            r.context_window_enabled = True
+
+            agent = Agent(
+                name="chatty-bot",
+                engine="codex",
+                actual_state="running",
+            )
+            db.add(agent)
+            await db.flush()
+            db.add(
+                Participant(
+                    room_id=room.id, agent_id=agent.id, role="member"
+                )
+            )
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(
+                AgentToken(
+                    agent_id=agent.id,
+                    token_hash=token_hash,
+                    lookup_hint=lookup_hint,
+                )
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=[
+                    "doorae.v1",
+                    f"bearer.{agent_token_plain}",
+                ],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(
@@ -1154,6 +1228,67 @@ class TestContextWindowBroadcast:
                 meta = msg.get("metadata") or {}
                 # parse_mentions resolves ``@bot`` as a legacy
                 # mention → direct addressing → no stamp.
+                assert "ingest_only" not in meta
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_room_user_send_is_not_stamped(
+        self, ws_env
+    ) -> None:
+        """#233 regression: in an ``orchestrator`` room with
+        ``context_window_enabled=True`` and an orchestrator pinned,
+        a plain user send must reach peer agents WITHOUT
+        ``ingest_only`` so the orchestrator's ``decide_policy`` O1
+        rule can fire instead of short-circuiting on rule 4.
+
+        Mirrors the live room4 reproduction captured in the plan:
+        before the fix every user turn was stamped and every agent
+        silently ingested, leaving the room quiet.
+        """
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room = ws_env["room"]
+        sf = ws_env["session_factory"]
+
+        # Seed an orchestrator agent participant and flip the
+        # room into orchestrator strategy with context-window on.
+        async with sf() as db:
+            agent = Agent(
+                name="alpha-orchestrator",
+                engine="codex",
+                actual_state="running",
+            )
+            db.add(agent)
+            await db.flush()
+            db.add(
+                Participant(
+                    room_id=room.id, agent_id=agent.id, role="member"
+                )
+            )
+
+            r = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            r.context_window_enabled = True
+            r.speaker_strategy = "orchestrator"
+            r.orchestrator_agent_id = agent.id
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(
+                    json.dumps({"type": "send", "content": "분석해줘"})
+                )
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                meta = msg.get("metadata") or {}
+                # Before #233 this was ``True`` and the orchestrator
+                # fell through to INGEST_ONLY.
                 assert "ingest_only" not in meta
 
     @pytest.mark.asyncio
