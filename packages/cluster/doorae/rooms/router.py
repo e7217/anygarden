@@ -391,6 +391,19 @@ async def add_participant(
             agent_id=body.agent_id,
             role=body.role,
         )
+        # #227 — ``ensure_agent_in_room`` delivers a JoinRoomOut best-
+        # effort. When the agent's WS is not subscribed to the pid we
+        # target the frame drops silently and the agent stays offline
+        # in this new room forever. Hand off to the lifecycle so the
+        # machine receives an authoritative ``sync_desired_state`` with
+        # the refreshed rooms list (``bump_generation`` for running
+        # agents, ``request_start`` for dormant ones). Missing
+        # ``agent_lifecycle`` on app.state falls back to the pre-#227
+        # best-effort-only behaviour for tests that don't wire the
+        # scheduler.
+        lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+        if lifecycle is not None:
+            await lifecycle.on_room_added(body.agent_id)
     else:
         assert body.user_id is not None
         participant = await add_user_to_room(

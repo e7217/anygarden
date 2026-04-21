@@ -335,6 +335,52 @@ class AgentLifecycle:
             "agents": frames,
         })
 
+    async def on_room_added(self, agent_id: str) -> None:
+        """Runtime-room-add entry point (#227).
+
+        Called by both ``POST /rooms/{id}/participants`` (agent branch)
+        and ``POST /agents/{id}/rooms`` so the two paths share a single
+        dispatch policy:
+
+        * Dormant agents (``idle`` / ``stopped`` / ``crashed`` /
+          ``pending``) → ``request_start``. Adding a room is the
+          moment the "no rooms yet" guard in ``request_start`` finally
+          releases, so this is the natural place to retry spawning.
+          This matches the behaviour introduced for the 2026-04-12
+          "서브에이전트1/2" regression (``test_add_room_redispatches_pending_agent``).
+        * Running / starting agents → ``bump_generation``. The agent
+          already has a live process and placement, but its
+          ``--room`` argv set is now stale. Bumping generation makes
+          the next ``sync_desired_state`` authoritative (machine
+          re-spawns with refreshed rooms). Before #227 we relied on
+          a single best-effort ``JoinRoomOut`` WS push which silently
+          dropped when the agent hadn't opened a WS session for the
+          specific ``Participant`` row we were targeting — the bug
+          this helper closes.
+        * Any other state (stopping / stopped with desired_state !=
+          running / unknown) → no-op. The admin explicitly arrested
+          the agent; a surprise respawn would fight that intent.
+        """
+        async with self._db_factory() as db:
+            agent = await self._get_agent(db, agent_id)
+            if agent is None:
+                logger.warning("lifecycle.on_room_added.agent_not_found", agent_id=agent_id)
+                return
+            state = agent.actual_state
+
+        if state in ("idle", "stopped", "crashed", "pending"):
+            await self.request_start(agent_id)
+            return
+        if state in ("running", "starting"):
+            await self.bump_generation(agent_id)
+            return
+
+        logger.info(
+            "lifecycle.on_room_added.noop",
+            agent_id=agent_id,
+            actual_state=state,
+        )
+
     async def bump_generation(self, agent_id: str) -> None:
         """Increment generation and push ``sync_desired_state`` if running."""
         async with self._db_factory() as db:

@@ -518,6 +518,140 @@ class TestAgentLifecycle:
         assert frame["files"] == {}
         assert frame["profile_yaml"] == "name: agent-legacy\nmodel: gpt\n"
 
+    # ── #227 — runtime-room-add lifecycle dispatch ────────────────
+
+    @pytest.mark.asyncio
+    async def test_on_room_added_bumps_generation_when_running(
+        self, lifecycle_env
+    ) -> None:
+        """#227 — adding a room to a *running* agent must bump the
+        generation so the machine re-sends ``sync_desired_state`` with
+        the updated ``rooms`` list. Without this, the agent process
+        keeps its old ``--room`` args and stays silent in the new
+        room forever (the bug this issue fixes).
+        """
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-running",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+                generation=3,
+                pid=1234,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle_env["attach_to_room"](agent_id)
+        sent_before = len(fake_ws.sent)
+
+        await lifecycle.on_room_added(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            # bump_generation increments. request_start would *also*
+            # increment, but would re-place (we already have placement).
+            assert agent.generation == 4
+            assert agent.placed_on_machine_id == machine.id
+
+        # A sync_desired_state frame must have been pushed to the
+        # machine with the refreshed rooms list.
+        assert len(fake_ws.sent) > sent_before
+        frame = json.loads(fake_ws.sent[-1])
+        assert frame["type"] == "sync_desired_state"
+        assert frame["agent_id"] == agent_id
+        assert frame["generation"] == 4
+
+    @pytest.mark.asyncio
+    async def test_on_room_added_starts_pending_agent(
+        self, lifecycle_env
+    ) -> None:
+        """Pending/idle/stopped/crashed agents must be re-dispatched
+        via ``request_start`` so adding a room to a dormant agent
+        actually boots it (this was the 2026-04-12 regression fixed
+        by ``test_add_room_redispatches_pending_agent``)."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-pending",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle_env["attach_to_room"](agent_id)
+        await lifecycle.on_room_added(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            # request_start places the agent on the only available
+            # machine and advances it through pending.
+            assert agent.placed_on_machine_id == machine.id
+            assert agent.actual_state == "pending"
+
+    @pytest.mark.asyncio
+    async def test_on_room_added_noop_when_stopping(
+        self, lifecycle_env
+    ) -> None:
+        """Agents mid-stop or already stopped-and-desired-stopped
+        should not be nudged. The admin explicitly stopped them, and
+        a bump would fight the stop."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-stopping",
+                engine="echo",
+                desired_state="stopped",
+                actual_state="stopping",
+                placed_on_machine_id=machine.id,
+                generation=7,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        sent_before = len(fake_ws.sent)
+        await lifecycle.on_room_added(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            # Generation unchanged — no nudge fired.
+            assert agent.generation == 7
+
+        assert len(fake_ws.sent) == sent_before
+
+    @pytest.mark.asyncio
+    async def test_on_room_added_missing_agent_is_noop(
+        self, lifecycle_env
+    ) -> None:
+        """Unknown agent_id must not raise; the endpoint's own 404
+        path catches this, but the helper should be defensive."""
+        lifecycle = lifecycle_env["lifecycle"]
+        await lifecycle.on_room_added("nonexistent-id")
+
     @pytest.mark.asyncio
     async def test_on_agent_stopped(self, lifecycle_env) -> None:
         """handle_report_actual_state with actual_state='stopped' transitions

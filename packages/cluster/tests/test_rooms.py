@@ -414,6 +414,109 @@ class TestRoomCRUD:
         assert frame["user_id"] == user.id
 
     @pytest.mark.asyncio
+    async def test_add_participant_agent_invokes_lifecycle_on_room_added(
+        self, room_env
+    ) -> None:
+        """#227 — adding an agent to a room via
+        ``POST /rooms/{id}/participants`` must hand off to
+        ``AgentLifecycle.on_room_added`` so the machine receives an
+        authoritative ``sync_desired_state`` with the refreshed rooms
+        list. Without this the agent's SDK only hears about the new
+        room via a best-effort ``JoinRoomOut`` WS push that drops
+        silently when the target pid is unsubscribed — the original
+        bug this issue fixes.
+        """
+        app = room_env["app"]
+        project = room_env["project"]
+        token = room_env["token"]
+
+        # Spy on the lifecycle. We don't need the whole machine_bus
+        # plumbing — the contract we're asserting is "on_room_added
+        # gets called with the right agent_id".
+        calls: list[str] = []
+
+        class SpyLifecycle:
+            async def on_room_added(self, agent_id: str) -> None:
+                calls.append(agent_id)
+
+        app.state.agent_lifecycle = SpyLifecycle()
+
+        # Seed an agent so the Participant insert FK is satisfied.
+        async with build_session_factory(app.state.engine)() as db:
+            agent = Agent(
+                name="room-bot",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+            )
+            db.add(agent)
+            await db.commit()
+            await db.refresh(agent)
+            agent_id = agent.id
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Create a fresh room — the owner fixture user is the
+            # admin of their own room.
+            resp = await client.post(
+                "/api/v1/rooms",
+                json={"project_id": project.id, "name": "bot-target"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 201, resp.text
+            new_room_id = resp.json()["id"]
+
+            resp = await client.post(
+                f"/api/v1/rooms/{new_room_id}/participants",
+                json={"agent_id": agent_id, "role": "member"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 201, resp.text
+
+        assert calls == [agent_id], (
+            f"on_room_added must be invoked exactly once with the new "
+            f"agent_id; got {calls!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_participant_user_does_not_invoke_on_room_added(
+        self, room_env
+    ) -> None:
+        """User-branch of ``add_participant`` must NOT call
+        ``on_room_added`` — the helper is agent-specific (it drives
+        machine re-spawn). Keep the two branches cleanly separated."""
+        app = room_env["app"]
+        project = room_env["project"]
+        user = room_env["user"]
+        token = room_env["token"]
+
+        calls: list[str] = []
+
+        class SpyLifecycle:
+            async def on_room_added(self, agent_id: str) -> None:
+                calls.append(agent_id)
+
+        app.state.agent_lifecycle = SpyLifecycle()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/rooms",
+                json={"project_id": project.id, "name": "user-target"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            new_room_id = resp.json()["id"]
+
+            resp = await client.post(
+                f"/api/v1/rooms/{new_room_id}/participants",
+                json={"user_id": user.id, "role": "member"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 201, resp.text
+
+        assert calls == []
+
+    @pytest.mark.asyncio
     async def test_delete_room(self, room_env) -> None:
         app = room_env["app"]
         project = room_env["project"]
