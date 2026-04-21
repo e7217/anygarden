@@ -13,7 +13,7 @@ vi.mock('@/components/EngineGlyph', () => ({
 }))
 
 import OverviewPanel from './OverviewPanel'
-import type { Agent } from '@/hooks/useAgents'
+import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 
 afterEach(() => cleanup())
 
@@ -32,15 +32,50 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   }
 }
 
-function setup(agent: Agent | null = makeAgent()) {
-  const updateAgent = vi.fn().mockResolvedValue(makeAgent())
-  render(<OverviewPanel agent={agent} updateAgent={updateAgent} />)
-  return { updateAgent }
+// Matches the shape the catalog endpoint returns for ``claude-code``
+// so the Overview dropdowns have something realistic to render.
+function makeClaudeCatalog(): EngineCatalog {
+  return {
+    engine: 'claude-code',
+    default_model: 'claude-opus-4-7',
+    models: [
+      { id: 'claude-opus-4-7', label: 'Claude Opus 4.7', reasoning_levels: [] },
+      { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', reasoning_levels: [] },
+      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', reasoning_levels: [] },
+    ],
+    reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+  }
+}
+
+interface SetupOpts {
+  agent?: Agent | null
+  catalog?: EngineCatalog | null
+  catalogFetcher?: (engine: string) => Promise<EngineCatalog | null>
+  updateAgent?: ReturnType<typeof vi.fn>
+}
+
+function setup(opts: SetupOpts = {}) {
+  const agent = opts.agent === undefined ? makeAgent() : opts.agent
+  const updateAgent =
+    opts.updateAgent ?? vi.fn().mockResolvedValue(makeAgent())
+  const catalogFetcher =
+    opts.catalogFetcher ??
+    vi
+      .fn<(engine: string) => Promise<EngineCatalog | null>>()
+      .mockResolvedValue(opts.catalog === undefined ? makeClaudeCatalog() : opts.catalog)
+  render(
+    <OverviewPanel
+      agent={agent}
+      updateAgent={updateAgent}
+      fetchEngineCatalog={catalogFetcher}
+    />,
+  )
+  return { updateAgent, catalogFetcher }
 }
 
 describe('OverviewPanel', () => {
   it('renders empty state when no agent is selected', () => {
-    setup(null)
+    setup({ agent: null })
     expect(screen.getByTestId('overview-panel-empty')).toBeInTheDocument()
   })
 
@@ -98,6 +133,95 @@ describe('OverviewPanel', () => {
       expect(screen.queryByTestId('avatar-picker-save')).toBeNull()
       fireEvent.click(screen.getByTestId('overview-avatar-trigger'))
       expect(await screen.findByTestId('avatar-picker-save')).toBeInTheDocument()
+    })
+  })
+
+  describe('model / reasoning dropdowns', () => {
+    it('populates options from the fetched catalog and preselects the current model', async () => {
+      setup({ agent: makeAgent({ model: 'claude-sonnet-4-6' }) })
+      const select = (await screen.findByTestId(
+        'overview-model-select',
+      )) as HTMLSelectElement
+      expect(select.value).toBe('claude-sonnet-4-6')
+      // default + 3 catalog entries
+      expect(select.querySelectorAll('option').length).toBe(4)
+    })
+
+    it('saves with model_set: true when the admin picks a new model', async () => {
+      const { updateAgent } = setup({ agent: makeAgent({ model: 'claude-opus-4-7' }) })
+      const select = (await screen.findByTestId(
+        'overview-model-select',
+      )) as HTMLSelectElement
+      fireEvent.change(select, { target: { value: 'claude-sonnet-4-6' } })
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        model: 'claude-sonnet-4-6',
+        model_set: true,
+      })
+    })
+
+    it('clears the model to null when the admin picks Default', async () => {
+      const { updateAgent } = setup({ agent: makeAgent({ model: 'claude-opus-4-7' }) })
+      const select = (await screen.findByTestId(
+        'overview-model-select',
+      )) as HTMLSelectElement
+      fireEvent.change(select, { target: { value: '' } })
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        model: null,
+        model_set: true,
+      })
+    })
+
+    it('saves reasoning_effort with reasoning_effort_set: true', async () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ reasoning_effort: 'low' }),
+      })
+      const select = (await screen.findByTestId(
+        'overview-reasoning-select',
+      )) as HTMLSelectElement
+      fireEvent.change(select, { target: { value: 'high' } })
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        reasoning_effort: 'high',
+        reasoning_effort_set: true,
+      })
+    })
+
+    it('preserves a legacy model value with a disabled option', async () => {
+      setup({ agent: makeAgent({ model: 'claude-opus-4-6-fast' }) })
+      const select = (await screen.findByTestId(
+        'overview-model-select',
+      )) as HTMLSelectElement
+      expect(select.value).toBe('claude-opus-4-6-fast')
+      const legacy = screen.getByText(
+        /Current: claude-opus-4-6-fast \(no longer in catalog\)/,
+      )
+      expect(legacy.tagName).toBe('OPTION')
+      expect((legacy as HTMLOptionElement).disabled).toBe(true)
+    })
+
+    it('hides the dropdown rows when the catalog is unavailable', async () => {
+      setup({ catalog: null })
+      // Wait a microtask for the catalog promise to resolve, then confirm.
+      await waitFor(() =>
+        expect(screen.queryByTestId('overview-model-select')).toBeNull(),
+      )
+      expect(screen.queryByTestId('overview-reasoning-select')).toBeNull()
+    })
+
+    it('shows an inline error when updateAgent rejects', async () => {
+      const updateAgent = vi.fn().mockRejectedValue(new Error('PUT failed'))
+      setup({ agent: makeAgent({ model: 'claude-opus-4-7' }), updateAgent })
+      const select = (await screen.findByTestId(
+        'overview-model-select',
+      )) as HTMLSelectElement
+      fireEvent.change(select, { target: { value: 'claude-sonnet-4-6' } })
+      await waitFor(() =>
+        expect(screen.getByTestId('overview-config-error')).toHaveTextContent(
+          'PUT failed',
+        ),
+      )
     })
   })
 

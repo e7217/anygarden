@@ -837,6 +837,7 @@ export default function AdminMachines() {
         deleteAgentFile={deleteAgentFile}
         fetchAttachedSkills={fetchAttachedSkills}
         fetchSkillPreview={fetchSkillPreview}
+        fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => selectedId && fetchDetail(selectedId)}
       />
     </div>

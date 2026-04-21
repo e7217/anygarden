@@ -19,17 +19,29 @@
  * ID text so the admin can copy it manually, and shows "Clipboard
  * unavailable" in place of "Copied".
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Copy, Check, AlertCircle } from 'lucide-react'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline } from '@/lib/agent-liveness'
-import type { Agent } from '@/hooks/useAgents'
+import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
+// ``loading`` while the catalog fetch is in flight, ``unavailable``
+// once it resolves with ``null`` (engine not in the static catalog or
+// fetch errored) — lets us hide the dropdowns without flashing an
+// empty ``<select>``.
+type CatalogState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; catalog: EngineCatalog }
+  | { kind: 'unavailable' }
+
+// Match AdminMachines.tsx so the two dialogs render identical selects.
+const SELECT_CSS =
+  'flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60'
 
 // The `Agent.avatar_kind` column is typed as a loose `string` (it's
 // open-ended at the DB layer), but EntityAvatar only understands
@@ -52,17 +64,32 @@ interface Props {
       avatar_kind_set?: boolean
       avatar_value?: string | null
       avatar_value_set?: boolean
+      model?: string | null
+      model_set?: boolean
+      reasoning_effort?: string | null
+      reasoning_effort_set?: boolean
     },
   ) => Promise<Agent>
+  /** Issue #217 — populate the Model / Reasoning dropdowns. Optional
+   *  so existing tests that don't care about config editing keep
+   *  passing; when absent, the rows render in read-only fallback. */
+  fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
 }
 
-export default function OverviewPanel({ agent, updateAgent }: Props) {
+export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }: Props) {
   const [showPicker, setShowPicker] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<CopyState>('idle')
   const idRef = useRef<HTMLSpanElement>(null)
+
+  // #217 — engine config editing. Catalog is fetched per engine on
+  // mount; ``configSaving`` gates both <select>s during an in-flight
+  // updateAgent so a fat-fingered double-click can't race two PUTs.
+  const [catalogState, setCatalogState] = useState<CatalogState>({ kind: 'loading' })
+  const [configSaving, setConfigSaving] = useState(false)
+  const [configError, setConfigError] = useState<string | null>(null)
 
   // Re-seed the name draft whenever the target agent changes so the
   // input reflects the new agent's current name.
@@ -78,6 +105,46 @@ export default function OverviewPanel({ agent, updateAgent }: Props) {
     const t = setTimeout(() => setCopyState('idle'), 2000)
     return () => clearTimeout(t)
   }, [copyState])
+
+  // #217 — catalog fetch runs whenever we switch to a different agent
+  // OR its engine changes. ``cancelled`` guards against an out-of-order
+  // resolve if the admin opens the dialog, closes it, and re-opens on
+  // another engine before the first fetch resolved.
+  const agentEngine = agent?.engine ?? null
+  useEffect(() => {
+    if (!agentEngine || !fetchEngineCatalog) {
+      setCatalogState({ kind: 'unavailable' })
+      return
+    }
+    let cancelled = false
+    setCatalogState({ kind: 'loading' })
+    setConfigError(null)
+    fetchEngineCatalog(agentEngine)
+      .then(cat => {
+        if (cancelled) return
+        setCatalogState(cat ? { kind: 'ready', catalog: cat } : { kind: 'unavailable' })
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogState({ kind: 'unavailable' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentEngine, fetchEngineCatalog])
+
+  // Per-model reasoning narrowing, mirroring AdminMachines.tsx so the
+  // create and edit dialogs agree on which effort levels apply to
+  // which model. Engine-level list is the fallback.
+  const currentModel = agent?.model ?? ''
+  const reasoningLevels = useMemo<readonly string[]>(() => {
+    if (catalogState.kind !== 'ready') return []
+    const { catalog } = catalogState
+    if (currentModel) {
+      const m = catalog.models.find(x => x.id === currentModel)
+      if (m && m.reasoning_levels.length > 0) return m.reasoning_levels
+    }
+    return catalog.reasoning_levels
+  }, [catalogState, currentModel])
 
   if (!agent) {
     return (
@@ -106,6 +173,39 @@ export default function OverviewPanel({ agent, updateAgent }: Props) {
       setNameDraft(agent.name) // rollback on failure
     }
     setNameSaving(false)
+  }
+
+  // #217 — onChange commits (avatar-picker pattern). Sending ``null``
+  // for an empty selection asks the server to clear the column and
+  // fall back to the adapter's built-in default. ``*_set: true`` is
+  // required so an unrelated PUT doesn't wipe the field.
+  const handleModelChange = async (raw: string) => {
+    const nextVal = raw === '' ? null : raw
+    if ((agent.model ?? null) === nextVal) return
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, { model: nextVal, model_set: true })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  const handleReasoningChange = async (raw: string) => {
+    const nextVal = raw === '' ? null : raw
+    if ((agent.reasoning_effort ?? null) === nextVal) return
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, {
+        reasoning_effort: nextVal,
+        reasoning_effort_set: true,
+      })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
   }
 
   const handleCopyId = async () => {
@@ -234,6 +334,77 @@ export default function OverviewPanel({ agent, updateAgent }: Props) {
 
         <dt className="text-[var(--color-foreground-muted)]">Engine</dt>
         <dd className="text-[var(--color-foreground)]">{agent.engine}</dd>
+
+        {/* #217 — Model + Reasoning editing. Rows only render when
+            the catalog resolved successfully; unknown/loading engines
+            fall back to the name-only metadata we had before. */}
+        {catalogState.kind === 'ready' ? (
+          <>
+            <dt className="text-[var(--color-foreground-muted)]">Model</dt>
+            <dd>
+              <select
+                value={agent.model ?? ''}
+                onChange={e => void handleModelChange(e.target.value)}
+                disabled={configSaving}
+                aria-label="Agent model"
+                data-testid="overview-model-select"
+                className={SELECT_CSS}
+              >
+                <option value="">
+                  Default ({catalogState.catalog.default_model})
+                </option>
+                {catalogState.catalog.models.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+                {/* Preserve a legacy value that's no longer listed in
+                    the catalog so admins can see what's actually stored
+                    instead of the UI silently collapsing to "Default". */}
+                {agent.model &&
+                !catalogState.catalog.models.some(m => m.id === agent.model) ? (
+                  <option value={agent.model} disabled>
+                    Current: {agent.model} (no longer in catalog)
+                  </option>
+                ) : null}
+              </select>
+            </dd>
+
+            <dt className="text-[var(--color-foreground-muted)]">Reasoning</dt>
+            <dd>
+              <select
+                value={agent.reasoning_effort ?? ''}
+                onChange={e => void handleReasoningChange(e.target.value)}
+                disabled={configSaving || reasoningLevels.length === 0}
+                aria-label="Reasoning effort"
+                data-testid="overview-reasoning-select"
+                className={SELECT_CSS}
+              >
+                <option value="">Default</option>
+                {reasoningLevels.map(level => (
+                  <option key={level} value={level}>
+                    {level.charAt(0).toUpperCase() + level.slice(1)}
+                  </option>
+                ))}
+                {agent.reasoning_effort &&
+                !reasoningLevels.includes(agent.reasoning_effort) ? (
+                  <option value={agent.reasoning_effort} disabled>
+                    Current: {agent.reasoning_effort} (no longer in catalog)
+                  </option>
+                ) : null}
+              </select>
+              {configError ? (
+                <div
+                  className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
+                  data-testid="overview-config-error"
+                >
+                  <AlertCircle className="h-3 w-3" aria-hidden="true" />
+                  {configError}
+                </div>
+              ) : null}
+            </dd>
+          </>
+        ) : null}
 
         <dt className="text-[var(--color-foreground-muted)]">State</dt>
         <dd className="flex items-center gap-2">
