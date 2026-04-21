@@ -18,6 +18,12 @@ question. Default ``FALSE`` preserves pre-#148 behaviour — rooms
 created before the migration keep the server-side flag unset, and
 the env-based Stage B path remains the only active ambient path
 until Part 3 lands.
+
+Note: the ``FALSE`` default was flipped to ``TRUE`` in migration
+028 (#225, 2026-04-21) once Part 3 + per-agent opt-out (023) were
+in place and ambient sharing became the default room experience.
+Existing rows keep their stored value; only the DDL default
+changed.
 """
 
 from __future__ import annotations

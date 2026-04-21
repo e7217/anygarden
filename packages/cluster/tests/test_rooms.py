@@ -7,6 +7,7 @@ import secrets
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.app import create_app
@@ -1108,11 +1109,61 @@ class TestRoomSpeakerStrategy:
 
 
 class TestRoomContextWindow:
-    """Tests for the #148 per-room ``context_window_enabled`` flag."""
+    """Tests for the #148 per-room ``context_window_enabled`` flag.
+
+    #225 flipped the server default to True and promoted the PATCH
+    field to admin-only (alongside ``speaker_strategy``). These
+    tests exercise both the default and the admin gate. Non-admin
+    rename PATCHes must keep working — the gate is scoped to the
+    admin-only fields, not the whole endpoint.
+    """
+
+    @pytest_asyncio.fixture()
+    async def admin_env(self, config: DooraeSettings):
+        """Admin user + room. Mirrors the shape of the ``rep_env``
+        fixture above so the admin-only PATCH tests use the same
+        pattern as the speaker-strategy suite."""
+        engine = build_engine(config.db_url)
+        session_factory = build_session_factory(engine)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with session_factory() as db:
+            admin = User(email="cw-admin@doorae.io", password_hash="x", is_admin=True)
+            db.add(admin)
+            await db.flush()
+
+            project = Project(name="cw-proj")
+            db.add(project)
+            await db.flush()
+
+            room = Room(project_id=project.id, name="cw-room")
+            db.add(room)
+            await db.flush()
+
+            await db.commit()
+            for obj in (admin, project, room):
+                await db.refresh(obj)
+
+            token = create_user_token(
+                admin.id, admin.email, True, secret=config.jwt_secret
+            )
+
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = session_factory
+
+            yield {"app": app, "room": room, "token": token}
+
+        await engine.dispose()
 
     @pytest.mark.asyncio
-    async def test_default_is_false(self, room_env) -> None:
-        """Freshly created rooms do not opt into ambient context sharing."""
+    async def test_default_is_true(self, room_env) -> None:
+        """#225 — fresh rooms opt into ambient context sharing by
+        default. Existing False rows (created before 028) stay False;
+        this fixture creates a brand-new room so it should reflect
+        the new default."""
         app = room_env["app"]
         room = room_env["room"]
         token = room_env["token"]
@@ -1124,24 +1175,26 @@ class TestRoomContextWindow:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 200
-            assert resp.json()["context_window_enabled"] is False
+            assert resp.json()["context_window_enabled"] is True
 
     @pytest.mark.asyncio
-    async def test_patch_toggles_context_window(self, room_env) -> None:
-        """PATCH accepts ``context_window_enabled`` and persists it."""
-        app = room_env["app"]
-        room = room_env["room"]
-        token = room_env["token"]
+    async def test_admin_patch_toggles_context_window(self, admin_env) -> None:
+        """PATCH accepts ``context_window_enabled`` from an admin and
+        persists it. Toggling off is the useful direction now that
+        the default is True."""
+        app = admin_env["app"]
+        room = admin_env["room"]
+        token = admin_env["token"]
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.patch(
                 f"/api/v1/rooms/{room.id}",
-                json={"context_window_enabled": True},
+                json={"context_window_enabled": False},
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 200
-            assert resp.json()["context_window_enabled"] is True
+            assert resp.json()["context_window_enabled"] is False
 
             # Survives a reload — confirms the value is persisted, not just
             # echoed from the request body.
@@ -1150,21 +1203,26 @@ class TestRoomContextWindow:
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp2.status_code == 200
-            assert resp2.json()["context_window_enabled"] is True
+            assert resp2.json()["context_window_enabled"] is False
 
     @pytest.mark.asyncio
-    async def test_patch_name_leaves_context_window_unchanged(self, room_env) -> None:
-        """Partial updates don't reset the flag (None ⇒ "don't touch")."""
-        app = room_env["app"]
-        room = room_env["room"]
-        token = room_env["token"]
+    async def test_admin_patch_name_leaves_context_window_unchanged(self, admin_env) -> None:
+        """Partial updates don't reset the flag (None ⇒ "don't touch").
+
+        Uses the admin fixture because only admins can seed the
+        "off" state via PATCH now; the test verifies the
+        don't-touch semantics still hold on a subsequent rename.
+        """
+        app = admin_env["app"]
+        room = admin_env["room"]
+        token = admin_env["token"]
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Arrange: flip the flag on.
+            # Arrange: flip the flag off as admin.
             await client.patch(
                 f"/api/v1/rooms/{room.id}",
-                json={"context_window_enabled": True},
+                json={"context_window_enabled": False},
                 headers={"Authorization": f"Bearer {token}"},
             )
             # Act: rename the room without touching the flag.
@@ -1176,7 +1234,59 @@ class TestRoomContextWindow:
             assert resp.status_code == 200
             body = resp.json()
             assert body["name"] == "renamed"
-            assert body["context_window_enabled"] is True
+            assert body["context_window_enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_change_context_window(self, room_env) -> None:
+        """#225 — non-admin members get 403 when PATCH includes
+        ``context_window_enabled``. The room's stored value must not
+        change (no partial write on rejection)."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        # Snapshot the current stored flag so we can assert invariance
+        # across the failed PATCH.
+        session_factory = app.state.session_factory
+        async with session_factory() as db:
+            before = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            before_flag = before.context_window_enabled
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"context_window_enabled": not before_flag},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 403
+
+        async with session_factory() as db:
+            after = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            assert after.context_window_enabled == before_flag
+
+    @pytest.mark.asyncio
+    async def test_non_admin_rename_without_flag_succeeds(self, room_env) -> None:
+        """Regression guard for #225 — the admin gate must only fire
+        when an admin-only field is present in the payload. A pure
+        rename by a non-admin member still returns 200."""
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"name": "renamed-by-member"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["name"] == "renamed-by-member"
 
 
 class TestRemoveParticipant:
