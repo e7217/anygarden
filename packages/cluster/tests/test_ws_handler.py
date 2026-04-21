@@ -1140,3 +1140,184 @@ class TestContextWindowBroadcast:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
                 assert welcome.get("context_window_opt_out") is True
+
+
+# ── ActivityLog request_id correlation (#222) ────────────────────────
+#
+# The per-agent ``request_id`` minted on each user send is the key that
+# ties ``message_received`` → ``handler_started`` → ``response_sent`` →
+# ``handler_finished`` into a single turn. The frontend's ActivityPanel
+# groups ActivityLog rows by this id, so two server-side guarantees must
+# hold:
+#
+# 1. ``message_received`` details include ``trigger_message_id`` pointing
+#    at the user Message row that woke the agent up — that's the link the
+#    UI uses to render "this turn responds to message X".
+# 2. When an agent echoes ``metadata.request_id`` back on its response,
+#    the stored Message row preserves that id in ``extra_metadata`` — so
+#    the message-level replay path can surface the turn id without
+#    needing a separate ActivityLog lookup.
+
+
+class TestActivityLogRequestIdCorrelation:
+    @pytest_asyncio.fixture()
+    async def corr_env(self, config: DooraeSettings):
+        """User + agent in a shared room, plus a fresh agent WS token.
+
+        Mirrors the rq_env shape but simpler: one room, one user, one
+        agent. Yields all the handles tests need to drive both the
+        user-send and agent-send code paths.
+        """
+        from doorae.auth.token import generate_token, hash_agent_token
+        from doorae.db.models import AgentToken
+
+        engine = build_engine(config.db_url)
+        sf = build_session_factory(engine)
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with sf() as db:
+            user = User(email="corr@test.com", password_hash="x")
+            db.add(user)
+            await db.flush()
+
+            project = Project(name="corr-proj")
+            db.add(project)
+            await db.flush()
+
+            room = Room(project_id=project.id, name="corr-room")
+            db.add(room)
+            await db.flush()
+
+            agent = Agent(
+                name="corr-bot", engine="codex", actual_state="running"
+            )
+            db.add(agent)
+            await db.flush()
+
+            db.add(Participant(
+                room_id=room.id, user_id=user.id, role="member"
+            ))
+            db.add(Participant(
+                room_id=room.id, agent_id=agent.id, role="member"
+            ))
+
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+            await db.commit()
+            for obj in (user, project, room, agent):
+                await db.refresh(obj)
+
+            user_token = create_user_token(
+                user.id, user.email, False, secret=config.jwt_secret
+            )
+
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = sf
+
+            yield {
+                "app": app,
+                "user_token": user_token,
+                "agent_token": agent_token_plain,
+                "user": user,
+                "agent": agent,
+                "room": room,
+                "session_factory": sf,
+            }
+
+        await engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_message_received_records_trigger_message_id(
+        self, corr_env
+    ) -> None:
+        """User send must stamp the ``message_received`` ActivityLog
+        with the id of the Message row it just wrote — that's the link
+        ActivityPanel uses to tie a turn back to the user input."""
+        from starlette.testclient import TestClient
+
+        from doorae.db.models import ActivityLog, Message
+
+        app = corr_env["app"]
+        user_token = corr_env["user_token"]
+        agent_id = corr_env["agent"].id
+        room_id = corr_env["room"].id
+        sf = corr_env["session_factory"]
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{user_token}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "hello agent",
+                }))
+                msg = json.loads(ws.receive_text())
+                assert msg["type"] == "message"
+                msg_id = msg["id"]
+
+        async with sf() as db:
+            stored_msg = (await db.execute(
+                select(Message).where(Message.id == msg_id)
+            )).scalar_one()
+            assert stored_msg.content == "hello agent"
+
+            row = (await db.execute(
+                select(ActivityLog).where(
+                    ActivityLog.agent_id == agent_id,
+                    ActivityLog.event_type == "message_received",
+                )
+            )).scalar_one()
+            assert row.request_id is not None
+            assert row.details["trigger_message_id"] == msg_id
+            assert row.details["room_id"] == room_id
+
+    @pytest.mark.asyncio
+    async def test_agent_response_message_preserves_request_id(
+        self, corr_env
+    ) -> None:
+        """Agent echoes the per-turn ``request_id`` on its response
+        frame. The server relays that echo onto ``response_sent``
+        ActivityLog (already covered elsewhere) AND — per #222 — must
+        also leave it on the stored Message's ``extra_metadata`` so the
+        message row itself is self-describing."""
+        from starlette.testclient import TestClient
+
+        from doorae.db.models import Message
+
+        app = corr_env["app"]
+        agent_token = corr_env["agent_token"]
+        room_id = corr_env["room"].id
+        sf = corr_env["session_factory"]
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{agent_token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "agent reply",
+                    "metadata": {"request_id": "rid-echo-test"},
+                }))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "message"
+                msg_id = resp["id"]
+
+        async with sf() as db:
+            stored = (await db.execute(
+                select(Message).where(Message.id == msg_id)
+            )).scalar_one()
+            assert stored.extra_metadata is not None
+            assert stored.extra_metadata["request_id"] == "rid-echo-test"

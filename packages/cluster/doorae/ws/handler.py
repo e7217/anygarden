@@ -800,6 +800,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 details={
                                     "room_id": room_id,
                                     "from_participant_id": participant.id,
+                                    # #222 — tie the turn back to the
+                                    # Message row that woke the agent
+                                    # up so ActivityPanel can render
+                                    # "responding to <msg>" without a
+                                    # second timestamp-based lookup.
+                                    "trigger_message_id": msg.id,
                                 },
                             ))
 

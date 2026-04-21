@@ -768,6 +768,11 @@ class ActivityLogOut(BaseModel):
     agent_id: str
     event_type: str
     timestamp: str
+    # #222 — exposed so the client can group rows by turn without
+    # parsing the ``details`` JSON. Null for system events
+    # (start_requested / stop_requested / state_changed / ...) that
+    # don't belong to any particular request lifecycle.
+    request_id: str | None = None
     details: dict | None = None
 
 
@@ -792,6 +797,7 @@ async def get_agent_activity(
             agent_id=r.agent_id,
             event_type=r.event_type,
             timestamp=r.timestamp.isoformat(),
+            request_id=r.request_id,
             details=r.details,
         )
         for r in rows

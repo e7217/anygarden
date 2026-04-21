@@ -481,6 +481,68 @@ class TestAgentsAPI:
             )
 
 
+class TestAgentActivityEndpoint:
+    """GET /agents/{id}/activity surface (#222).
+
+    ActivityPanel groups rows by ``request_id`` to render the per-turn
+    timeline, so the endpoint must expose that column. Lifecycle events
+    (message_received, handler_started, response_sent, handler_finished)
+    carry a non-null ``request_id``; system events
+    (start_requested / stop_requested) carry null.
+    """
+
+    @pytest.mark.asyncio
+    async def test_activity_endpoint_exposes_request_id(
+        self, agents_env
+    ) -> None:
+        from doorae.db.models import ActivityLog
+
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="activity-endpoint-agent",
+                engine="echo",
+                desired_state="stopped",
+                actual_state="stopped",
+            )
+            db.add(agent)
+            await db.flush()
+            agent_id = agent.id
+            # One lifecycle-style row (request_id set) and one system-
+            # style row (request_id null) so the response can be
+            # verified to preserve both shapes.
+            db.add(ActivityLog(
+                agent_id=agent_id,
+                event_type="message_received",
+                request_id="req-abc",
+                details={"room_id": "room-x"},
+            ))
+            db.add(ActivityLog(
+                agent_id=agent_id,
+                event_type="start_requested",
+                request_id=None,
+                details=None,
+            ))
+            await db.commit()
+
+        resp = await client.get(
+            f"/api/v1/agents/{agent_id}/activity",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert {r["event_type"] for r in rows} == {
+            "message_received",
+            "start_requested",
+        }
+        by_type = {r["event_type"]: r for r in rows}
+        assert by_type["message_received"]["request_id"] == "req-abc"
+        assert by_type["start_requested"]["request_id"] is None
+
+
 class TestAgentStopEndpoint:
     """POST /agents/{id}/stop response behaviour (#219).
 
