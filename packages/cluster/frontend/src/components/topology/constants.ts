@@ -78,16 +78,14 @@ export function edgeStyleFor(
     case 'places':
       return { stroke: 'rgba(0,0,0,0.28)', strokeWidth: 1.5, type: 'smoothstep' }
     case 'participates':
-      // Representative agent gets the single saturated accent per
-      // DESIGN.md §2 so "this agent speaks for the room" is visually
-      // unmissable. Collapses what used to be a separate ``represents``
-      // edge into a flag on the same agent→room line (see #226).
-      if (isRepresentative) {
-        return { stroke: ACCENT, strokeWidth: 2, type: 'smoothstep' }
-      }
+      // Same shape across the whole participates kind — straight + dashed —
+      // so the merged ``represents``/``participates`` model from #226/#228
+      // reads as a single domain relation. The representative case only
+      // swaps ACCENT_SOFT (50% alpha) for ACCENT (full Notion Blue) so
+      // differentiation is color-only per #231.
       if (actor === 'agent') {
         return {
-          stroke: ACCENT_SOFT,
+          stroke: isRepresentative ? ACCENT : ACCENT_SOFT,
           strokeWidth: 1,
           strokeDasharray: '3 3',
           type: 'straight',
