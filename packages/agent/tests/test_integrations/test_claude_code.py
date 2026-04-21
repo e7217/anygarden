@@ -448,6 +448,147 @@ class TestHandoffTool:
         assert len(sent) == 0
 
 
+class TestOrchestratorRosterPrompt:
+    """Issue #221 — the orchestrator adapter injects the room roster
+    into ``system_prompt`` so the LLM can call ``handoff_to`` with a
+    real participant UUID. Before this was wired, the LLM had no
+    source of UUIDs and routinely emitted display names that the
+    server rejected as unknown participants."""
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_prompt_includes_room_roster(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Roster lines carry ``<@user:uuid>`` annotations so the LLM's
+        mention-syntax pattern matching preserves the UUID."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._participants_by_room["room-a"] = {
+            "orc-pid": {
+                "id": "orc-pid",
+                "display_name": "orc",
+                "kind": "agent",
+                "agent_id": "agent-alpha",
+            },
+            "worker-pid": {
+                "id": "worker-pid",
+                "display_name": "worker",
+                "kind": "agent",
+                "agent_id": "agent-beta",
+            },
+            "user-pid": {
+                "id": "user-pid",
+                "display_name": "alice",
+                "kind": "user",
+                "agent_id": None,
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        prompt = opts.get("system_prompt", "")
+        assert prompt.startswith("You are Orc.")
+        assert "<@user:worker-pid>" in prompt
+        assert "<@user:user-pid>" in prompt
+        # The orchestrator must not see itself in the roster —
+        # ``handoff_to me`` would be a no-op cycle.
+        assert "<@user:orc-pid>" not in prompt
+        # The display_name should appear alongside the UUID so the LLM
+        # can reason about *who* to hand off to, not just UUIDs.
+        assert "worker" in prompt
+        assert "alice" in prompt
+
+    @pytest.mark.asyncio
+    async def test_non_orchestrator_prompt_unchanged(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Worker agents don't get roster stamping — their prompt
+        remains verbatim from construction. This keeps the roster
+        strictly scoped to the agent that can actually use it."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Worker")
+        client._agent_id = "agent-beta"
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._participants_by_room["room-a"] = {
+            "other-pid": {
+                "id": "other-pid",
+                "display_name": "other",
+                "kind": "agent",
+                "agent_id": "agent-alpha",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(
+            system_prompt="You are Worker.", client=client
+        )
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert opts.get("system_prompt") == "You are Worker."
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_without_base_prompt_gets_roster_only(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """An adapter created without a custom system_prompt should
+        still receive the roster as a standalone prompt — we don't
+        want the CLAUDE.md-driven default path to silently skip the
+        roster."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._participants_by_room["room-a"] = {
+            "worker-pid": {
+                "id": "worker-pid",
+                "display_name": "worker",
+                "kind": "agent",
+                "agent_id": "agent-beta",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        prompt = opts.get("system_prompt")
+        assert prompt is not None
+        assert "<@user:worker-pid>" in prompt
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_with_empty_roster_leaves_prompt_unchanged(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Pre-#221 servers don't stamp the roster — the adapter must
+        still produce a workable prompt without it. Roster absence
+        should not inject a stray "Room participants:" header."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        # _participants_by_room not populated — pre-#221 server path.
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert opts.get("system_prompt") == "You are Orc."
+
+
 class TestIngestContext:
     """Issue #74 — `ingest_context` absorbs ambient messages into a
     per-room buffer that the next active turn consumes as a prompt

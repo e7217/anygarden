@@ -562,6 +562,7 @@ _VALID_SPEAKER_STRATEGIES: frozenset[str] = frozenset(
 async def update_room(
     room_id: str,
     body: RoomUpdate,
+    request: Request,
     # Room metadata changes are closed to guests (§11.5).
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
@@ -646,6 +647,30 @@ async def update_room(
         room.orchestrator_agent_id = body.orchestrator_agent_id
     await db.commit()
     await db.refresh(room)
+
+    # Issue #221 — broadcast settings changes to subscribed clients so
+    # connected agents refresh their cached dispatch mode without a
+    # reconnect. ``None`` fields mean "not touched by this PATCH" so a
+    # rename-only edit doesn't reset other caches on the receiving end.
+    # Skipped entirely for rename-only PATCHes to keep the wire quiet
+    # when no cached state depends on the change.
+    settings_touched = (
+        body.speaker_strategy is not None
+        or body.orchestrator_agent_id is not None
+        or body.context_window_enabled is not None
+    )
+    if settings_touched:
+        manager = getattr(request.app.state, "connection_manager", None)
+        if manager is not None:
+            from doorae.ws.protocol import RoomSettingsChangedOut
+
+            frame = RoomSettingsChangedOut(
+                room_id=room_id,
+                speaker_strategy=body.speaker_strategy,
+                orchestrator_agent_id=body.orchestrator_agent_id,
+                context_window_enabled=body.context_window_enabled,
+            )
+            await manager.broadcast(room_id, frame)
     return room
 
 

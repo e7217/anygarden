@@ -539,6 +539,58 @@ class TestWelcomeAgentId:
                 assert welcome.get("agent_id") == agent.id
 
 
+class TestWelcomeParticipantsRoster:
+    """Issue #221 — welcome must include a roster of the room's
+    participants so orchestrator agents can inject the list into their
+    LLM system prompt and call ``handoff_to`` with valid UUIDs."""
+
+    @pytest.mark.asyncio
+    async def test_welcome_includes_room_roster(self, ws_env) -> None:
+        """User and agent participants show up with kind + display_name."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+        user = ws_env["user"]
+        token = ws_env["token"]
+
+        async with sf() as db:
+            agent = Agent(name="orch-agent", engine="claude-code", actual_state="running")
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+            await db.commit()
+            await db.refresh(agent)
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                roster = welcome.get("participants")
+                assert isinstance(roster, list)
+                assert len(roster) == 2
+
+                kinds = {e["kind"] for e in roster}
+                assert {"user", "agent"} <= kinds
+
+                agent_entry = next(e for e in roster if e["kind"] == "agent")
+                user_entry = next(e for e in roster if e["kind"] == "user")
+                assert agent_entry["agent_id"] == agent.id
+                assert agent_entry["display_name"] == "orch-agent"
+                # Each entry has a participant id (UUID in the room).
+                assert agent_entry["id"]
+                assert user_entry["id"]
+                # User entries do not carry ``agent_id``.
+                assert user_entry.get("agent_id") is None
+                # Display name falls back to the email local-part when
+                # ``User.display_name`` is empty (mirrors REST behaviour).
+                assert user_entry["display_name"] == user.email.split("@")[0]
+
+
 class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
 

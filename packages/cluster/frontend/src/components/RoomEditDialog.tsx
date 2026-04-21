@@ -175,6 +175,13 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
   } | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // #221 — transient success flash shown between ``Save`` and the
+  // dialog close. The server now broadcasts ``room_settings_changed``
+  // on admin PATCH so already-connected agents refresh their cached
+  // dispatch mode without a reconnect; the banner tells the admin
+  // that a subsequent message in the room will actually use the new
+  // strategy rather than the old one.
+  const [successFlash, setSuccessFlash] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!roomId) return
@@ -255,7 +262,13 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         throw new Error(body.detail || 'Failed to save')
       }
       onSaved?.()
-      onOpenChange(false)
+      setSuccessFlash('설정이 저장되었습니다. 접속 중 에이전트에 실시간 전파됩니다.')
+      // Brief flash before the dialog auto-closes so the admin sees
+      // confirmation without needing a dedicated toast library.
+      window.setTimeout(() => {
+        setSuccessFlash(null)
+        onOpenChange(false)
+      }, 1400)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -392,6 +405,15 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         {error && (
           <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
             {error}
+          </div>
+        )}
+
+        {successFlash && (
+          <div
+            role="status"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-foreground)]"
+          >
+            {successFlash}
           </div>
         )}
 
