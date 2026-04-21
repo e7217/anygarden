@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import dagre from 'dagre'
 import type { Edge as RFEdge, Node as RFNode } from '@xyflow/react'
 import type { GraphEdge, GraphNode, NodeKind } from './types'
+import type { Overrides } from './useTopologyLayoutOverrides'
 
 // Canvas size per node kind. Dagre uses these to compute layout boxes
 // before React Flow renders the DOM. The exact rendered sizes can
@@ -39,10 +40,16 @@ interface Layouted {
  * when the server delivers a genuinely new graph. Filter toggles or
  * hover state must NOT invalidate this cache; they operate on the
  * already-positioned output further down the render tree.
+ *
+ * ``overrides`` (#234) is a per-node position map that is overlaid on
+ * the dagre result in a separate memo keyed on its reference. This
+ * way dragging a node doesn't invalidate the expensive dagre pass —
+ * only the cheap ``.map`` that applies the overrides reruns.
  */
 export function useGraphLayout(
   graphNodes: GraphNode[] | undefined,
   graphEdges: GraphEdge[] | undefined,
+  overrides?: Overrides,
 ): Layouted {
   // Stable hash of inputs. ``id``s are the only values the layout
   // depends on — labels, data.status etc. can churn without moving
@@ -60,7 +67,7 @@ export function useGraphLayout(
     return `${nids}#${eids}`
   }, [graphNodes, graphEdges])
 
-  return useMemo<Layouted>(() => {
+  const dagreLayouted = useMemo<Layouted>(() => {
     if (!graphNodes || !graphEdges || graphNodes.length === 0) {
       return { nodes: [], edges: [] }
     }
@@ -134,4 +141,20 @@ export function useGraphLayout(
     return { nodes: rfNodes, edges: rfEdges }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [digest])
+
+  // Overlay user-edited positions on top of dagre. Skipping the overlay
+  // entirely when ``overrides`` is missing/empty keeps reference identity
+  // of ``rfNodes`` stable (no unnecessary allocations for users who
+  // haven't dragged anything).
+  return useMemo<Layouted>(() => {
+    if (!overrides || Object.keys(overrides).length === 0) {
+      return dagreLayouted
+    }
+    const applied: RFNode[] = dagreLayouted.nodes.map(n => {
+      const o = overrides[n.id]
+      if (!o) return n
+      return { ...n, position: { x: o.x, y: o.y } }
+    })
+    return { nodes: applied, edges: dagreLayouted.edges }
+  }, [dagreLayouted, overrides])
 }
