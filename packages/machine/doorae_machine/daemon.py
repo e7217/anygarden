@@ -34,6 +34,13 @@ REPORT_INTERVAL = 30  # seconds between report_actual_state sends
 RECONNECT_BASE = 1  # initial backoff in seconds
 RECONNECT_MAX = 60  # max backoff in seconds
 TOKEN_REQUEST_TIMEOUT = 30  # seconds to wait for a token_grant
+# Safety-net for leaked ``_transitional_states`` entries: if a
+# starting/stopping annotation sticks around longer than this without
+# either a running-process match or a stop callback, drop it on the
+# next report so the server isn't stuck seeing a phantom transition
+# forever. The window is generous because normal spawns can legitimately
+# take tens of seconds (engine boot, first tool load).
+TRANSITIONAL_LEAK_GRACE = 60.0
 
 
 def _base_url_from_machine_url(machine_ws_url: str) -> str:
@@ -110,6 +117,17 @@ class MachineDaemon:
         # (#183). Different agents get different locks — reconciliation
         # across agents stays parallel.
         self._agent_locks: dict[str, asyncio.Lock] = {}
+        # Short-lived "starting"/"stopping" annotations (#219). Set at
+        # spawn/kill dispatch, cleared by the ``_on_agent_stopped`` /
+        # ``_on_agent_crashed`` callbacks or by the spawn coroutine's
+        # cleanup step. ``_report_actual_state`` merges these with the
+        # spawner's running list so admins see the transition instead
+        # of a 30s-wide "running → stopped" jump. The value is the
+        # unix-epoch seconds the annotation was set; stale entries
+        # older than ``_TRANSITIONAL_LEAK_GRACE`` seconds are pruned on
+        # each report as a safety net against missed callbacks.
+        self._transitional_states: dict[str, str] = {}
+        self._transitional_set_at: dict[str, float] = {}
 
     # ── Main loop ──────────────────────────────────────────────────────
 
@@ -292,6 +310,12 @@ class MachineDaemon:
             if manifest.desired_state == "stopped":
                 if running is not None:
                     log.info("stopping_agent", agent_id=agent_id)
+                    # #219 — annotate BEFORE kill so the report we push
+                    # out next carries the stopping badge; the periodic
+                    # 30s loop would otherwise leave admins staring at
+                    # a stale ``running`` until the kill completes.
+                    self._mark_transitional(agent_id, "stopping")
+                    await self._report_actual_state()
                     await self._spawner.kill(agent_id)
                 self._running_generations.pop(agent_id, None)
                 return
@@ -325,6 +349,10 @@ class MachineDaemon:
             # instead of racing to dispatch a duplicate spawn. On spawn
             # failure, ``_request_token_and_spawn`` rolls this back.
             self._running_generations[agent_id] = manifest.generation
+            # #219 — mark starting so the immediate report (and any
+            # periodic report before the spawn completes) surfaces the
+            # transition to admins.
+            self._mark_transitional(agent_id, "starting")
             should_dispatch_spawn = True
 
         # Dispatch OUTSIDE the lock: ``_request_token_and_spawn`` awaits
@@ -334,6 +362,11 @@ class MachineDaemon:
         # but without the lock+reservation above, the dispatch itself
         # raced.
         if should_dispatch_spawn:
+            # Push the ``starting`` annotation out before the spawn task
+            # yields — otherwise admins wait one 30s report cycle to see
+            # anything. Done outside the lock so ``_send`` doesn't
+            # serialize reconciles across agents.
+            await self._report_actual_state()
             asyncio.create_task(
                 self._request_token_and_spawn(agent_id, manifest)
             )
@@ -406,6 +439,11 @@ class MachineDaemon:
                 error=result.error,
             )
             await self._rollback_reservation(agent_id, manifest.generation)
+        # #219 — the spawn is done (success or fail). Drop the
+        # ``starting`` annotation so the final report reflects the true
+        # state: running (if spawner.list_running picks it up) or
+        # absent (server converges to stopped via absent-from-report).
+        self._clear_transitional(agent_id)
         await self._report_actual_state()
 
     async def _rollback_reservation(
@@ -439,6 +477,10 @@ class MachineDaemon:
         """Callback when an agent exits normally (exit code 0)."""
         async with self._lock_for(agent_id):
             self._running_generations.pop(agent_id, None)
+        # #219 — process actually gone, release the transitional marker
+        # so the next report is absent-from-report (→ server converges
+        # to ``stopped``) instead of phantom-stopping.
+        self._clear_transitional(agent_id)
         log.info("agent_stopped", agent_id=agent_id, exit_code=exit_code)
         await self._report_actual_state()
 
@@ -448,6 +490,12 @@ class MachineDaemon:
         """Callback when an agent crashes. Attempt local restart if budget allows."""
         async with self._lock_for(agent_id):
             self._running_generations.pop(agent_id, None)
+        # #219 — crash implies the spawn lifecycle ended, whatever
+        # transitional marker was there (typically ``starting`` from a
+        # still-booting spawn) must go before the crash-restart dispatch
+        # below otherwise the restart's fresh ``starting`` marker gets
+        # overwritten on the leak-grace timer rather than set explicitly.
+        self._clear_transitional(agent_id)
         log.warning(
             "agent_crashed",
             agent_id=agent_id,
@@ -536,16 +584,40 @@ class MachineDaemon:
     # ── Report actual state ────────────────────────────────────────────
 
     async def _report_actual_state(self) -> None:
-        """Build and send a ReportActualStateFrame from current state."""
+        """Build and send a ReportActualStateFrame from current state.
+
+        Merges two sources (#219):
+
+        - ``_spawner.list_running()`` — concrete processes this daemon
+          currently owns. The default state is ``running``.
+        - ``_transitional_states`` — short-lived ``starting`` /
+          ``stopping`` annotations set by ``_reconcile_agent`` on
+          spawn/kill dispatch. When an entry exists, it takes
+          precedence over the spawner's ``running`` (for ``stopping``
+          where the process is still alive) or stands alone (for
+          ``starting`` where no process exists yet).
+
+        Entries that have been in ``_transitional_states`` longer than
+        ``TRANSITIONAL_LEAK_GRACE`` seconds without a corresponding
+        running process are pruned here as a safety net — if the
+        normal callback path missed clearing the annotation (for
+        example the daemon was restarted mid-spawn) the entry
+        shouldn't linger forever.
+        """
         now = time.time()
+        self._prune_stale_transitional(now)
+
         agents: list[AgentActual] = []
+        seen: set[str] = set()
 
         for info in self._spawner.list_running():
             agent_id = info["agent_id"]
+            seen.add(agent_id)
+            state = self._transitional_states.get(agent_id) or "running"
             agents.append(
                 AgentActual(
                     agent_id=agent_id,
-                    actual_state="running",
+                    actual_state=state,
                     pid=info.get("pid"),
                     engine=info.get("engine", ""),
                     generation=self._running_generations.get(agent_id, 0),
@@ -553,8 +625,58 @@ class MachineDaemon:
                 )
             )
 
+        # Starting agents have no process yet — emit them separately so
+        # the server sees the transition immediately rather than
+        # interpreting "not in the report" as stopped.
+        for agent_id, state in self._transitional_states.items():
+            if agent_id in seen:
+                continue
+            if state != "starting":
+                continue
+            agents.append(
+                AgentActual(
+                    agent_id=agent_id,
+                    actual_state="starting",
+                    generation=self._running_generations.get(agent_id, 0),
+                )
+            )
+
         frame = ReportActualStateFrame(agents=agents)
         await self._send(frame.model_dump())
+
+    # ── Transitional state helpers (#219) ──────────────────────────────
+
+    def _mark_transitional(self, agent_id: str, state: str) -> None:
+        """Annotate *agent_id* with a transitional ``state`` and remember
+        when the annotation was set so ``_prune_stale_transitional`` can
+        reclaim it if the matching callback never arrives."""
+        self._transitional_states[agent_id] = state
+        self._transitional_set_at[agent_id] = time.time()
+
+    def _clear_transitional(self, agent_id: str) -> None:
+        """Drop both the state and the timestamp; safe if absent."""
+        self._transitional_states.pop(agent_id, None)
+        self._transitional_set_at.pop(agent_id, None)
+
+    def _prune_stale_transitional(self, now: float) -> None:
+        """Reclaim annotations stuck past ``TRANSITIONAL_LEAK_GRACE`` with
+        no running process — belt-and-suspenders for missed callbacks."""
+        running_ids = {
+            info["agent_id"] for info in self._spawner.list_running()
+        }
+        stale = [
+            aid
+            for aid, ts in self._transitional_set_at.items()
+            if aid not in running_ids
+            and now - ts > TRANSITIONAL_LEAK_GRACE
+        ]
+        for aid in stale:
+            log.warning(
+                "transitional_leak_reclaimed",
+                agent_id=aid,
+                state=self._transitional_states.get(aid),
+            )
+            self._clear_transitional(aid)
 
     # ── Drain & rotate ─────────────────────────────────────────────────
 

@@ -76,8 +76,34 @@ export interface SkillPreview {
   extra_files: string[];
 }
 
+// #219 — states that mean "the machine is still converging on the
+// admin's requested lifecycle change". While any agent is in one of
+// these the hook runs a short-cadence poll so the UI badge follows
+// the transition without needing a hard refresh.
+//
+// ``pending`` is included because request_start stamps it while
+// sync_desired_state is in flight; the daemon's first ``starting``
+// report supersedes it within seconds. If the agent ends up stuck in
+// ``pending`` (e.g. no suitable machine) the server writes a
+// ``last_crash_reason`` — callers can filter on that to avoid an
+// infinite poll; the hook itself stays dumb.
+const TRANSITIONAL_STATES: ReadonlySet<string> = new Set([
+  'pending',
+  'starting',
+  'stopping',
+]);
+
+const TRANSITIONAL_POLL_MS = 1500;
+
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  // Tracks agent ids whose start/stop mutation is still awaiting the
+  // server response. Buttons consult this to render the disabled /
+  // spinner state that closes the "I clicked — is anything happening?"
+  // gap (#219). Distinct from ``TRANSITIONAL_STATES``: pendingIds is a
+  // purely client-side "request in flight" flag, while the server
+  // state is what drives the post-ack poll loop.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
 
   const fetchAgents = useCallback(async () => {
     const resp = await apiFetch('/api/v1/agents');
@@ -108,16 +134,35 @@ export function useAgents() {
     setAgents(prev => prev.filter(a => a.id !== id));
   }, []);
 
+  const markPending = useCallback((id: string, on: boolean) => {
+    setPendingIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
   const startAgent = useCallback(async (id: string) => {
-    const resp = await apiFetch(`/api/v1/agents/${id}/start`, { method: 'POST' });
-    if (resp.ok) { await fetchAgents(); return await resp.json(); }
-    throw new Error('Failed to start agent');
-  }, [fetchAgents]);
+    markPending(id, true);
+    try {
+      const resp = await apiFetch(`/api/v1/agents/${id}/start`, { method: 'POST' });
+      if (resp.ok) { await fetchAgents(); return await resp.json(); }
+      throw new Error('Failed to start agent');
+    } finally {
+      markPending(id, false);
+    }
+  }, [fetchAgents, markPending]);
 
   const stopAgent = useCallback(async (id: string) => {
-    const resp = await apiFetch(`/api/v1/agents/${id}/stop`, { method: 'POST' });
-    if (resp.ok) { await fetchAgents(); }
-  }, [fetchAgents]);
+    markPending(id, true);
+    try {
+      const resp = await apiFetch(`/api/v1/agents/${id}/stop`, { method: 'POST' });
+      if (resp.ok) { await fetchAgents(); }
+    } finally {
+      markPending(id, false);
+    }
+  }, [fetchAgents, markPending]);
 
   const addAgentToRoom = useCallback(async (agentId: string, roomId: string) => {
     const resp = await apiFetch(`/api/v1/agents/${agentId}/rooms`, {
@@ -284,8 +329,30 @@ export function useAgents() {
   }, []);
 
   useEffect(() => { fetchAgents(); fetchAvailableEngines(); }, [fetchAgents, fetchAvailableEngines]);
+
+  // #219 — while any agent is visibly transitioning, refetch on a
+  // short cadence so the badge catches up within a second or two of
+  // the machine's next report. Stops automatically as soon as every
+  // agent has settled (running / stopped / crashed / idle). We skip
+  // agents with ``last_crash_reason`` set while still in ``pending``
+  // because those indicate a sticky failure (e.g. no suitable machine)
+  // and would otherwise hold the poll open forever.
+  useEffect(() => {
+    const hasTransitional = agents.some(a => {
+      if (!TRANSITIONAL_STATES.has(a.actual_state)) return false;
+      if (a.actual_state === 'pending' && a.last_crash_reason) return false;
+      return true;
+    });
+    if (!hasTransitional) return;
+    const timer = window.setInterval(() => {
+      fetchAgents();
+    }, TRANSITIONAL_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [agents, fetchAgents]);
+
   return {
     agents,
+    pendingIds,
     availableEngines,
     fetchAvailableEngines,
     fetchEngineCatalog,

@@ -481,6 +481,54 @@ class TestAgentsAPI:
             )
 
 
+class TestAgentStopEndpoint:
+    """POST /agents/{id}/stop response behaviour (#219).
+
+    The machine page UX depends on the admin seeing the transition
+    badge immediately after clicking Stop. The REST response and the
+    next GET both need to surface ``actual_state='stopping'`` so the
+    frontend's transitional-state poll loop has something to latch
+    onto before the machine's next periodic report.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stop_sets_actual_state_stopping(self, agents_env) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+        machine = agents_env["machine"]
+
+        # Seed a running agent placed on the fixture machine so the
+        # orphan short-circuit path doesn't kick in.
+        async with factory() as db:
+            agent = Agent(
+                name="stop-transition-agent",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+                pid=1234,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        resp = await client.post(
+            f"/api/v1/agents/{agent_id}/stop",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["actual_state"] == "stopping"
+
+        # Subsequent GET confirms the DB state was flipped.
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopping"
+            assert agent.desired_state == "stopped"
+
+
 class TestAgentManifestAPI:
     """Tests for the agents_md + agent_files editing surface.
 

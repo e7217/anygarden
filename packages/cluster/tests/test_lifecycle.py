@@ -253,6 +253,136 @@ class TestAgentLifecycle:
         assert frame["type"] == "sync_desired_state"
         assert frame["desired_state"] == "stopped"
 
+    # ── #219: stopping transitional state ─────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_request_stop_marks_actual_state_stopping(
+        self, lifecycle_env
+    ) -> None:
+        """request_stop must flip actual_state from 'running' to
+        'stopping' immediately so admins see the transition without
+        waiting for the machine's next periodic report (#219)."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-stop-transitional",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+                pid=8000,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle.request_stop(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.desired_state == "stopped"
+            assert agent.actual_state == "stopping"
+
+    @pytest.mark.asyncio
+    async def test_request_stop_from_starting_goes_to_stopping(
+        self, lifecycle_env
+    ) -> None:
+        """Admin aborts a slow spawn: starting → stopping, not stuck starting."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-abort-start",
+                engine="echo",
+                desired_state="running",
+                actual_state="starting",
+                placed_on_machine_id=machine.id,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle.request_stop(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopping"
+
+    @pytest.mark.asyncio
+    async def test_request_stop_unplaced_goes_to_stopped(
+        self, lifecycle_env
+    ) -> None:
+        """An agent with no machine assigned has no daemon to tell —
+        the absent-from-report convergence loop never runs for it, so
+        'stopping' would leak forever. Short-circuit to 'stopped'."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-orphan",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                placed_on_machine_id=None,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle.request_stop(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopped"
+            assert agent.desired_state == "stopped"
+
+    @pytest.mark.asyncio
+    async def test_stopping_converges_to_stopped_via_absent_report(
+        self, lifecycle_env
+    ) -> None:
+        """Once the machine drops the agent from its next report,
+        handle_report_actual_state's absent-from-report branch converges
+        actual_state='stopping' to 'stopped' — the normal exit path for
+        #219's transitional state."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-converge",
+                engine="echo",
+                desired_state="stopped",
+                actual_state="stopping",
+                placed_on_machine_id=machine.id,
+                pid=1,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        # Machine sends a report that no longer mentions this agent.
+        await lifecycle.handle_report_actual_state(machine.id, [])
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopped"
+            assert agent.pid is None
+
     @pytest.mark.asyncio
     async def test_request_start_refuses_when_no_rooms(self, lifecycle_env) -> None:
         """Agents with zero room memberships must not be handed to the daemon.

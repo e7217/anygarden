@@ -13,7 +13,7 @@ import {
 import {
   Plus, Copy, Check, Trash2, RefreshCw, Save as SaveIcon,
   PauseCircle, Server, Bot, Square, Settings, Play,
-  DoorOpen, FileCog, History,
+  DoorOpen, FileCog, History, Loader2,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
@@ -68,6 +68,7 @@ export default function AdminMachines() {
   const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, regenerateToken } = useMachines()
   const {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
+    pendingIds,
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
     fetchAttachedSkills, fetchSkillPreview,
   } = useAgents()
@@ -118,6 +119,27 @@ export default function AdminMachines() {
   useEffect(() => {
     if (selectedId) fetchDetail(selectedId)
   }, [selectedId, fetchDetail])
+
+  // #219 — while any agent on the selected machine is mid-transition
+  // the top-level ``useAgents`` hook re-polls ``/api/v1/agents`` every
+  // ~1.5 s. The machine detail payload comes from a separate endpoint
+  // though (``/api/v1/machines/<id>/agents``), so mirror the refresh
+  // here so the detail list's badge keeps pace with the global list.
+  const selectedAgentStates = useMemo(() => {
+    if (!selectedId || selectedId === UNPLACED) return ''
+    return agents
+      .filter(a => a.placed_on_machine_id === selectedId)
+      .map(a => `${a.id}:${a.actual_state}`)
+      .sort()
+      .join(',')
+  }, [agents, selectedId])
+  useEffect(() => {
+    if (selectedId && selectedId !== UNPLACED) {
+      fetchDetail(selectedId)
+    }
+    // selectedAgentStates is a dependency — intentionally drives the
+    // mirrored refetch.
+  }, [selectedAgentStates, selectedId, fetchDetail])
 
   // Agent count per machine — only running/starting agents count toward capacity
   const agentCountByMachine = new Map<string, number>()
@@ -557,28 +579,53 @@ export default function AdminMachines() {
                             and Play/Square icons themselves
                             communicate state better than a menu item
                             would. Rest of the admin actions collapsed
-                            into AgentSettingsMenu. */}
-                        {isRunning ? (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => { stopAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }}
-                            title={isMachineOffline ? 'Machine is offline' : 'Stop'}
-                            disabled={isMachineOffline}
-                          >
-                            <Square className="h-3.5 w-3.5 text-red-500" />
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => { startAgent(agent.id); setTimeout(() => fetchDetail(selectedId!), 500) }}
-                            title={isMachineOffline ? 'Machine is offline' : 'Start'}
-                            disabled={isMachineOffline}
-                          >
-                            <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
-                          </Button>
-                        )}
+                            into AgentSettingsMenu.
+
+                            #219 — while the POST is in flight, swap to
+                            a spinner + disabled so the admin gets
+                            immediate feedback. The subsequent
+                            ``starting``/``stopping`` badge is driven
+                            by the hook's transitional poll and the
+                            daemon's fast-path report. */}
+                        {(() => {
+                          const isPending = pendingIds.has(agent.id)
+                          if (isPending) {
+                            return (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                disabled
+                                title={isRunning ? 'Stopping…' : 'Starting…'}
+                              >
+                                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-foreground-muted)]" />
+                              </Button>
+                            )
+                          }
+                          if (isRunning) {
+                            return (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => { void stopAgent(agent.id) }}
+                                title={isMachineOffline ? 'Machine is offline' : 'Stop'}
+                                disabled={isMachineOffline}
+                              >
+                                <Square className="h-3.5 w-3.5 text-red-500" />
+                              </Button>
+                            )
+                          }
+                          return (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => { void startAgent(agent.id) }}
+                              title={isMachineOffline ? 'Machine is offline' : 'Start'}
+                              disabled={isMachineOffline}
+                            >
+                              <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
+                            </Button>
+                          )
+                        })()}
                         <AgentSettingsMenu
                           onOpenSettings={() => handleOpenSettings(agent.id)}
                           onDelete={() => handleDeleteAgent(agent.id)}
