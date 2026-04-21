@@ -89,8 +89,13 @@ class Room(Base):
     # peer agents ingest the text as background context without
     # triggering a full response. Part 1 stores the flag; Part 3
     # wires the broadcast-side logic.
+    #
+    # Issue #225 — default flipped to True (migration 028). Fresh
+    # rooms opt into ambient sharing by default; admins can still
+    # toggle individual rooms off via the room edit dialog (the
+    # PATCH field is now admin-only, matching ``speaker_strategy``).
     context_window_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default=sa_text("0")
+        Boolean, nullable=False, default=True, server_default=sa_text("1")
     )
     # Issue #159 Phase A — speaker-selection strategy for the room.
     # ``mentioned_only`` (default) preserves the current decide_policy

@@ -1084,13 +1084,27 @@ class TestContextWindowBroadcast:
 
     @pytest.mark.asyncio
     async def test_no_stamp_when_flag_off(self, ws_env) -> None:
-        """Default (flag off) rooms behave exactly as pre-#148: no
-        ``ingest_only`` metadata is attached."""
+        """Rooms with ``context_window_enabled=False`` behave exactly
+        as pre-#148: no ``ingest_only`` metadata is attached.
+
+        #225 flipped the server default to True so this test now
+        explicitly disables the flag on the fixture room; the old
+        assertion that relied on the default being False no longer
+        holds.
+        """
         from starlette.testclient import TestClient
 
         app = ws_env["app"]
         token = ws_env["token"]
         room = ws_env["room"]
+        sf = ws_env["session_factory"]
+
+        async with sf() as db:
+            r = (
+                await db.execute(select(Room).where(Room.id == room.id))
+            ).scalar_one()
+            r.context_window_enabled = False
+            await db.commit()
 
         with TestClient(app) as client:
             with client.websocket_connect(

@@ -158,7 +158,12 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
-  const [contextWindowEnabled, setContextWindowEnabled] = useState(false)
+  // #225 — default flipped to true so the initial render (before the
+  // GET settles) matches the server-side default. Non-admins never
+  // see the toggle, but the payload gate below guarantees they can't
+  // reach the admin-only field even if the load() callback hasn't
+  // populated state yet.
+  const [contextWindowEnabled, setContextWindowEnabled] = useState(true)
   // #159 Phase C — admin-only dispatch-mode controls. Non-admin
   // users still see the rest of the dialog but these fields stay
   // read-only (and the PATCH payload omits them).
@@ -244,14 +249,17 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
       const payload: Record<string, unknown> = {
         name: name.trim(),
         description: description.trim() || null,
-        context_window_enabled: contextWindowEnabled,
       }
-      // Only admins can send the dispatch-mode fields. The server
-      // rejects non-admin payloads with 403, but gating at the
-      // client too keeps the request body clean.
+      // Only admins can send the dispatch-mode + context-window
+      // fields (#159 Phase C, #225). The server rejects non-admin
+      // payloads with 403, but gating at the client too keeps the
+      // request body clean and avoids surfacing a 403 on a rename
+      // that happens to include ``context_window_enabled`` from
+      // local state.
       if (isAdmin) {
         payload.speaker_strategy = speakerStrategy
         payload.orchestrator_agent_id = orchestratorAgentId
+        payload.context_window_enabled = contextWindowEnabled
       }
       const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
         method: 'PATCH',
@@ -309,87 +317,93 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
               onChange={e => setDescription(e.target.value)}
             />
           </div>
-          {/* #148 — ambient context window toggle. Replaces the machine-
-              level ``DOORAE_CONTEXT_WINDOW_ENABLED`` env knob with a
-              per-room setting that operators can flip from the UI. Part 1
-              only persists the flag; Part 3 wires it into the broadcast
-              path. */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="room-edit-context-window"
-              className="flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5"
-            >
-              <input
-                id="room-edit-context-window"
-                data-testid="room-edit-context-window-toggle"
-                type="checkbox"
-                checked={contextWindowEnabled}
-                onChange={e => setContextWindowEnabled(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span className="flex-1 space-y-0.5">
-                <span className="block text-sm font-medium text-[var(--color-foreground)]">
-                  대화 맥락 공유
-                </span>
-                <span className="block text-caption text-[var(--color-foreground-muted)]">
-                  다른 에이전트의 응답·잡담도 이 룸의 에이전트 컨텍스트에
-                  함께 전달합니다 (토큰 비용이 늘 수 있음).
-                </span>
-              </span>
-            </label>
-          </div>
-
-          {/* #159 Phase C — speaker-strategy + orchestrator picker.
-              Admin-only per the DESIGN.md contract: a misclick here
-              silently reroutes which agent wakes up for every turn. */}
+          {/* #159 Phase C + #225 — admin-only room controls. The
+              context-window toggle leads the block because it's the
+              simplest switch; the speaker-strategy picker follows.
+              Both fields live on the admin surface: flipping either
+              silently changes who replies / how many tokens burn for
+              every turn. */}
           {isAdmin && (
-            <div className="space-y-1.5 border-t border-[var(--color-border)] pt-4">
-              <Label htmlFor="room-edit-speaker-strategy">
-                발화 전략
-              </Label>
-              <select
-                id="room-edit-speaker-strategy"
-                data-testid="room-edit-speaker-strategy"
-                value={speakerStrategy}
-                onChange={e => setSpeakerStrategy(e.target.value)}
-                className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
-              >
-                {STRATEGY_OPTIONS.map(opt => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-caption text-[var(--color-foreground-muted)]">
-                {strategyHint}
-              </p>
+            <div className="space-y-4 border-t border-[var(--color-border)] pt-4">
+              {/* #148 + #225 — ambient context window toggle. Replaces
+                  the machine-level ``DOORAE_CONTEXT_WINDOW_ENABLED``
+                  env knob with a per-room admin toggle. Default is
+                  True (see migration 028); un-checking opts the room
+                  out of ambient sharing to save tokens. */}
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="room-edit-context-window"
+                  className="flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-2.5"
+                >
+                  <input
+                    id="room-edit-context-window"
+                    data-testid="room-edit-context-window-toggle"
+                    type="checkbox"
+                    checked={contextWindowEnabled}
+                    onChange={e => setContextWindowEnabled(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span className="flex-1 space-y-0.5">
+                    <span className="block text-sm font-medium text-[var(--color-foreground)]">
+                      대화 맥락 공유
+                    </span>
+                    <span className="block text-caption text-[var(--color-foreground-muted)]">
+                      다른 에이전트의 응답·잡담도 이 룸의 에이전트 컨텍스트에
+                      함께 전달합니다. 해제하면 각 에이전트가 자기에게
+                      직접 향한 메시지만 받아 토큰을 절약합니다.
+                    </span>
+                  </span>
+                </label>
+              </div>
 
-              {speakerStrategy === 'orchestrator' && (
-                <div className="space-y-1.5 pt-2">
-                  <Label htmlFor="room-edit-orchestrator">오케스트레이터</Label>
-                  <select
-                    id="room-edit-orchestrator"
-                    data-testid="room-edit-orchestrator"
-                    value={orchestratorAgentId ?? ''}
-                    onChange={e =>
-                      setOrchestratorAgentId(e.target.value || null)
-                    }
-                    className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
-                  >
-                    <option value="">(선택 안 됨)</option>
-                    {agentParticipants.map(p => (
-                      <option key={p.id} value={p.agent_id ?? ''}>
-                        {p.display_name || p.agent_id}
-                      </option>
-                    ))}
-                  </select>
-                  {agentParticipants.length === 0 && (
-                    <p className="text-caption text-[var(--color-foreground-muted)]">
-                      이 룸에 에이전트가 없어 오케스트레이터를 지정할 수 없습니다.
-                    </p>
-                  )}
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="room-edit-speaker-strategy">
+                  발화 전략
+                </Label>
+                <select
+                  id="room-edit-speaker-strategy"
+                  data-testid="room-edit-speaker-strategy"
+                  value={speakerStrategy}
+                  onChange={e => setSpeakerStrategy(e.target.value)}
+                  className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
+                >
+                  {STRATEGY_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-caption text-[var(--color-foreground-muted)]">
+                  {strategyHint}
+                </p>
+
+                {speakerStrategy === 'orchestrator' && (
+                  <div className="space-y-1.5 pt-2">
+                    <Label htmlFor="room-edit-orchestrator">오케스트레이터</Label>
+                    <select
+                      id="room-edit-orchestrator"
+                      data-testid="room-edit-orchestrator"
+                      value={orchestratorAgentId ?? ''}
+                      onChange={e =>
+                        setOrchestratorAgentId(e.target.value || null)
+                      }
+                      className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
+                    >
+                      <option value="">(선택 안 됨)</option>
+                      {agentParticipants.map(p => (
+                        <option key={p.id} value={p.agent_id ?? ''}>
+                          {p.display_name || p.agent_id}
+                        </option>
+                      ))}
+                    </select>
+                    {agentParticipants.length === 0 && (
+                      <p className="text-caption text-[var(--color-foreground-muted)]">
+                        이 룸에 에이전트가 없어 오케스트레이터를 지정할 수 없습니다.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

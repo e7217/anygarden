@@ -76,8 +76,9 @@ class RoomOut(BaseModel):
     # #148 — when True the server stamps ``metadata.ingest_only=True``
     # on ambient (un-addressed) broadcasts so peer agents pick up the
     # text as background context. Part 1 only surfaces storage; Part 3
-    # wires the broadcast-side logic.
-    context_window_enabled: bool = False
+    # wires the broadcast-side logic. #225 flipped the default to True
+    # (migration 028); the PATCH field is admin-only.
+    context_window_enabled: bool = True
     # #159 Phase A — room-scoped speaker strategy. ``mentioned_only``
     # (default) is the pre-#159 behaviour; ``round_robin`` rotates
     # across agents; ``orchestrator`` delegates next-speaker choice to
@@ -552,7 +553,9 @@ class RoomUpdate(BaseModel):
     description: str | None = None
     # #148 — ``None`` means "don't touch" so a rename PATCH can't
     # accidentally reset the ambient-sharing flag. Explicit ``True``/
-    # ``False`` toggles it.
+    # ``False`` toggles it. #225 promoted this to an admin-only field
+    # (enforced in the handler below alongside the #159 Phase C fields)
+    # because flipping it affects token cost for the entire room.
     context_window_enabled: bool | None = None
     # #159 Phase C — room-scoped speaker strategy. Admin-only: the
     # handler rejects non-admin callers when either of these fields
@@ -584,13 +587,13 @@ async def update_room(
 
     Fields split by permission tier:
 
-    - Open to every member: ``name``, ``description``,
-      ``context_window_enabled``.
-    - Admin-only (#159 Phase C): ``speaker_strategy``,
-      ``orchestrator_agent_id``. Touching either field requires
-      ``identity.is_admin`` — mirrors the DESIGN.md guidance that
-      dispatch-mode controls stay on the admin surface because a
-      mistaken flip silently reroutes who replies.
+    - Open to every member: ``name``, ``description``.
+    - Admin-only (#159 Phase C, #225): ``speaker_strategy``,
+      ``orchestrator_agent_id``, ``context_window_enabled``.
+      Touching any of these requires ``identity.is_admin`` — mirrors
+      the DESIGN.md guidance that dispatch-mode controls stay on the
+      admin surface because a mistaken flip silently reroutes who
+      replies or balloons token cost.
 
     The admin gate is enforced inside the handler (not via
     ``get_admin_identity``) so a member PATCH that only renames the
@@ -605,6 +608,7 @@ async def update_room(
     admin_only_fields_present = (
         body.speaker_strategy is not None
         or body.orchestrator_agent_id is not None
+        or body.context_window_enabled is not None
     )
     if admin_only_fields_present:
         # Mirror ``get_admin_identity``'s shape but as an inline gate —
@@ -618,7 +622,10 @@ async def update_room(
         if not is_admin:
             raise HTTPException(
                 status_code=403,
-                detail="Admin required to change speaker_strategy or orchestrator_agent_id",
+                detail=(
+                    "Admin required to change speaker_strategy, "
+                    "orchestrator_agent_id, or context_window_enabled"
+                ),
             )
 
     if body.speaker_strategy is not None:
