@@ -51,14 +51,16 @@ class TestCatalog:
     def test_is_valid_reasoning_effort_engine_level(self) -> None:
         """Without specifying a model, engine-level levels apply."""
         assert is_valid_reasoning_effort("codex", "medium") is True
-        assert is_valid_reasoning_effort("codex", "xhigh") is False  # engine-level doesn't include xhigh
+        # Codex CLI validator also accepts ``none``, but the catalog
+        # omits it so we don't surface a "disabled" pseudo-level.
+        assert is_valid_reasoning_effort("codex", "none") is False
 
     def test_is_valid_reasoning_effort_model_level(self) -> None:
         """Per-model reasoning_levels narrow the engine-level list."""
         # gpt-5.4 supports xhigh at model level
         assert is_valid_reasoning_effort("codex", "xhigh", model="gpt-5.4") is True
-        # gpt-5.4-mini does NOT support xhigh
-        assert is_valid_reasoning_effort("codex", "xhigh", model="gpt-5.4-mini") is False
+        # gpt-5.2 does NOT support xhigh (only low/medium/high)
+        assert is_valid_reasoning_effort("codex", "xhigh", model="gpt-5.2") is False
 
     def test_is_valid_reasoning_effort_unknown_engine(self) -> None:
         assert is_valid_reasoning_effort("unknown", "medium") is False
@@ -154,5 +156,5 @@ class TestEngineModelsEndpoint:
         data = resp.json()
         gpt54 = next(m for m in data["models"] if m["id"] == "gpt-5.4")
         assert "xhigh" in gpt54["reasoning_levels"]
-        mini = next(m for m in data["models"] if m["id"] == "gpt-5.4-mini")
-        assert "xhigh" not in mini["reasoning_levels"]
+        gpt52 = next(m for m in data["models"] if m["id"] == "gpt-5.2")
+        assert "xhigh" not in gpt52["reasoning_levels"]
