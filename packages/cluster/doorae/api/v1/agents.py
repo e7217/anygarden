@@ -15,6 +15,7 @@ from doorae.auth.dependencies import Identity
 from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Room
 from doorae.dependencies import get_admin_identity, get_db
 from doorae.engines import get_engine_entry
+from doorae.rooms.membership import ensure_agent_in_room
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -680,7 +681,11 @@ async def add_agent_room(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Check if already in room
+    # Explicit duplicate check stays *before* ``ensure_agent_in_room``.
+    # The helper is idempotent (returns the existing row when called
+    # twice) which is the right semantics for ``POST /participants``
+    # but the admin API contract here is "409 on repeat add" — the
+    # frontend's confirmation UX depends on that distinct error code.
     existing = await db.execute(
         select(Participant).where(
             Participant.agent_id == agent_id,
@@ -690,32 +695,46 @@ async def add_agent_room(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Agent already in room")
 
-    participant = Participant(room_id=body.room_id, agent_id=agent_id, role="member")
-    db.add(participant)
-    await db.commit()
-    await db.refresh(participant)
+    # #227 — route through ``ensure_agent_in_room`` so this endpoint
+    # shares the JoinRoomOut fan-out and drop-observability with
+    # ``POST /rooms/{id}/participants``. Before #227 the two paths
+    # diverged: the agents-API route inserted the row directly and
+    # skipped the WS notification entirely, meaning the agent's
+    # SDK *never* heard about the new room until process restart
+    # even for dormant agents that got redispatched via request_start
+    # immediately after.
+    manager = getattr(request.app.state, "connection_manager", None)
+    await ensure_agent_in_room(
+        db,
+        manager,
+        room_id=body.room_id,
+        agent_id=agent_id,
+        role="member",
+    )
 
-    # Trigger start if the agent is dormant.
-    #
-    # ``pending`` is intentionally in the set: when an agent is
-    # created via ``POST /agents`` with no rooms, the lifecycle's
-    # spawn_refused_no_rooms guard refuses dispatch and leaves the
-    # agent at ``pending`` with a helpful ``last_crash_reason``.
-    # Adding a room resolves the guard's precondition, so the
-    # agent should immediately get a fresh spawn attempt —
-    # otherwise the admin has to remember to click Start manually
-    # (a UX trap that caught real users in 2026-04-12 Playwright
-    # session with "서브에이전트1" / "서브에이전트2").
-    if agent.actual_state in ("idle", "stopped", "crashed", "pending"):
-        lifecycle = request.app.state.agent_lifecycle
-        agent.actual_state = "pending"
-        agent.desired_state = "running"
-        await db.commit()
-        await lifecycle.request_start(agent.id)
+    # #227 — single dispatch policy shared with ``rooms/router.py``:
+    # ``on_room_added`` decides between ``request_start`` (dormant
+    # agents, including the 2026-04-12 "서브에이전트1/2" pending case)
+    # and ``bump_generation`` (running/starting agents — the bug this
+    # issue fixes: the machine re-spawns with refreshed ``--room``
+    # args instead of relying on the silently-droppable WS push).
+    lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    if lifecycle is not None:
+        if agent.actual_state in ("idle", "stopped", "crashed", "pending"):
+            # Preserve the pre-#227 eager state flip so the admin UI
+            # reflects the new desired/pending pair before the
+            # machine's first heartbeat. ``request_start`` would do
+            # this itself but only after the placement query — the
+            # flip here keeps the UX snappy.
+            agent.actual_state = "pending"
+            agent.desired_state = "running"
+            await db.commit()
+        await lifecycle.on_room_added(agent.id)
         await db.refresh(agent)
 
-    from doorae.db.models import Room
-    room = (await db.execute(select(Room).where(Room.id == body.room_id))).scalar_one_or_none()
+    room = (
+        await db.execute(select(Room).where(Room.id == body.room_id))
+    ).scalar_one_or_none()
     return AgentRoomOut(room_id=body.room_id, room_name=room.name if room else "", role="member")
 
 

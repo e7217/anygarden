@@ -480,6 +480,96 @@ class TestAgentsAPI:
                 "agent should be placed on the only machine in the test fixture"
             )
 
+    @pytest.mark.asyncio
+    async def test_add_room_bumps_generation_for_running_agent(
+        self, agents_env
+    ) -> None:
+        """#227 — core fix. When an agent is already running and admin
+        attaches it to a new room, the server must bump the agent's
+        generation and re-send ``sync_desired_state`` so the machine
+        re-spawns the subprocess with the refreshed ``--room`` argv.
+
+        Before the fix this endpoint inserted the ``Participant`` row,
+        skipped any WS notification, and then fell through to the
+        dormant-state branch which only fired for ``idle``/``stopped``/
+        ``crashed``/``pending`` — running agents got *nothing*. The
+        in-flight agent process kept its original ``--room`` set and
+        was invisible in the new room forever.
+        """
+        from doorae.db.models import Project, Room
+
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+        machine = agents_env["machine"]
+
+        # Seed an agent already in steady-state running. The initial
+        # room is needed so ``request_start`` (triggered once by the
+        # generation bump inside our assertion path) wouldn't trip
+        # the spawn_refused_no_rooms guard — but we're testing the
+        # running branch so request_start never runs. Still, keep the
+        # agent consistent with a real production row.
+        async with factory() as db:
+            project = Project(name="running-proj")
+            db.add(project)
+            await db.flush()
+            seed_room = Room(project_id=project.id, name="seed")
+            db.add(seed_room)
+            await db.flush()
+            agent = Agent(
+                name="running-bot",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+                generation=5,
+                pid=4321,
+            )
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(
+                room_id=seed_room.id, agent_id=agent.id, role="member"
+            ))
+            # Separate target room for the add-room call under test.
+            target_room = Room(project_id=project.id, name="target")
+            db.add(target_room)
+            await db.commit()
+            agent_id = agent.id
+            target_room_id = target_room.id
+
+        resp = await client.post(
+            f"/api/v1/agents/{agent_id}/rooms",
+            json={"room_id": target_room_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, resp.text
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            # ``bump_generation`` bumped. ``request_start`` would have
+            # set actual_state → pending; it must stay running since
+            # we took the running branch.
+            assert agent.generation == 6, (
+                f"expected generation to bump from 5 to 6, got "
+                f"{agent.generation!r}"
+            )
+            assert agent.actual_state == "running", (
+                f"running agent must stay running across room-add; "
+                f"got {agent.actual_state!r}"
+            )
+            # Participant row inserted via ensure_agent_in_room.
+            part = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.agent_id == agent_id,
+                        Participant.room_id == target_room_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            assert part is not None
+
 
 class TestAgentActivityEndpoint:
     """GET /agents/{id}/activity surface (#222).

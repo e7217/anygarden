@@ -16,12 +16,16 @@ a fourth path added tomorrow can't regress the invariant.
 
 from __future__ import annotations
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.db.models import Participant
+from doorae.observability.metrics import agent_joinroom_drop_total
 from doorae.ws.manager import ConnectionManager
 from doorae.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
+
+logger = structlog.get_logger(__name__)
 
 
 async def ensure_agent_in_room(
@@ -80,8 +84,37 @@ async def ensure_agent_in_room(
             )
         ).scalars().all()
         if other_pids:
+            # #227 — observe silent drops. ``send_to`` is best-effort
+            # (it no-ops if the target pid is missing from
+            # ``_by_participant``), so counting the frames we *know*
+            # will drop is the only way to trip an alert when a whole
+            # cohort of agents misses JoinRoomOut. The send itself
+            # still happens below as a cheap no-op for the pids that
+            # *are* subscribed, plus belt-and-braces for race windows
+            # where a subscription arrives between our check and the
+            # send. Callers that need delivery guarantees must pair
+            # this helper with a machine-side nudge (``bump_generation``
+            # or ``request_start``) — see ``AgentLifecycle.on_room_added``.
+            try:
+                connected_pids = await manager.connected_participant_ids()
+            except AttributeError:
+                # Legacy test doubles without the method — treat as
+                # "nothing connected" conservatively, which is also
+                # the only safe assumption if we can't introspect.
+                connected_pids = set()
             frame = JoinRoomOut(room_id=room_id, participant_id="")
             for pid in other_pids:
+                if pid not in connected_pids:
+                    agent_joinroom_drop_total.labels(
+                        reason="not_subscribed"
+                    ).inc()
+                    logger.warning(
+                        "membership.joinroom_dropped",
+                        agent_id=agent_id,
+                        room_id=room_id,
+                        dropped_pid=pid,
+                        reason="not_subscribed",
+                    )
                 await manager.send_to(pid, frame)
 
     return participant, created

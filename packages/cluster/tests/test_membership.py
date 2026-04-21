@@ -22,12 +22,28 @@ class _Send:
 
 @dataclass
 class FakeConnectionManager:
-    """Records ``send_to`` calls without opening real sockets."""
+    """Records ``send_to`` calls without opening real sockets.
+
+    ``connected`` models which participant ids have a live WS
+    subscription — ``ensure_agent_in_room`` uses it to detect
+    JoinRoomOut frames that would be silently dropped (#227). Defaults
+    to ``None`` which the helper treats as "everyone is connected"
+    (pre-#227 behaviour, useful for legacy tests that don't care).
+    """
 
     sends: list[_Send] = field(default_factory=list)
+    connected: set[str] | None = None
 
     async def send_to(self, participant_id: str, frame: Any) -> None:
         self.sends.append(_Send(participant_id=participant_id, frame=frame))
+
+    async def connected_participant_ids(self) -> set[str]:
+        # Tests that don't wire ``connected`` get a permissive view so
+        # existing assertions (count the sends, not the drops) keep
+        # passing unchanged.
+        if self.connected is None:
+            return {s.participant_id for s in self.sends}
+        return set(self.connected)
 
 
 @pytest.fixture()
@@ -163,6 +179,84 @@ class TestEnsureAgentInRoom:
         )
         assert created is True
         assert part.room_id == room.id
+
+    @pytest.mark.asyncio
+    async def test_drop_counter_bumps_when_pid_not_subscribed(
+        self, db: AsyncSession
+    ) -> None:
+        """Issue #227 — silent-drop observability.
+
+        When the agent has an ``other_pid`` (DB row) but that pid has
+        no active WS subscription, ``send_to`` silently succeeds and
+        the SDK never learns about the new room. The fix path is to
+        also nudge the machine via ``bump_generation`` / ``request_start``,
+        but we want a metric+warning so a regression never hides again.
+        """
+        from doorae.observability.metrics import agent_joinroom_drop_total
+
+        project, agent = await _seed_agent(db)
+        room_a = await _make_room(db, project.id, "a")
+        room_b = await _make_room(db, project.id, "b")
+
+        # Pre-seed a participant in room_a — this is the ``other_pid``
+        # ``ensure_agent_in_room`` will try to notify.
+        part_a = Participant(
+            room_id=room_a.id, agent_id=agent.id, role="member"
+        )
+        db.add(part_a)
+        await db.commit()
+        await db.refresh(part_a)
+
+        # Manager reports no active subscriptions — the drop branch.
+        manager = FakeConnectionManager(connected=set())
+
+        before = agent_joinroom_drop_total.labels(
+            reason="not_subscribed"
+        )._value.get()
+        await ensure_agent_in_room(
+            db, manager, room_id=room_b.id, agent_id=agent.id
+        )
+        after = agent_joinroom_drop_total.labels(
+            reason="not_subscribed"
+        )._value.get()
+
+        assert after == before + 1, (
+            f"expected drop counter to bump by 1, got {before=} {after=}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_drop_counter_does_not_bump_when_pid_subscribed(
+        self, db: AsyncSession
+    ) -> None:
+        """Mirror: when every ``other_pid`` has a live subscription,
+        the drop counter stays put. This guards against an overeager
+        counter that trips on success."""
+        from doorae.observability.metrics import agent_joinroom_drop_total
+
+        project, agent = await _seed_agent(db)
+        room_a = await _make_room(db, project.id, "a")
+        room_b = await _make_room(db, project.id, "b")
+
+        part_a = Participant(
+            room_id=room_a.id, agent_id=agent.id, role="member"
+        )
+        db.add(part_a)
+        await db.commit()
+        await db.refresh(part_a)
+
+        manager = FakeConnectionManager(connected={part_a.id})
+
+        before = agent_joinroom_drop_total.labels(
+            reason="not_subscribed"
+        )._value.get()
+        await ensure_agent_in_room(
+            db, manager, room_id=room_b.id, agent_id=agent.id
+        )
+        after = agent_joinroom_drop_total.labels(
+            reason="not_subscribed"
+        )._value.get()
+
+        assert after == before
 
 
 class TestAddUserToRoom:

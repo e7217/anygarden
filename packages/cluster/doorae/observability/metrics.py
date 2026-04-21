@@ -77,3 +77,23 @@ guest_rate_limited_total = Counter(
     "Total number of guest WS sends rejected by a rate-limit layer",
     ["scope"],
 )
+
+# ── #227 — JoinRoomOut delivery telemetry ────────────────────────────
+#
+# ``ensure_agent_in_room`` fans a ``JoinRoomOut`` frame to every *other*
+# participant row belonging to the same agent so the agent SDK can
+# auto-subscribe to the new room over its existing WS sessions. Those
+# sends are best-effort: when a target pid has no active subscription
+# (``ConnectionManager._by_participant`` miss) the frame is silently
+# dropped. Before #227 that silent drop was the failure mode — the
+# agent stayed offline in the new room until process restart. The
+# counter below is the "did we just drop?" signal so the same class of
+# regression trips an alert instead of hiding. The ``reason`` label is
+# forward-looking in case future drop modes (serialization error, ws
+# send failure) need separate attribution.
+agent_joinroom_drop_total = Counter(
+    "doorae_agent_joinroom_drop_total",
+    "Total number of JoinRoomOut frames dropped because the target "
+    "participant had no active WebSocket subscription",
+    ["reason"],  # "not_subscribed"
+)
