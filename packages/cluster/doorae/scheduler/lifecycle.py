@@ -123,13 +123,30 @@ class AgentLifecycle:
                 )
 
     async def request_stop(self, agent_id: str) -> None:
-        """Set desired_state='stopped' and push ``sync_desired_state``."""
+        """Set desired_state='stopped' and push ``sync_desired_state``.
+
+        #219 — also flips ``actual_state`` into the transitional
+        ``stopping`` badge immediately so admin UIs don't wait up to
+        30 s for the machine's next periodic report. If the agent has
+        no machine placement the daemon can't confirm the stop, so
+        short-circuit to ``stopped`` here to avoid a permanent
+        stuck-stopping row.
+        """
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
                 return
 
             agent.desired_state = "stopped"
+            if agent.placed_on_machine_id:
+                if agent.actual_state in ("running", "starting", "pending"):
+                    agent.actual_state = "stopping"
+            else:
+                # Orphan path — no daemon will ever confirm the stop,
+                # so absent-from-report convergence won't fire either.
+                # Short-circuit to stopped to avoid a stuck row.
+                agent.actual_state = "stopped"
+                agent.pid = None
             db.add(ActivityLog(agent_id=agent_id, event_type="stop_requested"))
             await db.commit()
 

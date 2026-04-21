@@ -264,6 +264,14 @@ class TestAgentActual:
         agent = AgentActual(agent_id="agent-s1", actual_state="starting")
         assert agent.actual_state == "starting"
 
+    def test_stopping_state(self):
+        # #219 — transitional state emitted by the daemon between a
+        # kill dispatch and ``_on_agent_stopped`` so admins see a
+        # "stopping" badge instead of the 30s gap where the prior
+        # actual_state="running" lingers.
+        agent = AgentActual(agent_id="agent-sp1", actual_state="stopping")
+        assert agent.actual_state == "stopping"
+
     def test_invalid_state_raises(self):
         with pytest.raises(ValidationError):
             AgentActual(agent_id="agent-x", actual_state="unknown_state")

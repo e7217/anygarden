@@ -149,6 +149,155 @@ class TestReportActualState:
         assert report["agents"] == []
 
 
+# ── Transitional states (#219) ───────────────────────────────────────
+#
+# `_transitional_states` holds the short-lived ``starting`` / ``stopping``
+# annotations for agents whose spawn or kill is in flight. Without it
+# admins only see ``running`` → (30s gap) → ``stopped`` because the
+# daemon's periodic report runs on a 30s cadence and never emits the
+# in-flight states.
+
+
+class TestTransitionalStatesReport:
+    """Transitional states feed into ``_report_actual_state`` output."""
+
+    async def test_starting_emitted_when_spawn_in_flight(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Agent with an in-flight spawn (not yet running) reports as starting."""
+        sent_frames = _capture_ws(daemon)
+
+        # Process hasn't come up yet, but a spawn is dispatched.
+        daemon._spawner.list_running = MagicMock(return_value=[])
+        daemon._transitional_states["a-new"] = "starting"
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        assert len(report["agents"]) == 1
+        assert report["agents"][0]["agent_id"] == "a-new"
+        assert report["agents"][0]["actual_state"] == "starting"
+
+    async def test_stopping_emitted_while_process_still_alive(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Kill is dispatched but the process hasn't exited — report stopping."""
+        sent_frames = _capture_ws(daemon)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-dying", "pid": 42, "engine": "claude-code", "uptime_seconds": 5},
+        ])
+        daemon._transitional_states["a-dying"] = "stopping"
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        states = {a["agent_id"]: a["actual_state"] for a in report["agents"]}
+        assert states == {"a-dying": "stopping"}
+
+    async def test_running_wins_when_no_transitional_entry(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Regression guard: normal running agents still reported as running."""
+        sent_frames = _capture_ws(daemon)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-ok", "pid": 1, "engine": "x", "uptime_seconds": 1},
+        ])
+        # No transitional entry.
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        assert report["agents"][0]["actual_state"] == "running"
+
+
+class TestTransitionalStatesLifecycle:
+    """Transitional state is set on dispatch and cleared on callback."""
+
+    async def test_stop_reconcile_emits_stopping_before_kill(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """When desired=stopped and the agent is running, the daemon must
+        emit a ``stopping`` report BEFORE ``spawner.kill`` returns — so
+        admins see the transition in under 2s instead of waiting for the
+        next periodic report (30s)."""
+        sent_frames = _capture_ws(daemon)
+
+        # Pretend agent is running.
+        mock_running = MagicMock()
+        mock_running.agent_id = "a-bye"
+        daemon._spawner.get_running = MagicMock(return_value=mock_running)
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-bye", "pid": 99, "engine": "x", "uptime_seconds": 5},
+        ])
+
+        # Capture report frames seen at the moment kill() is invoked.
+        reports_at_kill: list[dict] = []
+
+        async def record_then_succeed(agent_id: str) -> dict:
+            reports_at_kill.extend(
+                f for f in sent_frames if f["type"] == "report_actual_state"
+            )
+            return {"success": True}
+
+        daemon._spawner.kill = AsyncMock(side_effect=record_then_succeed)
+
+        # Save a stopped manifest and run reconcile.
+        manifest = SyncDesiredStateFrame(
+            agent_id="a-bye",
+            desired_state="stopped",
+            generation=2,
+            engine="x",
+        )
+        daemon._manifest_store.save(manifest)
+        daemon._running_generations["a-bye"] = 1
+
+        await daemon._reconcile_agent("a-bye")
+
+        # By the time kill ran there was already a stopping report.
+        assert reports_at_kill, "no report sent before kill dispatched"
+        latest = reports_at_kill[-1]
+        states = {a["agent_id"]: a["actual_state"] for a in latest["agents"]}
+        assert states.get("a-bye") == "stopping"
+
+    async def test_on_agent_stopped_clears_transitional(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """After the normal-exit callback, the transitional map must drop
+        the entry so the next report correctly treats the agent as absent
+        (→ server converges to ``stopped`` via the absent-from-report
+        branch)."""
+        _capture_ws(daemon)
+        daemon._transitional_states["a-done"] = "stopping"
+        daemon._running_generations["a-done"] = 1
+
+        await daemon._on_agent_stopped("a-done", 0)
+
+        assert "a-done" not in daemon._transitional_states
+
+    async def test_on_agent_crashed_clears_transitional(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Crash path must also release the transitional map entry so a
+        leaked ``starting`` doesn't linger across the crash-restart."""
+        _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="a-boom",
+            desired_state="running",
+            generation=1,
+            engine="x",
+            restart_policy="stop",
+        )
+        daemon._manifest_store.save(manifest)
+        daemon._transitional_states["a-boom"] = "starting"
+
+        await daemon._on_agent_crashed("a-boom", 1, "segfault")
+
+        assert "a-boom" not in daemon._transitional_states
+
+
 # ── Sync desired state ───────────────────────────────────────────────
 
 

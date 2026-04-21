@@ -149,7 +149,7 @@ class AgentActual(BaseModel):
     """Snapshot of a single agent's current state on this machine."""
 
     agent_id: str
-    actual_state: Literal["running", "stopped", "crashed", "starting"]
+    actual_state: Literal["running", "stopped", "crashed", "starting", "stopping"]
     pid: int | None = None
     engine: str = ""
     generation: int = 0
