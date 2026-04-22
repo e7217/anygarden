@@ -22,8 +22,28 @@ const PROVIDERS = [
   { id: 'vertex_ai', label: 'Google Vertex', upstreamPrefix: 'vertex_ai/' },
   { id: 'azure', label: 'Azure OpenAI', upstreamPrefix: 'azure/' },
   { id: 'ollama', label: 'Ollama (local)', upstreamPrefix: 'ollama/' },
+  { id: 'vllm', label: 'vLLM (local)', upstreamPrefix: 'openai/' },
   { id: 'custom', label: 'Custom', upstreamPrefix: '' },
 ]
+
+// Local/self-hosted providers: api_key_ref becomes optional (most
+// Ollama/vLLM setups don't check Authorization) and the api_base URL
+// field is exposed so the admin can point at a LAN host instead of
+// relying on LiteLLM's per-provider default (``localhost:11434`` etc).
+// Backend normalises blank api_key_ref to the ``OLLAMA_DUMMY`` sentinel
+// for these providers — see ``_normalise_api_key_ref`` in llm_gateway.py.
+const LOCAL_PROVIDERS = new Set(['ollama', 'vllm', 'custom'])
+
+const API_KEY_PLACEHOLDER: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  bedrock: 'AWS_BEDROCK_API_KEY',
+  vertex_ai: 'GOOGLE_VERTEX_API_KEY',
+  azure: 'AZURE_API_KEY',
+  ollama: '(optional for Ollama)',
+  vllm: '(optional for vLLM)',
+  custom: '(leave blank if endpoint has no auth)',
+}
 
 interface Props {
   initial: GatewayModel | null
@@ -36,11 +56,26 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
   const [provider, setProvider] = useState(initial?.provider ?? 'anthropic')
   const [modelName, setModelName] = useState(initial?.model_name ?? '')
   const [upstream, setUpstream] = useState(initial?.upstream_model ?? '')
-  const [apiKeyRef, setApiKeyRef] = useState(
-    initial?.api_key_ref ?? (secrets[0]?.env_var_name ?? '')
-  )
+  // Backend stores the OLLAMA_DUMMY sentinel for local providers when the
+  // admin left api_key_ref blank. Surfacing that sentinel back into the
+  // Edit form as a pre-filled value would look like a real env var name;
+  // blank it out so the placeholder text guides the user instead.
+  const initialApiKeyRef =
+    initial?.api_key_ref && initial.api_key_ref !== 'OLLAMA_DUMMY'
+      ? initial.api_key_ref
+      : (secrets[0]?.env_var_name ?? '')
+  const [apiKeyRef, setApiKeyRef] = useState(initialApiKeyRef)
+  // Unpack extra_params.api_base into its own form field so local-provider
+  // admins see it as a first-class setting. Other keys in extra_params
+  // (temperature, custom headers, …) are merged back untouched at submit.
+  const [apiBase, setApiBase] = useState<string>(() => {
+    const existing = (initial?.extra_params as Record<string, unknown> | null | undefined)?.api_base
+    return typeof existing === 'string' ? existing : ''
+  })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const isLocal = LOCAL_PROVIDERS.has(provider)
 
   const handleProviderChange = (next: string) => {
     setProvider(next)
@@ -54,17 +89,41 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
 
   const handleSubmit = async () => {
     setError(null)
-    if (!modelName.trim() || !upstream.trim() || !apiKeyRef.trim()) {
-      setError('Model name, upstream, and API key are all required.')
+    if (!modelName.trim() || !upstream.trim()) {
+      setError('Model name and upstream model are required.')
       return
     }
+    if (!isLocal && !apiKeyRef.trim()) {
+      setError(`Provider '${provider}' requires an API key reference.`)
+      return
+    }
+
+    // Preserve any non-api_base keys the admin previously stored
+    // (e.g. temperature, max_tokens) — the api_base field is the only
+    // one this dialog owns right now, but that may change later.
+    const existingExtras =
+      (initial?.extra_params as Record<string, unknown> | null | undefined) ?? {}
+    const nextExtras: Record<string, unknown> = { ...existingExtras }
+    const trimmedBase = apiBase.trim()
+    if (trimmedBase) {
+      nextExtras.api_base = trimmedBase
+    } else {
+      delete nextExtras.api_base
+    }
+    const extraParamsPayload =
+      Object.keys(nextExtras).length > 0 ? nextExtras : null
+
     setSubmitting(true)
     try {
       await onSubmit({
         model_name: modelName.trim(),
         provider,
         upstream_model: upstream.trim(),
+        // Empty string is fine for local providers — backend normalises
+        // it to the OLLAMA_DUMMY sentinel. Trim keeps whitespace-only
+        // input from silently passing either branch.
         api_key_ref: apiKeyRef.trim(),
+        extra_params: extraParamsPayload,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -129,8 +188,10 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
           </div>
 
           <div className="flex flex-col gap-1">
-            <Label htmlFor="api_key_ref">API key</Label>
-            {secrets.length > 0 ? (
+            <Label htmlFor="api_key_ref">
+              API key{isLocal ? ' (optional)' : ''}
+            </Label>
+            {secrets.length > 0 && !isLocal ? (
               <select
                 id="api_key_ref"
                 value={apiKeyRef}
@@ -147,16 +208,41 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
               <>
                 <Input
                   id="api_key_ref"
-                  placeholder="ANTHROPIC_API_KEY"
+                  placeholder={API_KEY_PLACEHOLDER[provider] ?? 'ENV_VAR_NAME'}
                   value={apiKeyRef}
                   onChange={e => setApiKeyRef(e.target.value)}
                 />
                 <p className="text-[11px] text-[var(--color-foreground-muted)]">
-                  No secrets registered yet. Use the Secrets section to add one, then this will become a dropdown.
+                  {isLocal
+                    ? 'Most local endpoints ignore Authorization — leave blank unless your server requires one.'
+                    : secrets.length > 0
+                    ? 'Or type a new env var name not yet registered in Secrets.'
+                    : 'No secrets registered yet. Use the Secrets section to add one, then this will become a dropdown.'}
                 </p>
               </>
             )}
           </div>
+
+          {isLocal && (
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="api_base">API base URL</Label>
+              <Input
+                id="api_base"
+                placeholder={
+                  provider === 'ollama'
+                    ? 'http://localhost:11434'
+                    : provider === 'vllm'
+                    ? 'http://localhost:8000/v1'
+                    : 'https://…'
+                }
+                value={apiBase}
+                onChange={e => setApiBase(e.target.value)}
+              />
+              <p className="text-[11px] text-[var(--color-foreground-muted)]">
+                Leave blank to use LiteLLM's provider default. Point this at a remote host when Ollama/vLLM runs off-server.
+              </p>
+            </div>
+          )}
 
           {error && (
             <p className="rounded-[var(--radius-sm)] border border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-900">

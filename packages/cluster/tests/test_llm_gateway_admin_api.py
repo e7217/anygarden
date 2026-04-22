@@ -209,6 +209,114 @@ async def test_model_crud_round_trip(env) -> None:
         assert list_after.json() == []
 
 
+async def test_create_model_ollama_allows_missing_api_key_ref(env) -> None:
+    """Ollama(로컬)은 보통 auth가 없어 api_key_ref를 생략할 수 있어야 한다.
+
+    핸들러는 provider가 ``ollama``/``vllm``/``custom``이면 빈/None
+    ``api_key_ref``를 허용하고 고정 sentinel ``OLLAMA_DUMMY``를 DB에
+    저장한다. 이 sentinel은 supervisor가 child_env에
+    ``DOORAE_LITELLM_OLLAMA_DUMMY`` 로 주입하는 기본 placeholder와
+    한 짝으로 동작한다.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        # api_key_ref 자체를 생략
+        resp = await c.post(
+            "/api/v1/llm-gateway/models",
+            headers=_auth(env["admin_jwt"]),
+            json={
+                "model_name": "qwen3-local",
+                "provider": "ollama",
+                "upstream_model": "ollama/qwen3-coder:30b",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["api_key_ref"] == "OLLAMA_DUMMY"
+
+        # 빈 문자열을 명시적으로 전송해도 동일 처리
+        resp2 = await c.post(
+            "/api/v1/llm-gateway/models",
+            headers=_auth(env["admin_jwt"]),
+            json={
+                "model_name": "qwen3-local-2",
+                "provider": "vllm",
+                "upstream_model": "openai/qwen3-coder",
+                "api_key_ref": "",
+            },
+        )
+        assert resp2.status_code == 201, resp2.text
+        assert resp2.json()["api_key_ref"] == "OLLAMA_DUMMY"
+
+
+async def test_create_model_cloud_provider_requires_api_key_ref(env) -> None:
+    """Anthropic/OpenAI 등 클라우드 provider는 여전히 api_key_ref 필수.
+
+    로컬 provider의 완화가 클라우드 provider로 새지 않음을 보증.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        # api_key_ref 생략
+        resp = await c.post(
+            "/api/v1/llm-gateway/models",
+            headers=_auth(env["admin_jwt"]),
+            json={
+                "model_name": "claude-sonnet-4-6",
+                "provider": "anthropic",
+                "upstream_model": "anthropic/claude-sonnet-4-6",
+            },
+        )
+        assert resp.status_code == 422, resp.text
+        # 빈 문자열
+        resp2 = await c.post(
+            "/api/v1/llm-gateway/models",
+            headers=_auth(env["admin_jwt"]),
+            json={
+                "model_name": "claude-sonnet-4-6",
+                "provider": "anthropic",
+                "upstream_model": "anthropic/claude-sonnet-4-6",
+                "api_key_ref": "",
+            },
+        )
+        assert resp2.status_code == 422, resp2.text
+
+
+async def test_create_model_ollama_with_extra_params_api_base(env) -> None:
+    """Ollama 원격 호스트를 가리키는 ``extra_params.api_base`` 라운드트립.
+
+    UI는 입력된 ``api_base``를 ``extra_params = {api_base: ...}`` 로
+    패킹해 POST 한다. 응답에 그대로 실려 돌아오고, PATCH로 덮어쓸 수 있어야
+    한다.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        create = await c.post(
+            "/api/v1/llm-gateway/models",
+            headers=_auth(env["admin_jwt"]),
+            json={
+                "model_name": "qwen3-remote",
+                "provider": "ollama",
+                "upstream_model": "ollama/qwen3-coder:30b",
+                "extra_params": {"api_base": "http://10.0.0.5:11434"},
+            },
+        )
+        assert create.status_code == 201, create.text
+        body = create.json()
+        assert body["extra_params"] == {"api_base": "http://10.0.0.5:11434"}
+        model_id = body["id"]
+
+        # PATCH로 api_base를 변경
+        patch = await c.patch(
+            f"/api/v1/llm-gateway/models/{model_id}",
+            headers=_auth(env["admin_jwt"]),
+            json={"extra_params": {"api_base": "http://10.0.0.9:11434"}},
+        )
+        assert patch.status_code == 200, patch.text
+        assert patch.json()["extra_params"] == {"api_base": "http://10.0.0.9:11434"}
+
+
 async def test_duplicate_model_name_returns_409(env) -> None:
     body = {
         "model_name": "dupe",

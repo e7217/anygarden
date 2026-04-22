@@ -44,6 +44,17 @@ router = APIRouter(
 )
 
 
+# Local/self-hosted providers don't require caller-supplied credentials —
+# Ollama and most vLLM deployments don't check ``Authorization``. The
+# admin UI therefore lets the operator leave ``api_key_ref`` blank for
+# these providers; the handler normalises blank input to a fixed
+# sentinel so the yaml/env machinery stays uniform. Supervisor
+# (``bootstrap.py::_build_spawn_params_factory``) injects the matching
+# env var (``DOORAE_LITELLM_OLLAMA_DUMMY=sk-local``) on every spawn.
+_LOCAL_PROVIDERS = frozenset({"ollama", "vllm", "custom"})
+_OLLAMA_DUMMY_REF = "OLLAMA_DUMMY"
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
@@ -103,7 +114,12 @@ class ModelCreate(BaseModel):
     model_name: str = Field(..., min_length=1, max_length=128)
     provider: str = Field(..., min_length=1, max_length=32)
     upstream_model: str = Field(..., min_length=1, max_length=255)
-    api_key_ref: str = Field(..., min_length=1, max_length=64)
+    # ``api_key_ref`` is optional at the schema layer. The create
+    # handler below fills in ``_OLLAMA_DUMMY_REF`` for local providers
+    # or rejects blank input for cloud providers, keeping DB rows
+    # well-formed without forcing the admin UI to invent a throwaway
+    # secret for every Ollama model.
+    api_key_ref: Optional[str] = Field(default=None, max_length=64)
     extra_params: Optional[dict] = None
     enabled: bool = True
 
@@ -114,7 +130,10 @@ class ModelUpdate(BaseModel):
     model_name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     provider: Optional[str] = Field(default=None, min_length=1, max_length=32)
     upstream_model: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    api_key_ref: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    # ``max_length=64`` only — empty string allowed so the admin can
+    # clear out a stale cloud-provider ref when switching a model to a
+    # local provider. Handler normalises/validates same as Create.
+    api_key_ref: Optional[str] = Field(default=None, max_length=64)
     extra_params: Optional[dict] = None
     enabled: Optional[bool] = None
 
@@ -209,6 +228,31 @@ async def list_models(
     return list(rows)
 
 
+def _normalise_api_key_ref(
+    provider: str, api_key_ref: Optional[str]
+) -> str:
+    """Resolve a possibly-blank ``api_key_ref`` against the provider.
+
+    - Local providers (ollama / vllm / custom) tolerate empty input
+      and are stored under the shared ``OLLAMA_DUMMY`` sentinel.
+    - Cloud providers still require a non-empty reference; raising
+      a 422 keeps accidental credential-less Anthropic/OpenAI rows
+      out of the DB where they'd silently render an invalid
+      ``os.environ/DOORAE_LITELLM_`` reference into the yaml.
+    """
+    ref = (api_key_ref or "").strip()
+    if ref:
+        return ref
+    if provider in _LOCAL_PROVIDERS:
+        return _OLLAMA_DUMMY_REF
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"provider '{provider}' requires a non-empty api_key_ref"
+        ),
+    )
+
+
 @router.post(
     "/models",
     response_model=ModelOut,
@@ -232,7 +276,11 @@ async def create_model(
             detail=f"Model '{body.model_name}' already exists",
         )
 
-    row = LLMGatewayModel(**body.model_dump())
+    payload = body.model_dump()
+    payload["api_key_ref"] = _normalise_api_key_ref(
+        body.provider, body.api_key_ref
+    )
+    row = LLMGatewayModel(**payload)
     db.add(row)
     await db.commit()
     await db.refresh(row)
@@ -265,6 +313,16 @@ async def update_model(
                 status_code=409,
                 detail=f"Model name '{updates['model_name']}' already in use",
             )
+
+    # If the PATCH touches ``api_key_ref``, validate against the final
+    # provider (new one if also in this PATCH, otherwise the row's
+    # current one). Blank input under a local provider becomes the
+    # shared sentinel; blank input under a cloud provider is a 422.
+    if "api_key_ref" in updates:
+        final_provider = updates.get("provider", row.provider)
+        updates["api_key_ref"] = _normalise_api_key_ref(
+            final_provider, updates["api_key_ref"]
+        )
 
     for k, v in updates.items():
         setattr(row, k, v)
