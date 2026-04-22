@@ -39,6 +39,13 @@ export interface AgentSettingsMenuProps {
    *  toggle row when both are provided. */
   contextWindowOptOut?: boolean
   onToggleContextWindowOptOut?: () => void | Promise<void>
+  /** #241 — narrow rows (e.g. sidebar agent row next to the ``+``
+   *  button) need a 24×24 trigger instead of shadcn's default
+   *  ``size-9`` (36×36) so the two buttons align vertically. When
+   *  true, renders a bare button with the same ``h-6 w-6`` geometry
+   *  as ``SidebarRoomMenu``'s trigger. Default false keeps the
+   *  AdminMachines usage intact. */
+  compact?: boolean
 }
 
 export default function AgentSettingsMenu({
@@ -46,6 +53,7 @@ export default function AgentSettingsMenu({
   onDelete,
   contextWindowOptOut,
   onToggleContextWindowOptOut,
+  compact = false,
 }: AgentSettingsMenuProps) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -80,17 +88,32 @@ export default function AgentSettingsMenu({
 
   return (
     <div ref={rootRef} className="relative">
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={() => setOpen(v => !v)}
-        title="Agent settings"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        data-testid="agent-settings-menu-trigger"
-      >
-        <MoreHorizontal className="h-4 w-4" />
-      </Button>
+      {compact ? (
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          title="Agent settings"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label="Agent settings"
+          className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/10 hover:text-[var(--color-foreground)]"
+          data-testid="agent-settings-menu-trigger"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </button>
+      ) : (
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setOpen(v => !v)}
+          title="Agent settings"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          data-testid="agent-settings-menu-trigger"
+        >
+          <MoreHorizontal className="h-4 w-4" />
+        </Button>
+      )}
       {open && (
         <div
           role="group"
