@@ -387,3 +387,88 @@ describe('MessageBubble — question pending badge', () => {
     expect(screen.queryByTestId('question-pending-badge')).toBeNull()
   })
 })
+
+// Issue #238 — accepted orchestrator handoff messages render as a
+// dedicated breathing-border card instead of bleeding the raw
+// ``[HANDOFF] <@user:...>`` protocol text into the chat.
+describe('MessageBubble — handoff variant', () => {
+  function handoffMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
+    return baseMsg({
+      id: 'mh',
+      participant_id: 'agent-rep',
+      content: '[HANDOFF] <@user:agent-1> Round 1 자기소개를 부탁드립니다.',
+      metadata: {
+        next_speaker_participant_id: 'agent-1',
+        mentions: [{ type: 'user', id: 'agent-1' }],
+      },
+      ...overrides,
+    })
+  }
+
+  it('delegates to HandoffMessageCard with the resolved target name', () => {
+    render(
+      <MessageBubble
+        message={handoffMsg()}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    const card = screen.getByTestId('handoff-card')
+    expect(card).toHaveAttribute('data-state', 'pending')
+    expect(screen.getByTestId('handoff-target-caption')).toHaveTextContent(
+      'Helper',
+    )
+    // The raw protocol tokens are NOT surfaced in the card body.
+    expect(card).not.toHaveTextContent('[HANDOFF]')
+    expect(card).not.toHaveTextContent('<@user:agent-1>')
+  })
+
+  it('shows resolved state when handoffResolvedAt prop is non-null', () => {
+    render(
+      <MessageBubble
+        message={handoffMsg()}
+        participants={participants}
+        isMine={false}
+        handoffResolvedAt={new Date().toISOString()}
+      />,
+    )
+    const card = screen.getByTestId('handoff-card')
+    expect(card).toHaveAttribute('data-state', 'resolved')
+  })
+
+  it('does not enter the handoff branch when metadata is missing', () => {
+    const m = baseMsg({
+      id: 'mnh',
+      content: '[HANDOFF] <@user:agent-1> hi',
+      // no metadata → defensive parse returns null, fall back to plain.
+    })
+    render(
+      <MessageBubble
+        message={m}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    expect(screen.queryByTestId('handoff-card')).toBeNull()
+  })
+})
+
+// Issue #238 — workers sometimes append a ``handoff_to: ...`` trailer
+// to their replies. Render-time strip keeps the wire body intact.
+describe('MessageBubble — handoff_to trailer stripping', () => {
+  it('removes a trailing handoff_to block from an agent reply', () => {
+    const msg = baseMsg({
+      content:
+        '정리된 답변입니다.\n\nhandoff_to: <@user:agent-rep> participant_id: agent-rep',
+    })
+    render(
+      <MessageBubble
+        message={msg}
+        participants={participants}
+        isMine={false}
+      />,
+    )
+    expect(screen.getByText('정리된 답변입니다.')).toBeInTheDocument()
+    expect(screen.queryByText(/handoff_to:/)).toBeNull()
+  })
+})

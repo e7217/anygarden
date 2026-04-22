@@ -396,3 +396,64 @@ code, pre, kbd, samp {
   border-radius: var(--radius-md);
   margin: 0.5em 0;
 }
+
+/* ==========================================================================
+   HandoffMessageCard — orchestrator [HANDOFF] breathing accent border
+   Issue #238. See packages/cluster/frontend/src/components/HandoffMessageCard.tsx
+   ========================================================================== */
+
+/* A slow left-to-right sweep drives the "waiting for target agent" signal.
+   Kept at 2.4s per cycle per DESIGN.md §1 (subtle, not attention-grabbing). */
+@keyframes handoff-sweep {
+  0%   { background-position: -100% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.handoff-card {
+  /* The accent lives on ::before so the card itself can keep a
+     normal 1px border without doubling up. overflow-hidden on the
+     element clips the sweep to the card's rounded corners. */
+  isolation: isolate;
+}
+
+.handoff-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  pointer-events: none;
+}
+
+.handoff-card--pending::before {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 117, 222, 0.9) 50%,
+    transparent 100%
+  );
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: handoff-sweep 2.4s linear infinite;
+}
+
+.handoff-card--resolved::before {
+  /* Static translucent brand tint — still a visible pair-marker, but
+     stops moving once the target has replied. */
+  background: rgba(0, 117, 222, 0.25);
+}
+
+.handoff-card--timeout::before {
+  /* Muted neutral so the card reads as "stale" without shouting. */
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* Accessibility — honour prefers-reduced-motion by freezing the sweep
+   at a centred static position instead of animating. */
+@media (prefers-reduced-motion: reduce) {
+  .handoff-card--pending::before {
+    animation: none;
+    background-position: 50% 0;
+  }
+}
