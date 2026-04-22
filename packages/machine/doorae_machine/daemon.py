@@ -129,6 +129,12 @@ class MachineDaemon:
         self._transitional_states: dict[str, str] = {}
         self._transitional_set_at: dict[str, float] = {}
 
+        # Issue #237 — per-agent last-seen hash of ``memory/notes.md``.
+        # Used by the report loop to cheaply detect mutation since the
+        # last sync. Populated lazily on first read. Wiped when the
+        # agent stops so a re-spawn performs a clean first-read.
+        self._memory_last_hash: dict[str, str] = {}
+
     # ── Main loop ──────────────────────────────────────────────────────
 
     async def run(self) -> None:
@@ -411,6 +417,10 @@ class MachineDaemon:
             agents_md=manifest.agents_md,
             files=dict(manifest.files),
             engine_secrets=dict(manifest.engine_secrets),
+            # Issue #237 — pass DB snapshot through so the spawner can
+            # materialize ``memory/notes.md`` on cold start. ``getattr``
+            # keeps compatibility with pre-#237 frames that omit the field.
+            memory_md=getattr(manifest, "memory_md", None),
             reasoning_effort=manifest.reasoning_effort,
             model=manifest.model,
             sub_rooms=list(manifest.sub_rooms),
@@ -643,6 +653,66 @@ class MachineDaemon:
 
         frame = ReportActualStateFrame(agents=agents)
         await self._send(frame.model_dump())
+
+        # Issue #237 — piggy-back the memory sync on the same report
+        # tick. Cheap (sha256 of a markdown file per running agent),
+        # avoids spinning up a parallel scheduler. Failures are logged
+        # but never abort the report path — sync-back is best-effort.
+        try:
+            await self._flush_memory_updates()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("memory_flush_failed", error=str(exc))
+
+    async def _flush_memory_updates(self) -> None:
+        """Detect ``memory/notes.md`` changes for each running agent and
+        emit ``agent_memory_update`` frames.
+
+        Direction (#237 plan §3.2 decision 4): file is the runtime
+        truth; the cluster's ``agents.memory_md`` is the snapshot. We
+        hash the file body and only send when the hash differs from
+        the last one we sent. Empty / missing files are reported as
+        empty strings on first observation so the server can clear
+        stale snapshots — but only once (the cached "" hash suppresses
+        repeats).
+        """
+        import hashlib
+
+        for info in self._spawner.list_running():
+            agent_id = info["agent_id"]
+            try:
+                agent_root = self._spawner.get_agent_root(agent_id)
+            except AttributeError:
+                # Tests may stub the spawner with MagicMock; in that case
+                # the accessor is missing entirely and there's nothing
+                # to sync. Skipping silently keeps existing tests happy.
+                continue
+            notes_path = agent_root / "memory" / "notes.md"
+            # File won't exist yet when the agent's spawn path was
+            # skipped (e.g. unit tests with stubbed spawner). Skip the
+            # frame entirely in that case — the first real sync will
+            # fire as soon as materialize lays the empty file.
+            if not notes_path.is_file():
+                continue
+            try:
+                body = notes_path.read_text()
+            except OSError as exc:
+                log.warning(
+                    "memory_read_failed", agent_id=agent_id, error=str(exc)
+                )
+                continue
+            digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            if self._memory_last_hash.get(agent_id) == digest:
+                continue
+            self._memory_last_hash[agent_id] = digest
+            from doorae_machine.protocol.frames import AgentMemoryUpdateFrame
+
+            frame = AgentMemoryUpdateFrame(agent_id=agent_id, memory_md=body)
+            await self._send(frame.model_dump())
+            log.info(
+                "memory_synced",
+                agent_id=agent_id,
+                bytes=len(body),
+            )
 
     # ── Transitional state helpers (#219) ──────────────────────────────
 

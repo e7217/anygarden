@@ -75,6 +75,11 @@ class SpawnManifest:
     agents_md: str | None = None
     files: dict[str, str] = field(default_factory=dict)
     engine_secrets: dict[str, str] = field(default_factory=dict)
+    # Issue #237 — DB snapshot of the agent's long-term memory. The
+    # spawner writes this to ``<agent_dir>/memory/notes.md`` if the file
+    # doesn't yet exist, preserving the runtime file when it does (the
+    # agent may have written between welcome frame and spawn reconcile).
+    memory_md: str | None = None
     reasoning_effort: str | None = None
     model: str | None = None
     sub_rooms: list[dict] = field(default_factory=list)
@@ -256,23 +261,30 @@ class Spawner:
                     sections.append(f"- **{name}**")
                 sections.append(f"  → /delegate {name} <task>")
 
-        # ── Memory auto-inline ──────────────────────────────────
+        # ── Memory auto-inline (#237 file-memory convention) ────
         sections.append("")
         sections.append("## Memory")
         sections.append("")
         sections.append(
-            "You have a persistent memory file at `workspace/MEMORY.md`. "
-            "At the START of every session, read this file to restore "
-            "context from prior conversations.\n\n"
-            "At the END of a conversation (before going idle), write a "
-            "concise summary to `workspace/MEMORY.md` capturing:\n"
-            "- Your current role and active context\n"
-            "- Key decisions made and their rationale\n"
-            "- Ongoing tasks and their status\n"
-            "- Important facts about the workspace or project\n\n"
-            "Keep the file short (under 500 words). Overwrite the entire "
-            "file each time — do not append. The file persists across "
-            "sessions on the same machine."
+            "You have a long-term memory file at `memory/notes.md` "
+            "(relative to your agent directory, one level up from this "
+            "AGENTS.md's workspace). The cluster also injects the "
+            "current contents into your `system_prompt` at session "
+            "start, so treat it as a shared notebook between sessions.\n\n"
+            "Guidelines:\n"
+            "- Append (do not overwrite) observations you want to "
+            "remember across sessions. Examples: user preferences, "
+            "ongoing project state, important facts.\n"
+            "- Use markdown sections so the file stays scannable.\n"
+            "- If the file grows too long, prune or summarise entries "
+            "yourself — there is no automatic rollover.\n"
+            "- When a session is marked **ephemeral** "
+            "(`<ephemeral-session/>` in your system prompt), do NOT "
+            "write to this file. The user expects the conversation to "
+            "leave no trace in long-term memory.\n\n"
+            "The machine syncs this file back to the cluster DB "
+            "periodically and on shutdown, so writes survive restart "
+            "and machine migration."
         )
 
         # Only add trailing newline if we appended extra sections.
@@ -364,6 +376,23 @@ class Spawner:
         if msg.agents_md is not None:
             agents_md = agent_root / "AGENTS.md"
             safe_write_text(agents_md, self._compose_agents_md(msg), mode=0o600)
+
+        # --- Write memory/notes.md (#237) ------------------------------
+        #
+        # Direction: DB snapshot → file, but only when the file doesn't
+        # yet exist. The file is the runtime source of truth (agent
+        # appends to it), and the prune step above spared ``workspace``
+        # but does wipe ``memory/`` — so we recreate the directory and
+        # seed it with the DB snapshot here. On a resume where the
+        # machine already had the file, the prune would have removed it
+        # and the seed here puts the last-known DB content back in its
+        # place. The next heartbeat flushes agent-side writes so the
+        # round-trip converges.
+        memory_dir = agent_root / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(memory_dir, 0o700)
+        notes_path = memory_dir / "notes.md"
+        safe_write_text(notes_path, msg.memory_md or "", mode=0o600)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():
@@ -924,6 +953,17 @@ class Spawner:
     def get_running(self, agent_id: str) -> RunningAgent | None:
         """Return the RunningAgent for *agent_id*, or None if not running."""
         return self._agents.get(agent_id)
+
+    def get_agent_root(self, agent_id: str) -> Path:
+        """Return the per-agent directory for *agent_id*.
+
+        Issue #237 — exposed so the daemon can read ``memory/notes.md``
+        without recomputing the path. Validation lives in
+        ``_materialize_agent_dir`` (the only writer); this read accessor
+        trusts the agent_id has already been validated by the spawn
+        path that placed the directory.
+        """
+        return self._agent_dirs_root / agent_id
 
     def _cleanup(self, agent_id: str) -> None:
         """Delete temp profile file and remove from internal state."""

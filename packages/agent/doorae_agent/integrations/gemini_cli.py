@@ -93,6 +93,11 @@ class GeminiCliAdapter(EngineAdapter):
         # next active turn — see ``coordination.pending_context`` for
         # the shared policy.
         self._pending_context: dict[str, list[tuple[float, str]]] = {}
+        # #237 — owning client reference for cross-engine memory
+        # suffix composition. ``integrate_with_gemini_cli`` wires this
+        # after ``start()``; tests that instantiate the adapter directly
+        # leave it None and the suffix helper degrades to empty string.
+        self._client: ChatClient | None = None
 
     async def start(self) -> None:
         """Verify that the gemini CLI is installed and reachable."""
@@ -146,7 +151,7 @@ class GeminiCliAdapter(EngineAdapter):
 
         # Build prompt with per-room conversation context.
         conversation.append({"role": "user", "content": turn_content})
-        prompt = self._build_prompt(conversation)
+        prompt = self._build_prompt(conversation, room_id=room_id)
 
         try:
             response = await self._call_gemini(prompt)
@@ -180,7 +185,9 @@ class GeminiCliAdapter(EngineAdapter):
         self._conversations.clear()
         self._pending_context.clear()
 
-    def _build_prompt(self, conversation: list[dict[str, str]]) -> str:
+    def _build_prompt(
+        self, conversation: list[dict[str, str]], room_id: str | None = None
+    ) -> str:
         """Build a single prompt string from per-room conversation history.
 
         The Gemini CLI non-interactive (``-p``) mode treats the prompt
@@ -188,10 +195,25 @@ class GeminiCliAdapter(EngineAdapter):
         tagged transcript. AGENTS.md handles the system-prompt layer
         at the CLI level via ``context.fileName``; this method only
         carries the dialogue state.
+
+        #237 — when ``room_id`` is supplied the memory / ephemeral
+        block is appended to the system-prompt preamble. Kept optional
+        so the legacy call sites (tests) don't break.
         """
         parts: list[str] = []
         if self._system_prompt:
             parts.append(self._system_prompt)
+            parts.append("")
+        # Issue #237 — cross-engine memory suffix. Appended to the
+        # system-prompt preamble (before the dialogue state) so the
+        # agent reads it first.
+        from doorae_agent.integrations.base import compose_memory_suffix
+
+        memory_suffix = compose_memory_suffix(
+            getattr(self, "_client", None), room_id
+        )
+        if memory_suffix:
+            parts.append(memory_suffix)
             parts.append("")
         for turn in conversation:
             role = turn["role"]
@@ -318,6 +340,9 @@ async def integrate_with_gemini_cli(
     Returns the adapter instance for lifecycle management.
     """
     adapter = GeminiCliAdapter(model=model, system_prompt=system_prompt, reasoning_effort=reasoning_effort)
+    # #237 — hook the client so ``_build_prompt`` can pull the memory /
+    # ephemeral suffix from the welcome-frame cache.
+    adapter._client = client
     await adapter.start()
 
     engine_timeout = float(

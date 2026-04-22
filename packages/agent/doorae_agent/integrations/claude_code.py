@@ -257,6 +257,18 @@ class ClaudeCodeAdapter(EngineAdapter):
         }
         if self._system_prompt is not None:
             kwargs["system_prompt"] = self._system_prompt
+        # Issue #237 — append the cross-engine memory / ephemeral block.
+        # Done AFTER ``self._system_prompt`` so the base prompt (typically
+        # AGENTS.md-derived) still drives the personality and the memory
+        # suffix acts as an override at the end.
+        from doorae_agent.integrations.base import compose_memory_suffix
+
+        memory_suffix = compose_memory_suffix(self._client, room_id)
+        if memory_suffix:
+            existing = kwargs.get("system_prompt")
+            kwargs["system_prompt"] = (
+                f"{existing}\n\n{memory_suffix}" if existing else memory_suffix
+            )
         if self._model is not None:
             kwargs["model"] = self._model
         session_id = self._sessions.get(room_id)

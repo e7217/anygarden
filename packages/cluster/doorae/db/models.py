@@ -135,6 +135,14 @@ class Room(Base):
         default=0,
         server_default=sa_text("0"),
     )
+    # Issue #237 — ephemeral / "temporary session" flag. When True the
+    # agent is instructed via system_prompt to skip writing to
+    # ``memory/notes.md``. This is a trust-model signal, not a hard
+    # filesystem guard (see plan §3.2 decision 3). Toggle-able by DM
+    # owner; admin-only for non-DM rooms.
+    ephemeral: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="rooms")
@@ -270,6 +278,13 @@ class Agent(Base):
     context_window_opt_out: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
     )
+    # Issue #237 — per-agent long-term memory scratchpad (markdown).
+    # DB is the "last-known snapshot"; runtime truth lives in the file
+    # ``~/.doorae/agents/<id>/memory/notes.md`` on the hosting machine.
+    # Spawner materializes this into the file on start; machine flushes
+    # file -> DB on heartbeat and graceful shutdown. See plan §3.2
+    # decision 4 for the bi-directional sync rationale.
+    memory_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")

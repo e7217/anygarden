@@ -941,3 +941,62 @@ class TestMaterializeRefusesSymlinkFollow:
         assert victim.read_text() == "sacred"
         assert not bridge.is_symlink()
         assert bridge.is_file()
+
+
+class TestMemoryMaterialize:
+    """Issue #237 — ``memory/notes.md`` is seeded from the DB snapshot on
+    every materialize so the cluster's last-known memory content is the
+    starting point for every new session. The file is the runtime truth
+    thereafter; sync-back from the machine flushes file → DB on change.
+    """
+
+    def test_writes_memory_notes_with_content(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        msg = _msg()
+        msg.memory_md = "## User\nPrefers Korean responses."
+        agent_root = spawner._materialize_agent_dir(msg)
+        notes = agent_root / "memory" / "notes.md"
+        assert notes.is_file()
+        assert notes.read_text() == "## User\nPrefers Korean responses."
+        assert notes.stat().st_mode & 0o777 == 0o600
+        assert (agent_root / "memory").stat().st_mode & 0o777 == 0o700
+
+    def test_writes_empty_memory_file_when_db_has_none(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """Fresh agent with ``memory_md=None`` still gets an empty file so
+        the agent knows the path exists and can start writing."""
+        msg = _msg()
+        msg.memory_md = None
+        agent_root = spawner._materialize_agent_dir(msg)
+        notes = agent_root / "memory" / "notes.md"
+        assert notes.is_file()
+        assert notes.read_text() == ""
+
+    def test_rematerialize_seeds_from_db_snapshot(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """On re-spawn the prune step wipes ``memory/``; the DB snapshot
+        (which should already reflect the last sync-back) is then
+        written. Simulates restart / machine move."""
+        msg = _msg()
+        msg.memory_md = "first"
+        spawner._materialize_agent_dir(msg)
+
+        msg.memory_md = "second (after sync-back)"
+        agent_root = spawner._materialize_agent_dir(msg)
+        assert (agent_root / "memory" / "notes.md").read_text() == (
+            "second (after sync-back)"
+        )
+
+    def test_agents_md_mentions_memory_notes_path(
+        self, spawner: Spawner
+    ) -> None:
+        """AGENTS.md convention points at ``memory/notes.md`` so agents
+        of every engine learn where to write long-term memory."""
+        agent_root = spawner._materialize_agent_dir(_msg())
+        body = (agent_root / "AGENTS.md").read_text()
+        assert "memory/notes.md" in body
+        # Ephemeral convention is documented too.
+        assert "ephemeral" in body.lower()

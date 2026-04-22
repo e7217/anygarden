@@ -77,6 +77,12 @@ export function useWebSocket(roomId: string | null) {
         //      or an empty chat view).
         window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
         window.dispatchEvent(new CustomEvent('doorae:room:deleted', { detail: data }));
+      } else if (data.type === 'room_settings_changed') {
+        // #237 — forward settings change so ``useRooms`` updates its
+        // cached ephemeral flag on other tabs / other open sessions.
+        window.dispatchEvent(
+          new CustomEvent('doorae:rooms:settings-changed', { detail: data }),
+        );
       } else if (data.type === 'presence_update') {
         // #54 — participant liveness toggled in the current room.
         // The hook that actually tracks presence state

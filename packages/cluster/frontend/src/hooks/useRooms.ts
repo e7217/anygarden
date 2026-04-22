@@ -36,6 +36,10 @@ export interface Room {
   // see ``pinned=false``.
   pinned?: boolean;
   sort_order?: number | null;
+  // #237 — ephemeral mode. When True the agent is instructed (via
+  // system_prompt) not to write to its long-term memory file in
+  // this room. Trust-model signal, not a hard FS guard.
+  ephemeral?: boolean;
 }
 
 // Fetch state machine for the projects+rooms store.
@@ -94,6 +98,12 @@ interface RoomsContextValue {
   /** Overwrite the pinned section order with a full snapshot (#47).
    *  Optimistic with rollback on failure. */
   reorderPinnedRooms: (roomIds: string[]) => Promise<void>;
+  /** #237 — create a new DM room bound to ``agentId``. Returns the
+   *  new room so callers can navigate to it. */
+  createAgentDM: (agentId: string, name?: string) => Promise<Room>;
+  /** #237 — PATCH the room's ephemeral flag. Optimistic update on
+   *  local state so the room header reflects the change instantly. */
+  setRoomEphemeral: (roomId: string, ephemeral: boolean) => Promise<void>;
 }
 
 const RoomsContext = createContext<RoomsContextValue | null>(null);
@@ -411,6 +421,62 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     }
   }, [rooms]);
 
+  // ---- #237 helpers ----------------------------------------
+  //
+  // ``createAgentDM`` mirrors ``createRoom`` but hits the
+  // admin-only ``POST /api/v1/agents/{id}/dms`` endpoint that
+  // seeds a new DM room for the agent. The caller navigates to
+  // the returned room after refetching the DM list.
+  //
+  // ``setRoomEphemeral`` patches a room's ephemeral flag. We
+  // update local state first so the header toggle renders
+  // instantly, then roll back on failure. Server pushes a
+  // ``room_settings_changed`` frame to other open sessions.
+
+  const createAgentDM = useCallback(
+    async (agentId: string, name?: string): Promise<Room> => {
+      const resp = await apiFetch(`/api/v1/agents/${agentId}/dms`, {
+        method: 'POST',
+        body: JSON.stringify(name ? { name } : {}),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || 'Failed to create DM');
+      }
+      const room = (await resp.json()) as Room;
+      await fetchAgentDMs();
+      return room;
+    },
+    [fetchAgentDMs],
+  );
+
+  const setRoomEphemeral = useCallback(
+    async (roomId: string, ephemeral: boolean) => {
+      // Optimistic local patch across DMs + project rooms.
+      setAgentDMs(prev =>
+        prev.map(r => (r.id === roomId ? { ...r, ephemeral } : r)),
+      );
+      applyRoomPatch(roomId, { ephemeral });
+      try {
+        const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ ephemeral }),
+        });
+        if (!resp.ok) throw new Error(`PATCH /rooms/${roomId} → ${resp.status}`);
+      } catch (e) {
+        // Roll back on failure.
+        setAgentDMs(prev =>
+          prev.map(r =>
+            r.id === roomId ? { ...r, ephemeral: !ephemeral } : r,
+          ),
+        );
+        applyRoomPatch(roomId, { ephemeral: !ephemeral });
+        throw e;
+      }
+    },
+    [applyRoomPatch],
+  );
+
   // ---- Boot cascade -----------------------------------------
   //
   // Initial mount runs ``refetch`` so ``status`` reaches
@@ -483,6 +549,38 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // #237 — server-pushed ``room_settings_changed`` frame updates
+  // our cached ``ephemeral`` flag so a toggle in another tab
+  // propagates without a refetch. Guard on ``None`` → "not touched"
+  // semantics (fields the server omits should leave local state
+  // untouched).
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const detail = (evt as CustomEvent).detail as {
+        room_id?: string;
+        ephemeral?: boolean | null;
+      } | undefined;
+      if (!detail?.room_id) return;
+      if (detail.ephemeral === null || detail.ephemeral === undefined) return;
+      const eph = detail.ephemeral;
+      const roomId = detail.room_id;
+      setAgentDMs(prev => prev.map(r => r.id === roomId ? { ...r, ephemeral: eph } : r));
+      setRooms(prev => {
+        const out: Record<string, Room[]> = { ...prev };
+        for (const [pid, list] of Object.entries(prev)) {
+          out[pid] = list.map(r => r.id === roomId ? { ...r, ephemeral: eph } : r);
+        }
+        return out;
+      });
+    };
+    window.addEventListener(
+      'doorae:rooms:settings-changed', handler as EventListener,
+    );
+    return () => window.removeEventListener(
+      'doorae:rooms:settings-changed', handler as EventListener,
+    );
+  }, []);
+
   const value = useMemo<RoomsContextValue>(() => ({
     projects,
     rooms,
@@ -498,7 +596,9 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     createSubRoom,
     pinRoom,
     reorderPinnedRooms,
-  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms]);
+    createAgentDM,
+    setRoomEphemeral,
+  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms, createAgentDM, setRoomEphemeral]);
 
   // JSX is deliberately avoided here to keep this file a ``.ts``
   // (not ``.tsx``) so the import shape of existing callers stays

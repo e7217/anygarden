@@ -555,6 +555,11 @@ class AgentLifecycle:
             "profile_yaml": agent.profile_yaml or "",
             "rooms": rooms,
             "agents_md": agent.agents_md,
+            # Issue #237 — DB snapshot of the long-term memory file. The
+            # machine seeds ``memory/notes.md`` from this on materialize;
+            # subsequent file writes by the agent flow back via
+            # ``agent_memory_update`` frames.
+            "memory_md": agent.memory_md,
             "files": files_map,
             "engine_secrets": engine_secrets,
             "reasoning_effort": agent.reasoning_effort,

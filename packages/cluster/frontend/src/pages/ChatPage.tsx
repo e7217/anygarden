@@ -54,7 +54,7 @@ export default function ChatPage() {
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
   const selectedRoom = roomId ?? null
-  const { projects, rooms, agentDMs, fetchRooms, fetchAgentDMs } = useRooms()
+  const { projects, rooms, agentDMs, fetchRooms, fetchAgentDMs, setRoomEphemeral } = useRooms()
   const { user } = useAuth()
   const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(selectedRoom)
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
@@ -481,6 +481,26 @@ export default function ChatPage() {
                 onOpenSidebar={() => setSidebarOpen(true)}
                 onToggleParticipants={
                   isDm ? undefined : () => setParticipantsOpen((v) => !v)
+                }
+                ephemeral={currentRoom.ephemeral ?? false}
+                /* #237 — only DM owners (the user participant of the
+                   DM) and admins may toggle ephemeral. Non-members
+                   should not see the toggle at all. ChatPage already
+                   filters DM access at the participant layer, so any
+                   user who lands here on a DM is by definition a
+                   member; we still gate on ``isDm`` to hide the
+                   toggle on non-DM rooms (admin uses RoomEditDialog
+                   for those). */
+                onToggleEphemeral={
+                  isDm
+                    ? async (next) => {
+                        try {
+                          await setRoomEphemeral(currentRoom.id, next)
+                        } catch (e) {
+                          console.warn('setRoomEphemeral failed', e)
+                        }
+                      }
+                    : undefined
                 }
               />
               {/* #116 — no participant toggle in DMs means the

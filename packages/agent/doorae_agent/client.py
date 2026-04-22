@@ -114,6 +114,17 @@ class ChatClient:
         # opt-out agents.
         self._context_window_opt_out: bool = False
 
+        # Issue #237 — per-room ephemeral flag and agent-level memory
+        # snapshot cached from welcome frames. Adapters read these in
+        # their system-prompt composition step so every engine receives
+        # the same cross-engine memory block (see
+        # ``doorae_agent.memory.compose_memory_block``). ``memory_md``
+        # is a single agent-level scalar (same on every WS for the same
+        # agent); ``ephemeral`` is per-room because the user can toggle
+        # it per DM.
+        self._room_ephemeral: dict[str, bool] = {}
+        self._memory_md: str | None = None
+
         # Per-room agent-only consecutive message counter.
         # Counts how many messages in a row came from agents (non-human)
         # without a human message in between.  When the count exceeds
@@ -521,6 +532,17 @@ class ChatClient:
                 self._context_window_opt_out = bool(
                     data.get("context_window_opt_out")
                 )
+            # Issue #237 — ephemeral is per-room; memory_md is per-agent.
+            # We refresh both on every welcome so a toggle +
+            # ``bump_generation`` cycle propagates cleanly.
+            if "ephemeral" in data:
+                self._room_ephemeral[room_id] = bool(data.get("ephemeral"))
+            if "memory_md" in data:
+                # Server sends ``None`` when the agent has never written;
+                # preserve None so the compose helper can pick a default
+                # placeholder instead of a quoted literal ``"None"``.
+                mm = data.get("memory_md")
+                self._memory_md = mm if isinstance(mm, str) else None
             # Issue #159 Phase A — cache the room's speaker-strategy
             # fields so ``decide_policy`` can dispatch on them. Default
             # 'mentioned_only' keeps pre-#159 rooms on the legacy path.
@@ -563,12 +585,19 @@ class ChatClient:
             new_orc = data.get("orchestrator_agent_id")
             if new_orc is not None:
                 self._orchestrator_agent_id[target_room] = new_orc
+            # #237 — ephemeral toggle arrives over the same frame. We
+            # only touch the cache when the server sent a non-None
+            # value so a rename-only PATCH doesn't wipe the stored flag.
+            new_ephemeral = data.get("ephemeral")
+            if new_ephemeral is not None:
+                self._room_ephemeral[target_room] = bool(new_ephemeral)
             logger.info(
                 "ws.room_settings_changed",
                 room_id=target_room,
                 speaker_strategy=new_strategy,
                 orchestrator_agent_id=new_orc,
                 context_window_enabled=data.get("context_window_enabled"),
+                ephemeral=new_ephemeral,
             )
         elif msg_type == "join_room":
             new_room = data.get("room_id")
