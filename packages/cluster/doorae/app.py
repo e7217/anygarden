@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
@@ -391,13 +391,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             import structlog
             structlog.get_logger().info("startup.machines_reset_offline")
 
+    # #246 — reconcile on-disk room shared files against the DB. A
+    # crash mid-upload can leave a renamed file with no matching row,
+    # or a stale ``.tmp/`` remnant. Sweep them on boot so disk usage
+    # stays bounded.
+    try:
+        from doorae.db.models import RoomSharedFile as _RoomSharedFile
+        from doorae.rooms import file_storage as _file_storage
+
+        async with app.state.session_factory() as _db:
+            known_ids = set(
+                (await _db.execute(select(_RoomSharedFile.id))).scalars().all()
+            )
+        removed = _file_storage.cleanup_orphans(
+            config.room_files_dir, known_ids=known_ids
+        )
+        if removed:
+            import structlog
+            structlog.get_logger().info(
+                "startup.room_files_cleanup", removed=removed
+            )
+    except Exception:  # pragma: no cover — best-effort boot chore
+        import structlog
+        structlog.get_logger().exception(
+            "startup.room_files_cleanup_failed"
+        )
+
     # Dev mode: auto-create admin user
     if config.dev:
         from doorae.auth.password import hash_password
         from doorae.db.models import User
 
         async with app.state.session_factory() as db:
-            from sqlalchemy import select, func
+            from sqlalchemy import func
             count = (await db.execute(select(func.count()).select_from(User))).scalar()
             if count == 0:
                 db.add(User(

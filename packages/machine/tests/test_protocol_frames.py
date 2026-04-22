@@ -490,3 +490,49 @@ class TestMemoryFrames237:
         assert payload["type"] == "agent_memory_update"
         assert payload["agent_id"] == "a1"
         assert payload["memory_md"] == "hello"
+
+
+# ── Room shared file frames (#246) ────────────────────────────────────
+
+
+class TestSharedFileFrames:
+    """``AgentMemorySharedFileWrite/DeleteFrame`` round-trip through
+    ``parse_server_frame`` — they're server→machine frames, so the
+    daemon needs the dispatcher to hand back the concrete class.
+    """
+
+    def test_write_round_trip(self):
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        frame = AgentMemorySharedFileWriteFrame(
+            agent_id="a1",
+            storage_name="spec.md",
+            content="hello\n",
+            content_sha256="deadbeef",
+        )
+        data = frame.model_dump()
+        assert data["type"] == "agent_memory_shared_file_write"
+
+        parsed = parse_server_frame(data)
+        assert isinstance(parsed, AgentMemorySharedFileWriteFrame)
+        assert parsed.storage_name == "spec.md"
+        assert parsed.content == "hello\n"
+        assert parsed.content_sha256 == "deadbeef"
+
+    def test_delete_round_trip(self):
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+        )
+
+        frame = AgentMemorySharedFileDeleteFrame(
+            agent_id="a1", storage_name="spec.md"
+        )
+        data = frame.model_dump()
+        assert data["type"] == "agent_memory_shared_file_delete"
+
+        parsed = parse_server_frame(data)
+        assert isinstance(parsed, AgentMemorySharedFileDeleteFrame)
+        assert parsed.agent_id == "a1"
+        assert parsed.storage_name == "spec.md"

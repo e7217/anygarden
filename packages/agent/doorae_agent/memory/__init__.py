@@ -12,6 +12,9 @@ agent's directory; the DB carries the ``agents.memory_md`` snapshot
 
 from __future__ import annotations
 
-from doorae_agent.memory.compose import compose_memory_block
+from doorae_agent.memory.compose import (
+    compose_memory_block,
+    compose_shared_context_block,
+)
 
-__all__ = ["compose_memory_block"]
+__all__ = ["compose_memory_block", "compose_shared_context_block"]

@@ -129,6 +129,44 @@ class RotateTokenFrame(BaseModel):
     new_token: str
 
 
+class AgentMemorySharedFileWriteFrame(BaseModel):
+    """Server pushes a room-shared file into an agent's
+    ``memory/shared/`` directory (#246).
+
+    Room shared files are copy-distributed to every participating
+    agent (see plan §3, decision 1). The server is the source of
+    truth — the machine only materializes these files and never
+    sync-backs their contents, which is why this flow lives in a
+    dedicated frame instead of piggybacking on the bidirectional
+    ``AgentMemoryUpdateFrame`` path for ``notes.md``.
+
+    ``content_sha256`` lets the machine skip the write when the
+    existing file already matches, making re-delivery (backfill on
+    reconnect, room rejoin) idempotent and cheap.
+    """
+
+    type: Literal["agent_memory_shared_file_write"] = "agent_memory_shared_file_write"
+    agent_id: str
+    storage_name: str
+    content: str
+    content_sha256: str
+
+
+class AgentMemorySharedFileDeleteFrame(BaseModel):
+    """Server removes a room-shared file from an agent's
+    ``memory/shared/`` directory (#246).
+
+    Sent when a file is deleted from the room or when an agent is
+    removed from the room. The handler is a no-op if the file is
+    already absent — delete frames are expected to be idempotent so
+    we can re-issue them freely during reconciliation.
+    """
+
+    type: Literal["agent_memory_shared_file_delete"] = "agent_memory_shared_file_delete"
+    agent_id: str
+    storage_name: str
+
+
 ServerFrame = Union[
     SyncDesiredStateFrame,
     SyncBatchFrame,
@@ -136,6 +174,8 @@ ServerFrame = Union[
     DrainFrame,
     PingFrame,
     RotateTokenFrame,
+    AgentMemorySharedFileWriteFrame,
+    AgentMemorySharedFileDeleteFrame,
 ]
 
 
@@ -229,6 +269,8 @@ _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
     "drain": DrainFrame,
     "ping": PingFrame,
     "rotate_token": RotateTokenFrame,
+    "agent_memory_shared_file_write": AgentMemorySharedFileWriteFrame,
+    "agent_memory_shared_file_delete": AgentMemorySharedFileDeleteFrame,
 }
 
 

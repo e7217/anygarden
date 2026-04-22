@@ -19,6 +19,8 @@ from doorae_machine.detector import detect_engines
 from doorae_machine.manifest_store import ManifestStore
 from doorae_machine.protocol.frames import (
     AgentActual,
+    AgentMemorySharedFileDeleteFrame,
+    AgentMemorySharedFileWriteFrame,
     RegisterFrame,
     ReportActualStateFrame,
     RequestReplacementFrame,
@@ -244,6 +246,10 @@ class MachineDaemon:
                 await self._report_actual_state()
             case "rotate_token":
                 await self._handle_rotate_token(frame)
+            case "agent_memory_shared_file_write":
+                await self._handle_agent_memory_shared_file_write(frame)
+            case "agent_memory_shared_file_delete":
+                await self._handle_agent_memory_shared_file_delete(frame)
 
     # ── Desired-state handlers ─────────────────────────────────────────
 
@@ -766,6 +772,72 @@ class MachineDaemon:
             return
         self.machine_token = new_token
         log.info("rotate_token_applied")
+
+    # ── Room shared file handlers (#246) ───────────────────────────────
+
+    async def _handle_agent_memory_shared_file_write(
+        self, frame: AgentMemorySharedFileWriteFrame
+    ) -> None:
+        """Materialize a room-shared file under
+        ``<agent_root>/memory/shared/<storage_name>``.
+
+        Idempotent by design — if the on-disk file already matches
+        ``frame.content_sha256`` the write is skipped so backfill /
+        reconnect storms don't churn the filesystem.
+        """
+        import hashlib
+
+        try:
+            agent_root = self._spawner.get_agent_root(frame.agent_id)
+        except (AttributeError, KeyError):
+            # Unknown agent (stopped, not yet spawned, or a test stub
+            # without the accessor) — drop silently; the server will
+            # re-deliver once the agent is back.
+            return
+
+        # Defensive: refuse path components in ``storage_name``. The
+        # server already sanitises, but the daemon runs unprivileged
+        # filesystem writes that shouldn't implicitly trust upstream
+        # strings.
+        if "/" in frame.storage_name or frame.storage_name in ("", ".", ".."):
+            log.warning(
+                "shared_file_write_rejected",
+                agent_id=frame.agent_id,
+                storage_name=frame.storage_name,
+            )
+            return
+
+        shared_dir = agent_root / "memory" / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        target = shared_dir / frame.storage_name
+
+        if target.exists():
+            existing = hashlib.sha256(target.read_bytes()).hexdigest()
+            if existing == frame.content_sha256:
+                return
+
+        target.write_text(frame.content, encoding="utf-8")
+        log.info(
+            "shared_file_written",
+            agent_id=frame.agent_id,
+            storage_name=frame.storage_name,
+        )
+
+    async def _handle_agent_memory_shared_file_delete(
+        self, frame: AgentMemorySharedFileDeleteFrame
+    ) -> None:
+        """Remove a room-shared file if present. No-op when absent so
+        redundant delete frames are safe to re-issue."""
+        try:
+            agent_root = self._spawner.get_agent_root(frame.agent_id)
+        except (AttributeError, KeyError):
+            return
+
+        if "/" in frame.storage_name or frame.storage_name in ("", ".", ".."):
+            return
+
+        target = agent_root / "memory" / "shared" / frame.storage_name
+        target.unlink(missing_ok=True)
 
     # ── WebSocket send ─────────────────────────────────────────────────
 
