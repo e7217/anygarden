@@ -388,6 +388,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # agent was offline).  The SDK will auto-join them.
     pending_rooms: list[str] = []
     agent_opt_out = False
+    # Issue #237 — per-agent memory_md snapshot stamped into the welcome
+    # frame so the SDK can inject it into the engine's system prompt.
+    # None for user/guest connections.
+    agent_memory_md: str | None = None
     # Issue #159 Phase A — speaker strategy fields cached from the
     # Room row so the SDK can dispatch in ``decide_policy``. Defaults
     # here reproduce the pre-#159 behaviour for welcome flows that
@@ -411,12 +415,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             # welcome.
             opt_out_row = (
                 await db.execute(
-                    select(Agent.context_window_opt_out).where(
+                    select(Agent.context_window_opt_out, Agent.memory_md).where(
                         Agent.id == identity.id
                     )
                 )
-            ).scalar_one_or_none()
-            agent_opt_out = bool(opt_out_row)
+            ).first()
+            if opt_out_row is not None:
+                agent_opt_out = bool(opt_out_row[0])
+                agent_memory_md = opt_out_row[1]
         connected_pids = await manager.connected_participant_ids()
         connected_room_ids = {
             pid_to_room[pid] for pid in pid_to_room if pid in connected_pids
@@ -433,6 +439,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # (see ``claude_code.py``). Same session as the Room row to keep
     # welcome to a single round-trip pair.
     participants_brief: list[ParticipantBrief] = []
+    # Issue #237 — ephemeral flag from the Room row.
+    room_ephemeral = False
     async with session_factory() as db:
         row = (
             await db.execute(
@@ -440,11 +448,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     Room.speaker_strategy,
                     Room.orchestrator_agent_id,
                     Room.next_speaker_participant_id,
+                    Room.ephemeral,
                 ).where(Room.id == room_id)
             )
         ).first()
         if row is not None:
-            speaker_strategy, orchestrator_agent_id, next_speaker_participant_id = row
+            (
+                speaker_strategy,
+                orchestrator_agent_id,
+                next_speaker_participant_id,
+                room_ephemeral,
+            ) = row
         participants_brief = await _build_participants_brief(db, room_id=room_id)
 
     welcome = WelcomeOut(
@@ -459,6 +473,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         orchestrator_agent_id=orchestrator_agent_id,
         next_speaker_participant_id=next_speaker_participant_id,
         participants=participants_brief,
+        ephemeral=bool(room_ephemeral),
+        memory_md=agent_memory_md,
     )
     # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
     # try/except (which starts at the ``try:`` on the Subscribe block

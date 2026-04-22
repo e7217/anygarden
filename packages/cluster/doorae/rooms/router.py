@@ -88,6 +88,11 @@ class RoomOut(BaseModel):
     # legible (decisions §3.2 A).
     speaker_strategy: str = "mentioned_only"
     orchestrator_agent_id: Optional[str] = None
+    # #237 — when True the WS welcome frame carries ``ephemeral=True``
+    # so the agent's system_prompt gets a "do not write to memory/notes.md"
+    # directive. Trust-model signal, not a hard FS guard (see plan §3.2).
+    # Default False keeps legacy rooms behaving as before.
+    ephemeral: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -183,6 +188,7 @@ async def create_room(
 async def list_rooms(
     project_id: Optional[str] = None,
     is_dm: Optional[bool] = None,
+    representative_agent_id: Optional[str] = None,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -192,6 +198,10 @@ async def list_rooms(
     bound to (§11.5 "다른 룸 조회 ❌"). Registered users still see
     the full tree the endpoint used to return — project-/dm-level
     filtering is unchanged.
+
+    #237 — ``representative_agent_id`` filters to rooms that belong
+    to a specific agent. Combined with ``is_dm=true`` this returns the
+    caller's full DM list for that agent (sidebar multi-DM view).
     """
     query = select(Room)
     if identity.kind == "guest" and isinstance(identity.claims, GuestClaims):
@@ -203,6 +213,8 @@ async def list_rooms(
         query = query.where(Room.project_id == project_id)
     if is_dm is not None:
         query = query.where(Room.is_dm == is_dm)
+    if representative_agent_id is not None:
+        query = query.where(Room.representative_agent_id == representative_agent_id)
     query = query.order_by(Room.created_at)
     result = await db.execute(query)
     rooms = list(result.scalars().all())
@@ -244,6 +256,7 @@ async def list_rooms(
                 context_window_enabled=r.context_window_enabled,
                 speaker_strategy=r.speaker_strategy,
                 orchestrator_agent_id=r.orchestrator_agent_id,
+                ephemeral=r.ephemeral,
             )
         )
     return out
@@ -356,6 +369,7 @@ async def get_room(
         context_window_enabled=room.context_window_enabled,
         speaker_strategy=room.speaker_strategy,
         orchestrator_agent_id=room.orchestrator_agent_id,
+        ephemeral=room.ephemeral,
         participants=participant_outs,
     )
 
@@ -563,6 +577,10 @@ class RoomUpdate(BaseModel):
     # "don't touch" following the context_window pattern above.
     speaker_strategy: str | None = None
     orchestrator_agent_id: str | None = None
+    # #237 — ephemeral toggle. For DM rooms any member (the DM owner)
+    # can flip this; for non-DM rooms admin required. ``None`` means
+    # "don't touch" following the context_window pattern above.
+    ephemeral: bool | None = None
 
 
 # Strategy names accepted by the dispatcher in
@@ -628,6 +646,39 @@ async def update_room(
                 ),
             )
 
+    # #237 — ephemeral toggle: DM owner can toggle their own DM;
+    # admin can toggle any room. "DM owner" = user participant of the
+    # DM room. Non-DM rooms fall back to admin-only to match the
+    # ``context_window_enabled`` trust tier.
+    if body.ephemeral is not None:
+        is_admin = (
+            identity.kind == "user"
+            and identity.claims is not None
+            and getattr(identity.claims, "is_admin", False)
+        )
+        if not is_admin:
+            if not room.is_dm:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Admin required to toggle ephemeral on non-DM rooms",
+                )
+            # DM room: caller must be a participant (owner or member).
+            if identity.kind != "user":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only room members can toggle ephemeral on a DM",
+                )
+            part_stmt = select(Participant).where(
+                Participant.room_id == room_id,
+                Participant.user_id == identity.id,
+            )
+            part = (await db.execute(part_stmt)).scalar_one_or_none()
+            if part is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Only room members can toggle ephemeral on a DM",
+                )
+
     if body.speaker_strategy is not None:
         if body.speaker_strategy not in _VALID_SPEAKER_STRATEGIES:
             raise HTTPException(
@@ -665,6 +716,8 @@ async def update_room(
         room.speaker_strategy = body.speaker_strategy
     if body.orchestrator_agent_id is not None:
         room.orchestrator_agent_id = body.orchestrator_agent_id
+    if body.ephemeral is not None:
+        room.ephemeral = body.ephemeral
     await db.commit()
     await db.refresh(room)
 
@@ -678,6 +731,7 @@ async def update_room(
         body.speaker_strategy is not None
         or body.orchestrator_agent_id is not None
         or body.context_window_enabled is not None
+        or body.ephemeral is not None
     )
     if settings_touched:
         manager = getattr(request.app.state, "connection_manager", None)
@@ -689,6 +743,7 @@ async def update_room(
                 speaker_strategy=body.speaker_strategy,
                 orchestrator_agent_id=body.orchestrator_agent_id,
                 context_window_enabled=body.context_window_enabled,
+                ephemeral=body.ephemeral,
             )
             await manager.broadcast(room_id, frame)
     return room

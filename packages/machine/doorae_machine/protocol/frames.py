@@ -40,6 +40,12 @@ class SyncDesiredStateFrame(BaseModel):
     files: dict[str, str] = Field(default_factory=dict)
     engine_secrets: dict[str, str] = Field(default_factory=dict)
 
+    # Issue #237 — per-agent long-term memory scratchpad (markdown).
+    # The cluster ships the DB snapshot here and the machine materializes
+    # it into ``<agent_dir>/memory/notes.md``. Default None preserves
+    # pre-#237 compatibility — older servers simply omit the field.
+    memory_md: str | None = None
+
     # Per-agent reasoning effort (low/medium/high/etc — engine-dependent)
     reasoning_effort: str | None = None
 
@@ -190,11 +196,27 @@ class RequestReplacementFrame(BaseModel):
     reason: str = ""
 
 
+class AgentMemoryUpdateFrame(BaseModel):
+    """Machine reports that an agent's ``memory/notes.md`` changed.
+
+    #237 — the file is the runtime truth; the cluster stores a snapshot
+    in ``agents.memory_md`` so the memory survives restart / machine
+    move. The machine watches the file (mtime/hash) and sends this
+    frame on change + graceful shutdown. Cluster-side handler is
+    idempotent: it simply overwrites the DB column.
+    """
+
+    type: Literal["agent_memory_update"] = "agent_memory_update"
+    agent_id: str
+    memory_md: str
+
+
 MachineFrame = Union[
     RegisterFrame,
     ReportActualStateFrame,
     TokenRequestFrame,
     RequestReplacementFrame,
+    AgentMemoryUpdateFrame,
 ]
 
 

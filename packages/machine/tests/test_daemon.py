@@ -1144,3 +1144,100 @@ class TestReconnection:
 
         # Should have attempted to connect 3 times (2 OSError + 1 CancelledError)
         assert connect_count == 3
+
+
+class TestMemorySyncBack237:
+    """Issue #237 — daemon emits ``agent_memory_update`` frames when
+    ``memory/notes.md`` changes for any running agent.
+    """
+
+    async def test_emits_memory_update_on_first_observation(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """First time we see a non-empty memory file we ship it."""
+        sent = _capture_ws(daemon)
+
+        # Lay down a file as if the spawner had materialized it.
+        agent_root = tmp_path / "a1"
+        (agent_root / "memory").mkdir(parents=True)
+        (agent_root / "memory" / "notes.md").write_text("remember this")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "agent_memory_update" in types
+        memory_frame = next(f for f in sent if f["type"] == "agent_memory_update")
+        assert memory_frame["agent_id"] == "a1"
+        assert memory_frame["memory_md"] == "remember this"
+
+    async def test_skips_unchanged_memory_on_next_tick(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """The hash cache suppresses repeat frames when the file body
+        is identical to the last observation."""
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "a1"
+        (agent_root / "memory").mkdir(parents=True)
+        (agent_root / "memory" / "notes.md").write_text("same")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+        first = sum(1 for f in sent if f.get("type") == "agent_memory_update")
+        await daemon._report_actual_state()
+        second = sum(1 for f in sent if f.get("type") == "agent_memory_update")
+        assert first == 1
+        assert second == 1  # no new frame
+
+    async def test_emits_new_frame_when_body_changes(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "a1"
+        notes = agent_root / "memory" / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("v1")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+        notes.write_text("v2 with more content")
+        await daemon._report_actual_state()
+
+        memory_frames = [f for f in sent if f.get("type") == "agent_memory_update"]
+        assert len(memory_frames) == 2
+        assert memory_frames[0]["memory_md"] == "v1"
+        assert memory_frames[1]["memory_md"] == "v2 with more content"
+
+    async def test_missing_file_is_silent(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """Agents spawned pre-#237 (no memory directory yet) don't
+        emit spurious frames — the guard skips when the file is absent."""
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "empty"
+        agent_root.mkdir()
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+
+        memory_frames = [f for f in sent if f.get("type") == "agent_memory_update"]
+        assert memory_frames == []

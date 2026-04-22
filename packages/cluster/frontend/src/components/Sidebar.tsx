@@ -888,6 +888,37 @@ function RoomTreeNodeView({
  * coupling them would force one site's ``onChange`` shape onto the
  * other. See plan §3.2 decision 2 for the full rationale.
  */
+// #237 — user-scoped localStorage for per-agent DM tree expansion.
+// Pattern borrowed from #234's topology layout hook — same try/catch
+// shield so Safari private mode doesn't blow up the sidebar.
+function loadExpandedAgents(userId: string | undefined): Set<string> {
+  if (!userId) return new Set()
+  try {
+    const raw = localStorage.getItem(`doorae_expanded_agents_v1_${userId}`)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return new Set()
+    return new Set(parsed.filter((v): v is string => typeof v === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExpandedAgents(
+  userId: string | undefined,
+  expanded: Set<string>,
+): void {
+  if (!userId) return
+  try {
+    localStorage.setItem(
+      `doorae_expanded_agents_v1_${userId}`,
+      JSON.stringify([...expanded]),
+    )
+  } catch {
+    /* private-mode: swallow */
+  }
+}
+
 function AgentDMListAdmin({
   dms,
   selectedRoom,
@@ -907,7 +938,52 @@ function AgentDMListAdmin({
     fetchAttachedSkills,
     fetchSkillPreview,
   } = useAgents()
-  const { fetchAgentDMs } = useRooms()
+  const { fetchAgentDMs, createAgentDM } = useRooms()
+  const { user } = useAuth()
+  const userId = user?.id
+
+  // #237 — track which agent rows have their DM tree expanded.
+  // Populated lazily from localStorage on mount so the state persists
+  // across page reloads per-user (mirroring #234 topology pattern).
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(
+    () => loadExpandedAgents(userId),
+  )
+  useEffect(() => {
+    setExpandedAgents(loadExpandedAgents(userId))
+  }, [userId])
+
+  const toggleExpanded = useCallback(
+    (agentId: string) => {
+      setExpandedAgents(prev => {
+        const next = new Set(prev)
+        if (next.has(agentId)) next.delete(agentId)
+        else next.add(agentId)
+        saveExpandedAgents(userId, next)
+        return next
+      })
+    },
+    [userId],
+  )
+
+  const handleCreateDM = useCallback(
+    async (agentId: string) => {
+      try {
+        const room = await createAgentDM(agentId)
+        // Auto-expand the agent tree when a new DM is added so the
+        // user sees the freshly created row without a second click.
+        setExpandedAgents(prev => {
+          const next = new Set(prev)
+          next.add(agentId)
+          saveExpandedAgents(userId, next)
+          return next
+        })
+        onGo(`/rooms/${room.id}`)
+      } catch (e) {
+        console.warn('createAgentDM failed', e)
+      }
+    },
+    [createAgentDM, onGo, userId],
+  )
 
   // Per-row dialogs — mirrors AdminMachines.tsx state shape so the
   // #158 — collapsed into a single settings dialog. ``settingsAgent``
@@ -952,58 +1028,115 @@ function AgentDMListAdmin({
     }
   }
 
+  // #237 — group DMs by agent. Each agent's DM list is sorted by
+  // name so the ordering stays stable across re-renders. Orphan
+  // DMs (where ``findAgentForDM`` can't resolve a matching agent
+  // row) fall into a separate "unowned" bucket rendered at the end.
+  const grouped = useMemo(() => {
+    const byAgent = new Map<string, { agent: Agent; dms: Room[] }>()
+    const orphans: Room[] = []
+    for (const dm of dms) {
+      const agent = findAgentForDM(dm, agents)
+      if (!agent) {
+        orphans.push(dm)
+        continue
+      }
+      const bucket = byAgent.get(agent.id)
+      if (bucket) bucket.dms.push(dm)
+      else byAgent.set(agent.id, { agent, dms: [dm] })
+    }
+    for (const { dms: list } of byAgent.values()) {
+      list.sort((a, b) => a.name.localeCompare(b.name))
+    }
+    return { byAgent, orphans }
+  }, [dms, agents])
+
   return (
     <div className="flex flex-col gap-0.5">
-      {dms.map(dm => {
-        const agent = findAgentForDM(dm, agents)
-        const online = deriveAgentOnline(agent?.actual_state)
-        const label = dm.name.replace(/^DM:\s*/, '')
-        const isSelected = selectedRoom === dm.id
+      {[...grouped.byAgent.values()].map(({ agent, dms: agentDms }) => {
+        const online = deriveAgentOnline(agent.actual_state)
+        // Adaptive: single-DM agents render inline without a toggle
+        // chevron (plan §3.2 decision 5). Two+ DMs render a collapsible
+        // tree with the DM list underneath.
+        const hasMultipleDMs = agentDms.length > 1
+        const isExpanded = !hasMultipleDMs || expandedAgents.has(agent.id)
+        // For single-DM agents the row itself navigates to the DM so
+        // the clickable area feels identical to the pre-#237 behaviour.
+        // For multi-DM agents the row toggles expansion and the DM
+        // children are the click targets.
+        const soloDM = !hasMultipleDMs ? agentDms[0] : null
+        const soloIsSelected = soloDM ? selectedRoom === soloDM.id : false
         return (
-          <div
-            key={dm.id}
-            // ``group`` + ``has-[[aria-expanded=true]]:...`` keeps the
-            // menu trigger visible while the popover is open even if
-            // the user moves the pointer off the row. Same pattern as
-            // PinnedRoomItem's unpin handle.
-            className={`group relative flex w-full items-center rounded-[var(--radius-sm)] transition-colors ${
-              isSelected
-                ? 'bg-white shadow-whisper'
-                : 'hover:bg-black/5'
-            }`}
-          >
-            <button
-              onClick={() => onGo(`/rooms/${dm.id}`)}
-              data-testid={`sidebar-dm-${dm.id}`}
-              className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                isSelected
-                  ? 'text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
+          <div key={agent.id} className="flex flex-col">
+            <div
+              className={`group relative flex w-full items-center rounded-[var(--radius-sm)] transition-colors ${
+                soloIsSelected
+                  ? 'bg-white shadow-whisper'
+                  : 'hover:bg-black/5'
               }`}
             >
-              <EntityAvatar
-                id={agent?.id ?? dm.representative_agent_id ?? dm.id}
-                name={agent?.name ?? label}
-                kind="agent"
-                engine={agent?.engine}
-                size="xs"
-                avatarKind={
-                  (agent?.avatar_kind as AvatarKind | null | undefined) ?? null
+              <button
+                onClick={() => {
+                  if (soloDM) onGo(`/rooms/${soloDM.id}`)
+                  else toggleExpanded(agent.id)
+                }}
+                data-testid={
+                  soloDM
+                    ? `sidebar-dm-${soloDM.id}`
+                    : `sidebar-agent-${agent.id}`
                 }
-                avatarValue={agent?.avatar_value ?? null}
-              />
-              <PresenceDot
-                variant="agent"
-                online={online}
-                agentState={agent?.actual_state}
-              />
-              <span className="truncate">{label}</span>
-            </button>
-            {agent && (
+                className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                  soloIsSelected
+                    ? 'text-[var(--color-foreground)]'
+                    : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
+                }`}
+              >
+                {hasMultipleDMs ? (
+                  isExpanded ? (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  )
+                ) : null}
+                <EntityAvatar
+                  id={agent.id}
+                  name={agent.name}
+                  kind="agent"
+                  engine={agent.engine}
+                  size="xs"
+                  avatarKind={
+                    (agent.avatar_kind as AvatarKind | null | undefined) ?? null
+                  }
+                  avatarValue={agent.avatar_value ?? null}
+                />
+                <PresenceDot
+                  variant="agent"
+                  online={online}
+                  agentState={agent.actual_state}
+                />
+                <span className="truncate">{agent.name}</span>
+                {hasMultipleDMs && (
+                  <span className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)]">
+                    {agentDms.length}
+                  </span>
+                )}
+              </button>
               <span
                 className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
-                data-testid={`sidebar-dm-actions-${dm.id}`}
+                data-testid={`sidebar-agent-actions-${agent.id}`}
               >
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleCreateDM(agent.id)
+                  }}
+                  title="새 대화"
+                  aria-label="새 대화"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/10 hover:text-[var(--color-foreground)]"
+                  data-testid={`sidebar-new-dm-${agent.id}`}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
                 <AgentSettingsMenu
                   onOpenSettings={() => handleOpenSettings(agent.id)}
                   onDelete={() => { void handleDeleteAgent(agent.id) }}
@@ -1018,8 +1151,63 @@ function AgentDMListAdmin({
                   }
                 />
               </span>
+            </div>
+            {hasMultipleDMs && isExpanded && (
+              <div className="ml-5 flex flex-col gap-0.5 border-l border-black/5 pl-1.5">
+                {agentDms.map(dm => {
+                  const isSel = selectedRoom === dm.id
+                  const label = dm.name.replace(/^DM:\s*/, '')
+                  return (
+                    <button
+                      key={dm.id}
+                      onClick={() => onGo(`/rooms/${dm.id}`)}
+                      data-testid={`sidebar-dm-${dm.id}`}
+                      className={`flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-[13px] font-medium transition-colors ${
+                        isSel
+                          ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                          : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                      }`}
+                    >
+                      <MessageSquare className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{label}</span>
+                      {dm.ephemeral && (
+                        <span
+                          className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
+                          title="임시 세션 — 장기 기억에 저장되지 않습니다"
+                        >
+                          임시
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
             )}
           </div>
+        )
+      })}
+      {grouped.orphans.map(dm => {
+        const isSel = selectedRoom === dm.id
+        const label = dm.name.replace(/^DM:\s*/, '')
+        return (
+          <button
+            key={dm.id}
+            onClick={() => onGo(`/rooms/${dm.id}`)}
+            data-testid={`sidebar-dm-${dm.id}`}
+            className={`flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+              isSel
+                ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+            }`}
+          >
+            <EntityAvatar
+              id={dm.representative_agent_id ?? dm.id}
+              name={label}
+              kind="agent"
+              size="xs"
+            />
+            <span className="truncate">{label}</span>
+          </button>
         )
       })}
 

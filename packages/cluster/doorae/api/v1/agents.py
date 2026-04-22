@@ -88,6 +88,13 @@ class AgentUpdate(BaseModel):
     # rename PATCH can't silently reset the flag back to False.
     context_window_opt_out: Optional[bool] = None
     context_window_opt_out_set: bool = False
+    # Issue #237 — admin editable memory_md. Same ``_set`` flag pattern
+    # as ``agents_md``: explicit opt-in lets an admin clear the field
+    # (send ``memory_md=None, memory_md_set=True``) while omitting the
+    # field leaves the stored value untouched. Machine-level syncs
+    # write here too (machine -> DB flush on file change).
+    memory_md: Optional[str] = None
+    memory_md_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -120,6 +127,12 @@ class AgentOut(BaseModel):
     # will wire this into the spawn path so agents actually honour
     # the flag at runtime.
     context_window_opt_out: bool = False
+    # Issue #237 — per-agent long-term memory snapshot (markdown). None
+    # for agents that have never written anything; the file at
+    # ``~/.doorae/agents/<id>/memory/notes.md`` on the hosting machine
+    # is the runtime truth. Exposed so the admin UI can render / edit
+    # the scratchpad.
+    memory_md: Optional[str] = None
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -213,10 +226,15 @@ async def create_agent(
     # always arbitrary for DMs (the old "first_project" heuristic
     # had no domain meaning), and decoupling removes the data-loss
     # foot-gun for admins.
+    # #237 — stamp ``representative_agent_id`` so the per-agent DM
+    # list endpoint (``GET /api/v1/rooms?is_dm=true&representative_agent_id=<id>``)
+    # can fan out to every DM an agent owns, not just the auto-created
+    # first one.
     dm_room = Room(
         project_id=None,
         name=f"DM: {agent.name}",
         is_dm=True,
+        representative_agent_id=agent.id,
     )
     db.add(dm_room)
     await db.flush()
@@ -294,6 +312,14 @@ async def update_agent(
         # restart. Counted as non_avatar_changed so the existing
         # generation-bump path handles the respawn.
         agent.context_window_opt_out = bool(body.context_window_opt_out)
+        non_avatar_changed = True
+    if body.memory_md_set:
+        # #237 — admin manually edited the memory scratchpad. This
+        # becomes the new DB-side snapshot; the next spawn / resume
+        # will materialize it to ``memory/notes.md`` on the hosting
+        # machine. Counted as non_avatar_changed so the restart
+        # picks up the new content.
+        agent.memory_md = body.memory_md
         non_avatar_changed = True
 
     if non_avatar_changed or avatar_changed:
@@ -438,6 +464,25 @@ async def list_agents(
     """List all agents."""
     result = await db.execute(select(Agent).order_by(Agent.created_at))
     return list(result.scalars().all())
+
+
+@router.get("/{agent_id}", response_model=AgentOut)
+async def get_agent(
+    agent_id: str,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a single agent by id.
+
+    #237 surfaced the need for a single-agent read path so the admin UI
+    can fetch ``memory_md`` in isolation. The same endpoint also keeps
+    callers from having to scan ``list_agents`` for one row.
+    """
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
 
 
 class EngineInfo(BaseModel):
@@ -777,6 +822,115 @@ async def remove_agent_room(
             await lifecycle.request_stop(agent.id)
 
     return {"removed": True}
+
+
+# ── Per-agent DMs (#237) ────────────────────────────────────────────
+#
+# The admin UI's sidebar renders a tree ``Agent → DM[]`` so users can
+# split a long-running conversation into multiple rooms (cold-start
+# SDK sessions per room). Each DM is a normal ``Room`` with
+# ``is_dm=True`` and ``representative_agent_id`` pointing at the
+# agent, plus two Participant rows (caller + agent). Creation is
+# triggered by the sidebar's "+ 새 대화" button in the AgentNode.
+
+
+class AgentDMCreate(BaseModel):
+    """Body for ``POST /agents/{id}/dms``.
+
+    ``name`` is optional — if the caller omits it the server mints
+    ``"DM: <agent.name> #<N>"`` where N is the count of the caller's
+    existing DMs with this agent + 1. Always returning a unique name
+    keeps the sidebar reading cleanly when it renders the tree.
+    """
+
+    name: Optional[str] = None
+
+
+@router.post("/{agent_id}/dms", status_code=status.HTTP_201_CREATED)
+async def create_agent_dm(
+    agent_id: str,
+    body: AgentDMCreate,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a new DM room bound to ``agent_id``.
+
+    Mirrors the auto-DM path in ``create_agent`` but never consults /
+    reuses an existing DM: each call yields a fresh room with a fresh
+    SDK session. The caller is added as ``owner`` so they can later
+    toggle ephemeral / rename / delete without needing the global
+    admin claim.
+
+    Returns the room payload in the same shape the sidebar expects
+    (matches ``RoomOut`` shape). ``representative_agent_id`` is always
+    populated so the list filter at
+    ``GET /api/v1/rooms?is_dm=true&representative_agent_id=<id>`` picks
+    it up immediately.
+    """
+    result = await db.execute(select(Agent).where(Agent.id == agent_id))
+    agent = result.scalar_one_or_none()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Auto-name from existing DM count when caller omits ``name``.
+    if body.name:
+        dm_name = body.name
+    else:
+        existing = (
+            await db.execute(
+                select(Room)
+                .where(Room.is_dm.is_(True))
+                .where(Room.representative_agent_id == agent_id)
+                .join(Participant, Participant.room_id == Room.id)
+                .where(Participant.user_id == identity.id)
+            )
+        ).scalars().all()
+        dm_name = f"DM: {agent.name} #{len(existing) + 1}"
+
+    room = Room(
+        project_id=None,
+        name=dm_name,
+        is_dm=True,
+        representative_agent_id=agent_id,
+    )
+    db.add(room)
+    await db.flush()
+    db.add(Participant(room_id=room.id, user_id=identity.id, role="owner"))
+    await db.flush()
+
+    # Register the agent as a participant via the shared helper so the
+    # JoinRoomOut frame fires (same invariant ``create_agent`` relies
+    # on — the helper adds the row idempotently).
+    manager = getattr(request.app.state, "connection_manager", None)
+    await ensure_agent_in_room(
+        db,
+        manager,
+        room_id=room.id,
+        agent_id=agent_id,
+        role="member",
+    )
+
+    # Re-dispatch lifecycle so the machine picks up the new room.
+    lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    if lifecycle is not None:
+        await lifecycle.on_room_added(agent_id)
+
+    await db.commit()
+    await db.refresh(room)
+    return {
+        "id": room.id,
+        "project_id": room.project_id,
+        "name": room.name,
+        "description": room.description,
+        "parent_room_id": room.parent_room_id,
+        "is_dm": room.is_dm,
+        "representative_agent_id": room.representative_agent_id,
+        "context_window_enabled": room.context_window_enabled,
+        "speaker_strategy": room.speaker_strategy,
+        "orchestrator_agent_id": room.orchestrator_agent_id,
+        "ephemeral": room.ephemeral,
+    }
 
 
 # ── Activity log ───────────────────────────────────────────────────

@@ -199,6 +199,17 @@ class CodexAdapter(EngineAdapter):
         # ``codex.options`` submodule. Stays ``None`` until ``start()``
         # succeeds.
         self._thread_options_cls: Any = None
+        # #237 — owning client reference for the memory / ephemeral
+        # suffix. Wired in ``integrate_with_codex``; tests that bypass
+        # the integration factory leave it None and the suffix helper
+        # degrades to an empty string.
+        self._client: Any = None
+        # Track which threads have already received the memory /
+        # ephemeral header. Codex threads persist history natively, so
+        # we only inject the block on the first turn of each thread —
+        # re-sending every turn would pollute the conversation with
+        # duplicate "policy" text.
+        self._memory_injected: set[str] = set()
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
@@ -292,6 +303,19 @@ class CodexAdapter(EngineAdapter):
             prefix = drain_context(self._pending_context, room_id)
             turn_content = f"{prefix}\n\n{content}" if prefix else content
 
+            # #237 — inject the memory / ephemeral block as a prompt
+            # prefix on the first turn of each room. Codex threads
+            # persist history natively so re-injecting every turn
+            # would noisily repeat the block; tracking ``_memory_injected``
+            # keeps the block as a one-shot system-prompt analogue.
+            if room_id not in self._memory_injected:
+                from doorae_agent.integrations.base import compose_memory_suffix
+
+                memory_suffix = compose_memory_suffix(self._client, room_id)
+                if memory_suffix:
+                    turn_content = f"{memory_suffix}\n\n{turn_content}"
+                self._memory_injected.add(room_id)
+
             # Issue #190 — bound the turn with an explicit timeout so
             # a stuck codex call doesn't freeze the room's WS receive
             # loop indefinitely. ``threading.Event`` implements
@@ -360,6 +384,9 @@ async def integrate_with_codex(
     Returns the adapter instance for lifecycle management.
     """
     adapter = CodexAdapter(model=model, system_prompt=system_prompt, reasoning_effort=reasoning_effort)
+    # #237 — hook client reference so Codex can pull memory / ephemeral
+    # suffix from the welcome-frame cache.
+    adapter._client = client
     await adapter.start()
 
     engine_timeout = float(

@@ -113,6 +113,25 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                 reason = data.get("reason", "")
                 await lifecycle.handle_request_replacement(machine_id, agent_id, reason)
 
+            elif frame_type == "agent_memory_update":
+                # #237 — file → DB sync. Machine observed a change in
+                # ``memory/notes.md`` and shipped the full body. We
+                # overwrite the snapshot so the next spawn's
+                # materialize-from-DB picks up the new content.
+                agent_id = data.get("agent_id", "")
+                memory_md = data.get("memory_md", "")
+                if agent_id:
+                    async with session_factory() as db:
+                        from doorae.db.models import Agent
+                        from sqlalchemy import update
+
+                        await db.execute(
+                            update(Agent)
+                            .where(Agent.id == agent_id)
+                            .values(memory_md=memory_md)
+                        )
+                        await db.commit()
+
             else:
                 logger.warning(
                     "machine_ws.unknown_frame",

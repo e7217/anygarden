@@ -446,3 +446,47 @@ class TestParseServerFrame:
         data = {"agent_id": "agent-no-type"}
         with pytest.raises(ValueError, match="Unknown server frame type"):
             parse_server_frame(data)
+
+
+class TestMemoryFrames237:
+    """Issue #237 — SpawnManifest/SyncDesiredStateFrame carry ``memory_md``
+    through to the spawner, and machines emit ``agent_memory_update``
+    frames when the on-disk notes file changes.
+    """
+
+    def test_sync_frame_parses_memory_md(self):
+        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+
+        frame = SyncDesiredStateFrame.model_validate(
+            {
+                "type": "sync_desired_state",
+                "agent_id": "a1",
+                "desired_state": "running",
+                "generation": 1,
+                "engine": "codex",
+                "memory_md": "## Note\nremember me",
+            }
+        )
+        assert frame.memory_md == "## Note\nremember me"
+
+    def test_sync_frame_memory_md_defaults_to_none(self):
+        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+
+        frame = SyncDesiredStateFrame.model_validate(
+            {
+                "type": "sync_desired_state",
+                "agent_id": "a1",
+                "desired_state": "running",
+                "generation": 1,
+            }
+        )
+        assert frame.memory_md is None
+
+    def test_agent_memory_update_frame_serialises(self):
+        from doorae_machine.protocol.frames import AgentMemoryUpdateFrame
+
+        frame = AgentMemoryUpdateFrame(agent_id="a1", memory_md="hello")
+        payload = frame.model_dump()
+        assert payload["type"] == "agent_memory_update"
+        assert payload["agent_id"] == "a1"
+        assert payload["memory_md"] == "hello"

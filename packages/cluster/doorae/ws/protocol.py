@@ -236,6 +236,17 @@ class WelcomeOut(BaseModel):
     # Defaults to an empty list so pre-#221 clients see no change in
     # semantics when the server is rolled forward first.
     participants: list[ParticipantBrief] = []
+    # Issue #237 — ephemeral toggle: when True the agent's system
+    # prompt gets a directive to skip writing to memory/notes.md.
+    # Trust-model signal (see plan §3.2 decision 3). Default False
+    # keeps existing welcome frames unchanged for non-ephemeral rooms.
+    ephemeral: bool = False
+    # Issue #237 — the per-agent long-term memory snapshot (markdown).
+    # Populated from ``agents.memory_md`` when the WS session belongs to
+    # an agent; None for user/guest connections or agents with empty
+    # memory. The SDK stamps this into the engine adapter's system
+    # prompt via ``compose_memory_block``.
+    memory_md: Optional[str] = None
 
 
 class RoomSettingsChangedOut(BaseModel):
@@ -256,6 +267,9 @@ class RoomSettingsChangedOut(BaseModel):
     speaker_strategy: Optional[str] = None
     orchestrator_agent_id: Optional[str] = None
     context_window_enabled: Optional[bool] = None
+    # #237 — ephemeral mode toggle. None means "not part of this PATCH"
+    # so other setting fields aren't implicitly reset on receivers.
+    ephemeral: Optional[bool] = None
 
 
 class ErrorOut(BaseModel):

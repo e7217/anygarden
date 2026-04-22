@@ -76,6 +76,45 @@ class EngineAdapter(ABC):
         return
 
 
+def compose_memory_suffix(
+    client: "ChatClient | None",
+    room_id: str | None,
+) -> str:
+    """Shared helper — assemble the cross-engine memory / ephemeral block.
+
+    Issue #237 — three engine adapters (Claude Code, Codex, Gemini CLI)
+    all inject the same memory / ephemeral instructions into their
+    respective system prompts. Centralising the read-from-client and
+    ``compose_memory_block`` call here avoids duplicated logic and
+    ensures all engines see the same content.
+
+    Returns an empty string when the client is absent or the welcome
+    frame has not arrived yet — adapters concatenate the result so a
+    leading newline is only emitted when the block is non-empty.
+    """
+    if client is None:
+        return ""
+
+    # Both attributes are populated by the welcome frame handler in
+    # ``doorae_agent.client``. Fall back defensively so pre-#237 clients
+    # stay source-compatible.
+    memory_md = getattr(client, "_memory_md", None)
+    room_ephemeral_map = getattr(client, "_room_ephemeral", {}) or {}
+    ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
+
+    # Skip the suffix entirely when the welcome frame carried neither
+    # memory content nor an ephemeral flag — pre-#237 servers don't
+    # stamp these fields, and adding a boilerplate block to every
+    # legacy prompt would be surprising. The explicit policy kicks in
+    # once an agent actually has memory or the room is ephemeral.
+    if not memory_md and not ephemeral:
+        return ""
+
+    from doorae_agent.memory import compose_memory_block
+
+    return compose_memory_block(memory_md, ephemeral)
+
+
 def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     """Unified 3-state gate: how should the agent handle this message?
 

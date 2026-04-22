@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Hash, Users, Menu, ChevronLeft } from 'lucide-react'
+import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -68,6 +68,13 @@ interface RoomHeaderProps {
   onDeleteRoom?: () => void
   onOpenSidebar?: () => void
   onToggleParticipants?: () => void
+  /** #237 — ephemeral mode state + toggle. ``undefined`` hides the
+   *  control (non-DM rooms, or the caller didn't wire it yet).
+   *  DM owners and admins may flip the flag; other members should
+   *  receive ``undefined`` for ``onToggleEphemeral`` so the icon
+   *  renders read-only. */
+  ephemeral?: boolean
+  onToggleEphemeral?: (next: boolean) => void
 }
 
 /**
@@ -109,6 +116,8 @@ export default function RoomHeader({
   onDeleteRoom,
   onOpenSidebar,
   onToggleParticipants,
+  ephemeral,
+  onToggleEphemeral,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
   const hasParent = parentBreadcrumb && parentBreadcrumb.length > 0
@@ -203,6 +212,33 @@ export default function RoomHeader({
               </option>
             ))}
           </select>
+        )}
+        {isDm && onToggleEphemeral !== undefined && (
+          /* #237 — ephemeral toggle. Active state uses the Notion
+             Blue accent per DESIGN.md §2; inactive stays near-black
+             ghost-button to match the surrounding icon buttons. */
+          <button
+            type="button"
+            onClick={() => onToggleEphemeral(!ephemeral)}
+            title={
+              ephemeral
+                ? '임시 세션: 장기 기억(memory/notes.md)에 기록하지 않습니다. 클릭으로 해제'
+                : '임시 세션으로 전환'
+            }
+            aria-pressed={!!ephemeral}
+            data-testid="room-header-ephemeral-toggle"
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
+              ephemeral
+                ? 'bg-[#0075de] text-white hover:bg-[#0068c4]'
+                : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+            }`}
+          >
+            {ephemeral ? (
+              <EyeOff className="h-4 w-4" />
+            ) : (
+              <Eye className="h-4 w-4" />
+            )}
+          </button>
         )}
         <Badge variant={connected ? 'default' : 'destructive'}>
           <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
