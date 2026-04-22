@@ -102,17 +102,32 @@ def compose_memory_suffix(
     room_ephemeral_map = getattr(client, "_room_ephemeral", {}) or {}
     ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
 
-    # Skip the suffix entirely when the welcome frame carried neither
-    # memory content nor an ephemeral flag — pre-#237 servers don't
-    # stamp these fields, and adding a boilerplate block to every
-    # legacy prompt would be surprising. The explicit policy kicks in
-    # once an agent actually has memory or the room is ephemeral.
-    if not memory_md and not ephemeral:
+    # #246 — room shared files live under ``<agent_root>/memory/shared``.
+    # The agent process runs with its agent dir as cwd (see spawner
+    # convention), so ``Path.cwd()`` gets us there without threading
+    # a dedicated field through ``ChatClient``.
+    from pathlib import Path
+
+    from doorae_agent.memory import (
+        compose_memory_block,
+        compose_shared_context_block,
+    )
+
+    shared_block = compose_shared_context_block(
+        Path.cwd() / "memory" / "shared"
+    )
+
+    # Skip the suffix entirely when nothing would be rendered — keeping
+    # pre-#237 / pre-#246 prompts byte-for-byte identical in that case.
+    if not memory_md and not ephemeral and not shared_block:
         return ""
 
-    from doorae_agent.memory import compose_memory_block
-
-    return compose_memory_block(memory_md, ephemeral)
+    memory_block = (
+        compose_memory_block(memory_md, ephemeral)
+        if (memory_md or ephemeral)
+        else ""
+    )
+    return memory_block + shared_block
 
 
 def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:

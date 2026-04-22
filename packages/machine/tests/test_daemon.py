@@ -1241,3 +1241,182 @@ class TestMemorySyncBack237:
 
         memory_frames = [f for f in sent if f.get("type") == "agent_memory_update"]
         assert memory_frames == []
+
+
+# ── Room shared file handlers (#246) ──────────────────────────────────
+
+
+class TestSharedFileHandlers:
+    """Server→machine shared file frames materialize files under
+    ``<agent_root>/memory/shared/``. The handlers are idempotent — the
+    server retransmits during reconnect/backfill and must not clobber
+    identical payloads — and they never touch ``notes.md``.
+    """
+
+    async def test_write_creates_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        frame = AgentMemorySharedFileWriteFrame(
+            agent_id="a1",
+            storage_name="spec.md",
+            content="hello\n",
+            content_sha256="irrelevant-tests-compute-their-own",
+        )
+        await daemon._handle_agent_memory_shared_file_write(frame)
+
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        assert shared_file.read_text() == "hello\n"
+
+    async def test_write_skips_when_hash_matches(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """A second write with the same sha256 must not rewrite the
+        file. Observed via mtime: a rewrite would bump it."""
+        import hashlib
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        content = "hello\n"
+        sha = hashlib.sha256(content.encode()).hexdigest()
+        frame = AgentMemorySharedFileWriteFrame(
+            agent_id="a1",
+            storage_name="spec.md",
+            content=content,
+            content_sha256=sha,
+        )
+
+        await daemon._handle_agent_memory_shared_file_write(frame)
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        first_mtime = shared_file.stat().st_mtime_ns
+
+        # Force a detectable mtime bump if a rewrite actually happens.
+        # ``os.utime`` rewinds the clock so any real write would move
+        # it forward past the set value.
+        import os
+
+        os.utime(shared_file, ns=(0, 0))
+        rewound_mtime = shared_file.stat().st_mtime_ns
+
+        await daemon._handle_agent_memory_shared_file_write(frame)
+        after_mtime = shared_file.stat().st_mtime_ns
+
+        # Didn't rewrite → mtime stays at the rewound value.
+        assert after_mtime == rewound_mtime
+        assert first_mtime != rewound_mtime  # sanity check for rewind
+
+    async def test_write_overwrites_when_hash_changes(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        import hashlib
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        first = "hello\n"
+        second = "goodbye\n"
+        for content in (first, second):
+            sha = hashlib.sha256(content.encode()).hexdigest()
+            await daemon._handle_agent_memory_shared_file_write(
+                AgentMemorySharedFileWriteFrame(
+                    agent_id="a1",
+                    storage_name="spec.md",
+                    content=content,
+                    content_sha256=sha,
+                )
+            )
+
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        assert shared_file.read_text() == second
+
+    async def test_delete_removes_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        shared_dir = agent_root / "memory" / "shared"
+        shared_dir.mkdir(parents=True)
+        (shared_dir / "spec.md").write_text("x")
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle_agent_memory_shared_file_delete(
+            AgentMemorySharedFileDeleteFrame(
+                agent_id="a1", storage_name="spec.md"
+            )
+        )
+        assert not (shared_dir / "spec.md").exists()
+
+    async def test_delete_missing_is_noop(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from doorae_machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        # Must not raise.
+        await daemon._handle_agent_memory_shared_file_delete(
+            AgentMemorySharedFileDeleteFrame(
+                agent_id="a1", storage_name="nope.md"
+            )
+        )
+
+    async def test_handle_dispatches_shared_write(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """``_handle`` must route the new frame types through to their
+        handlers — otherwise the daemon silently drops them."""
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle(
+            {
+                "type": "agent_memory_shared_file_write",
+                "agent_id": "a1",
+                "storage_name": "spec.md",
+                "content": "x",
+                "content_sha256": "h",
+            }
+        )
+        assert (agent_root / "memory" / "shared" / "spec.md").read_text() == "x"
+
+    async def test_handle_dispatches_shared_delete(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "agent-a"
+        shared_dir = agent_root / "memory" / "shared"
+        shared_dir.mkdir(parents=True)
+        (shared_dir / "spec.md").write_text("x")
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle(
+            {
+                "type": "agent_memory_shared_file_delete",
+                "agent_id": "a1",
+                "storage_name": "spec.md",
+            }
+        )
+        assert not (shared_dir / "spec.md").exists()

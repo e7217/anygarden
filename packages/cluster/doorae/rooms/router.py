@@ -5,7 +5,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,19 +22,25 @@ from sqlalchemy.orm import selectinload
 
 from doorae.api.v1.invites import _require_room_admin_or_owner
 from doorae.auth.dependencies import Identity, GuestClaims
-from doorae.db.models import Agent, Participant, Room, User
+from doorae.db.models import Agent, Participant, Room, RoomSharedFile, User
 from doorae.dependencies import (
     forbid_guest,
     get_admin_identity,
     get_current_identity,
     get_db,
 )
+from doorae.rooms import shared_files as shared_files_service
+from doorae.rooms.file_storage import FileTooLargeError
 from doorae.rooms.membership import add_user_to_room, ensure_agent_in_room
 from doorae.rooms.service import (
     archive_child_rooms,
     create_sub_room,
     reorder_pinned_rooms,
     set_room_pinned,
+)
+from doorae.rooms.shared_files import (
+    InvalidFilenameError,
+    UnsupportedMimeError,
 )
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
@@ -379,6 +394,7 @@ async def add_participant(
     room_id: str,
     body: ParticipantAdd,
     request: Request,
+    background: BackgroundTasks,
     # Mutating room membership is closed to guests. The guest flow
     # adds them via ``POST /auth/guest`` instead.
     identity: Identity = Depends(forbid_guest),
@@ -399,13 +415,21 @@ async def add_participant(
     # — see issue #50 for the history of this invariant drifting.
     manager = getattr(request.app.state, "connection_manager", None)
     if body.agent_id:
-        participant, _ = await ensure_agent_in_room(
+        participant, created = await ensure_agent_in_room(
             db,
             manager,
             room_id=room_id,
             agent_id=body.agent_id,
             role=body.role,
         )
+        # #246 — a freshly-joined agent needs the room's existing
+        # shared files materialised on its machine. Skip when the
+        # participant already existed so replays / duplicate joins
+        # don't re-emit the whole fan-out.
+        if created:
+            _schedule_shared_files_backfill(
+                request, background, room_id=room_id, agent_id=body.agent_id
+            )
         # #227 — ``ensure_agent_in_room`` delivers a JoinRoomOut best-
         # effort. When the agent's WS is not subscribed to the pid we
         # target the frame drops silently and the agent stays offline
@@ -440,6 +464,7 @@ async def remove_participant(
     room_id: str,
     participant_id: str,
     request: Request,
+    background: BackgroundTasks,
     # Guests cannot manage membership (§11.5). ``forbid_guest`` yields
     # a user or agent identity; ``_require_room_admin_or_owner`` below
     # further restricts to global admins or room admin/owner roles.
@@ -542,9 +567,24 @@ async def remove_participant(
         )
     ).scalars().all()
 
+    # Capture the removed agent's id before deletion so we can tell
+    # its machine to drop the room's shared files from
+    # ``memory/shared/`` (#246). The agent remains a participant in
+    # *other* rooms, so we only want a targeted delete — not the
+    # global ``fan_out_delete`` that blasts every participant.
+    removed_agent_id = target.agent_id
+
     # 8. Delete the row and commit.
     await db.execute(delete(Participant).where(Participant.id == target.id))
     await db.commit()
+
+    if removed_agent_id is not None:
+        _schedule_shared_files_delete_for_agent(
+            request,
+            background,
+            room_id=room_id,
+            agent_id=removed_agent_id,
+        )
 
     # 9. Broadcast ``RoomMembershipChangedOut`` to remaining subscribers.
     manager = getattr(request.app.state, "connection_manager", None)
@@ -1106,3 +1146,288 @@ async def get_room_token_stats(
         label: serialise_window(window)
         for label, window in stats.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# Room shared files (#246)
+# ---------------------------------------------------------------------------
+
+
+class RoomSharedFileOut(BaseModel):
+    id: str
+    room_id: str
+    filename: str
+    storage_name: str
+    sha256: str
+    size_bytes: int
+    mime: str
+    uploaded_by: Optional[str]
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: RoomSharedFile) -> "RoomSharedFileOut":
+        return cls(
+            id=row.id,
+            room_id=row.room_id,
+            filename=row.filename,
+            storage_name=row.storage_name,
+            sha256=row.sha256,
+            size_bytes=row.size_bytes,
+            mime=row.mime,
+            uploaded_by=row.uploaded_by,
+            created_at=row.created_at,
+        )
+
+
+def _schedule_shared_files_backfill(
+    request: Request,
+    background: BackgroundTasks,
+    *,
+    room_id: str,
+    agent_id: str,
+) -> None:
+    """Queue a ``backfill_agent`` fan-out on the BackgroundTasks stack.
+
+    Uses a short-lived session spawned from the app's session factory
+    so we don't hold the request's DB session open across the
+    fan-out — the opposite would serialise subsequent requests on
+    this transaction.
+    """
+    session_factory = getattr(request.app.state, "session_factory", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    config = getattr(request.app.state, "config", None)
+    if session_factory is None or machine_bus is None or config is None:
+        return
+
+    async def _run() -> None:
+        async with session_factory() as bg_session:
+            await shared_files_service.backfill_agent(
+                bg_session,
+                machine_bus=machine_bus,
+                room_files_dir=config.room_files_dir,
+                room_id=room_id,
+                agent_id=agent_id,
+            )
+
+    background.add_task(_run)
+
+
+def _schedule_shared_files_delete_for_agent(
+    request: Request,
+    background: BackgroundTasks,
+    *,
+    room_id: str,
+    agent_id: str,
+) -> None:
+    """Queue delete frames for every shared file in the room, targeted
+    at a single agent that's leaving the room.
+
+    Uses a dedicated session and the ``fan_out_delete`` helper's
+    machine-bus wrapper, but scoped to one agent_id so we don't nuke
+    other participants' copies of the file. The service's generic
+    ``fan_out_delete`` fans to every placed agent in the room, which
+    is the right behaviour for file-wide deletes but wrong for
+    "this one agent is leaving".
+    """
+    session_factory = getattr(request.app.state, "session_factory", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    config = getattr(request.app.state, "config", None)
+    if session_factory is None or machine_bus is None or config is None:
+        return
+
+    async def _run() -> None:
+        async with session_factory() as bg_session:
+            agent = await bg_session.get(Agent, agent_id)
+            if agent is None or agent.placed_on_machine_id is None:
+                return
+            files = await shared_files_service.list_shared_files(
+                bg_session, room_id=room_id
+            )
+            for file in files:
+                await machine_bus.send(
+                    agent.placed_on_machine_id,
+                    {
+                        "type": "agent_memory_shared_file_delete",
+                        "agent_id": agent_id,
+                        "storage_name": file.storage_name,
+                    },
+                )
+
+    background.add_task(_run)
+
+
+async def _require_room_participant(
+    room_id: str, identity: Identity, db: AsyncSession
+) -> None:
+    """Raise 403 when ``identity`` is not a participant of ``room_id``.
+
+    Global admins pass unconditionally. Guests are always rejected —
+    the shared-file feature isn't scoped to guest sessions.
+    """
+    if identity.kind == "guest":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
+        )
+    if (
+        identity.kind == "user"
+        and identity.claims is not None
+        and getattr(identity.claims, "is_admin", False)
+    ):
+        return
+
+    stmt = select(Participant).where(Participant.room_id == room_id)
+    if identity.kind == "user":
+        stmt = stmt.where(Participant.user_id == identity.id)
+    elif identity.kind == "agent":
+        stmt = stmt.where(Participant.agent_id == identity.id)
+    else:  # pragma: no cover — unknown identity kind
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
+        )
+    row = (await db.execute(stmt)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a participant of this room",
+        )
+
+
+@router.post(
+    "/{room_id}/files",
+    status_code=status.HTTP_201_CREATED,
+    response_model=RoomSharedFileOut,
+)
+async def upload_room_shared_file(
+    room_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    upload: UploadFile = File(...),
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> RoomSharedFileOut:
+    """Attach a file to the room. The bytes land on the server's disk
+    and are copy-distributed to every participating agent's
+    ``memory/shared/`` directory via a background fan-out (#246).
+
+    Same filename re-uploaded = upsert: the file's bytes are replaced
+    atomically and a fresh write-frame goes to every agent.
+    """
+    await _require_room_participant(room_id, identity, db)
+
+    room = await db.scalar(select(Room).where(Room.id == room_id))
+    if room is None:
+        raise HTTPException(status_code=404, detail="Room not found")
+
+    uploader_user_id = identity.id if identity.kind == "user" else None
+
+    config = request.app.state.config
+    machine_bus = request.app.state.machine_bus
+
+    try:
+        row = await shared_files_service.upload_file(
+            db,
+            room_files_dir=config.room_files_dir,
+            room_id=room_id,
+            uploader_user_id=uploader_user_id,
+            filename=upload.filename or "upload",
+            mime=upload.content_type or "application/octet-stream",
+            stream=upload.file,
+        )
+    except UnsupportedMimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc)
+        )
+    except InvalidFilenameError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except FileTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)
+        )
+
+    # Response snapshot before scheduling the fan-out so the caller's
+    # payload is stable even if a later ORM refresh races with
+    # background work on the same row.
+    response = RoomSharedFileOut.from_row(row)
+
+    file_id = row.id
+
+    async def _fan_out() -> None:
+        # Re-open the row in a short-lived session so we don't hold
+        # the request's session open across the fan-out (which would
+        # serialise every subsequent request on this transaction).
+        session_factory = request.app.state.session_factory
+        async with session_factory() as bg_session:
+            fresh = await bg_session.get(RoomSharedFile, file_id)
+            if fresh is None:
+                return
+            await shared_files_service.fan_out_write(
+                bg_session,
+                machine_bus=machine_bus,
+                room_files_dir=config.room_files_dir,
+                file=fresh,
+            )
+
+    background.add_task(_fan_out)
+    return response
+
+
+@router.get(
+    "/{room_id}/files", response_model=list[RoomSharedFileOut]
+)
+async def list_room_shared_files(
+    room_id: str,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> list[RoomSharedFileOut]:
+    """List shared files attached to the room. Participants only."""
+    await _require_room_participant(room_id, identity, db)
+    rows = await shared_files_service.list_shared_files(db, room_id=room_id)
+    return [RoomSharedFileOut.from_row(r) for r in rows]
+
+
+@router.delete(
+    "/{room_id}/files/{file_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_room_shared_file(
+    room_id: str,
+    file_id: str,
+    request: Request,
+    background: BackgroundTasks,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Remove a shared file from the room. Participants only.
+
+    The DB row and on-disk bytes are removed synchronously; a delete
+    fan-out to participating agents is scheduled in the background so
+    their ``memory/shared/<storage_name>`` copies are pruned too.
+    """
+    await _require_room_participant(room_id, identity, db)
+
+    config = request.app.state.config
+    machine_bus = request.app.state.machine_bus
+
+    removed = await shared_files_service.delete_shared_file(
+        db, room_files_dir=config.room_files_dir, file_id=file_id
+    )
+    if removed is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if removed.room_id != room_id:
+        # Rare — the ``file_id`` belongs to a different room. Surface
+        # as 404 rather than leaking the cross-room existence.
+        raise HTTPException(status_code=404, detail="File not found")
+
+    storage_name = removed.storage_name
+
+    async def _fan_out_delete() -> None:
+        session_factory = request.app.state.session_factory
+        async with session_factory() as bg_session:
+            await shared_files_service.fan_out_delete(
+                bg_session,
+                machine_bus=machine_bus,
+                room_id=room_id,
+                storage_name=storage_name,
+            )
+
+    background.add_task(_fan_out_delete)

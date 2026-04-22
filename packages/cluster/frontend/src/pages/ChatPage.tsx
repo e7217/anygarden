@@ -5,6 +5,7 @@ import SidebarExpandButton from '@/components/SidebarExpandButton'
 import RoomHeader from '@/components/RoomHeader'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
+import RoomSharedFilesDialog from '@/components/RoomSharedFilesDialog'
 import TypingIndicator from '@/components/TypingIndicator'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
@@ -19,7 +20,7 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu, Search, ListTodo } from 'lucide-react'
+import { MessageSquare, Menu, Search, ListTodo, Paperclip } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 
 export interface Participant {
@@ -61,6 +62,7 @@ export default function ChatPage() {
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
+  const [sharedFilesOpen, setSharedFilesOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState(false)
@@ -564,12 +566,24 @@ export default function ChatPage() {
                   participants={participants}
                   myParticipantId={myParticipantId}
                 />
+                <div className="flex justify-end px-4 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setSharedFilesOpen(true)}
+                    className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
+                    title="이 룸에 공유된 파일 관리"
+                  >
+                    <Paperclip className="h-3 w-3" />
+                    공유 파일
+                  </button>
+                </div>
                 <MessageInput
                   onSend={send}
                   onTyping={sendTyping}
                   disabled={!connected}
                   mentionUsers={mentionUsers}
                   mentionRooms={mentionRooms}
+                  roomId={selectedRoom}
                 />
               </>
             ) : (
@@ -584,6 +598,11 @@ export default function ChatPage() {
                 onChange={refreshParticipants}
               />
             )}
+            <RoomSharedFilesDialog
+              roomId={selectedRoom}
+              open={sharedFilesOpen}
+              onOpenChange={setSharedFilesOpen}
+            />
             <CreateSubRoomDialog
               parentRoomId={selectedRoom}
               parentRoomName={currentRoom.name}

@@ -1,5 +1,5 @@
 import { useState, useCallback, memo, useMemo } from 'react'
-import { Bookmark, BookmarkCheck, CornerDownRight } from 'lucide-react'
+import { Bookmark, BookmarkCheck, CornerDownRight, Paperclip } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
@@ -35,6 +35,48 @@ interface MessageBubbleProps {
    * forward-scanning the message stream. */
   handoffResolvedAt?: string | null
 }
+
+/** #246 — render file attachments announced via
+ * ``metadata.references``. Only ``shared_file`` references are
+ * supported for now; future reference kinds can fan out from the
+ * same metadata key. */
+interface SharedFileReference {
+  type: 'shared_file'
+  id: string
+  name: string
+}
+
+function MessageReferences({
+  metadata,
+}: {
+  metadata?: Record<string, unknown>
+}) {
+  if (!metadata) return null
+  const raw = metadata.references
+  if (!Array.isArray(raw)) return null
+  const refs = raw.filter(
+    (r): r is SharedFileReference =>
+      typeof r === 'object' && r !== null && (r as { type?: unknown }).type === 'shared_file'
+      && typeof (r as { id?: unknown }).id === 'string'
+      && typeof (r as { name?: unknown }).name === 'string',
+  )
+  if (refs.length === 0) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {refs.map(r => (
+        <span
+          key={r.id}
+          className="inline-flex max-w-[240px] items-center gap-1.5 rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-xs text-[var(--color-foreground-muted)]"
+          title={r.name}
+        >
+          <Paperclip className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" />
+          <span className="truncate">{r.name}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 
 export default memo(function MessageBubble({
   message,
@@ -351,6 +393,7 @@ export default memo(function MessageBubble({
       </div>
       <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'w-full' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
         <MarkdownContent content={renderedContent} resolveUser={resolveUser} resolveRoom={resolveRoom} />
+        <MessageReferences metadata={message.metadata} />
       </div>
       <div className="mt-1 pl-1 flex items-center gap-2">
         {pendingBadge}

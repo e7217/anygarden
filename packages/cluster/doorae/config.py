@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_DB_DIR = Path.home() / ".doorae"
 _DEFAULT_DB_URL = f"sqlite+aiosqlite:///{_DEFAULT_DB_DIR / 'doorae.db'}"
+_DEFAULT_ROOM_FILES_DIR = _DEFAULT_DB_DIR / "room_files"
 
 # Bind addresses that listen on every interface aren't valid dial targets.
 # When we build a URL for an agent to connect back to us, map these to a
@@ -49,6 +50,13 @@ class DooraeSettings(BaseSettings):
     # ``~/.doorae/litellm.yaml`` — resolved lazily in the gateway
     # code so tests can point at a temp dir without poisoning home.
     llm_gateway_config_path: str = ""
+    # #246 — Disk-backed storage for room shared files. The DB only
+    # keeps metadata + sha256; the original bytes live under
+    # ``<room_files_dir>/<room_id>/<file_id>``. Kept outside the
+    # DB so the default SQLite ``doorae.db`` stays compact as rooms
+    # accumulate attachments. Resolved lazily so tests can redirect
+    # it without touching ``$HOME``.
+    room_files_dir: Path = _DEFAULT_ROOM_FILES_DIR
 
     model_config = SettingsConfigDict(env_prefix="DOORAE_")
 

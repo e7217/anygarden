@@ -393,6 +393,14 @@ class Spawner:
         os.chmod(memory_dir, 0o700)
         notes_path = memory_dir / "notes.md"
         safe_write_text(notes_path, msg.memory_md or "", mode=0o600)
+        # #246 — ``memory/shared/`` is the drop zone for room-shared
+        # files pushed by the server. Pre-create it so the daemon's
+        # write handler doesn't have to special-case first delivery
+        # (and so agents enumerate an empty dir instead of a missing
+        # one when no files have been shared yet).
+        shared_dir = memory_dir / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(shared_dir, 0o700)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():

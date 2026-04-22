@@ -531,6 +531,57 @@ class Message(Base):
     )
 
 
+class RoomSharedFile(Base):
+    """A file attached to a room and copy-distributed to every
+    participating agent's ``memory/shared/`` directory (#246).
+
+    The original bytes live on disk under
+    ``<settings.room_files_dir>/<room_id>/<id>`` so SQLite stays
+    compact. This row keeps metadata plus ``sha256`` for integrity
+    checks and idempotent fan-out.
+    """
+
+    __tablename__ = "room_shared_files"
+    __table_args__ = (
+        UniqueConstraint("room_id", "storage_name", name="uq_room_shared_storage"),
+    )
+
+    # ``id`` doubles as the on-disk filename under
+    # ``<room_files_dir>/<room_id>/<id>``. uuid keeps user-supplied
+    # filenames out of the filesystem path (defence against
+    # traversal / OS-specific name restrictions).
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    # Original filename as uploaded — shown in the UI, never touched
+    # by the filesystem layer.
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Sanitized name used on the agent side under
+    # ``memory/shared/<storage_name>``. Derived from ``filename`` but
+    # scrubbed of path separators / reserved names.
+    storage_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Path relative to ``settings.room_files_dir`` (``<room_id>/<id>``).
+    # Stored redundantly with ``id``/``room_id`` so future relocations
+    # (e.g. sharding across disks) don't require back-computing paths.
+    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime: Mapped[str] = mapped_column(String(128), nullable=False)
+    # ``SET NULL`` so that deleting an uploader doesn't cascade-delete
+    # the file row — the file belongs to the room, not the person who
+    # happened to upload it.
+    uploaded_by: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+    room: Mapped["Room"] = relationship("Room")
+
+
 class AgentFile(Base):
     """A single file in an agent's per-agent directory manifest.
 

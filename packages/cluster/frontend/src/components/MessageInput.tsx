@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
-import { Send } from 'lucide-react'
+import { Paperclip, Send, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
+import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 
 interface MessageInputProps {
   onSend: (content: string, metadata?: Record<string, unknown>) => void
@@ -10,6 +11,15 @@ interface MessageInputProps {
   disabled?: boolean
   mentionUsers?: MentionOption[]
   mentionRooms?: MentionOption[]
+  /** Room the message will land in; required to upload file
+   * attachments (#246). Falsy = upload UI is hidden. */
+  roomId?: string
+}
+
+interface Attachment {
+  id: string
+  filename: string
+  storage_name: string
 }
 
 interface MentionState {
@@ -27,14 +37,22 @@ interface TrackedMention {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
+  roomId,
 }: MessageInputProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [mention, setMention] = useState<MentionState | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [popoverPos, setPopoverPos] = useState({ top: 0, left: 0 })
   const trackedMentions = useRef<TrackedMention[]>([])
+  // Attachments uploaded since the last send; they're already stored
+  // server-side at this point, we just carry their ids to include
+  // in the next outbound message's ``references`` metadata.
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current
@@ -83,7 +101,12 @@ export default function MessageInput({
 
   const handleSend = () => {
     const trimmed = value.trim()
-    if (!trimmed || disabled) return
+    // A message is sendable if either the user typed something, or
+    // they attached at least one file — "attach only" is a valid
+    // action that announces the share in the room.
+    if (!trimmed && attachments.length === 0) return
+    if (disabled) return
+
     // Replace display names with ID-based tokens before sending
     let content = trimmed
     for (const m of trackedMentions.current) {
@@ -92,14 +115,62 @@ export default function MessageInput({
     // Resolve any remaining directly-typed `#RoomName` plaintext into room tokens.
     // Issue #53: previously only autocomplete selections were tokenized.
     content = resolveRoomMentionsInText(content, mentionRooms)
+    // Attach-only messages: render a short marker so the message has
+    // visible content. The MessageBubble renderer may still choose
+    // to present the attachment pill as the primary affordance.
+    if (!content && attachments.length > 0) {
+      content = attachments.length === 1
+        ? `📎 ${attachments[0].filename}`
+        : `📎 ${attachments.length} files`
+    }
     const mentions = extractMentionsMetadata(content)
-    const metadata = mentions.length > 0 ? { mentions } : undefined
-    onSend(content, metadata)
+    const references = attachments.map(a => ({
+      type: 'shared_file' as const,
+      id: a.id,
+      name: a.filename,
+    }))
+    const metadata: Record<string, unknown> = {}
+    if (mentions.length > 0) metadata.mentions = mentions
+    if (references.length > 0) metadata.references = references
+    onSend(content, Object.keys(metadata).length > 0 ? metadata : undefined)
     setValue('')
     trackedMentions.current = []
+    setAttachments([])
+    setUploadError(null)
     setMention(null)
     onTyping(false)
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+  }
+
+  const handleFileSelected = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0]
+    // Reset the input so selecting the same file twice in a row
+    // still fires ``change``.
+    e.target.value = ''
+    if (!file || !roomId) return
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const uploaded: RoomSharedFile = await uploadRoomFile(roomId, file)
+      setAttachments(prev => [
+        ...prev,
+        {
+          id: uploaded.id,
+          filename: uploaded.filename,
+          storage_name: uploaded.storage_name,
+        },
+      ])
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id))
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -171,34 +242,86 @@ export default function MessageInput({
 
   return (
     <div className="border-t border-[var(--color-border)] bg-white px-4 py-3">
-      <div className="relative mx-auto flex w-full max-w-3xl items-end gap-2">
-        {mention && filtered.length > 0 && (
-          <MentionPopover
-            options={filtered}
-            position={popoverPos}
-            selectedIndex={selectedIndex}
-            onSelect={selectMention}
-            onClose={closeMention}
-          />
+      <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
+        {(attachments.length > 0 || uploadError) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {attachments.map(a => (
+              <span
+                key={a.id}
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-white px-2.5 py-0.5 text-xs text-[var(--color-foreground)]"
+              >
+                <Paperclip className="h-3 w-3 text-[var(--color-foreground-subtle)]" />
+                <span className="max-w-[200px] truncate" title={a.filename}>
+                  {a.filename}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  className="text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
+                  aria-label={`Remove ${a.filename}`}
+                  title="Remove"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            {uploadError && (
+              <span className="text-xs text-red-600">{uploadError}</span>
+            )}
+          </div>
         )}
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          disabled={disabled}
-          placeholder={disabled ? 'Connecting...' : 'Type a message... (@ to mention, # for rooms)'}
-          rows={1}
-          className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-        />
-        <Button
-          size="icon"
-          onClick={handleSend}
-          disabled={disabled || !value.trim()}
-          title="Send message"
-        >
-          <Send className="h-4 w-4" />
-        </Button>
+        <div className="relative flex w-full items-end gap-2">
+          {mention && filtered.length > 0 && (
+            <MentionPopover
+              options={filtered}
+              position={popoverPos}
+              selectedIndex={selectedIndex}
+              onSelect={selectMention}
+              onClose={closeMention}
+            />
+          )}
+          {roomId && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleFileSelected}
+                accept=".txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={disabled || uploading}
+                title="Attach file"
+                aria-label="Attach file"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            disabled={disabled}
+            placeholder={disabled ? 'Connecting...' : 'Type a message... (@ to mention, # for rooms)'}
+            rows={1}
+            className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          />
+          <Button
+            size="icon"
+            onClick={handleSend}
+            disabled={
+              disabled || uploading || (!value.trim() && attachments.length === 0)
+            }
+            title="Send message"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </div>
   )

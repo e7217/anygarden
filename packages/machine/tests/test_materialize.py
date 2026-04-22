@@ -1000,3 +1000,16 @@ class TestMemoryMaterialize:
         assert "memory/notes.md" in body
         # Ephemeral convention is documented too.
         assert "ephemeral" in body.lower()
+
+    def test_creates_empty_shared_dir(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """#246 — ``memory/shared/`` is the drop zone for room-shared
+        files fan-out from the server. The directory must exist at
+        spawn time so the daemon's shared-file handler can
+        ``open(..., "w")`` into it without special-casing first write."""
+        agent_root = spawner._materialize_agent_dir(_msg())
+        shared = agent_root / "memory" / "shared"
+        assert shared.is_dir()
+        # Starts empty — the server pushes files in after spawn.
+        assert list(shared.iterdir()) == []
