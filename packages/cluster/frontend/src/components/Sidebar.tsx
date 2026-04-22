@@ -1150,15 +1150,28 @@ function AgentDMListAdmin({
                   online={online}
                   agentState={agent.actual_state}
                 />
-                <span className="truncate">{agent.name}</span>
+                <span className="truncate" title={agent.name}>
+                  {agent.name}
+                </span>
                 {hasMultipleDMs && (
-                  <span className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)]">
+                  // #243 — hide the DM count on hover so the space is
+                  // handed back to the name while the action buttons
+                  // (``+`` new DM + ``⋯`` settings) are revealed. On
+                  // mouse-out the badge fades back in; the information
+                  // is never lost, only toggled with the user's intent.
+                  <span className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)] group-hover:hidden">
                     {agentDms.length}
                   </span>
                 )}
               </button>
               <span
-                className="mr-1 shrink-0 opacity-0 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
+                // #243 — ``inline-flex`` is load-bearing: without it
+                // ``AgentSettingsMenu``'s wrapping ``<div class="relative">``
+                // drops onto its own line (block-in-inline quirk),
+                // making the agent row appear twice as tall. Pairing
+                // with ``items-center gap-0.5`` keeps the ``+`` and
+                // ``⋯`` buttons side-by-side at 24×24 each.
+                className="mr-1 inline-flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
                 data-testid={`sidebar-agent-actions-${agent.id}`}
               >
                 <button
