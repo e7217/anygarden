@@ -992,6 +992,42 @@ function AgentDMListAdmin({
   // an update.
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null)
+  // #241 — DM rename dialog. ``editDMRoomId`` mirrors the project
+  // rooms ``editRoomId`` state in the Sidebar root; kept local here
+  // because AgentDMListAdmin owns the DM tree and the root doesn't
+  // thread its dialog state into this sub-tree.
+  const [editDMRoomId, setEditDMRoomId] = useState<string | null>(null)
+
+  const handleDeleteDM = useCallback(
+    async (roomId: string, displayName: string) => {
+      const ok = window.confirm(
+        `이 대화 "${displayName}"을(를) 삭제하시겠습니까?\n\n` +
+          '대화의 모든 메시지가 사라집니다. 되돌릴 수 없습니다.',
+      )
+      if (!ok) return
+      const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
+        method: 'DELETE',
+      })
+      if (resp.status === 204) {
+        // Refresh the DM list immediately; the WS ``room_deleted``
+        // broadcast will also fan out, but this keeps the acting
+        // user's UI snappy without waiting on the round-trip.
+        fetchAgentDMs()
+        // Navigate away if the deleted DM was the currently open one.
+        if (selectedRoom === roomId) onGo('/')
+        return
+      }
+      let detail = `Failed to delete DM (${resp.status})`
+      try {
+        const body = await resp.json()
+        if (body && typeof body.detail === 'string') detail = body.detail
+      } catch {
+        /* ignore */
+      }
+      window.alert(detail)
+    },
+    [fetchAgentDMs, onGo, selectedRoom],
+  )
 
   const handleOpenSettings = (agentId: string) => {
     const full = agents.find(a => a.id === agentId)
@@ -1138,6 +1174,7 @@ function AgentDMListAdmin({
                   <Plus className="h-3.5 w-3.5" />
                 </button>
                 <AgentSettingsMenu
+                  compact
                   onOpenSettings={() => handleOpenSettings(agent.id)}
                   onDelete={() => { void handleDeleteAgent(agent.id) }}
                   contextWindowOptOut={
@@ -1158,27 +1195,36 @@ function AgentDMListAdmin({
                   const isSel = selectedRoom === dm.id
                   const label = dm.name.replace(/^DM:\s*/, '')
                   return (
-                    <button
+                    <div
                       key={dm.id}
-                      onClick={() => onGo(`/rooms/${dm.id}`)}
-                      data-testid={`sidebar-dm-${dm.id}`}
-                      className={`flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-[13px] font-medium transition-colors ${
+                      className={`group relative flex min-w-0 items-center rounded-[var(--radius-sm)] ${
                         isSel
                           ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
                           : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
                       }`}
                     >
-                      <MessageSquare className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{label}</span>
-                      {dm.ephemeral && (
-                        <span
-                          className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
-                          title="임시 세션 — 장기 기억에 저장되지 않습니다"
-                        >
-                          임시
-                        </span>
-                      )}
-                    </button>
+                      <button
+                        onClick={() => onGo(`/rooms/${dm.id}`)}
+                        data-testid={`sidebar-dm-${dm.id}`}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-[13px] font-medium transition-colors"
+                      >
+                        <MessageSquare className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{label}</span>
+                        {dm.ephemeral && (
+                          <span
+                            className="shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
+                            title="임시 세션 — 장기 기억에 저장되지 않습니다"
+                          >
+                            임시
+                          </span>
+                        )}
+                      </button>
+                      <SidebarRoomMenu
+                        roomId={dm.id}
+                        onRename={() => setEditDMRoomId(dm.id)}
+                        onDelete={() => { void handleDeleteDM(dm.id, label) }}
+                      />
+                    </div>
                   )
                 })}
               </div>
@@ -1229,6 +1275,18 @@ function AgentDMListAdmin({
         fetchSkillPreview={fetchSkillPreview}
         onRoomsChange={() => { fetchAgentDMs() }}
       />
+      {/* #241 — DM rename dialog. Reuses RoomEditDialog so DM
+          rename flows through the same PATCH /rooms/{id} endpoint
+          as project rooms. ``onSaved`` refetches the DM list so
+          the new name shows up immediately. */}
+      {editDMRoomId && (
+        <RoomEditDialog
+          roomId={editDMRoomId}
+          open={editDMRoomId !== null}
+          onOpenChange={(o) => { if (!o) setEditDMRoomId(null) }}
+          onSaved={() => { fetchAgentDMs() }}
+        />
+      )}
     </div>
   )
 }

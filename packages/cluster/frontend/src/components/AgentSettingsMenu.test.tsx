@@ -137,4 +137,32 @@ describe('AgentSettingsMenu', () => {
       ).toBeNull()
     })
   })
+
+  // #241 — compact variant for sidebar agent rows.
+  describe('compact variant', () => {
+    it('renders a 24×24 bare trigger when compact is true', () => {
+      render(<AgentSettingsMenu compact onOpenSettings={vi.fn()} />)
+      const trigger = screen.getByTestId('agent-settings-menu-trigger')
+      // Bare <button> element, not the shadcn Button wrapper.
+      expect(trigger.tagName).toBe('BUTTON')
+      // h-6 w-6 geometry matches the sibling ``+`` (new DM) button
+      // so the two align vertically in the sidebar row.
+      expect(trigger.className).toMatch(/\bh-6\b/)
+      expect(trigger.className).toMatch(/\bw-6\b/)
+    })
+
+    it('defaults to the shadcn Button (h-9) when compact is omitted', () => {
+      render(<AgentSettingsMenu onOpenSettings={vi.fn()} />)
+      const trigger = screen.getByTestId('agent-settings-menu-trigger')
+      // shadcn Button size="icon" yields ``size-9`` — no compact
+      // h-6 leak into the default path.
+      expect(trigger.className).not.toMatch(/\bh-6\b/)
+    })
+
+    it('still opens the menu on click in compact mode', () => {
+      render(<AgentSettingsMenu compact onOpenSettings={vi.fn()} />)
+      fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+      expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
+    })
+  })
 })
