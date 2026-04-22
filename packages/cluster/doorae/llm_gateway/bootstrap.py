@@ -127,7 +127,21 @@ def _build_spawn_params_factory(
         # tested for #124) without introducing a separate encryption
         # helper just for the gateway. The ``"v"`` key is arbitrary —
         # the writer on the admin API side uses the same convention.
-        child_env: dict[str, str] = {"DOORAE_LITELLM_MASTER_KEY": master_key}
+        #
+        # ``DOORAE_LITELLM_OLLAMA_DUMMY`` is the placeholder referenced
+        # by local-provider rows (Ollama / vLLM / custom) whose admin
+        # left ``api_key_ref`` blank — the admin API normalises such
+        # input to the ``OLLAMA_DUMMY`` sentinel, and config_writer
+        # therefore renders ``api_key: os.environ/DOORAE_LITELLM_OLLAMA_DUMMY``
+        # into the yaml. LiteLLM ignores the value for Ollama, but we
+        # still supply a stable string so the reference resolves and
+        # no "missing env var" warning surfaces. A secret row also
+        # named ``OLLAMA_DUMMY`` would overwrite this during the loop
+        # below; that's acceptable (admin override semantics).
+        child_env: dict[str, str] = {
+            "DOORAE_LITELLM_MASTER_KEY": master_key,
+            "DOORAE_LITELLM_OLLAMA_DUMMY": "sk-local",
+        }
         for row in secrets_rows:
             try:
                 payload = mcp_secrets.decrypt_dict(row.encrypted_value)

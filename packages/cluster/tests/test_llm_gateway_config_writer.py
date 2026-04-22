@@ -89,6 +89,33 @@ class TestRenderConfig:
         # Never collide with the core fields
         assert params["model"] == "anthropic/claude-sonnet-4-6"
 
+    def test_ollama_model_with_api_base_extra_param(self) -> None:
+        """Ollama + 원격 호스트 api_base가 litellm_params로 흘러들어가야 한다.
+
+        어드민 UI가 ``extra_params={"api_base": ...}``로 저장하면
+        config_writer의 기존 병합 로직(``m.extra_params`` → params
+        merge)을 그대로 타고 yaml에 노출된다. ``api_key``는
+        ``OLLAMA_DUMMY`` sentinel 아래 env reference로 렌더되고,
+        supervisor가 ``DOORAE_LITELLM_OLLAMA_DUMMY=sk-local``을
+        child env에 주입해 짝을 맞춘다.
+        """
+        text = render_config(
+            [
+                _model(
+                    name="qwen3-remote",
+                    provider="ollama",
+                    upstream="ollama/qwen3-coder:30b",
+                    key_ref="OLLAMA_DUMMY",
+                    extra={"api_base": "http://10.0.0.5:11434"},
+                )
+            ]
+        )
+        params = yaml.safe_load(text)["model_list"][0]["litellm_params"]
+
+        assert params["model"] == "ollama/qwen3-coder:30b"
+        assert params["api_base"] == "http://10.0.0.5:11434"
+        assert params["api_key"] == "os.environ/DOORAE_LITELLM_OLLAMA_DUMMY"
+
     def test_empty_model_list_is_valid(self) -> None:
         # LiteLLM boots fine with ``model_list: []`` and answers
         # "model not found" to requests. See §12.5.
