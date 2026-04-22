@@ -937,6 +937,7 @@ function AgentDMListAdmin({
     deleteAgentFile,
     fetchAttachedSkills,
     fetchSkillPreview,
+    fetchEngineCatalog,
   } = useAgents()
   const { fetchAgentDMs, createAgentDM } = useRooms()
   const { user } = useAuth()
@@ -1286,6 +1287,7 @@ function AgentDMListAdmin({
         deleteAgentFile={deleteAgentFile}
         fetchAttachedSkills={fetchAttachedSkills}
         fetchSkillPreview={fetchSkillPreview}
+        fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => { fetchAgentDMs() }}
       />
       {/* #241 — DM rename dialog. Reuses RoomEditDialog so DM
