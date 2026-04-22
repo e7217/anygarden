@@ -11,6 +11,8 @@ import {
   buildPendingQueries,
   seedTerminalDismissals,
 } from '@/lib/pending-queries'
+import { parseHandoff, isHandoffStatusMessage } from '@/lib/handoff'
+import { parseServerDate } from '@/lib/datetime'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -85,6 +87,64 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
       ),
     [pendingQueries],
   )
+
+  // Issue #238 — compute two pieces of per-message state in a single
+  // O(n) sweep: the ``handoffResolvedAt`` map (handoff_message_id →
+  // target-reply timestamp) and the ``hiddenIds`` set (orchestrator
+  // "마이크 넘겼습니다 🎤" style status chatter that should be
+  // suppressed in the UI). Both are derived from the message stream
+  // alone so no new subscriptions or server changes are needed.
+  const { handoffResolvedMap, hiddenMessageIds } = useMemo(() => {
+    const resolved = new Map<string, string>()
+    const hidden = new Set<string>()
+    // Window within which a status-announcement following a handoff
+    // is considered part of the same protocol turn (milliseconds).
+    const STATUS_WINDOW_MS = 10_000
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]
+      const handoff = parseHandoff(msg)
+      if (handoff) {
+        // Forward-scan for the first subsequent message authored by
+        // the target participant. That message's timestamp is the
+        // "resolved" moment — ``HandoffMessageCard`` stops breathing.
+        for (let j = i + 1; j < messages.length; j++) {
+          if (
+            messages[j].participant_id === handoff.targetParticipantId
+          ) {
+            resolved.set(msg.id, messages[j].created_at)
+            break
+          }
+        }
+      }
+      // Hide detection — a later message is hidden when:
+      //   1. Its content matches the orchestrator status patterns,
+      //   2. There is a preceding handoff from the same sender,
+      //   3. The handoff is less than STATUS_WINDOW_MS old.
+      // We walk backwards to find the most recent handoff; if it
+      // matches the sender/window/pattern we suppress this row.
+      if (i > 0 && isHandoffStatusMessage(msg.content)) {
+        for (let k = i - 1; k >= 0; k--) {
+          const prior = messages[k]
+          const priorHandoff = parseHandoff(prior)
+          if (!priorHandoff) continue
+          if (prior.participant_id !== msg.participant_id) break
+          try {
+            const delta =
+              parseServerDate(msg.created_at).getTime()
+              - parseServerDate(prior.created_at).getTime()
+            if (delta >= 0 && delta <= STATUS_WINDOW_MS) {
+              hidden.add(msg.id)
+            }
+          } catch {
+            // Bad timestamp → don't hide (fail-open is safer than
+            // losing a user-visible row).
+          }
+          break
+        }
+      }
+    }
+    return { handoffResolvedMap: resolved, hiddenMessageIds: hidden }
+  }, [messages])
 
   // Seed dismissedIds on room (re-)entry with the terminal chips
   // already present in history. Without this, switching into an old
@@ -192,16 +252,24 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
       />
       <ScrollArea className="flex-1 bg-white" ref={scrollRootRef}>
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-4">
-          {messages.map((msg, i) => (
-            <div key={msg.seq || i} data-message-id={msg.id}>
-              <MessageBubble
-                message={msg}
-                participants={participants}
-                isMine={msg.participant_id === myParticipantId}
-                pendingQueryIds={pendingQueryIds}
-              />
-            </div>
-          ))}
+          {messages.map((msg, i) => {
+            // #238 — drop orchestrator status chatter that the UI
+            // already expresses via HandoffMessageCard's breathing
+            // border. Returning null here (not just an empty bubble)
+            // keeps the gap from spacing-y vestigial.
+            if (hiddenMessageIds.has(msg.id)) return null
+            return (
+              <div key={msg.seq || i} data-message-id={msg.id}>
+                <MessageBubble
+                  message={msg}
+                  participants={participants}
+                  isMine={msg.participant_id === myParticipantId}
+                  pendingQueryIds={pendingQueryIds}
+                  handoffResolvedAt={handoffResolvedMap.get(msg.id) ?? null}
+                />
+              </div>
+            )
+          })}
           {typingNames.length > 0 && (
             <div className="flex flex-col items-start">
               <span className="text-badge text-[var(--color-foreground-muted)] mb-1 pl-1">
