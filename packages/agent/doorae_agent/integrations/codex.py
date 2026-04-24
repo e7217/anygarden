@@ -204,12 +204,24 @@ class CodexAdapter(EngineAdapter):
         # the integration factory leave it None and the suffix helper
         # degrades to an empty string.
         self._client: Any = None
-        # Track which threads have already received the memory /
-        # ephemeral header. Codex threads persist history natively, so
-        # we only inject the block on the first turn of each thread —
-        # re-sending every turn would pollute the conversation with
-        # duplicate "policy" text.
-        self._memory_injected: set[str] = set()
+        # Track the sha256 of the last ``<shared-context>``/memory
+        # block injected into each room's thread. #237 established
+        # that Codex threads persist history natively, so identical
+        # content must not be re-injected every turn (pollutes the
+        # conversation with duplicate "policy" text). #255 extends
+        # this: when the upstream content *changes* (new room shared
+        # file uploaded, backfill arrived mid-session) the adapter
+        # must re-inject — but tagged as an update so the model
+        # notices the refresh rather than treating it as a duplicate.
+        #
+        # Value semantics:
+        #   - key absent  → room never injected yet (first turn)
+        #   - value ""    → sentinel for "nothing worth injecting"
+        #                   was composed last turn (empty suffix);
+        #                   kept so we can notice when content
+        #                   appears after the first turn.
+        #   - value sha   → sha256 hex of the last injected suffix.
+        self._memory_injected: dict[str, str] = {}
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
@@ -303,18 +315,37 @@ class CodexAdapter(EngineAdapter):
             prefix = drain_context(self._pending_context, room_id)
             turn_content = f"{prefix}\n\n{content}" if prefix else content
 
-            # #237 — inject the memory / ephemeral block as a prompt
-            # prefix on the first turn of each room. Codex threads
-            # persist history natively so re-injecting every turn
-            # would noisily repeat the block; tracking ``_memory_injected``
-            # keeps the block as a one-shot system-prompt analogue.
-            if room_id not in self._memory_injected:
-                from doorae_agent.integrations.base import compose_memory_suffix
+            # #237 / #255 — inject the memory / ephemeral / shared-
+            # context block as a prompt prefix, BUT only when the
+            # block's content has changed since the last injection
+            # in this room. Codex threads persist history, so
+            # identical repeats pollute the conversation; a changed
+            # block however must land — it carries backfilled files
+            # that arrived after the room's first turn.
+            from doorae_agent.integrations.base import compose_memory_suffix
 
-                memory_suffix = compose_memory_suffix(self._client, room_id)
-                if memory_suffix:
-                    turn_content = f"{memory_suffix}\n\n{turn_content}"
-                self._memory_injected.add(room_id)
+            memory_suffix = compose_memory_suffix(self._client, room_id)
+            if memory_suffix:
+                import hashlib
+
+                new_sha = hashlib.sha256(
+                    memory_suffix.encode("utf-8")
+                ).hexdigest()
+                last_sha = self._memory_injected.get(room_id)
+                if new_sha != last_sha:
+                    if last_sha is None:
+                        # First turn — no header needed.
+                        turn_content = f"{memory_suffix}\n\n{turn_content}"
+                    else:
+                        # Mid-session update. The explicit label makes
+                        # the delta unambiguous to the model: fresh
+                        # files / memory just arrived, not a duplicate
+                        # paste of the opening block.
+                        turn_content = (
+                            "[공유 자료 업데이트]\n"
+                            f"{memory_suffix}\n\n{turn_content}"
+                        )
+                    self._memory_injected[room_id] = new_sha
 
             # Issue #190 — bound the turn with an explicit timeout so
             # a stuck codex call doesn't freeze the room's WS receive

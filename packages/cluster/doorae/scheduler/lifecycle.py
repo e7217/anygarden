@@ -10,6 +10,7 @@ tokens or replacement placement as needed.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,7 @@ class AgentLifecycle:
         *,
         mcp_template_service=None,
         llm_gateway_enabled: bool = False,
+        room_files_dir: Path | None = None,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -58,6 +60,13 @@ class AgentLifecycle:
         # doesn't have to know the plaintext token (which it cannot
         # — only the hash is stored after grant).
         self._llm_gateway_enabled = llm_gateway_enabled
+        # #255 — On-disk root for room shared files. Populated by the
+        # app factory from ``DooraeSettings.room_files_dir``; tests
+        # that don't exercise shared-files behaviour leave it None and
+        # the backfill hook becomes a no-op. Must match whatever the
+        # ``/rooms/{id}/files`` HTTP route writes into, or the daemon
+        # will receive stale bytes.
+        self._room_files_dir = room_files_dir
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -172,6 +181,15 @@ class AgentLifecycle:
         Each dict in *agents_data* must contain at minimum ``agent_id``
         and ``actual_state``.  Optional keys: ``pid``, ``last_crash_reason``.
         """
+        # #255 — Agents that just transitioned into ``running`` need
+        # their room-shared files re-pushed: the spawner prunes
+        # ``<agent_root>/memory/`` on every respawn, so the materialised
+        # copies of any file uploaded earlier are already gone by the
+        # time the new process reports in. Collected here and flushed
+        # after the DB commit below; a heartbeat that merely confirms
+        # an already-running agent stays no-op because ``old_state``
+        # is read before we overwrite it.
+        backfill_targets: list[str] = []
         async with self._db_factory() as db:
             for entry in agents_data:
                 aid = entry.get("agent_id")
@@ -213,6 +231,8 @@ class AgentLifecycle:
                             "machine_id": machine_id,
                         },
                     ))
+                    if new_state == "running":
+                        backfill_targets.append(aid)
             # Agents placed on this machine but absent from the report:
             # if desired=stopped they are confirmed stopped. Keep
             # placed_on_machine_id so the machine page still lists them.
@@ -236,6 +256,61 @@ class AgentLifecycle:
                     ))
 
             await db.commit()
+
+        # #255 — Flush shared-file backfill for newly-running agents.
+        # Runs outside the state-update transaction so a backfill
+        # failure can't roll back the actual_state commit. The daemon
+        # compares ``content_sha256`` per file and skips rewrites, so
+        # occasional double-sends (e.g. pending→starting→running
+        # transitions arriving in separate frames) are harmless.
+        if self._room_files_dir is not None and backfill_targets:
+            await self._backfill_shared_files_for_agents(backfill_targets)
+
+    async def _backfill_shared_files_for_agents(
+        self, agent_ids: list[str]
+    ) -> None:
+        """Push every room shared file to each agent in ``agent_ids``.
+
+        #255 — Invoked after an agent transitions into ``running``,
+        because the spawner pruned ``memory/shared/`` during spawn.
+        Uses ``shared_files.backfill_agent`` which internally reads
+        from the DB + ``room_files_dir`` and fans out via
+        ``machine_bus`` — we just need to walk the agent's rooms.
+
+        Failures are logged and swallowed per (agent, room) pair so a
+        single missing-on-disk file doesn't starve the rest of the
+        fleet of its backfill.
+        """
+        from doorae.rooms import shared_files as shared_files_service
+
+        async with self._db_factory() as db:
+            for aid in agent_ids:
+                rooms = [
+                    row[0]
+                    for row in (
+                        await db.execute(
+                            select(Participant.room_id).where(
+                                Participant.agent_id == aid
+                            )
+                        )
+                    ).all()
+                ]
+                for room_id in rooms:
+                    try:
+                        await shared_files_service.backfill_agent(
+                            db,
+                            machine_bus=self._machine_bus,
+                            room_files_dir=self._room_files_dir,
+                            room_id=room_id,
+                            agent_id=aid,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "lifecycle.shared_files_backfill_failed",
+                            agent_id=aid,
+                            room_id=room_id,
+                            error=str(exc),
+                        )
 
     async def handle_token_request(
         self,

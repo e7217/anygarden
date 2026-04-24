@@ -103,9 +103,13 @@ def compose_memory_suffix(
     ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
 
     # #246 — room shared files live under ``<agent_root>/memory/shared``.
-    # The agent process runs with its agent dir as cwd (see spawner
-    # convention), so ``Path.cwd()`` gets us there without threading
-    # a dedicated field through ``ChatClient``.
+    # The agent subprocess's cwd is ``<agent_root>/workspace`` (the
+    # spawner pins cwd there so engines discover AGENTS.md/CLAUDE.md
+    # via their upward file-discovery walk), so ``memory/shared`` sits
+    # one directory up from cwd — not inside it. ``Path.cwd() / "memory"
+    # / "shared"`` was the original shape and silently evaluated to a
+    # non-existent path, which made ``compose_shared_context_block``
+    # return an empty block and the agent never saw room-shared files.
     from pathlib import Path
 
     from doorae_agent.memory import (
@@ -114,7 +118,7 @@ def compose_memory_suffix(
     )
 
     shared_block = compose_shared_context_block(
-        Path.cwd() / "memory" / "shared"
+        Path.cwd().parent / "memory" / "shared"
     )
 
     # Skip the suffix entirely when nothing would be rendered — keeping
