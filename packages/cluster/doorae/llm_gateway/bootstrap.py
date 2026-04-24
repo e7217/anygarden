@@ -7,7 +7,7 @@ real-world implementations that:
 - Spawn the ``litellm`` binary via
   :func:`asyncio.create_subprocess_exec`, passing ``--config`` +
   ``--port`` + ``--host 127.0.0.1``.
-- Probe ``GET http://127.0.0.1:<port>/health`` via an
+- Probe ``GET http://127.0.0.1:<port>/health/liveliness`` via an
   :class:`httpx.AsyncClient`, polling until 2xx or timeout.
 - Read the current gateway DB state, render ``litellm.yaml``, write it
   to disk, decrypt each referenced secret, and return a
@@ -72,7 +72,7 @@ async def _real_spawn(params: _SpawnParams, binary: str) -> Any:
 def _build_health_probe(client: httpx.AsyncClient) -> Callable[[int], Any]:
     """Return a probe callable bound to a shared httpx client.
 
-    Polls ``GET /health`` up to the supervisor's ``health_timeout``;
+    Polls ``GET /health/liveliness`` up to the supervisor's ``health_timeout``;
     returns True on 2xx, False otherwise. Connection errors during
     startup (when litellm is still binding) are expected, so they
     just retry instead of failing the whole probe.
@@ -80,7 +80,7 @@ def _build_health_probe(client: httpx.AsyncClient) -> Callable[[int], Any]:
 
     async def probe(port: int) -> bool:
         deadline = asyncio.get_event_loop().time() + 9.0  # supervisor grants 10s total
-        url = f"http://127.0.0.1:{port}/health"
+        url = f"http://127.0.0.1:{port}/health/liveliness"
         while asyncio.get_event_loop().time() < deadline:
             try:
                 resp = await client.get(url, timeout=1.0)
