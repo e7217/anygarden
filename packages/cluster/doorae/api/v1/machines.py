@@ -419,12 +419,19 @@ async def list_machine_agents(
 @router.get("/{machine_id}/engines", response_model=list[MachineEngineOut])
 async def list_machine_engines(
     machine_id: str,
+    request: Request,
     # Guests are not account holders; machines are a registered-user
     # concern only.
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """List engines available on a specific machine."""
+    """List engines available on a specific machine.
+
+    Virtual engines (today: ``codex-extra``) are augmented in-memory
+    here based on live gateway supervisor state — they are not stored
+    in ``machine_engines`` because the machine daemon only knows about
+    CLI binaries it detected on disk.
+    """
     machine = (await db.execute(select(Machine).where(Machine.id == machine_id))).scalar_one_or_none()
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
@@ -433,7 +440,20 @@ async def list_machine_engines(
         select(MachineEngine).where(MachineEngine.machine_id == machine_id)
     )).scalars().all()
 
-    return [MachineEngineOut(engine=r.engine, version=r.version) for r in rows]
+    out = [MachineEngineOut(engine=r.engine, version=r.version) for r in rows]
+
+    # #197 — Surface ``codex-extra`` when the embedded LLM gateway is
+    # actually RUNNING. FAILED/STARTING/STOPPED states hide it so admins
+    # don't pick a mode that would 503 on every request.
+    supervisor = getattr(request.app.state, "llm_gateway_supervisor", None)
+    if supervisor is not None:
+        gateway_running = (
+            getattr(supervisor.state, "value", str(supervisor.state)) == "running"
+        )
+        if gateway_running and any(e.engine == "codex" for e in out):
+            out.append(MachineEngineOut(engine="codex-extra", version=None))
+
+    return out
 
 
 class MachineActivityOut(BaseModel):

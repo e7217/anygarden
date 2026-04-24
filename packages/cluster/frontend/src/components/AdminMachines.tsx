@@ -43,6 +43,7 @@ interface MachineEngineInfo {
 
 const ENGINE_LABELS: Record<string, string> = {
   'codex': 'Codex CLI',
+  'codex-extra': 'Codex (extra)',
   'claude-code': 'Claude Code',
   'gemini-cli': 'Gemini CLI',
   'openai': 'OpenAI API',
@@ -812,12 +813,46 @@ export default function AdminMachines() {
               <div className="space-y-2">
                 <Label>Model</Label>
                 <select value={agentModel} onChange={e => setAgentModel(e.target.value)} className={selectCSS}>
-                  <option value="">Default ({agentCatalog.default_model})</option>
-                  {agentCatalog.models.map(m => (
-                    <option key={m.id} value={m.id}>{m.label}</option>
-                  ))}
+                  {agentCatalog.default_model && (
+                    <option value="">Default ({agentCatalog.default_model})</option>
+                  )}
+                  {(() => {
+                    const builtins = agentCatalog.models.filter(m => m.source !== 'gateway')
+                    const gateway = agentCatalog.models.filter(m => m.source === 'gateway')
+                    if (gateway.length === 0) {
+                      return agentCatalog.models.map(m => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))
+                    }
+                    return (
+                      <>
+                        {builtins.length > 0 && (
+                          <optgroup label="Built-in">
+                            {builtins.map(m => (
+                              <option key={m.id} value={m.id}>{m.label}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <optgroup label="LLM Gateway">
+                          {gateway.map(m => (
+                            <option key={m.id} value={m.id}>{m.label}</option>
+                          ))}
+                        </optgroup>
+                      </>
+                    )
+                  })()}
                 </select>
+                {agentEngine === 'codex-extra' && agentCatalog.models.length === 0 && (
+                  <p className="text-xs text-[var(--color-foreground-muted)]">
+                    No models registered. Add one in Admin › LLM Gateway first.
+                  </p>
+                )}
               </div>
+            )}
+            {agentEngine === 'codex-extra' && (!agentCatalog || agentCatalog.models.length === 0) && (
+              <p className="text-xs text-[var(--color-foreground-muted)]">
+                This engine routes through the embedded LLM Gateway. Register a model in Admin › LLM Gateway to pick it here.
+              </p>
             )}
             {agentReasoningLevels.length > 0 && (
               <div className="space-y-2">
