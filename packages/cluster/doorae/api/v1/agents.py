@@ -12,9 +12,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from doorae.agent_files import AgentFilePathError, validate_agent_file_path
 from doorae.auth.dependencies import Identity
-from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Machine, MachineEngine, Participant, Room
+from doorae.db.models import (
+    ActivityLog,
+    Agent,
+    AgentFile,
+    AgentToken,
+    LLMGatewayModel,
+    Machine,
+    MachineEngine,
+    Participant,
+    Room,
+)
 from doorae.dependencies import get_admin_identity, get_db
-from doorae.engines import get_engine_entry
+from doorae.engines import get_engine_entry, is_gateway_engine
 from doorae.rooms.membership import ensure_agent_in_room
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -516,6 +526,11 @@ class EngineModelOut(BaseModel):
     id: str
     label: str
     reasoning_levels: list[str]
+    # Marker for UI to distinguish static catalog entries from gateway-
+    # registered models. ``"builtin"`` is the existing hand-curated list
+    # in ``engines/catalog.py``; ``"gateway"`` is populated at request
+    # time from ``llm_gateway_models``.
+    source: str = "builtin"
 
 
 class EngineCatalogOut(BaseModel):
@@ -529,27 +544,64 @@ class EngineCatalogOut(BaseModel):
 async def get_engine_models(
     engine: str,
     identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return the model catalog for ``engine``.
 
     The ``reasoning_levels`` on each model narrow the engine-level
     levels. When a model's ``reasoning_levels`` is empty, the
     engine-level list applies. Clients should union them as needed.
+
+    For virtual engines that route through the LLM gateway (today:
+    ``codex-extra``), the model list is populated from
+    ``llm_gateway_models`` at request time — the static catalog's
+    ``models`` tuple is empty.
     """
     entry = get_engine_entry(engine)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Unknown engine: {engine}")
+
+    models: list[EngineModelOut] = [
+        EngineModelOut(
+            id=m.id,
+            label=m.label,
+            reasoning_levels=list(m.reasoning_levels),
+            source="builtin",
+        )
+        for m in entry.models
+    ]
+
+    default_model = entry.default_model
+
+    if is_gateway_engine(engine):
+        rows = (
+            await db.execute(
+                select(LLMGatewayModel)
+                .where(LLMGatewayModel.enabled == True)  # noqa: E712
+                .order_by(LLMGatewayModel.model_name)
+            )
+        ).scalars().all()
+        gateway_models = [
+            EngineModelOut(
+                id=row.model_name,
+                label=f"{row.model_name} · {row.provider}",
+                # Gateway models inherit the engine-level reasoning levels;
+                # per-model narrowing isn't exposed via the admin form yet.
+                reasoning_levels=[],
+                source="gateway",
+            )
+            for row in rows
+        ]
+        models.extend(gateway_models)
+        # Pick the first gateway model as default when the static catalog
+        # didn't supply one (virtual engines set ``default_model=""``).
+        if not default_model and gateway_models:
+            default_model = gateway_models[0].id
+
     return EngineCatalogOut(
         engine=entry.engine,
-        default_model=entry.default_model,
-        models=[
-            EngineModelOut(
-                id=m.id,
-                label=m.label,
-                reasoning_levels=list(m.reasoning_levels),
-            )
-            for m in entry.models
-        ],
+        default_model=default_model,
+        models=models,
         reasoning_levels=list(entry.reasoning_levels),
     )
 
