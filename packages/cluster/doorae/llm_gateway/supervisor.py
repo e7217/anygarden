@@ -8,8 +8,8 @@ responsibilities:
    env that carries *only* the Fernet-decrypted API keys (masked under
    ``DOORAE_LITELLM_*`` names to avoid colliding with doorae's own
    env), plus an ephemeral master key the reverse proxy reuses.
-2. Probe ``GET /health`` until the subprocess answers — this is the
-   single edge that transitions ``STARTING → RUNNING``.
+2. Probe the LiteLLM liveness endpoint until the subprocess answers —
+   this is the single edge that transitions ``STARTING → RUNNING``.
 3. Watch the process for unexpected exits and respawn with bounded
    exponential backoff (``[1s, 5s, 30s]``). A fourth consecutive crash
    drops the supervisor into ``FAILED`` so an operator sees it in the
@@ -69,7 +69,7 @@ class GatewayState(str, Enum):
 # the schedule is exhausted lands the supervisor in ``FAILED``.
 _BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 5.0, 30.0)
 
-# How long we poll ``GET /health`` before declaring the spawn a bust.
+# How long we poll LiteLLM liveness before declaring the spawn a bust.
 _HEALTH_TIMEOUT_SEC = 10.0
 
 # SIGTERM grace period before SIGKILL during graceful shutdown.
@@ -130,7 +130,7 @@ class _SpawnParams:
 # returning a FakeProc.
 #
 # ``HealthProbe``: async callable that returns ``True`` once LiteLLM
-# answers ``GET /health`` successfully, ``False`` on timeout/failure.
+# answers the liveness probe successfully, ``False`` on timeout/failure.
 # Production does an HTTP poll loop inside the probe; tests pass a
 # trivial ``AsyncMock(return_value=True)``.
 

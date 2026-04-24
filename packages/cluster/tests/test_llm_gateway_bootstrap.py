@@ -23,7 +23,10 @@ from cryptography.fernet import Fernet
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
 from doorae.db.models import Base, LLMGatewayModel, LLMGatewaySecret
-from doorae.llm_gateway.bootstrap import _build_spawn_params_factory
+from doorae.llm_gateway.bootstrap import (
+    _build_health_probe,
+    _build_spawn_params_factory,
+)
 from doorae.mcp_templates.encryption import MCPSecrets
 
 
@@ -72,6 +75,30 @@ async def test_child_env_always_carries_ollama_dummy_placeholder(env) -> None:
     assert params.child_env["DOORAE_LITELLM_OLLAMA_DUMMY"] == "sk-local"
     assert params.child_env["DOORAE_LITELLM_MASTER_KEY"] == "sk-master"
     assert params.master_key == "sk-master"
+
+
+async def test_health_probe_uses_litellm_liveliness_endpoint() -> None:
+    """LiteLLM's aggregate health route requires auth; probe liveness."""
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, float]] = []
+
+        async def get(self, url: str, timeout: float):
+            self.calls.append((url, timeout))
+
+            class Response:
+                status_code = 200
+
+            return Response()
+
+    client = FakeClient()
+    probe = _build_health_probe(client)  # type: ignore[arg-type]
+
+    assert await probe(4001) is True
+    assert client.calls == [
+        ("http://127.0.0.1:4001/health/liveliness", 1.0),
+    ]
 
 
 async def test_secret_rows_merge_with_placeholder_in_child_env(env) -> None:
