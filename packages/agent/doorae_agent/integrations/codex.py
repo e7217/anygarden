@@ -168,7 +168,7 @@ class CodexAdapter(EngineAdapter):
         sandbox: str = "workspace-write",
         reasoning_effort: str | None = None,
     ) -> None:
-        self._model = model or "gpt-5.4"
+        self._model = model or "gpt-5.5"
         self._system_prompt = system_prompt
         self._reasoning_effort = reasoning_effort
         self._sandbox = sandbox

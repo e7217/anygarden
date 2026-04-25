@@ -1,10 +1,16 @@
 """Static catalog of engine models and reasoning levels.
 
-Last refreshed: 2026-04-21 against the locally-installed CLIs
+Last refreshed: 2026-04-25 against the locally-installed CLIs
 (``claude`` 2.1.116, ``codex`` 0.121.0, ``gemini`` 0.37.1). Values were
 verified by probing ``--help``, triggering validation errors, and
 reading the shipped binaries' model-name tables — not by trusting the
 vendor marketing docs, which lag behind the actual CLIs.
+
+Exception: ``gpt-5.5`` (codex/openai) was added on the 2026-04-25
+announcement and is not yet round-tripped against a live ``codex exec``
+call. If ChatGPT-account auth rejects it at runtime, roll the
+``default_model`` back to ``gpt-5.4`` — Codex does no client-side
+validation, so the catalog can advertise an ID the backend then refuses.
 
 This is intentionally a hand-maintained dict rather than a live query
 against each SDK/CLI. Reasons:
@@ -79,8 +85,15 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # auth through a separate engine entry.
     "codex": EngineCatalogEntry(
         engine="codex",
-        default_model="gpt-5.4",
+        default_model="gpt-5.5",
         models=(
+            # gpt-5.5: announcement-only on 2026-04-25; runtime
+            # round-trip verification pending. See module docstring.
+            EngineModel(
+                id="gpt-5.5",
+                label="GPT-5.5",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
             EngineModel(
                 id="gpt-5.4",
                 label="GPT-5.4",
@@ -167,8 +180,11 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # models Doorae agents wire through the plain Responses API.
     "openai": EngineCatalogEntry(
         engine="openai",
-        default_model="gpt-5.4",
+        default_model="gpt-5.5",
         models=(
+            # gpt-5.5: announcement-only on 2026-04-25; runtime
+            # verification pending. See module docstring.
+            EngineModel(id="gpt-5.5", label="GPT-5.5"),
             EngineModel(id="gpt-5.4", label="GPT-5.4"),
             EngineModel(id="gpt-5.4-mini", label="GPT-5.4 Mini"),
         ),
