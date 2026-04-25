@@ -30,6 +30,7 @@ htmlcov/
 # Frontend
 node_modules/
 .vite/
+*.tsbuildinfo
 
 # Doorae runtime
 .doorae/
@@ -39,3 +40,9 @@ node_modules/
 # Env
 .env
 .env.local
+.envrc
+
+# Local-only AI tooling caches and scratch dirs
+.claude/
+.playwright-mcp/
+.tmp/
