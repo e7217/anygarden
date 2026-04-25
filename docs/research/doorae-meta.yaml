@@ -1,0 +1,218 @@
+# doorae self-mapping against awesome-ai-anatomy META_SCHEMA v2.
+# Schema: https://github.com/NeuZhou/awesome-ai-anatomy/blob/main/META_SCHEMA.yaml
+#
+# Phase A output of the awesome-ai-anatomy benchmark research
+# (.tmp/plan-awesome-ai-anatomy-benchmark.md). Each block keeps the
+# schema's intent — factual descriptions, no grades — and adds source
+# locations as comments where the choice required code-level judgement.
+
+# ─── Basic Info ───────────────────────────────────────────────
+name: Doorae
+repo: e7217/doorae
+stars: null              # Personal GitHub repo, no public star tracking yet
+forks: null
+language: [Python, TypeScript]
+loc: 88397               # Python 62050 + TS/TSX 26347 (find … wc -l, 2026-04-25)
+license: Apache-2.0
+created: "2026-04-14"   # First commit 9460772 "feat: initial monorepo structure"
+data_as_of: "2026-04-25"
+
+# ─── Classification ──────────────────────────────────────────
+# enum reminder:
+#   coding-agent | workflow-engine | browser | security-framework |
+#   memory-system | social-simulation | dev-tool
+# doorae is a multi-agent chat platform that hosts coding-agent CLIs
+# (claude/codex/gemini/openhands) inside chat rooms. The closest enum
+# fit is "coding-agent" because the agents wired in are coding agents,
+# but the project is more accurately a host/orchestrator for them.
+# See the "host-of-agents" note in characteristics.architecture.
+category: coding-agent
+maturity: beta            # 11 days old, production gating active (DOORAE_MCP_SECRETS_KEY refusal in prod boot, worklog 138)
+deployment: pip           # PyPI: doorae-cluster, doorae-machine, doorae-agent (+ npm @doorae/agent-ts). No Dockerfile in repo.
+
+# ─── Characteristics (factual, no grades) ────────────────────
+characteristics:
+  architecture: >
+    3-tier monorepo (uv workspace): cluster (FastAPI + WebSocket chat
+    server, React/Vite SPA) ↔ machine (per-host daemon that spawns
+    agent subprocesses) ↔ agent SDK (engine-adapter library imported
+    by the agent process). Communication uses an engine-agnostic
+    SpawnManifest dataclass between cluster and machine
+    (packages/machine/doorae_machine/spawner.py:30) so the spawner
+    never depends on protocol-frame shape. Frontend talks to cluster
+    over /api (REST) and /ws (WebSocket).
+
+  code_organization: >
+    3 Python packages (doorae-cluster, doorae-machine, doorae-agent)
+    + 1 npm package (@doorae/agent-ts) + React SPA in
+    packages/cluster/frontend. Cluster has 19 sibling modules
+    (rooms/messages/orchestration/scheduler/llm_gateway/mcp/auth/...);
+    machine has 12 (spawner/supervisor/safefs/agent_dir/...); agent
+    runtime is intentionally thin (handler_wrapper.py only) and
+    delegates the agent loop to engine-specific integrations
+    (anthropic, claude_code, codex, deep_agents, gemini_cli, openai,
+    openhands) under doorae_agent/integrations/.
+
+  security_approach: >
+    Multi-token capability model — user JWT (python-jose), per-machine
+    machine_token, per-room invite_token, per-agent agent_token issued
+    in SpawnManifest. argon2-cffi for passwords; cryptography Fernet
+    for MCP credential at-rest (DOORAE_MCP_SECRETS_KEY required for
+    prod boot, worklog 138). FastAPI dependencies enforce admin/owner
+    ACL: /api/v1/agents/* admin-only, /api/v1/machines/* owner-only.
+    No container/sandbox isolation — agents run as subprocesses under
+    the machine daemon's UID with safefs path validation
+    (machine/safefs.py, machine/agent_dir.py).
+
+  context_strategy: >
+    Per-room context window (worklog 148 part1-4) with admin-only
+    enabling (worklog 225) and per-agent opt-out (148 part2). Agent
+    receives ingest-only frames so context flows in but doesn't auto-
+    drive responses (074, 233). Memory split into runtime workspace
+    (machine/agent_dir) and long-term notes.md DB-backed snapshot
+    (worklog 237 multi-session DM file memory). Room shared files are
+    bridged into agent workspace on spawn and on respawn (#255, #257).
+    No condenser pipeline — context is bounded by room policy, not
+    summarized.
+
+  documentation: >
+    docs/{decisions, design, history, plans, research} at repo root,
+    per-package docs/ inside each package, CHANGELOG.md per package,
+    and a STAR-format worklogs/ with 100+ entries indexed by issue
+    number (one worklog per merged PR). DESIGN.md (20KB) and CLAUDE.md
+    (5KB) at root anchor UI design system and collaboration rules.
+
+# ─── Architecture Features ───────────────────────────────────
+features:
+  sandbox: process_isolation
+  # No docker/seatbelt/landlock. The machine daemon spawns each agent
+  # as a child subprocess; isolation is process-boundary + path
+  # validation (validate_agent_id, validate_agent_file_path in
+  # machine/agent_dir.py) + safe write helpers (machine/safefs.py).
+  # KILL_TIMEOUT=10s SIGTERM→SIGKILL escalation in spawner.py.
+
+  agent_loop: custom
+  # The schema enum (react/plan-execute/event-driven/workflow-dag/
+  # custom) doesn't fit cleanly. doorae's pattern is
+  # "engine-loop-as-adapter": the agent loop body lives inside the
+  # external CLI (claude, codex, gemini, openhands) and doorae wires
+  # message IPC + room shared files + cycle guard around it. The
+  # cluster side IS event-driven (WebSocket fan-in/fan-out, cooldown
+  # token bucket per participant in orchestration/rules.py), but the
+  # decision-making loop is delegated. Marking "custom" with a note.
+
+  context_management: custom
+  # Per-room window + ingest-only routing + per-agent opt-out
+  # (worklogs 148 part1-4, 225, 074). Not a condenser pipeline,
+  # not a sliding window in the usual sense — closer to "policy-
+  # bounded room context with explicit ingest gates".
+
+  stuck_detection: true
+  # Two layers:
+  # (a) #67 / #157 Phase A: counter-based brake — max_agent_turns
+  #     caps consecutive agent messages, task-init reset guard
+  #     prevents prefix abuse.
+  # (b) #157 Phase B: content-hash semantic cycle detector
+  #     (packages/agent/doorae_agent/integrations/cycle_guard.py).
+  #     SHA-1 of casefolded first 64 chars, 16-hex output, fires
+  #     when (sender, hash) pair appears ≥2 times in last 6
+  #     messages. Citation: $47K production loop case from the
+  #     2026-04-19 deep-research report.
+
+  multi_agent: true
+  # Multi-agent rooms are the primary product. Speaker strategy +
+  # orchestrator-handoff tool (worklog 159). Per-participant cooldown
+  # via TokenBucket (capacity=5, refill=1.0 tok/s) in
+  # cluster/orchestration/rules.py.
+
+  mcp_support: true
+  # cluster/mcp/{auth,router,tools}.py and cluster/mcp_templates/*.
+  # MCP server template catalog (worklog 124), Fernet-encrypted
+  # secret store (worklog 138), claude code mcp.json writer (worklog
+  # 142), agent-self-authoring skills via mcp create-skill (#120).
+
+  plugin_system: true
+  # Skill library: cluster/skills_library/{github_fetcher, search,
+  # service}.py — github-based skill registration (#119), agent self-
+  # authoring (#120), approve workflow + audit log (#125), library
+  # skills surfaced in manifest (#133), generation bump on attach/
+  # detach (#119), pass-through full skill dir on spawn (#123).
+
+  security:
+    layers: 4
+    types: [jwt-auth, multi-token-capabilities, fernet-at-rest, fastapi-dependency-acl]
+    # 1. python-jose JWT for users
+    # 2. machine_token / invite_token / agent_token capability tokens
+    #    (cluster/auth/{machine_token,invite_token,token}.py)
+    # 3. cryptography Fernet for MCP credential at-rest
+    # 4. FastAPI Depends() ACL (cluster/dependencies.py,
+    #    cluster/auth/dependencies.py) — admin/owner enforcement
+
+  providers:
+    count: 7
+    names: [anthropic, claude_code, codex, deep_agents, gemini_cli, openai, openhands]
+    # packages/agent/doorae_agent/integrations/. Note: machine/
+    # detector.py auto-detects only 4 binaries (claude-code, codex,
+    # gemini-cli, openhands) — the SDK adapters (anthropic, openai,
+    # deep_agents) are library-only and don't need a CLI on PATH.
+    # Static engine catalog (cluster/engines/catalog.py) hand-
+    # maintained, last refreshed 2026-04-21 against actual installed
+    # CLIs (claude 2.1.116, codex 0.121.0, gemini 0.37.1).
+
+# ─── Key Insights ─────────────────────────────────────────────
+key_finding: >
+  doorae is a "host of coding-agent CLIs" rather than a coding agent
+  itself — it wraps 4 external agent binaries (claude/codex/gemini/
+  openhands) plus 3 SDK paths in an engine-agnostic chat-room layer
+  with multi-token capability auth, per-room context policy, and a
+  64-bit content-hash cycle guard born from a real $47K production
+  loop. The agent reasoning loop is delegated to the wrapped CLI; the
+  host owns IPC, room context, lifecycle, and stuck/loop defenses.
+
+worth_stealing:
+  - >
+    Engine-agnostic SpawnManifest dataclass (machine/spawner.py:30)
+    decouples the spawner from any specific protocol-frame shape —
+    the same spawn() can be driven by SyncDesiredStateFrame +
+    TokenGrantFrame today and by something else tomorrow without
+    touching the spawner.
+  - >
+    Hand-maintained engine catalog with explicit "stale entry is a
+    trivial PR, not a runtime failure" contract (engines/catalog.py).
+    Adapters fall back to engine-default model when the requested ID
+    is unknown, so a stale catalog never breaks spawn.
+  - >
+    Cycle guard via 64-bit (sender, content-hash) pair over a 6-
+    message window. Tiny implementation (~80 LOC in cycle_guard.py),
+    excludes <16-char content from hashing so legit "ok"/"네"/"done"
+    don't trip it. Born from a documented production incident.
+  - >
+    Per-package CHANGELOG + global STAR-format worklogs/ indexed by
+    issue number. Every merged PR ships a worklog file in the same
+    branch (CLAUDE.md "feature 브랜치에서 커밋 후에는 write-worklog
+    스킬로 STAR 워크로그 커밋"), giving cross-cutting historical
+    rationale that survives squash-merge.
+
+easter_eggs:
+  - >
+    catalog.py docstring openly states "vendor marketing docs lag
+    behind actual CLIs" and that values were verified by probing
+    --help and triggering validation errors, not by trusting docs.
+  - >
+    Codex CLI does no client-side model-id validation at all
+    (engines/catalog.py module docstring). The catalog encodes UI
+    constraints because the CLI itself won't.
+  - >
+    KILL_TIMEOUT = 10s SIGTERM-then-SIGKILL escalation is a single
+    constant in spawner.py, not a configurable. Pragmatic over
+    flexible.
+
+# ─── Tags (for filtering) ────────────────────────────────────
+tags:
+  - multi-agent-chat
+  - coding-agent-host
+  - process-isolation
+  - mcp-support
+  - skill-library
+  - cycle-guard
+  - litellm-gateway
