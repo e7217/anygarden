@@ -1,6 +1,111 @@
 # CHANGELOG
 
 
+## v0.4.0 (2026-04-25)
+
+### Features — orchestrator & speaker strategies (#159)
+
+- Speaker-strategy schema + welcome propagation
+  ([#164](https://github.com/e7217/doorae/pull/164))
+  — Phase A introduces the strategy contract that
+  downstream phases plug into.
+- Strategy dispatcher + `round_robin`
+  ([#168](https://github.com/e7217/doorae/pull/168))
+  — Phase B routes a turn through pluggable speaker
+  selectors.
+- Orchestrator agent + `handoff` tool + per-agent token
+  UI ([#178](https://github.com/e7217/doorae/pull/178))
+  — Phase C+D adds an orchestrator role that selects the
+  next speaker via a deterministic tool-call rather than
+  free-form prose; surfaces participant roster on
+  `handoff_to` and broadcasts room settings
+  ([#224](https://github.com/e7217/doorae/pull/224)).
+
+### Features — multi-session DM & shared file memory
+
+- Per-agent multi-session DM + cross-engine file memory +
+  ephemeral mode
+  ([#240](https://github.com/e7217/doorae/pull/240))
+  — same agent can hold multiple parallel DM threads with
+  isolated history; ephemeral mode skips persistence.
+- Room shared files copy-distributed to agent memory
+  ([#250](https://github.com/e7217/doorae/pull/250))
+  — files attached to a room are copied into each agent's
+  workspace under `memory/shared/` on spawn and re-synced
+  on attach/detach.
+- Bridge `memory/shared/` into agent workspace
+  ([#260](https://github.com/e7217/doorae/pull/260))
+  — workspace now exposes `memory/shared/` as a stable
+  cross-engine path.
+
+### Features — ambient context window (#74, #148)
+
+- Decouple context ingestion from response gate (#74)
+  ([#139](https://github.com/e7217/doorae/pull/139))
+- Ambient context window for session engines (#74 Stage B)
+  ([#141](https://github.com/e7217/doorae/pull/141))
+- Per-room `context_window_enabled` toggle (#148 Part 1)
+  & per-agent `context_window_opt_out` (Part 2) +
+  `ingest_only` broadcast wiring (Part 3) +
+  Stage B accumulator removed (Part 4)
+  ([#149](https://github.com/e7217/doorae/pull/149),
+  [#150](https://github.com/e7217/doorae/pull/150),
+  [#151](https://github.com/e7217/doorae/pull/151),
+  [#152](https://github.com/e7217/doorae/pull/152)).
+
+### Features — task-init guards & cycle detection (#157)
+
+- Guard task-init reset-prefix abuse (Phase A)
+  ([#160](https://github.com/e7217/doorae/pull/160))
+- Detect semantic cycles in `decide_policy` (Phase B)
+  ([#161](https://github.com/e7217/doorae/pull/161))
+
+### Features — LLM gateway wiring (#197 Phase 5)
+
+- Agent reads/writes through the embedded LiteLLM gateway
+  ([#209](https://github.com/e7217/doorae/pull/209))
+  — closes the gateway loop opened in Phases 1–4.
+
+### Features — observability
+
+- Explicit request lifecycle + orphan sweeper for
+  observability (#204)
+  ([#210](https://github.com/e7217/doorae/pull/210))
+
+### Features — MCP
+
+- Auto-approve MCP tool calls for all engines (#134)
+  ([#137](https://github.com/e7217/doorae/pull/137))
+
+### Fixes
+
+- `agent/gemini`: pass `--skip-trust` to bypass the
+  trusted-folders gate (#261)
+  ([#262](https://github.com/e7217/doorae/pull/262))
+- Sync room shared files on agent respawn & mid-session
+  (#255) ([#256](https://github.com/e7217/doorae/pull/256))
+- Bypass `ingest_only` stamp for human senders; move
+  orchestrator O1 ahead of stamp (#233)
+  ([#235](https://github.com/e7217/doorae/pull/235))
+- Deliver codex responses that span long tool turns (#190)
+  ([#194](https://github.com/e7217/doorae/pull/194))
+- Keep `engine_secrets` out of agent
+  `/proc/self/environ` (#184 follow-up)
+  ([#193](https://github.com/e7217/doorae/pull/193))
+- Include source/responder `display_name` in
+  `room_query` / `room_query_result` metadata (#155, #153)
+  ([#154](https://github.com/e7217/doorae/pull/154),
+  [#156](https://github.com/e7217/doorae/pull/156))
+
+### Refactors
+
+- Remove `codex-extra` virtual engine
+  ([#258](https://github.com/e7217/doorae/pull/258))
+- Inject `engine_secrets` via subprocess env, not disk
+  `.env` (#184)
+  ([#189](https://github.com/e7217/doorae/pull/189))
+
+
 ## v0.3.2 (2026-04-17)
 
 No code changes this cycle — version bumped to keep the three
