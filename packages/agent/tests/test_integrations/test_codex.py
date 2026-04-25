@@ -451,3 +451,131 @@ class TestCodexTurnTimeout:
         assert not captured["signal"].is_set(), (
             "happy path must not fire the abort signal"
         )
+
+
+class TestCodexSharedContextReinjection:
+    """#255 — ``<shared-context>`` must be re-injected when its bytes
+    change across turns (file upload / backfill arriving after the
+    first turn), not cached once-and-forever like #237's memory
+    policy block. The first-turn optimisation from #237 stays for
+    unchanged blocks — we add a per-block-sha cache so identical
+    content is still dropped.
+    """
+
+    @staticmethod
+    def _patch_suffix(values):
+        """Patch ``compose_memory_suffix`` to return ``values`` in order
+        on successive calls. The adapter imports the helper from
+        ``base`` inline, so patching at the source module covers both
+        sites."""
+        from itertools import cycle
+        it = iter(values) if not isinstance(values, str) else cycle([values])
+
+        def _fake(*_args, **_kwargs):
+            try:
+                return next(it)
+            except StopIteration:
+                return ""
+
+        return patch(
+            "doorae_agent.integrations.base.compose_memory_suffix",
+            side_effect=_fake,
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_turn_injects_shared_block_as_prefix(self) -> None:
+        fake_mod, options_mod, _codex, mock_thread = _make_fake_codex_module()
+        suffix = "<shared-context>\n<file name=\"a.md\"/>\n</shared-context>\n"
+        with _patch_codex(fake_mod, options_mod), self._patch_suffix(suffix):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "Q1", "room_id": "r1"})
+
+        sent = mock_thread.run_text.call_args.args[0]
+        assert suffix.rstrip() in sent
+        assert sent.rstrip().endswith("Q1"), (
+            "shared block must be a prefix, user content is the tail"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unchanged_block_skips_reinjection(self) -> None:
+        """Identical suffix across turns → only the first turn carries
+        it. #237's rationale (Codex threads persist history) holds."""
+        fake_mod, options_mod, _codex, mock_thread = _make_fake_codex_module()
+        suffix = "<shared-context>same</shared-context>\n"
+        with _patch_codex(fake_mod, options_mod), self._patch_suffix(suffix):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "Q1", "room_id": "r1"})
+            await adapter.on_message({"content": "Q2", "room_id": "r1"})
+
+        second = mock_thread.run_text.call_args_list[1].args[0]
+        assert "<shared-context>" not in second
+        assert second == "Q2"
+
+    @pytest.mark.asyncio
+    async def test_changed_block_reinjects_with_update_marker(self) -> None:
+        """#255 core — when the suffix changes (new file uploaded,
+        backfill arrived), the next turn must carry the fresh block
+        tagged as an update so the agent notices the diff."""
+        fake_mod, options_mod, _codex, mock_thread = _make_fake_codex_module()
+        v1 = "<shared-context>v1</shared-context>\n"
+        v2 = "<shared-context>v2-with-new-file</shared-context>\n"
+        with _patch_codex(fake_mod, options_mod), self._patch_suffix([v1, v2, v2]):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "Q1", "room_id": "r1"})
+            await adapter.on_message({"content": "Q2", "room_id": "r1"})
+
+        second = mock_thread.run_text.call_args_list[1].args[0]
+        assert "v2-with-new-file" in second
+        assert "v1" not in second, "stale version must not appear"
+        # Must be user-visibly tagged as update so the model treats
+        # it as a refresh rather than a duplicate paste.
+        assert "업데이트" in second or "updated" in second.lower()
+        assert second.rstrip().endswith("Q2")
+
+    @pytest.mark.asyncio
+    async def test_empty_suffix_never_prefixes(self) -> None:
+        fake_mod, options_mod, _codex, mock_thread = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod), self._patch_suffix(""):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "Q1", "room_id": "r1"})
+            await adapter.on_message({"content": "Q2", "room_id": "r1"})
+
+        assert mock_thread.run_text.call_args_list[0].args[0] == "Q1"
+        assert mock_thread.run_text.call_args_list[1].args[0] == "Q2"
+
+    @pytest.mark.asyncio
+    async def test_per_room_cache_independent(self) -> None:
+        """A change in room A must not force a re-inject in room B and
+        vice-versa — the cache key is (room_id, sha)."""
+        fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
+        # Per-room threads need distinct run_text instances so each
+        # room's prompts are isolated in call_args_list.
+        room_threads: dict[str, MagicMock] = {}
+
+        def make_thread(**_kw):
+            t = MagicMock()
+            t.run_text = MagicMock(return_value="ok")
+            return t
+
+        mock_codex.start_thread = MagicMock(side_effect=make_thread)
+
+        a_suffix = "<shared-context>A</shared-context>\n"
+        b_suffix = "<shared-context>B</shared-context>\n"
+        seq = [a_suffix, b_suffix, a_suffix, b_suffix]  # A1, B1, A2, B2 — unchanged each
+        with _patch_codex(fake_mod, options_mod), self._patch_suffix(seq):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "A1", "room_id": "r-a"})
+            await adapter.on_message({"content": "B1", "room_id": "r-b"})
+            await adapter.on_message({"content": "A2", "room_id": "r-a"})
+            await adapter.on_message({"content": "B2", "room_id": "r-b"})
+
+        # Second turn per room: suffix unchanged → no prefix.
+        a_thread = adapter._threads["r-a"]
+        b_thread = adapter._threads["r-b"]
+        assert "<shared-context>" not in a_thread.run_text.call_args_list[1].args[0]
+        assert "<shared-context>" not in b_thread.run_text.call_args_list[1].args[0]

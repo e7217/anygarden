@@ -340,6 +340,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             server_url=server_url,
             mcp_template_service=app.state.mcp_template_service,
             llm_gateway_enabled=config.llm_gateway_enabled,
+            # #255 — lifecycle backfills room shared files when an agent
+            # transitions into ``running`` (respawn path). The same
+            # directory the /rooms/{id}/files upload route writes into.
+            room_files_dir=config.room_files_dir,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state

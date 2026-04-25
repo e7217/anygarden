@@ -683,3 +683,192 @@ class TestAgentLifecycle:
             agent = result.scalar_one()
             assert agent.actual_state == "stopped"
             assert agent.pid is None
+
+
+class TestSharedFilesBackfillOnRunningTransition:
+    """#255 — The spawner prunes ``<agent_root>/memory/`` on every
+    respawn, so any room shared files that were already materialised
+    there are wiped. The cluster only schedules a backfill on the
+    *first* room join (``ensure_agent_in_room`` ``created=True``),
+    which means respawn leaves the agent permanently without its
+    shared files until someone re-uploads.
+
+    The fix: when ``handle_report_actual_state`` observes a transition
+    *into* ``running``, re-push every room shared file to that agent's
+    machine. Idempotent thanks to the daemon's ``content_sha256``
+    compare — redundant re-sends after a no-op transition just skip.
+    """
+
+    @staticmethod
+    async def _seed_shared_file(
+        factory,
+        *,
+        room_id: str,
+        room_files_dir,
+        storage_name: str = "note.md",
+        body: bytes = b"# hello\n",
+    ) -> str:
+        """Write bytes to ``room_files_dir`` and insert a matching
+        ``RoomSharedFile`` row. Returns the storage-relative path
+        used by the DB row.
+        """
+        from doorae.db.models import RoomSharedFile
+
+        room_files_dir.mkdir(parents=True, exist_ok=True)
+        rel = f"{room_id}/{storage_name}"
+        path = room_files_dir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(body)
+
+        import hashlib
+        sha = hashlib.sha256(body).hexdigest()
+        async with factory() as db:
+            row = RoomSharedFile(
+                room_id=room_id,
+                filename=storage_name,
+                storage_name=storage_name,
+                storage_path=rel,
+                sha256=sha,
+                size_bytes=len(body),
+                mime="text/plain",
+            )
+            db.add(row)
+            await db.commit()
+        return rel
+
+    @pytest.mark.asyncio
+    async def test_running_transition_pushes_existing_shared_files(
+        self, lifecycle_env, tmp_path
+    ) -> None:
+        """pending → running must trigger agent_memory_shared_file_write
+        for every shared file currently in the room."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        room_id = lifecycle_env["room_id"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        room_files_dir = tmp_path / "room_files"
+        lifecycle._room_files_dir = room_files_dir  # test-only injection
+
+        async with factory() as db:
+            agent = Agent(
+                name="respawn-agent",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                placed_on_machine_id=machine.id,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+        await self._seed_shared_file(
+            factory,
+            room_id=room_id,
+            room_files_dir=room_files_dir,
+            storage_name="note.md",
+            body=b"shared content\n",
+        )
+
+        fake_ws.sent.clear()
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [{"agent_id": agent_id, "actual_state": "running", "pid": 1234}],
+        )
+
+        frames = [json.loads(s) for s in fake_ws.sent]
+        writes = [f for f in frames if f.get("type") == "agent_memory_shared_file_write"]
+        assert len(writes) == 1, (
+            f"expected one backfill frame, got frames={frames!r}"
+        )
+        assert writes[0]["agent_id"] == agent_id
+        assert writes[0]["storage_name"] == "note.md"
+        assert writes[0]["content"] == "shared content\n"
+
+    @pytest.mark.asyncio
+    async def test_running_to_running_does_not_rebackfill(
+        self, lifecycle_env, tmp_path
+    ) -> None:
+        """Heartbeat reports that keep actual_state=running should NOT
+        retrigger backfill — otherwise every heartbeat floods the
+        machine bus with duplicates."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        room_id = lifecycle_env["room_id"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        room_files_dir = tmp_path / "room_files"
+        lifecycle._room_files_dir = room_files_dir
+
+        async with factory() as db:
+            agent = Agent(
+                name="running-agent",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+        await self._seed_shared_file(
+            factory, room_id=room_id, room_files_dir=room_files_dir,
+        )
+
+        fake_ws.sent.clear()
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [{"agent_id": agent_id, "actual_state": "running"}],
+        )
+
+        frames = [json.loads(s) for s in fake_ws.sent]
+        writes = [f for f in frames if f.get("type") == "agent_memory_shared_file_write"]
+        assert writes == [], (
+            f"heartbeat with unchanged state must not backfill: {frames!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_room_files_dir_skips_gracefully(
+        self, lifecycle_env
+    ) -> None:
+        """When the lifecycle was built without a ``room_files_dir``
+        (pre-#255 tests, or deployments that never enabled shared
+        files), the running transition must still work — we just
+        can't backfill, so the frame list stays empty and no errors
+        raise."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        room_id = lifecycle_env["room_id"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        # No _room_files_dir on lifecycle.
+        assert not hasattr(lifecycle, "_room_files_dir") or \
+               getattr(lifecycle, "_room_files_dir") is None
+
+        async with factory() as db:
+            agent = Agent(
+                name="no-dir-agent",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                placed_on_machine_id=machine.id,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+
+        fake_ws.sent.clear()
+        # Must not raise.
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [{"agent_id": agent_id, "actual_state": "running"}],
+        )
+
+        frames = [json.loads(s) for s in fake_ws.sent]
+        writes = [f for f in frames if f.get("type") == "agent_memory_shared_file_write"]
+        assert writes == []
