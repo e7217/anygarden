@@ -61,7 +61,7 @@ class TestCodexAdapter:
 
     def test_default_model(self) -> None:
         adapter = CodexAdapter()
-        assert adapter._model == "gpt-5.4"
+        assert adapter._model == "gpt-5.5"
 
     @pytest.mark.asyncio
     async def test_start_initializes_client(self) -> None:

@@ -117,8 +117,9 @@ class TestEngineModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["engine"] == "codex"
-        assert data["default_model"] == "gpt-5.4"
+        assert data["default_model"] == "gpt-5.5"
         model_ids = [m["id"] for m in data["models"]]
+        assert "gpt-5.5" in model_ids
         assert "gpt-5.4" in model_ids
         assert "gpt-5.4-mini" in model_ids
 
