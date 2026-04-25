@@ -22,7 +22,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import Participant, Task
+from doorae.db.models import Participant, Room, Task
 from doorae.skills_library.service import (
     SkillLibraryService,
     SkillNameConflictError,
@@ -138,6 +138,45 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["task_id", "status"],
+        },
+    },
+    {
+        "name": "create_task",
+        "description": (
+            "Create a new task in a room you orchestrate, optionally "
+            "assigning it to one of the room's agent participants. Call "
+            "this multiple times in a single turn to break a complex "
+            "user request into independently delegated units of work. "
+            "Only the agent designated as the room's orchestrator may "
+            "use this tool, and only when the room runs the "
+            "``orchestrator`` speaker strategy."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": {"type": "string"},
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                },
+                "assignee_pid": {
+                    "type": ["string", "null"],
+                    "description": (
+                        "Participant id of the assignee. Must be a "
+                        "participant of ``room_id`` and must not be "
+                        "your own orchestrator participant (no "
+                        "self-loops). Omit to create an unassigned "
+                        "task that you intend to delegate later."
+                    ),
+                },
+                "status": {
+                    "type": "string",
+                    "enum": list(TASK_STATUS_VALUES),
+                    "default": "todo",
+                },
+            },
+            "required": ["room_id", "title"],
         },
     },
 ]
@@ -362,4 +401,134 @@ async def mark_task_status(
     return _ok_result(
         f"task {task_id} status -> {status}",
         structured={"task_id": task_id, "status": status},
+    )
+
+
+# ── create_task (#270) ─────────────────────────────────────────────
+
+
+async def create_task(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a task in a room the calling agent orchestrates.
+
+    Authorization (plan §3.1):
+    - The room must run ``speaker_strategy='orchestrator'``.
+    - ``Room.orchestrator_agent_id`` must equal the caller's
+      ``agent_id``.
+    - The optional ``assignee_pid`` must be a participant of the
+      target room AND must not point at the orchestrator's own
+      participant (self-loop guard, plan §6 R2).
+
+    On success the helper persists the row, then reuses Phase 1's
+    synthetic mention injection so the assignee agent wakes through
+    its existing ``decide_policy`` mention path — no new wake-up
+    protocol is introduced. Phase 1 also wires the WS fanout, which
+    the router applies after this handler returns (we deliberately
+    return ``task_id`` so the router can re-fetch and broadcast).
+    """
+    # ── Validate inputs ──────────────────────────────────────────
+    room_id = arguments.get("room_id")
+    title = arguments.get("title")
+    assignee_pid = arguments.get("assignee_pid")
+    status = arguments.get("status", "todo")
+    if not room_id:
+        return _error_result("missing required argument: room_id")
+    if not title or not isinstance(title, str) or not title.strip():
+        return _error_result("missing required argument: title")
+    if status not in TASK_STATUS_VALUES:
+        return _error_result(
+            f"invalid status {status!r}; expected one of "
+            f"{sorted(TASK_STATUS_VALUES)}"
+        )
+
+    # ── Authorization ────────────────────────────────────────────
+    room = (
+        await db.execute(select(Room).where(Room.id == room_id))
+    ).scalar_one_or_none()
+    if room is None:
+        return _error_result(f"room not found: {room_id}")
+    if room.speaker_strategy != "orchestrator":
+        return _error_result(
+            "forbidden: room speaker strategy is not 'orchestrator'; "
+            "create_task is reserved for orchestrator-driven rooms"
+        )
+    if room.orchestrator_agent_id != agent_id:
+        return _error_result(
+            "forbidden: only the room's orchestrator may create tasks"
+        )
+
+    # ── Optional assignee validation ─────────────────────────────
+    if assignee_pid is not None:
+        assignee = (
+            await db.execute(
+                select(Participant).where(Participant.id == assignee_pid)
+            )
+        ).scalar_one_or_none()
+        if assignee is None or assignee.room_id != room_id:
+            return _error_result(
+                "assignee_pid is not a participant of this room"
+            )
+        # Self-loop guard: if the orchestrator assigns the task to
+        # itself, its own ``decide_policy`` would wake again on the
+        # synthetic mention, potentially re-decomposing forever.
+        if assignee.agent_id == agent_id:
+            return _error_result(
+                "self-assignment is not allowed: orchestrator cannot "
+                "assign a task to its own participant"
+            )
+
+    # ── Persist + inject ─────────────────────────────────────────
+    task = Task(
+        room_id=room_id,
+        title=title.strip(),
+        status=status,
+        assignee_participant_id=assignee_pid,
+        # ``created_by`` is for User authors — agent-created tasks
+        # leave it NULL. The synthetic message metadata carries the
+        # full provenance.
+        created_by=None,
+    )
+    db.add(task)
+    await db.flush()
+
+    if assignee_pid is not None:
+        # Lazy import — avoids a top-level cycle between mcp/tools and
+        # messages/service (the latter imports doorae.db.models).
+        from doorae.messages.service import inject_task_assignment_message
+
+        # Sender: the orchestrator's own participant. We resolve it
+        # rather than requiring the caller to pass it because the
+        # orchestrator already authenticated as the room's conductor —
+        # any other sender choice would muddle the provenance.
+        orc_p = (
+            await db.execute(
+                select(Participant).where(
+                    Participant.room_id == room_id,
+                    Participant.agent_id == agent_id,
+                )
+            )
+        ).scalar_one_or_none()
+        sender_pid = orc_p.id if orc_p is not None else None
+        await inject_task_assignment_message(
+            db,
+            room=room,
+            task=task,
+            sender_participant_id=sender_pid,
+            event="assigned",
+        )
+
+    return _ok_result(
+        f"task {task.id!r} created" + (
+            f" and assigned to {assignee_pid}" if assignee_pid else ""
+        ),
+        structured={
+            "task_id": task.id,
+            "room_id": task.room_id,
+            "assignee_pid": task.assignee_participant_id,
+            "status": task.status,
+        },
     )
