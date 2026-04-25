@@ -21,6 +21,7 @@ from doorae.db.models import (
     MachineEngine,
     Participant,
     Room,
+    Task,
 )
 from doorae.dependencies import get_admin_identity, get_db
 from doorae.engines import get_engine_entry
@@ -966,6 +967,64 @@ class ActivityLogOut(BaseModel):
     # don't belong to any particular request lifecycle.
     request_id: str | None = None
     details: dict | None = None
+
+
+# ── Per-agent task aggregation (#266) ─────────────────────────────
+
+
+class AgentTaskOut(BaseModel):
+    """Task row enriched with its originating room — backs the 2차 뷰
+    in the agent profile (plan §3.1, Step 9). Mirrors ``TaskOut`` fields
+    plus ``room_name`` so the frontend can render room-name chips
+    without a second round-trip."""
+
+    id: str
+    room_id: str
+    room_name: str
+    title: str
+    status: str
+    assignee_participant_id: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: str
+
+
+@router.get("/{agent_id}/tasks", response_model=list[AgentTaskOut])
+async def list_agent_tasks(
+    agent_id: str,
+    status: Optional[str] = None,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return every task assigned to *agent_id* across all rooms.
+
+    Joins ``tasks`` to ``participants`` on ``assignee_participant_id``
+    and filters by ``participants.agent_id``. Unassigned tasks (the
+    NULL assignee path) are excluded by construction — the join key
+    is the assignee. Phase 1 권한: admin-only (plan §3.2 결정 3).
+    """
+    stmt = (
+        select(Task, Room.name)
+        .join(Participant, Task.assignee_participant_id == Participant.id)
+        .join(Room, Task.room_id == Room.id)
+        .where(Participant.agent_id == agent_id)
+        .order_by(Task.created_at)
+    )
+    if status:
+        stmt = stmt.where(Task.status == status)
+    rows = (await db.execute(stmt)).all()
+    return [
+        AgentTaskOut(
+            id=task.id,
+            room_id=task.room_id,
+            room_name=room_name,
+            title=task.title,
+            status=task.status,
+            assignee_participant_id=task.assignee_participant_id,
+            created_by=task.created_by,
+            created_at=task.created_at.isoformat(),
+        )
+        for task, room_name in rows
+    ]
 
 
 @router.get("/{agent_id}/activity", response_model=list[ActivityLogOut])

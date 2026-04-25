@@ -172,7 +172,7 @@ async def test_rpc_user_token_rejected(mcp_env):
 
 
 @pytest.mark.asyncio
-async def test_tools_list_returns_four_tools(mcp_env):
+async def test_tools_list_returns_expected_tools(mcp_env):
     client, token = mcp_env["client"], mcp_env["token_a"]
     data = await _rpc_call(client, token, "tools/list")
     assert data["_status"] == 200
@@ -180,11 +180,14 @@ async def test_tools_list_returns_four_tools(mcp_env):
     assert data["id"] == 1
     assert "result" in data
     names = {t["name"] for t in data["result"]["tools"]}
+    # #266 — ``mark_task_status`` joins the original skill-authoring
+    # quartet. Tests for the new tool live in test_mark_task_status.py.
     assert names == {
         "create_skill",
         "update_skill",
         "list_my_skills",
         "delete_my_skill",
+        "mark_task_status",
     }
 
 

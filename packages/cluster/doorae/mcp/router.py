@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from doorae.mcp.auth import resolve_agent_id
-from doorae.mcp.tools import TOOL_SCHEMAS, call_tool
+from doorae.mcp.tools import TOOL_SCHEMAS, call_tool, mark_task_status
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -104,6 +104,57 @@ async def mcp_rpc(request: Request) -> dict[str, Any]:
             return _jsonrpc_error(
                 req_id, -32602, "params.arguments must be an object"
             )
+        # ``mark_task_status`` (#266) is the first tool that operates
+        # on the main DB rather than the skill library, so it owns its
+        # own session lifecycle here. The legacy skill tools below
+        # continue to flow through ``call_tool``.
+        if name == "mark_task_status":
+            session_factory = request.app.state.session_factory
+            async with session_factory() as db:
+                tool_result = await mark_task_status(
+                    db, agent_id=agent_id, arguments=arguments
+                )
+                if not tool_result.get("isError"):
+                    # Snapshot the task and room name BEFORE the
+                    # commit closes the session — fanout reads them
+                    # outside the transaction boundary.
+                    from sqlalchemy import select as _sa_select
+
+                    from doorae.db.models import Room as _Room
+                    from doorae.db.models import Task as _Task
+                    from doorae.messages.service import (
+                        fanout_task_event as _fanout_task_event,
+                    )
+
+                    task_id_arg = arguments.get("task_id")
+                    task_obj = (
+                        await db.execute(
+                            _sa_select(_Task).where(_Task.id == task_id_arg)
+                        )
+                    ).scalar_one_or_none()
+                    room_obj = None
+                    if task_obj is not None:
+                        room_obj = (
+                            await db.execute(
+                                _sa_select(_Room).where(
+                                    _Room.id == task_obj.room_id
+                                )
+                            )
+                        ).scalar_one_or_none()
+                    await db.commit()
+                    if task_obj is not None:
+                        manager = getattr(
+                            request.app.state, "connection_manager", None
+                        )
+                        await _fanout_task_event(
+                            db,
+                            manager=manager,
+                            event="updated",
+                            task=task_obj,
+                            room_name=room_obj.name if room_obj else "",
+                        )
+            return _jsonrpc_ok(req_id, tool_result)
+
         service = _service(request)
         tool_result = await call_tool(service, agent_id, name, arguments)
         # Bump the author's generation when body-changing tools succeed,

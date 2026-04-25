@@ -587,7 +587,10 @@ export default function ChatPage() {
                 />
               </>
             ) : (
-              <TaskPanel roomId={selectedRoom} />
+              <TaskPanel
+                roomId={selectedRoom}
+                participants={participants}
+              />
             )}
             {user?.is_admin && (
               <ManageRoomAgentsDialog

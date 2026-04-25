@@ -108,6 +108,11 @@ class RoomOut(BaseModel):
     # directive. Trust-model signal, not a hard FS guard (see plan §3.2).
     # Default False keeps legacy rooms behaving as before.
     ephemeral: bool = False
+    # #266 — opt-in toggle for surfacing human participants in the
+    # task assignee dropdown. Default False (agent-only assignment is
+    # the primary mode). Surfaced here so the frontend can hide the
+    # human group without a second round-trip.
+    allow_human_assignment: bool = False
     model_config = {"from_attributes": True}
 
 

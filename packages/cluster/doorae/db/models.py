@@ -143,6 +143,14 @@ class Room(Base):
     ephemeral: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
     )
+    # Issue #266 — opt-in toggle that controls whether human
+    # participants are eligible task assignees in this room. Default
+    # False so existing rooms behave like before (agent-only target,
+    # which matches the "에이전트가 메인" stance). Flipped on per-room
+    # by admins when human-assignment workflows are wanted.
+    allow_human_assignment: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     project: Mapped["Project"] = relationship("Project", back_populates="rooms")
@@ -905,6 +913,11 @@ class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
         Index("ix_tasks_room_status", "room_id", "status"),
+        # Issue #266 — accelerates the per-agent aggregation query
+        # backing ``GET /api/v1/agents/{id}/tasks``. The 1차 view (룸)
+        # is covered by ``ix_tasks_room_status``; this is its dual for
+        # the 2차 view (에이전트 프로필).
+        Index("ix_tasks_assignee_status", "assignee_participant_id", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
