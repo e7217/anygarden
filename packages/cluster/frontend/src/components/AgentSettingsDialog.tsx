@@ -34,6 +34,7 @@ import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
+import TasksPanel from '@/components/agent-settings/TasksPanel'
 import { ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -219,6 +220,13 @@ export default function AgentSettingsDialog({
 
             <Section id="rooms" title="Rooms">
               <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
+            </Section>
+
+            {/* Tasks (#266) — cross-room aggregation of work currently
+                assigned to this agent. Sits next to Rooms because both
+                answer "what is this agent doing right now". */}
+            <Section id="tasks" title="Tasks">
+              <TasksPanel agentId={agent?.id ?? null} />
             </Section>
 
             {/* Activity is a lifecycle log — least-often consulted of

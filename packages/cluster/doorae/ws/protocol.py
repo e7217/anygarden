@@ -277,6 +277,26 @@ class ErrorOut(BaseModel):
     detail: str
 
 
+class TaskUpdateOut(BaseModel):
+    """Per-user push for the agent-profile 2차 view (#266 Step 6).
+
+    Emitted whenever a task is created, updated, deleted, or
+    (re)assigned. Goes to the room channel so the 1차 view can update
+    incrementally, AND to every admin user's WS sessions via
+    ``ConnectionManager.push_to_users`` so the 2차 view stays live
+    even when the admin isn't subscribed to the originating room.
+
+    ``task`` is intentionally typed as a free-form ``dict[str, Any]`` so
+    callers can shape the payload to match the REST schema they want to
+    surface (room TaskOut vs agent AgentTaskOut). The frontend treats
+    this as opaque metadata it merges into local state.
+    """
+
+    type: Literal["task.updated"] = "task.updated"
+    event: Literal["created", "updated", "deleted", "assigned", "reassigned"]
+    task: dict[str, Any]
+
+
 OutgoingFrame = (
     MessageOut
     | RoomCreatedOut
@@ -288,5 +308,6 @@ OutgoingFrame = (
     | PresenceUpdateOut
     | WelcomeOut
     | RoomSettingsChangedOut
+    | TaskUpdateOut
     | ErrorOut
 )

@@ -505,8 +505,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     is_guest_session = identity is not None and identity.kind == "guest"
     guest_gauge_incremented = False
 
-    # Subscribe
-    await manager.subscribe(room_id, participant.id, websocket)
+    # Subscribe — pass ``user_id`` for logged-in user sessions so the
+    # per-user task-update fanout (#266) can find them. Agent and
+    # guest connections leave the user_id index empty, which is the
+    # correct behaviour: those targets never receive a task.updated
+    # frame.
+    user_id = (
+        identity.id if identity is not None and identity.kind == "user" else None
+    )
+    await manager.subscribe(
+        room_id, participant.id, websocket, user_id=user_id
+    )
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
 
     # Track guest connections separately from the overall WS gauge so

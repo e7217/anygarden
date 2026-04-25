@@ -19,12 +19,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from doorae.db.models import Participant, Task
 from doorae.skills_library.service import (
     SkillLibraryService,
     SkillNameConflictError,
     SkillNotFoundError,
     SkillOwnershipError,
 )
+
+# Allowed task status values for ``mark_task_status`` (#266). Mirrored
+# in the JSON Schema below so the LLM gets a clear enum hint.
+TASK_STATUS_VALUES: tuple[str, ...] = ("todo", "in_progress", "done", "blocked")
 
 # ── Tool schemas ────────────────────────────────────────────────
 
@@ -109,6 +117,27 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"id": {"type": "string"}},
             "required": ["id"],
+        },
+    },
+    {
+        "name": "mark_task_status",
+        "description": (
+            "Update the status of a task currently assigned to you. "
+            "Only the agent that owns the task's assignee participant "
+            "may call this. Use this when you finish a unit of work, "
+            "begin one, or hit a blocker so the room (and the task's "
+            "human stakeholders) stay in sync."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "status": {
+                    "type": "string",
+                    "enum": list(TASK_STATUS_VALUES),
+                },
+            },
+            "required": ["task_id", "status"],
         },
     },
 ]
@@ -271,4 +300,66 @@ async def _delete_my_skill(
     return _ok_result(
         f"skill {skill_id} deleted",
         structured={"deleted": bool(deleted)},
+    )
+
+
+# ── mark_task_status (#266) ────────────────────────────────────────
+
+
+async def mark_task_status(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Flip a task's ``status`` on behalf of the calling agent.
+
+    Authorization: the caller's ``agent_id`` must match the agent that
+    owns the task's current assignee participant. This protects against
+    one agent silently completing another agent's work — a quiet but
+    real failure mode in multi-agent rooms.
+
+    Lives outside the legacy ``call_tool`` dispatcher (which only takes
+    a ``SkillLibraryService``) so the MCP router wires this branch
+    directly with a fresh DB session — see ``mcp/router.py``.
+    """
+    task_id = arguments.get("task_id")
+    status = arguments.get("status")
+    if not task_id:
+        return _error_result("missing required argument: task_id")
+    if not status:
+        return _error_result("missing required argument: status")
+    if status not in TASK_STATUS_VALUES:
+        return _error_result(
+            f"invalid status {status!r}; expected one of "
+            f"{sorted(TASK_STATUS_VALUES)}"
+        )
+
+    task = (
+        await db.execute(select(Task).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    if task is None:
+        return _error_result(f"task not found: {task_id}")
+
+    if not task.assignee_participant_id:
+        return _error_result(
+            "forbidden: task has no assignee — it cannot be marked by anyone"
+        )
+
+    assignee = (
+        await db.execute(
+            select(Participant).where(Participant.id == task.assignee_participant_id)
+        )
+    ).scalar_one_or_none()
+    if assignee is None or assignee.agent_id != agent_id:
+        return _error_result(
+            "forbidden: only the assignee agent may mark this task"
+        )
+
+    task.status = status
+    await db.flush()
+
+    return _ok_result(
+        f"task {task_id} status -> {status}",
+        structured={"task_id": task_id, "status": status},
     )

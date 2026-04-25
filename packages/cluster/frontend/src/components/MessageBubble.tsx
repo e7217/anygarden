@@ -16,6 +16,8 @@ import {
   stripRoomQueryPrefix,
 } from '@/lib/room-query'
 import { parseHandoff, stripHandoffToTrailer } from '@/lib/handoff'
+import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
+import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import { parseServerDate } from '@/lib/datetime'
 
 interface MessageBubbleProps {
@@ -131,6 +133,14 @@ export default memo(function MessageBubble({
   // Issue #238 — handoff is checked BEFORE the room_query variants so
   // an accepted ``[HANDOFF]`` always renders as the breathing card.
   const handoffMeta = useMemo(() => parseHandoff(message), [message])
+  // #266 — synthetic task-assignment messages render as a compact
+  // card. Checked first because it is the cheapest predicate and the
+  // synthetic payload should never accidentally fall through to the
+  // legacy text bubble.
+  const taskAssignmentMeta = useMemo(
+    () => parseTaskAssignment(message),
+    [message],
+  )
   const isPendingQuestion = !!(
     questionMeta && pendingQueryIds?.has(questionMeta.query_id)
   )
@@ -212,6 +222,27 @@ export default memo(function MessageBubble({
       data-testid="message-avatar"
     />
   )
+
+  // Task-assignment variant (#266): synthetic message that announces a
+  // task (re)assignment. Compact card, no avatar block — the row is
+  // server-originated info, not a participant statement, so we suppress
+  // the usual sender chrome to keep the channel readable.
+  if (taskAssignmentMeta) {
+    const assignee = participants[taskAssignmentMeta.assignee_pid]
+    const title = stripTaskMentionPrefix(message.content)
+    return (
+      <div className="group flex flex-col items-start">
+        <TaskAssignmentCard
+          meta={taskAssignmentMeta}
+          title={title || '(untitled task)'}
+          assignee={assignee}
+        />
+        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+          {formatTime(message.created_at)}
+        </span>
+      </div>
+    )
+  }
 
   // Handoff variant (#238): accepted orchestrator handoff renders as
   // a full-width breathing-border card. We still surface the sender's

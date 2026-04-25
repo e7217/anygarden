@@ -14,7 +14,7 @@ _MAX_SEQ_RETRIES = 3
 async def append_message(
     db: AsyncSession,
     room_id: str,
-    participant_id: str,
+    participant_id: str | None,
     content: str,
     metadata: dict | None = None,
 ) -> Message:
@@ -22,6 +22,10 @@ async def append_message(
 
     Uses a retry loop to handle concurrent seq collisions protected by the
     ``uq_room_seq`` unique constraint.
+
+    ``participant_id`` is nullable at the schema level — synthetic
+    server-side injections (e.g. task assignment, #266) can pass
+    ``None`` to denote a system-origin message.
     """
     for attempt in range(_MAX_SEQ_RETRIES):
         # Compute next seq for this room

@@ -94,6 +94,15 @@ export function useWebSocket(roomId: string | null) {
         window.dispatchEvent(
           new CustomEvent('doorae:presence:update', { detail: data }),
         );
+      } else if (data.type === 'task.updated') {
+        // #266 — task lifecycle event. The 1차 view (TaskPanel) and
+        // the 2차 view (AgentTasksTab) both subscribe via window
+        // events because they live outside the per-room hook tree
+        // (TaskPanel's filter state, AgentTasksTab's agent_id scope).
+        // Detail shape: { type, event, task: {...} }.
+        window.dispatchEvent(
+          new CustomEvent('doorae:task:updated', { detail: data }),
+        );
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         if (data.is_typing) {
