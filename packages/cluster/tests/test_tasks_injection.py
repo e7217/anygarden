@@ -103,6 +103,60 @@ async def test_inject_with_null_sender_marks_system_origin(db):
 
 
 @pytest.mark.asyncio
+async def test_content_first_line_carries_mention_and_title(db):
+    """Plan §3.1 — the first line of ``content`` is the canonical
+    addressable form (``<@user:pid> [TASK] title``). Renderers that read
+    only the first line — including the frontend ``stripTaskMentionPrefix``
+    — must continue to find a clean title there."""
+    room, creator, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="ship the homepage",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    msg = await inject_task_assignment_message(
+        db, room=room, task=task, sender_participant_id=creator.id
+    )
+    first = msg.content.split("\n", 1)[0]
+    assert first.startswith(f"<@user:{assignee.id}>")
+    assert "[TASK]" in first
+    assert task.title in first
+
+
+@pytest.mark.asyncio
+async def test_content_includes_mark_task_status_self_instruction(db):
+    """#275 — The synthetic message embeds a self-instruction telling the
+    LLM to call ``mark_task_status`` so the assignee actually reports
+    progress instead of just answering as a normal mention."""
+    room, creator, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="design review",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    msg = await inject_task_assignment_message(
+        db, room=room, task=task, sender_participant_id=creator.id
+    )
+
+    # The instruction must reference the tool name and the concrete
+    # task_id so the LLM can call it without re-deriving anything from
+    # metadata.
+    assert "mark_task_status" in msg.content
+    assert task.id in msg.content
+    # And the canonical status enum values the LLM is expected to use.
+    assert "in_progress" in msg.content
+    assert "done" in msg.content
+
+
+@pytest.mark.asyncio
 async def test_inject_reassigned_event_is_propagated(db):
     room, creator, assignee = await _seed_room_with_assignee(db)
     task = Task(

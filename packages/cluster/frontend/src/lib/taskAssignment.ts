@@ -35,9 +35,17 @@ export function parseTaskAssignment(
 }
 
 /** Strip the synthetic content prefix so the bare title shows up on
- * the card. Server format: ``<@user:{pid}> [TASK] {title}``. */
+ * the card. Server format: ``<@user:{pid}> [TASK] {title}``.
+ *
+ * Since #275 the message also carries a multi-line self-instruction for
+ * the assignee LLM beneath that first line. The instruction is meant
+ * for the agent only; the chat card surface only ever displays the
+ * canonical title, so we slice to the first line before stripping the
+ * mention/marker prefixes.
+ */
 export function stripTaskMentionPrefix(content: string): string {
-  return content
+  const firstLine = content.split('\n', 1)[0] ?? ''
+  return firstLine
     .replace(/^<@user:[^>]+>\s*/, '')
     .replace(/^\[TASK\]\s*/, '')
     .trim()
