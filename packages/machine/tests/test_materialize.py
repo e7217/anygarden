@@ -1013,3 +1013,93 @@ class TestMemoryMaterialize:
         assert shared.is_dir()
         # Starts empty — the server pushes files in after spawn.
         assert list(shared.iterdir()) == []
+
+
+class TestWorkspaceSharedBridge:
+    """#257 — bridge ``<agent_root>/memory/shared/`` into
+    ``<agent_root>/workspace/memory/shared/`` so tool-based engines
+    (codex / claude-code / gemini-cli) can resolve their Read tool's
+    ``memory/shared/<file>`` path inside the workspace sandbox.
+    Canonical bytes still live one level up; the bridge is purely
+    a cwd-anchored alias.
+
+    Raw-SDK adapters (anthropic, openai, openhands, deep_agents) skip
+    the bridge — they have no Read tool, so the bridge would be a
+    dead alias and just adds noise to the workspace tree. The
+    ``<shared-context>`` system-prompt block remains their only channel.
+    """
+
+    @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
+    def test_bridge_is_directory_symlink_to_canonical(
+        self, spawner: Spawner, agent_dirs_root: Path, engine: str
+    ) -> None:
+        """For each tool-based engine, ``workspace/memory/shared`` must
+        be a symlink whose target is the canonical directory above.
+
+        Resolved path equality is the contract — relative vs absolute
+        target form is incidental and tests should not pin it."""
+        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        canonical = agent_root / "memory" / "shared"
+        assert bridge.is_symlink(), f"{engine} bridge must be a symlink"
+        assert bridge.resolve() == canonical.resolve()
+
+    def test_raw_sdk_engine_has_no_bridge(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """``anthropic`` (representative raw-SDK engine) has no Read tool;
+        creating a bridge for it would be a dead alias. The slot stays
+        absent so the workspace tree mirrors what the engine actually
+        consumes."""
+        agent_root = spawner._materialize_agent_dir(_msg(engine="anthropic"))
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        assert not bridge.exists() and not bridge.is_symlink()
+
+    def test_bridge_resolves_files_written_by_daemon_after_spawn(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """The whole point of choosing a directory symlink over file-by-
+        file copies: files the daemon writes into the canonical dir
+        AFTER spawn must be visible through the workspace bridge with
+        no further materialize call."""
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        canonical_file = agent_root / "memory" / "shared" / "note.md"
+        canonical_file.write_text("post-spawn content")
+
+        via_bridge = agent_root / "workspace" / "memory" / "shared" / "note.md"
+        assert via_bridge.is_file()
+        assert via_bridge.read_text() == "post-spawn content"
+
+    def test_respawn_recreates_fresh_bridge(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """The materialize prune wipes ``workspace/memory/`` (it lives
+        under workspace which IS preserved, but the prune walks
+        siblings of the bridge). Whatever the prune does, the second
+        materialize must end with a usable bridge — otherwise respawn
+        leaves the agent without Read access to its shared files."""
+        msg = _msg(engine="claude-code")
+        spawner._materialize_agent_dir(msg)
+        agent_root = spawner._materialize_agent_dir(msg)
+
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        canonical = agent_root / "memory" / "shared"
+        assert bridge.is_symlink()
+        assert bridge.resolve() == canonical.resolve()
+
+    def test_stale_bridge_from_previous_engine_is_replaced(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """If a previous spawn left a bridge and the agent's engine
+        changed to a raw-SDK adapter (or vice versa), the slot must
+        be reconciled — never a stale symlink to the old shape."""
+        # First spawn as codex: bridge exists.
+        msg_codex = _msg(engine="codex")
+        agent_root = spawner._materialize_agent_dir(msg_codex)
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        assert bridge.is_symlink()
+
+        # Re-spawn the same agent as anthropic (raw SDK): bridge gone.
+        msg_anthropic = _msg(engine="anthropic")
+        agent_root = spawner._materialize_agent_dir(msg_anthropic)
+        assert not bridge.exists() and not bridge.is_symlink()

@@ -600,6 +600,44 @@ class Spawner:
                     shutil.rmtree(ws_link)
             ws_link.symlink_to("../.claude")
 
+        # --- workspace/memory/shared bridge for tool-based engines ---
+        # Issue #257. ``memory/shared/`` is the drop zone the daemon
+        # writes room-shared files into (#246). Tool-based engines
+        # (codex, claude-code, gemini-cli) pin cwd to ``workspace/``
+        # and resolve Read-tool paths against it, so a user prompt
+        # like "show memory/shared/note.md" sends the engine looking
+        # at ``<workspace>/memory/shared/note.md`` — outside its
+        # sandbox view of the canonical location one level up.
+        # Bridging the directory (not file-by-file) keeps the link
+        # current as the daemon's ``agent_memory_shared_file_write``
+        # handler adds files post-spawn; the OS resolves through the
+        # symlink each time. See plan-257 §3.2 decision 1 for why
+        # file-by-file copy / dual-write paths were rejected.
+        #
+        # Raw-SDK adapters (anthropic, openai, openhands, deep_agents)
+        # ship no Read tool, so the bridge would be a dead alias —
+        # skip them so the workspace tree mirrors what the engine
+        # actually consumes. ``<shared-context>`` system-prompt
+        # injection (#246) remains their only channel.
+        ws_shared = workspace / "memory" / "shared"
+        # Always reconcile from a clean slate so a previous engine's
+        # bridge can't survive an engine swap (raw → codex etc).
+        if ws_shared.is_symlink() or ws_shared.exists():
+            if ws_shared.is_symlink() or ws_shared.is_file():
+                ws_shared.unlink()
+            else:
+                shutil.rmtree(ws_shared)
+        if msg.engine in ("codex", "claude-code", "gemini-cli"):
+            ws_memory = workspace / "memory"
+            ws_memory.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(ws_memory, 0o700)
+            except PermissionError:
+                pass
+            # Two ``..`` hops: one up out of ``workspace``, one because
+            # the link itself sits inside ``workspace/memory/``.
+            ws_shared.symlink_to("../../memory/shared")
+
         return agent_root
 
     async def spawn(self, msg: SpawnManifest) -> SpawnResult:
