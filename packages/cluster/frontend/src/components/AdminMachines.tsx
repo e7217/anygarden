@@ -43,7 +43,6 @@ interface MachineEngineInfo {
 
 const ENGINE_LABELS: Record<string, string> = {
   'codex': 'Codex CLI',
-  'codex-extra': 'Codex (extra)',
   'claude-code': 'Claude Code',
   'gemini-cli': 'Gemini CLI',
   'openai': 'OpenAI API',
@@ -842,17 +841,7 @@ export default function AdminMachines() {
                     )
                   })()}
                 </select>
-                {agentEngine === 'codex-extra' && agentCatalog.models.length === 0 && (
-                  <p className="text-xs text-[var(--color-foreground-muted)]">
-                    No models registered. Add one in Admin › LLM Gateway first.
-                  </p>
-                )}
               </div>
-            )}
-            {agentEngine === 'codex-extra' && (!agentCatalog || agentCatalog.models.length === 0) && (
-              <p className="text-xs text-[var(--color-foreground-muted)]">
-                This engine routes through the embedded LLM Gateway. Register a model in Admin › LLM Gateway to pick it here.
-              </p>
             )}
             {agentReasoningLevels.length > 0 && (
               <div className="space-y-2">

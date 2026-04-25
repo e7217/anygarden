@@ -21,7 +21,6 @@ from doorae.db.models import (
     ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Participant, Room,
     SkillLibraryEntry,
 )
-from doorae.engines import base_engine
 from doorae.scheduler.machine_bus import MachineBus
 from doorae.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -36,30 +35,18 @@ class AgentLifecycle:
         self,
         db_factory,
         machine_bus: MachineBus,
-        server_url: str = "",
         *,
         mcp_template_service=None,
-        llm_gateway_enabled: bool = False,
         room_files_dir: Path | None = None,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
-        self._server_url = server_url
         # #124 — Optional MCP template service. Kept optional so
         # tests that only care about the skill library path don't
         # need to wire a secrets key. When None, ``_build_sync_frame``
         # skips the MCP overlay step entirely (no-op for agents that
         # have no instances attached anyway).
         self._mcp_template_service = mcp_template_service
-        # #197 — When true, ``_build_sync_frame`` injects
-        # ``ANTHROPIC_BASE_URL`` / ``OPENAI_BASE_URL`` (pointing at this
-        # server's ``/api/v1/llm`` reverse proxy) plus a sentinel for
-        # the agent's own doorae token under ``engine_secrets``. The
-        # machine daemon substitutes the sentinel with the live agent
-        # token before piping to the agent's stdin, so the server
-        # doesn't have to know the plaintext token (which it cannot
-        # — only the hash is stored after grant).
-        self._llm_gateway_enabled = llm_gateway_enabled
         # #255 — On-disk root for room shared files. Populated by the
         # app factory from ``DooraeSettings.room_files_dir``; tests
         # that don't exercise shared-files behaviour leave it None and
@@ -97,11 +84,8 @@ class AgentLifecycle:
                 return
 
             try:
-                # Virtual engines (e.g. ``codex-extra``) are satisfied by
-                # their base CLI on the machine side, so placement queries
-                # against the underlying engine id.
                 machine = await select_machine_for(
-                    base_engine(agent.engine), db, self._machine_bus
+                    agent.engine, db, self._machine_bus
                 )
             except NoSuitableMachineError:
                 logger.warning(
@@ -582,11 +566,7 @@ class AgentLifecycle:
                 settings_path_for_engine,
             )
 
-            # Virtual engines share MCP templates + settings path with
-            # their base engine (``codex-extra`` reuses ``.codex/``
-            # overlays). The settings/merge layer isn't virtual-aware,
-            # so collapse early.
-            mcp_engine = base_engine(agent.engine)
+            mcp_engine = agent.engine
             settings_path = settings_path_for_engine(mcp_engine)
             if settings_path is not None:
                 pairs = await self._mcp_template_service.list_instances_for_agent(
@@ -627,18 +607,12 @@ class AgentLifecycle:
             for name, desc in sub_result.all():
                 sub_rooms_info.append({"name": name, "description": desc})
 
-        engine_secrets = self._build_gateway_engine_secrets(agent.engine)
-
         return {
             "type": "sync_desired_state",
             "agent_id": agent.id,
             "desired_state": agent.desired_state,
             "generation": agent.generation,
-            # Machine daemon / spawner only knows the underlying CLI
-            # binary, so virtual engines are collapsed here. The opt-in
-            # signal (``codex-extra``) already lives in ``engine_secrets``
-            # via the gateway env vars.
-            "engine": base_engine(agent.engine),
+            "engine": agent.engine,
             "name": agent.name,
             "profile_yaml": agent.profile_yaml or "",
             "rooms": rooms,
@@ -649,7 +623,7 @@ class AgentLifecycle:
             # ``agent_memory_update`` frames.
             "memory_md": agent.memory_md,
             "files": files_map,
-            "engine_secrets": engine_secrets,
+            "engine_secrets": {},
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
             "sub_rooms": sub_rooms_info,
@@ -662,68 +636,6 @@ class AgentLifecycle:
             # SpawnManifest default of ``"python"``.
             "runtime": getattr(agent, "runtime", "python") or "python",
         }
-
-    # Sentinel the machine spawner expands to the agent's own doorae
-    # token just before piping engine_secrets to the agent's stdin.
-    # Kept as a module-level constant so the machine-side test can
-    # import and assert on the exact value rather than duplicating a
-    # literal string. See packages/machine/doorae_machine/spawner.py.
-    AGENT_TOKEN_SENTINEL = "@DOORAE_AGENT_TOKEN"
-
-    def _build_gateway_engine_secrets(self, engine: str) -> dict[str, str]:
-        """Populate ``engine_secrets`` for the LLM gateway when enabled.
-
-        Returns ``{}`` unless the agent's engine explicitly opts into
-        gateway routing (today: ``codex-extra``). Plain ``codex`` and
-        ``claude-code`` agents deliberately do NOT auto-enroll: they
-        run against host-level credentials (ChatGPT account auth,
-        ANTHROPIC_API_KEY, etc.) and an admin who wants gateway-routed
-        traffic picks the ``-extra`` virtual engine in the Add Agent
-        dialog instead. This keeps the gateway as an explicit mode
-        switch rather than a hidden side-effect of a server flag.
-
-        The sentinel value ``@DOORAE_AGENT_TOKEN`` stands in for the
-        auth header; the machine spawner substitutes it with the live
-        plaintext agent token at spawn time. The server can't supply
-        that plaintext itself because tokens are stored as argon2
-        hashes after grant.
-        """
-        if not self._llm_gateway_enabled:
-            return {}
-
-        base = self._http_base_url()
-        if not base:
-            # Without a reachable HTTP base we can't point agents at the
-            # gateway. Leave engine_secrets empty so the agent falls
-            # back to whatever it had before the flag got flipped on.
-            return {}
-
-        if engine == "codex-extra":
-            return {
-                "OPENAI_BASE_URL": f"{base}/api/v1/llm/v1",
-                "OPENAI_API_KEY": self.AGENT_TOKEN_SENTINEL,
-            }
-        # All other engines (``codex``, ``claude-code``, ``gemini-cli``,
-        # ``openhands``, ``deepagents``, ``openai``, ``anthropic``) use
-        # host-level credential discovery. A ``claude-code-extra`` may
-        # be added later once an Anthropic-compatible upstream is
-        # proven to round-trip tool calls through LiteLLM.
-        return {}
-
-    def _http_base_url(self) -> str:
-        """Return the gateway's http(s) URL derived from ``_server_url``.
-
-        ``_server_url`` is the WebSocket dial URL the server tells
-        daemons to reconnect through (e.g. ``ws://host:8000``). Strip
-        the ``ws`` prefix so agents can reach ``/api/v1/llm/*`` over
-        plain HTTP.
-        """
-        url = self._server_url or ""
-        if url.startswith("ws://"):
-            return "http://" + url[len("ws://"):]
-        if url.startswith("wss://"):
-            return "https://" + url[len("wss://"):]
-        return url
 
 
 # ── Issue #204 — orphan sweeper ──────────────────────────────────────

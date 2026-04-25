@@ -26,36 +26,6 @@ log = structlog.get_logger()
 
 KILL_TIMEOUT = 10  # seconds to wait after SIGTERM before SIGKILL
 
-# #197 — Sentinel the server writes into ``engine_secrets`` values that
-# should become the agent's own doorae token. Kept as a module-level
-# constant so both the substitution logic and its tests import the
-# exact value rather than duplicating a literal. Must match
-# ``doorae.scheduler.lifecycle.AgentLifecycle.AGENT_TOKEN_SENTINEL``
-# on the server side.
-AGENT_TOKEN_SENTINEL = "@DOORAE_AGENT_TOKEN"
-
-
-def _expand_agent_token_sentinel(
-    engine_secrets: dict[str, str],
-    agent_token: str,
-) -> dict[str, str]:
-    """Return a copy of ``engine_secrets`` with the sentinel replaced.
-
-    Any value equal to :data:`AGENT_TOKEN_SENTINEL` becomes
-    ``agent_token`` verbatim; everything else passes through. Keeps
-    the plaintext token contained to the machine — the server can't
-    supply it because only the argon2 hash is stored after grant.
-    When ``engine_secrets`` is empty or has no sentinel values the
-    function is effectively a shallow copy.
-    """
-    if not engine_secrets:
-        return {}
-    return {
-        k: (agent_token if v == AGENT_TOKEN_SENTINEL else v)
-        for k, v in engine_secrets.items()
-    }
-
-
 @dataclass
 class SpawnManifest:
     """Engine-agnostic spawn parameters.
@@ -852,19 +822,7 @@ class Spawner:
                 error=f"Failed to start process: {exc}",
             )
 
-        # #197 — expand the ``@DOORAE_AGENT_TOKEN`` sentinel the server
-        # emits into the agent's actual plaintext token. The server only
-        # has the argon2 hash after grant (by design), so it marks
-        # ``engine_secrets`` entries that need the token with the
-        # sentinel and the machine — which cached ``msg.agent_token``
-        # when the grant frame arrived — substitutes it here, just
-        # before the JSON is piped to the agent's stdin. Keeps the
-        # plaintext token local to the machine; the server never sees
-        # it again after the initial grant.
-        expanded_secrets = _expand_agent_token_sentinel(
-            msg.engine_secrets or {}, msg.agent_token,
-        )
-        secrets_payload = json.dumps(expanded_secrets).encode("utf-8")
+        secrets_payload = json.dumps(dict(msg.engine_secrets or {})).encode("utf-8")
         try:
             assert proc.stdin is not None  # PIPE guarantees it
             proc.stdin.write(secrets_payload)
