@@ -588,6 +588,86 @@ class TestOrchestratorRosterPrompt:
         opts = fake_sdk[-1]["options"].kwargs
         assert opts.get("system_prompt") == "You are Orc."
 
+    @pytest.mark.asyncio
+    async def test_orchestrator_roster_includes_peer_description(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Issue #271 — peers carrying a ``description`` get an em-dash
+        suffix so the LLM can route on intent. Peers without one fall
+        back to the legacy "name only" line for backwards compatibility."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._participants_by_room["room-a"] = {
+            "worker-pid": {
+                "id": "worker-pid",
+                "display_name": "frontend-bot",
+                "kind": "agent",
+                "agent_id": "agent-beta",
+                "description": "Reviews React components and accessibility",
+            },
+            "legacy-pid": {
+                "id": "legacy-pid",
+                "display_name": "legacy-bot",
+                "kind": "agent",
+                "agent_id": "agent-gamma",
+                # No description — pre-#271 agent.
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
+        assert (
+            "- <@user:worker-pid> frontend-bot (agent) — "
+            "Reviews React components and accessibility"
+        ) in prompt
+        # Legacy peer keeps the old format unchanged.
+        assert "- <@user:legacy-pid> legacy-bot (agent)\n" in prompt + "\n"
+        assert "legacy-bot (agent) —" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_roster_truncates_long_description(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """#271 — the REST layer caps incoming description at 200, but
+        we double-cap on the runtime side too. Newlines fold to spaces
+        so a single line stays a single line in the prompt."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        long_desc = "x" * 500 + "\nshould be folded"
+        client._participants_by_room["room-a"] = {
+            "p1": {
+                "id": "p1",
+                "display_name": "long",
+                "kind": "agent",
+                "agent_id": "agent-beta",
+                "description": long_desc,
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
+        # Locate the roster line for ``p1`` and assert the trailing
+        # description is exactly 200 chars (no newline leaked through).
+        line = next(line for line in prompt.splitlines() if "<@user:p1>" in line)
+        assert " — " in line
+        desc_in_line = line.split(" — ", 1)[1]
+        assert len(desc_in_line) == 200
+        assert "\n" not in desc_in_line
+
 
 class TestIngestContext:
     """Issue #74 — `ingest_context` absorbs ambient messages into a

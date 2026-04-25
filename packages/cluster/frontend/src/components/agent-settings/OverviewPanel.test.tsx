@@ -127,6 +127,75 @@ describe('OverviewPanel', () => {
     })
   })
 
+  describe('description inline edit (#271)', () => {
+    it('commits with description_set: true on blur after typing', async () => {
+      const { updateAgent } = setup()
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'Reviews React UIs' } })
+      fireEvent.blur(input)
+
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        description: 'Reviews React UIs',
+        description_set: true,
+      })
+    })
+
+    it('clears the description by sending null when the field is emptied', async () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ description: 'old intro' }),
+      })
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: '' } })
+      fireEvent.blur(input)
+
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        description: null,
+        description_set: true,
+      })
+    })
+
+    it('does not call updateAgent when the description is unchanged', () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ description: 'unchanged' }),
+      })
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.blur(input)
+      expect(updateAgent).not.toHaveBeenCalled()
+    })
+
+    it('updates the live counter as the admin types', () => {
+      setup()
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'hello' } })
+      expect(screen.getByTestId('overview-description-counter')).toHaveTextContent(
+        '5/200',
+      )
+    })
+
+    it('reverts to the stored value on Escape', () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ description: 'stored intro' }),
+      })
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'draft change' } })
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(input.value).toBe('stored intro')
+      expect(updateAgent).not.toHaveBeenCalled()
+    })
+  })
+
   describe('avatar picker', () => {
     it('toggles the inline AvatarPickerPanel on avatar click', async () => {
       setup()

@@ -293,6 +293,13 @@ class Agent(Base):
     # file -> DB on heartbeat and graceful shutdown. See plan §3.2
     # decision 4 for the bi-directional sync rationale.
     memory_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # Issue #271 — short public-facing self-introduction surfaced to other
+    # participants (LLM roster + mention popover + participant list).
+    # Distinct from ``agents_md`` which is *self-directed* (the agent's
+    # own system prompt body); ``description`` is what *others* see.
+    # Application layer caps this at 200 chars; DB stays Text for
+    # forward flexibility.
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")

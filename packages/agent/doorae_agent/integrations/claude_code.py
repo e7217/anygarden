@@ -301,9 +301,17 @@ class ClaudeCodeAdapter(EngineAdapter):
 
         Lines are formatted as ``- <@user:{uuid}> {name} ({kind})`` so
         the LLM's mention-syntax pattern matching keeps the UUID
-        intact when it echoes or reasons about the roster. Self is
-        excluded — an orchestrator handing off to itself would be a
-        no-op cycle. Returns an empty string when the roster cache
+        intact when it echoes or reasons about the roster. When the
+        peer carries a ``description`` (#271), it's appended after an
+        em-dash so the LLM can recognize *what* each peer does, not
+        just *who* they are. Newlines inside the description collapse
+        to single spaces and the visible portion is capped at 200
+        chars to keep the per-turn token cost predictable; peers
+        without a description fall back to the legacy "name only"
+        line so the change is non-breaking for older agents.
+
+        Self is excluded — an orchestrator handing off to itself would
+        be a no-op cycle. Returns an empty string when the roster cache
         is absent (pre-#221 server) or contains only self, letting
         the caller skip the ``system_prompt`` rewrite entirely.
         """
@@ -322,7 +330,10 @@ class ClaudeCodeAdapter(EngineAdapter):
                 continue
             name = brief.get("display_name") or "?"
             kind = brief.get("kind") or "user"
-            lines.append(f"- <@user:{pid}> {name} ({kind})")
+            raw_desc = brief.get("description") or ""
+            desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
+            desc_part = f" — {desc}" if desc else ""
+            lines.append(f"- <@user:{pid}> {name} ({kind}){desc_part}")
         if not lines:
             return ""
         return (

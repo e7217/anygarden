@@ -150,13 +150,31 @@ export default function ParticipantListPopover({
                   presence?.[p.id]?.lastSeenAt ?? p.last_seen_at ?? null
                 }
               />
-              <span className="truncate">
-                {p.display_name || p.id.slice(0, 8)}
-                {isMe && (
-                  <span className="ml-1 text-[var(--color-foreground-muted)]">
-                    (you)
+              {/* Stack name + description in a column so the
+                  description (when present) reads as a secondary line
+                  underneath the name. The column shrinks to fit the
+                  remaining row width so badges on the right keep
+                  their position. */}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate">
+                  {p.display_name || p.id.slice(0, 8)}
+                  {isMe && (
+                    <span className="ml-1 text-[var(--color-foreground-muted)]">
+                      (you)
+                    </span>
+                  )}
+                </span>
+                {/* #271 — agent description as secondary text. Hidden
+                    when absent so user/guest rows and pre-#271 agents
+                    keep their original single-line layout. */}
+                {p.description?.trim() ? (
+                  <span
+                    className="truncate text-[11px] text-[var(--color-foreground-subtle)]"
+                    data-testid={`participant-description-${p.id}`}
+                  >
+                    {p.description}
                   </span>
-                )}
+                ) : null}
               </span>
               <span className="ml-auto flex shrink-0 items-center gap-1">
                 {p.kind === 'agent' && (

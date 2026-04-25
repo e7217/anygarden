@@ -182,6 +182,22 @@ class TestAgentCRUD:
         ).scalar_one()
         assert refreshed.agents_md.startswith("# Agent")
 
+    @pytest.mark.asyncio
+    async def test_agent_description_is_nullable(self, db: AsyncSession) -> None:
+        # Issue #271 — description defaults to NULL for existing agents
+        # and accepts arbitrary text on update.
+        agent = Agent(name="b", engine="codex")
+        db.add(agent)
+        await db.flush()
+        assert agent.description is None
+
+        agent.description = "Helpful research assistant"
+        await db.flush()
+        refreshed = (
+            await db.execute(select(Agent).where(Agent.id == agent.id))
+        ).scalar_one()
+        assert refreshed.description == "Helpful research assistant"
+
 
 class TestAgentFileCRUD:
     @pytest.mark.asyncio

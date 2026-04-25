@@ -68,6 +68,8 @@ interface Props {
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean
+      description?: string | null
+      description_set?: boolean
     },
   ) => Promise<Agent>
   /** Issue #217 — populate the Model / Reasoning dropdowns. Optional
@@ -81,6 +83,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
+  // Issue #271 — public-facing self-introduction. Same blur-commit
+  // pattern as ``nameDraft`` but with a 200-char cap (mirrors the
+  // server-side ``Field(max_length=200)``).
+  const [descriptionDraft, setDescriptionDraft] = useState(agent?.description ?? '')
+  const [descriptionSaving, setDescriptionSaving] = useState(false)
+  const [descriptionError, setDescriptionError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<CopyState>('idle')
   const idRef = useRef<HTMLSpanElement>(null)
 
@@ -97,6 +105,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
     setNameDraft(agent?.name ?? '')
     setNameError(null)
   }, [agent?.id, agent?.name])
+
+  // Mirror the name-draft re-seeding for description.
+  useEffect(() => {
+    setDescriptionDraft(agent?.description ?? '')
+    setDescriptionError(null)
+  }, [agent?.id, agent?.description])
 
   // Auto-clear copy feedback after 2 seconds. Depends on the
   // transitioning state so each new click resets the timer.
@@ -173,6 +187,32 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       setNameDraft(agent.name) // rollback on failure
     }
     setNameSaving(false)
+  }
+
+  // #271 — description blur-commit. Empty input clears the column on
+  // the server (description=null + description_set=true) so the admin
+  // can remove an outdated introduction. Pre-trim so trailing
+  // whitespace doesn't cause a no-op PUT loop.
+  const commitDescription = async () => {
+    const stored = agent.description ?? ''
+    const trimmed = descriptionDraft.trim()
+    if (trimmed === stored.trim()) {
+      // No-op: avoid hitting the server when the user just blurred the
+      // field without changing it.
+      return
+    }
+    setDescriptionSaving(true)
+    setDescriptionError(null)
+    try {
+      await updateAgent(agent.id, {
+        description: trimmed === '' ? null : trimmed,
+        description_set: true,
+      })
+    } catch (e) {
+      setDescriptionError(e instanceof Error ? e.message : String(e))
+      setDescriptionDraft(agent.description ?? '') // rollback on failure
+    }
+    setDescriptionSaving(false)
   }
 
   // #217 — onChange commits (avatar-picker pattern). Sending ``null``
@@ -275,6 +315,44 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             >
               <AlertCircle className="h-3 w-3" aria-hidden="true" />
               {nameError}
+            </div>
+          ) : null}
+
+          {/* #271 — public-facing self-introduction. Sits with the name
+              because it's the same identity layer (what *others* see
+              when they look at this agent). Blur-commits like the name;
+              200-char cap mirrors ``Field(max_length=200)`` on the
+              server. Helper text follows DESIGN.md §3.3 secondary text
+              tone. */}
+          <textarea
+            value={descriptionDraft}
+            onChange={e => setDescriptionDraft(e.target.value)}
+            onBlur={() => void commitDescription()}
+            onKeyDown={e => {
+              if (e.key === 'Escape') {
+                setDescriptionDraft(agent.description ?? '')
+                ;(e.currentTarget as HTMLTextAreaElement).blur()
+              }
+            }}
+            disabled={descriptionSaving}
+            maxLength={200}
+            rows={2}
+            placeholder="Short introduction shown to other agents and users"
+            aria-label="Agent description"
+            data-testid="overview-description-input"
+            className="flex w-full resize-none rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60"
+          />
+          <div className="flex items-center justify-between text-[11px] text-[var(--color-foreground-subtle)]">
+            <span>Visible to other agents (LLM roster) and users (mention popover, participants list).</span>
+            <span data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
+          </div>
+          {descriptionError ? (
+            <div
+              className="flex items-center gap-1 text-xs text-[var(--color-warning)]"
+              data-testid="overview-description-error"
+            >
+              <AlertCircle className="h-3 w-3" aria-hidden="true" />
+              {descriptionError}
             </div>
           ) : null}
         </div>

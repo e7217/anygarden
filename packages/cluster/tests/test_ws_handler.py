@@ -590,6 +590,43 @@ class TestWelcomeParticipantsRoster:
                 # ``User.display_name`` is empty (mirrors REST behaviour).
                 assert user_entry["display_name"] == user.email.split("@")[0]
 
+    @pytest.mark.asyncio
+    async def test_welcome_includes_agent_description(self, ws_env) -> None:
+        """#271 — agents' ``description`` flows into ``ParticipantBrief``
+        so peers can recognize them by more than name. Users/guests get
+        ``None`` because the field is agent-only metadata."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+        token = ws_env["token"]
+
+        async with sf() as db:
+            agent = Agent(
+                name="introbot",
+                engine="claude-code",
+                actual_state="running",
+                description="Frontend reviewer with React expertise",
+            )
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                roster = welcome["participants"]
+                agent_entry = next(e for e in roster if e["kind"] == "agent")
+                user_entry = next(e for e in roster if e["kind"] == "user")
+                assert agent_entry["description"] == "Frontend reviewer with React expertise"
+                # User participants never carry agent metadata.
+                assert user_entry.get("description") is None
+
 
 class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
