@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from doorae.mcp.auth import resolve_agent_id
-from doorae.mcp.tools import TOOL_SCHEMAS, call_tool, mark_task_status
+from doorae.mcp.tools import TOOL_SCHEMAS, call_tool, create_task, mark_task_status
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -150,6 +150,101 @@ async def mcp_rpc(request: Request) -> dict[str, Any]:
                             db,
                             manager=manager,
                             event="updated",
+                            task=task_obj,
+                            room_name=room_obj.name if room_obj else "",
+                        )
+            return _jsonrpc_ok(req_id, tool_result)
+
+        # ``create_task`` (#270) — orchestrator-only tool that drops a
+        # task into the main DB and reuses the Phase 1 mention
+        # injection. Same session-lifecycle pattern as
+        # ``mark_task_status`` so the WS fanout can run after commit.
+        if name == "create_task":
+            session_factory = request.app.state.session_factory
+            async with session_factory() as db:
+                tool_result = await create_task(
+                    db, agent_id=agent_id, arguments=arguments
+                )
+                if not tool_result.get("isError"):
+                    from sqlalchemy import select as _sa_select
+
+                    from doorae.db.models import Room as _Room
+                    from doorae.db.models import Task as _Task
+                    from doorae.messages.service import (
+                        fanout_task_event as _fanout_task_event,
+                    )
+
+                    structured = tool_result.get("structuredContent") or {}
+                    task_id = structured.get("task_id")
+                    task_obj = None
+                    room_obj = None
+                    if task_id:
+                        task_obj = (
+                            await db.execute(
+                                _sa_select(_Task).where(_Task.id == task_id)
+                            )
+                        ).scalar_one_or_none()
+                        if task_obj is not None:
+                            room_obj = (
+                                await db.execute(
+                                    _sa_select(_Room).where(
+                                        _Room.id == task_obj.room_id
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                    await db.commit()
+                    if task_obj is not None:
+                        manager = getattr(
+                            request.app.state, "connection_manager", None
+                        )
+                        # Broadcast both the synthetic message frame
+                        # (room channel, so the chat stream renders the
+                        # task card) and the task.updated frame (room +
+                        # admin user fanout for the 1차/2차 views).
+                        if task_obj.assignee_participant_id is not None:
+                            from doorae.db.models import (
+                                Message as _Message,
+                            )
+                            from doorae.ws.protocol import (
+                                MessageOut as _MessageOut,
+                            )
+
+                            # The injection helper persisted exactly
+                            # one mention message during this call;
+                            # pull the latest task_assignment row.
+                            recent_msgs = (
+                                await db.execute(
+                                    _sa_select(_Message)
+                                    .where(_Message.room_id == task_obj.room_id)
+                                    .order_by(_Message.seq.desc())
+                                    .limit(5)
+                                )
+                            ).scalars().all()
+                            for m in recent_msgs:
+                                meta = m.extra_metadata or {}
+                                ta = meta.get("task_assignment")
+                                if (
+                                    ta
+                                    and ta.get("task_id") == task_obj.id
+                                    and manager is not None
+                                ):
+                                    await manager.broadcast(
+                                        task_obj.room_id,
+                                        _MessageOut(
+                                            id=m.id,
+                                            room_id=m.room_id,
+                                            participant_id=m.participant_id,
+                                            content=m.content,
+                                            seq=m.seq,
+                                            created_at=m.created_at,
+                                            metadata=m.extra_metadata,
+                                        ),
+                                    )
+                                    break
+                        await _fanout_task_event(
+                            db,
+                            manager=manager,
+                            event="created",
                             task=task_obj,
                             room_name=room_obj.name if room_obj else "",
                         )

@@ -181,13 +181,15 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     assert "result" in data
     names = {t["name"] for t in data["result"]["tools"]}
     # #266 — ``mark_task_status`` joins the original skill-authoring
-    # quartet. Tests for the new tool live in test_mark_task_status.py.
+    # quartet. #270 added ``create_task``. Per-tool tests live in
+    # test_mark_task_status.py and test_create_task_tool.py.
     assert names == {
         "create_skill",
         "update_skill",
         "list_my_skills",
         "delete_my_skill",
         "mark_task_status",
+        "create_task",
     }
 
 
