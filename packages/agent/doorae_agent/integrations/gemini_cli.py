@@ -252,6 +252,12 @@ class GeminiCliAdapter(EngineAdapter):
             # the timeout. The same trust model applies to our
             # codex and claude-code adapters (both run unattended).
             "--approval-mode", "yolo",
+            # #261 — gemini 0.39.x silently downgrades yolo to
+            # "default" when cwd is not in trustedFolders.json,
+            # then exits 55 in non-interactive mode. agent_root is
+            # a fresh UUID dir per spawn so it can't be pre-trusted;
+            # this flag trusts the workspace for this session only.
+            "--skip-trust",
         ]
         if self._model:
             cmd.extend(["--model", self._model])

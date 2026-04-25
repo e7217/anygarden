@@ -141,7 +141,7 @@ class TestParseResponse:
 class TestCallGemini:
     """Regression tests for the subprocess invocation surface.
 
-    Two things that the adapter MUST get right on every call:
+    Three things that the adapter MUST get right on every call:
 
     1. ``cwd=agent_root`` (one level above the agent's python cwd),
        because gemini's ``findProjectRoot`` walks upward from cwd
@@ -160,6 +160,14 @@ class TestCallGemini:
        fires; with no human behind the subprocess the request hangs
        until the timeout. Matches the trust model of the codex and
        claude-code adapters which also run unattended.
+
+    3. ``--skip-trust`` so gemini does not downgrade ``--approval-mode
+       yolo`` to ``default`` because the cwd is not in
+       ``~/.gemini/trustedFolders.json``. The agent_root is a fresh
+       UUID directory on every spawn and cannot be pre-registered;
+       without this flag gemini 0.39.x exits with code 55 and an
+       empty stdout, which the adapter then surfaces as ``None`` —
+       i.e. the user sees no response at all (#261).
     """
 
     @pytest.mark.asyncio
@@ -209,6 +217,40 @@ class TestCallGemini:
         # sanity: json output format is still requested
         assert "--output-format" in argv
         assert argv[argv.index("--output-format") + 1] == "json"
+
+    @pytest.mark.asyncio
+    async def test_skip_trust_flag_is_passed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # See class docstring item 3. Without ``--skip-trust`` gemini
+        # 0.39.x silently downgrades yolo to default and exits 55 in
+        # non-interactive mode, leaving the user with no response.
+        agent_root = tmp_path / "agent_root"
+        workspace = agent_root / "workspace"
+        workspace.mkdir(parents=True)
+        monkeypatch.chdir(workspace)
+
+        adapter = GeminiCliAdapter()
+        adapter._gemini_path = "/usr/bin/gemini"
+
+        captured: dict[str, object] = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return (b'{"response": "ok"}', b"")
+
+        async def fake_exec(*args: object, **kwargs: object) -> FakeProc:
+            captured["args"] = args
+            return FakeProc()
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+        await adapter._call_gemini("hello")
+
+        argv = list(captured["args"])  # type: ignore[arg-type]
+        assert "--skip-trust" in argv
 
 
 class TestIntegrateWithGeminiCli:
