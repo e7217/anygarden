@@ -214,6 +214,68 @@ def merge_codex_config(
     return tomli_w.dumps(base)
 
 
+# ── doorae self-MCP default entry (#277) ────────────────────────
+
+
+# Reserved name for the built-in doorae self-MCP entry that the
+# cluster auto-registers into every spawned agent's settings file
+# (#277). Admins who attach an external MCP under the same name
+# deliberately override the builtin (escape hatch — see plan §3.2).
+DOORAE_BUILTIN_NAME = "doorae"
+
+# Codex CLI's streamable HTTP transport reads the bearer token from a
+# named environment variable rather than persisting it on disk. The
+# machine spawner must inject this exact var into the agent process
+# environment for the indirection to resolve at runtime.
+DOORAE_TOKEN_ENV_VAR = "DOORAE_AGENT_TOKEN"
+
+
+def doorae_default_entry(
+    *,
+    engine: str,
+    cluster_url: str,
+    agent_token: str,
+) -> RenderedInstance | None:
+    """Return the doorae self-MCP entry rendered for *engine*.
+
+    All three MCP-supporting engines speak streamable HTTP, but their
+    config dialects differ:
+
+    - claude-code (.mcp.json) and gemini-cli (.gemini/settings.json)
+      take ``{"type": "http", "url", "headers"}`` — the bearer token
+      is written into the file as a literal Authorization header
+      because neither CLI supports placeholder interpolation in those
+      manifests today.
+    - codex (.codex/config.toml) takes
+      ``{"url", "bearer_token_env_var"}`` — codex resolves the token
+      from process env at runtime, so the manifest never holds the
+      plaintext. The matching env var (``DOORAE_TOKEN_ENV_VAR``) is
+      injected by the machine spawner.
+
+    Engines without MCP support (echo / openai / anthropic / unknown)
+    return ``None`` so callers can skip without a guard at every
+    callsite.
+    """
+    if engine in ("claude-code", "gemini-cli"):
+        return RenderedInstance(
+            name=DOORAE_BUILTIN_NAME,
+            config={
+                "type": "http",
+                "url": f"{cluster_url}/mcp/rpc",
+                "headers": {"Authorization": f"Bearer {agent_token}"},
+            },
+        )
+    if engine == "codex":
+        return RenderedInstance(
+            name=DOORAE_BUILTIN_NAME,
+            config={
+                "url": f"{cluster_url}/mcp/rpc",
+                "bearer_token_env_var": DOORAE_TOKEN_ENV_VAR,
+            },
+        )
+    return None
+
+
 # ── Top-level dispatcher ─────────────────────────────────────────
 
 

@@ -62,6 +62,14 @@ class SyncDesiredStateFrame(BaseModel):
     # stay compatible without re-emitting the field.
     runtime: str = "python"
 
+    # Issue #277 — bearer token for the doorae self-MCP entry the
+    # cluster baked into ``files`` (``.codex/config.toml`` references
+    # this via ``bearer_token_env_var``). Machine spawner exposes the
+    # value as ``DOORAE_AGENT_TOKEN`` in the agent process env.
+    # ``None`` means no self-MCP entry was registered (e.g. the
+    # cluster's ``cluster_external_url`` is unset).
+    doorae_mcp_token: str | None = None
+
     # Restart policy
     restart_policy: Literal[
         "stop", "restart_on_same_machine", "restart_anywhere"

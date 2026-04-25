@@ -61,6 +61,15 @@ class SpawnManifest:
     # continue to get the Python runtime — the dataclass default
     # guarantees backward compatibility.
     runtime: str = "python"
+    # Issue #277 — bearer token for the doorae self-MCP entry that the
+    # cluster baked into ``.codex/config.toml`` (codex) /
+    # ``.mcp.json`` (claude-code) / ``.gemini/settings.json`` at frame
+    # build time. Codex's ``[mcp_servers.doorae] bearer_token_env_var``
+    # only resolves if the spawner exposes the token under that env
+    # name in the agent process environment. ``None`` means the
+    # cluster did NOT register the self-MCP entry (e.g.
+    # ``cluster_external_url`` unset, or engine has no MCP support).
+    doorae_mcp_token: str | None = None
 
 
 @dataclass
@@ -706,6 +715,18 @@ class Spawner:
         # ``load_token``.
         env = os.environ.copy()
         env["DOORAE_TOKEN"] = msg.agent_token
+
+        # Issue #277 — codex's streamable HTTP MCP form references the
+        # token by env-var name (``bearer_token_env_var``) instead of
+        # storing it in ``.codex/config.toml``. Inject the matching
+        # variable so codex can resolve the doorae self-MCP entry at
+        # tool-call time. claude-code / gemini-cli already see the
+        # token as a literal Authorization header in their settings
+        # file, so this env var is effectively a no-op for them — but
+        # we still set it unconditionally to keep the spawn contract
+        # symmetric across engines.
+        if msg.doorae_mcp_token:
+            env["DOORAE_AGENT_TOKEN"] = msg.doorae_mcp_token
 
         # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` ONLY when
         # the manifest actually carries a codex overlay (MCP templates

@@ -33,11 +33,18 @@ async def env():
     await engine.dispose()
 
 
-async def _build_frame(factory, service, agent_id: str) -> dict:
+async def _build_frame(
+    factory,
+    service,
+    agent_id: str,
+    *,
+    cluster_external_url: str | None = None,
+) -> dict:
     bus = MachineBus()
     lifecycle = AgentLifecycle(
         db_factory=factory, machine_bus=bus,
         mcp_template_service=service,
+        cluster_external_url=cluster_external_url,
     )
     async with factory() as db:
         agent = (
@@ -259,3 +266,164 @@ class TestLifecycleOverlay:
         # Engine has no MCP settings path — ``_build_sync_frame``
         # must skip rather than crash or render into a bogus path.
         assert frame["files"] == {}
+
+
+class TestDoorAESelfRegistration:
+    """Issue #277 — every spawn frame for an MCP-supporting engine
+    must carry the doorae self-MCP entry by default, plus a fresh
+    bearer token surfaced on ``doorae_mcp_token`` for codex
+    process-env injection."""
+
+    @pytest.mark.asyncio
+    async def test_claude_code_gets_streamable_http_default(self, env):
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="claude-code", name="a1",
+                desired_state="idle", actual_state="idle",
+            )
+            db.add(agent)
+            await db.commit()
+            aid = agent.id
+
+        frame = await _build_frame(
+            env["factory"], env["service"], aid,
+            cluster_external_url="http://localhost:8001",
+        )
+        rendered = json.loads(frame["files"][".mcp.json"])
+        assert "doorae" in rendered["mcpServers"]
+        entry = rendered["mcpServers"]["doorae"]
+        assert entry["type"] == "http"
+        assert entry["url"] == "http://localhost:8001/mcp/rpc"
+        # The header carries a real token, and the same plaintext
+        # value rides on doorae_mcp_token for the machine spawner.
+        token = frame["doorae_mcp_token"]
+        assert token
+        assert entry["headers"]["Authorization"] == f"Bearer {token}"
+
+    @pytest.mark.asyncio
+    async def test_codex_uses_env_var_indirection(self, env):
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="codex", name="cx",
+                desired_state="idle", actual_state="idle",
+            )
+            db.add(agent)
+            await db.commit()
+            aid = agent.id
+
+        frame = await _build_frame(
+            env["factory"], env["service"], aid,
+            cluster_external_url="http://localhost:8001",
+        )
+        rendered = tomllib.loads(frame["files"][".codex/config.toml"])
+        entry = rendered["mcp_servers"]["doorae"]
+        assert entry["url"] == "http://localhost:8001/mcp/rpc"
+        assert entry["bearer_token_env_var"] == "DOORAE_AGENT_TOKEN"
+        # Plaintext token must NOT leak into the .toml file (the
+        # whole point of ``bearer_token_env_var``); the spawn frame
+        # ferries it out-of-band on ``doorae_mcp_token`` for the
+        # machine spawner to inject as DOORAE_AGENT_TOKEN env.
+        token = frame["doorae_mcp_token"]
+        assert token
+        assert token not in frame["files"][".codex/config.toml"]
+
+    @pytest.mark.asyncio
+    async def test_default_skipped_when_cluster_url_unset(self, env):
+        """Without a cluster URL the lifecycle must NOT mint a token
+        or write a partial doorae entry. (Tests / edge environments
+        rely on this being a no-op.)"""
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="claude-code", name="a2",
+                desired_state="idle", actual_state="idle",
+            )
+            db.add(agent)
+            await db.commit()
+            aid = agent.id
+
+        frame = await _build_frame(env["factory"], env["service"], aid)
+        assert frame["files"] == {}
+        assert frame["doorae_mcp_token"] is None
+
+    @pytest.mark.asyncio
+    async def test_admin_attachment_overrides_default(self, env):
+        """If admin attaches an external MCP under the reserved name
+        ``doorae`` it wins on key collision (escape hatch — plan
+        §3.2 결정 1)."""
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="claude-code", name="a3",
+                desired_state="idle", actual_state="idle",
+            )
+            template = MCPServerTemplate(
+                name="doorae",
+                display_name="Doorae (admin override)",
+                config_per_engine={
+                    "claude-code": {"command": "/bin/false", "args": [], "env": {}},
+                },
+                required_env_vars=[],
+                supported_engines=["claude-code"],
+                source="custom",
+            )
+            db.add_all([agent, template])
+            await db.flush()
+            db.add(MCPServerInstance(
+                agent_id=agent.id, template_id=template.id,
+            ))
+            await db.commit()
+            aid = agent.id
+
+        frame = await _build_frame(
+            env["factory"], env["service"], aid,
+            cluster_external_url="http://localhost:8001",
+        )
+        rendered = json.loads(frame["files"][".mcp.json"])
+        entry = rendered["mcpServers"]["doorae"]
+        # Admin's stdio command shape wins over the builtin http form.
+        assert entry.get("command") == "/bin/false"
+        assert "type" not in entry
+
+    @pytest.mark.asyncio
+    async def test_default_coexists_with_admin_attachment_under_other_name(
+        self, env,
+    ):
+        """The common case: admin attaches an external MCP (e.g.
+        ``github``) under a non-conflicting name, and the doorae
+        builtin coexists in the same merged manifest."""
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="claude-code", name="a4",
+                desired_state="idle", actual_state="idle",
+            )
+            template = MCPServerTemplate(
+                name="github",
+                display_name="GitHub",
+                config_per_engine={
+                    "claude-code": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-github"],
+                        "env": {},
+                    },
+                },
+                required_env_vars=[],
+                supported_engines=["claude-code"],
+                source="custom",
+            )
+            db.add_all([agent, template])
+            await db.flush()
+            db.add(MCPServerInstance(
+                agent_id=agent.id, template_id=template.id,
+            ))
+            await db.commit()
+            aid = agent.id
+
+        frame = await _build_frame(
+            env["factory"], env["service"], aid,
+            cluster_external_url="http://localhost:8001",
+        )
+        rendered = json.loads(frame["files"][".mcp.json"])
+        servers = rendered["mcpServers"]
+        assert "doorae" in servers
+        assert "github" in servers
+        assert servers["doorae"]["type"] == "http"
+        assert servers["github"]["command"] == "npx"
