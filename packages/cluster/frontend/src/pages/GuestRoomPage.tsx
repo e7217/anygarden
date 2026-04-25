@@ -136,6 +136,9 @@ export default function GuestRoomPage() {
         id: p.id,
         display: p.display_name,
         kind: (p.kind === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
+        // #271 — surface the agent description so guests in a single
+        // room can also distinguish multiple agents in the popover.
+        description: p.description ?? null,
       })),
     [participants],
   )

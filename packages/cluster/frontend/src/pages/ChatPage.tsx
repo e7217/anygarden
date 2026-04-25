@@ -49,6 +49,10 @@ export interface Participant {
   // Issue #101 — agent avatar override (null for user participants).
   avatar_kind?: string | null
   avatar_value?: string | null
+  // Issue #271 — short public-facing self-introduction. Populated for
+  // agent participants whose admin set ``Agent.description``; null
+  // for users/guests and for agents without a description set.
+  description?: string | null
 }
 
 export default function ChatPage() {
@@ -213,6 +217,9 @@ export default function ChatPage() {
       id: p.id,
       display: p.display_name,
       kind: (p.kind === 'agent' ? 'agent' : 'user') as 'user' | 'agent',
+      // #271 — propagate the agent's public introduction so the
+      // autocomplete can render a secondary line.
+      description: p.description ?? null,
     })),
     [participants],
   )

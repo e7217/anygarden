@@ -300,6 +300,7 @@ async def _build_participants_brief(
                     display_name=p.agent.name or "",
                     kind="agent",
                     agent_id=p.agent_id,
+                    description=p.agent.description,
                 )
             )
         else:

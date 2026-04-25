@@ -1055,6 +1055,115 @@ class TestAgentManifestAPI:
         assert body["context_window_opt_out"] is True  # untouched
 
     @pytest.mark.asyncio
+    async def test_create_agent_with_description(self, agents_env) -> None:
+        """#271 — POST accepts ``description`` and round-trips it on GET."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "intro-bot",
+                "description": "Helpful research assistant",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["description"] == "Helpful research assistant"
+
+        # And it persists on subsequent GET.
+        resp = await client.get(
+            f"/api/v1/agents/{body['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Helpful research assistant"
+
+    @pytest.mark.asyncio
+    async def test_create_agent_rejects_overlong_description(self, agents_env) -> None:
+        """#271 — Pydantic enforces the 200-char cap so the LLM roster
+        cost stays bounded."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "bad",
+                "description": "x" * 201,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_agent_description_roundtrip_and_clear(
+        self, agents_env
+    ) -> None:
+        """#271 — PATCH semantics:
+
+        * supplying ``description_set=True`` with text persists it
+        * supplying ``description_set=True`` with ``None`` clears it
+        * omitting the ``_set`` flag never touches the stored value
+        * description-only edits are peer metadata: no generation bump
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "intro2"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        agent_id = resp.json()["id"]
+        assert resp.json()["description"] is None
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            gen_before = agent.generation
+
+        # Set.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"description": "Frontend reviewer", "description_set": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Frontend reviewer"
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.description == "Frontend reviewer"
+            # Description is peer metadata — must not bump generation.
+            assert agent.generation == gen_before
+
+        # Omitting the _set flag leaves the field untouched.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"description": None},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] == "Frontend reviewer"
+
+        # Explicit clear.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"description": None, "description_set": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["description"] is None
+
+    @pytest.mark.asyncio
     async def test_list_agent_files_empty(self, agents_env) -> None:
         client = agents_env["client"]
         token = agents_env["token"]

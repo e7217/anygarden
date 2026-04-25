@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -54,6 +54,11 @@ class AgentCreate(BaseModel):
     # pin a specific runtime when they know the engine has a TS-native
     # SDK they want to exercise (e.g. Claude Code v2).
     runtime: str = "python"
+    # Issue #271 — short public-facing introduction visible to other
+    # participants (LLM roster + mention popover + participant list).
+    # Capped at 200 chars to keep the per-turn token cost predictable
+    # when the agent runtime appends it inline to every system prompt.
+    description: Optional[str] = Field(default=None, max_length=200)
 
 
 class AgentUpdate(BaseModel):
@@ -105,6 +110,13 @@ class AgentUpdate(BaseModel):
     # write here too (machine -> DB flush on file change).
     memory_md: Optional[str] = None
     memory_md_set: bool = False
+    # Issue #271 — public-facing introduction. ``_set`` flag follows
+    # the established pattern so an admin can explicitly clear the
+    # field (send ``description=None, description_set=True``) while
+    # leaving an unrelated PATCH from touching it. 200-char cap mirrors
+    # ``AgentCreate``.
+    description: Optional[str] = Field(default=None, max_length=200)
+    description_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -143,6 +155,10 @@ class AgentOut(BaseModel):
     # is the runtime truth. Exposed so the admin UI can render / edit
     # the scratchpad.
     memory_md: Optional[str] = None
+    # Issue #271 — public-facing self-introduction. None for agents
+    # that have never set one; otherwise capped at 200 chars and
+    # surfaced through the WS welcome frame to peers and the LLM roster.
+    description: Optional[str] = None
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -216,6 +232,7 @@ async def create_agent(
         model=body.model,
         restart_policy=body.restart_policy,
         runtime=body.runtime,
+        description=body.description,
     )
     db.add(agent)
     await db.flush()
@@ -281,65 +298,73 @@ async def update_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Two change counters so avatar-only edits can skip the
-    # ``bump_generation`` call: avatars are UI metadata and do not
-    # flow into the machine-side materializer, so restarting the
-    # subprocess for an emoji swap would be surprising. Any other
-    # mutable field flips ``non_avatar_changed`` and keeps the
-    # existing "mutate → generation bump → respawn" semantics.
-    non_avatar_changed = False
-    avatar_changed = False
+    # Two change counters so peer-only metadata edits can skip the
+    # ``bump_generation`` call: avatars and descriptions are read by
+    # *other* clients/agents (UI rendering, peer LLM rosters), never
+    # by this agent's own subprocess, so restarting it for a metadata
+    # swap would be surprising. Any field the subprocess actually
+    # consumes flips ``runtime_changed`` and keeps the existing
+    # "mutate → generation bump → respawn" semantics.
+    runtime_changed = False
+    peer_metadata_changed = False
     if body.name is not None:
         agent.name = body.name
-        non_avatar_changed = True
+        runtime_changed = True
     if body.agents_md_set:
         # Explicit opt-in flag is needed to distinguish "omit the
         # field" (no change) from "set the field to null" (clear
         # the role/rules body).
         agent.agents_md = body.agents_md
-        non_avatar_changed = True
+        runtime_changed = True
     if body.reasoning_effort_set:
         agent.reasoning_effort = body.reasoning_effort
-        non_avatar_changed = True
+        runtime_changed = True
     if body.model_set:
         agent.model = body.model
-        non_avatar_changed = True
+        runtime_changed = True
     if body.runtime_set and body.runtime is not None:
         # Issue #73 — runtime change needs a respawn to take effect,
         # which ``bump_generation`` below will trigger.
         agent.runtime = body.runtime
-        non_avatar_changed = True
+        runtime_changed = True
     if body.avatar_kind_set:
         agent.avatar_kind = body.avatar_kind
-        avatar_changed = True
+        peer_metadata_changed = True
     if body.avatar_value_set:
         agent.avatar_value = body.avatar_value
-        avatar_changed = True
+        peer_metadata_changed = True
     if body.context_window_opt_out_set:
         # #148 Part 2 — pure server-side policy flag. The agent
         # subprocess reads its setting at spawn time (Part 3), so a
         # post-spawn toggle takes effect on the next bump_generation
-        # restart. Counted as non_avatar_changed so the existing
-        # generation-bump path handles the respawn.
+        # restart.
         agent.context_window_opt_out = bool(body.context_window_opt_out)
-        non_avatar_changed = True
+        runtime_changed = True
     if body.memory_md_set:
         # #237 — admin manually edited the memory scratchpad. This
         # becomes the new DB-side snapshot; the next spawn / resume
         # will materialize it to ``memory/notes.md`` on the hosting
-        # machine. Counted as non_avatar_changed so the restart
-        # picks up the new content.
+        # machine. The restart picks up the new content.
         agent.memory_md = body.memory_md
-        non_avatar_changed = True
+        runtime_changed = True
+    if body.description_set:
+        # #271 — public-facing introduction. The agent itself never
+        # consumes this field at runtime; only *peers* see it via the
+        # WS welcome frame's ``ParticipantBrief.description``. Restarting
+        # this agent's subprocess would do nothing for that propagation,
+        # so it's treated as peer metadata. Peers pick up the new value
+        # on their next welcome (room join, reconnect, or new spawn).
+        agent.description = body.description
+        peer_metadata_changed = True
 
-    if non_avatar_changed or avatar_changed:
+    if runtime_changed or peer_metadata_changed:
         await db.commit()
         await db.refresh(agent)
 
-    # Bump generation and push sync to machine only when a non-avatar
-    # field changed. Avatar-only edits reach the UI via the REST
-    # response alone.
-    if non_avatar_changed:
+    # Bump generation and push sync to machine only when a field the
+    # subprocess actually reads has changed. Peer-metadata-only edits
+    # reach the UI via the REST response alone.
+    if runtime_changed:
         lifecycle = request.app.state.agent_lifecycle
         await lifecycle.bump_generation(agent_id)
 

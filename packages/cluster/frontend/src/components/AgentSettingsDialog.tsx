@@ -57,6 +57,8 @@ interface Props {
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean
+      description?: string | null
+      description_set?: boolean
     },
   ) => Promise<Agent>
   upsertAgentFile: (id: string, path: string, content: string) => Promise<AgentFile>

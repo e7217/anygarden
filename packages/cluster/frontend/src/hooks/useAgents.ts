@@ -28,6 +28,10 @@ export interface Agent {
   // renders a checked-style toggle that reads this; mutations go
   // through ``updateAgent``.
   context_window_opt_out?: boolean;
+  // Issue #271 — public-facing self-introduction surfaced to peers
+  // (LLM roster + mention popover + participant list). Capped at 200
+  // chars by the REST layer; null when unset.
+  description?: string | null;
 }
 
 export interface EngineModel {
@@ -227,6 +231,10 @@ export function useAgents() {
       model_set?: boolean;
       reasoning_effort?: string | null;
       reasoning_effort_set?: boolean;
+      // Issue #271 — public-facing introduction. ``_set`` idiom lets
+      // an admin clear the field (description=null + description_set=true).
+      description?: string | null;
+      description_set?: boolean;
     },
   ) => {
     const resp = await apiFetch(`/api/v1/agents/${id}`, {

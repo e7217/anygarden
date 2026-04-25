@@ -188,12 +188,19 @@ class ParticipantBrief(BaseModel):
     (user email/display_name or agent name) so consumers don't have
     to cross-reference a separate lookup. ``agent_id`` is set only
     for agent participants; user/guest participants leave it ``None``.
+
+    ``description`` (#271) is the agent's public-facing self-introduction
+    sourced from ``Agent.description``. Always ``None`` for user/guest
+    participants; capped at 200 chars by the REST layer that writes it.
+    Surfaced both to the LLM roster (so peers' models can recognize this
+    agent semantically) and the frontend mention/participant popovers.
     """
 
     id: str
     display_name: str
     kind: Literal["user", "agent", "guest"]
     agent_id: Optional[str] = None
+    description: Optional[str] = None
 
 
 class WelcomeOut(BaseModel):
