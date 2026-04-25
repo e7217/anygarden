@@ -1,7 +1,221 @@
 # CHANGELOG
 
 
-## Unreleased
+## v0.4.0 (2026-04-25)
+
+### Features — embedded LLM gateway (#197)
+
+- Phase 1 — architecture docs
+  ([#200](https://github.com/e7217/doorae/pull/200))
+- Phase 2 — backend supervisor, proxy, bootstrap
+  ([#202](https://github.com/e7217/doorae/pull/202))
+- Phase 3 — admin REST API
+  ([#207](https://github.com/e7217/doorae/pull/207))
+- Phase 4 — admin frontend with secondary sidebar
+  ([#208](https://github.com/e7217/doorae/pull/208))
+- Phase 5 — agent wiring closes the loop
+  ([#209](https://github.com/e7217/doorae/pull/209))
+- Surface `api_base` + `vllm` provider for local LLMs
+  (#249) ([#251](https://github.com/e7217/doorae/pull/251))
+- Add `codex-extra` virtual engine for LiteLLM-routed
+  agents ([#254](https://github.com/e7217/doorae/pull/254));
+  later removed in
+  [#258](https://github.com/e7217/doorae/pull/258).
+- Restrict `/api/v1/llm/*` to agent + machine identities
+  ([#212](https://github.com/e7217/doorae/pull/212))
+- Use LiteLLM liveliness health probe
+  ([#252](https://github.com/e7217/doorae/pull/252))
+
+### Features — skill library (#119, #120, #123–#126, #133)
+
+- Skill library with GitHub-based registration
+  ([#121](https://github.com/e7217/doorae/pull/121))
+- Pass through full skill directory into agent spawn
+  ([#127](https://github.com/e7217/doorae/pull/127))
+- Approve workflow + audit log
+  ([#129](https://github.com/e7217/doorae/pull/129))
+- Agent self-authoring skills via MCP `create_skill` tool
+  ([#130](https://github.com/e7217/doorae/pull/130))
+- `skills.sh` search proxy + stale check
+  ([#131](https://github.com/e7217/doorae/pull/131))
+- Surface attached library skills in manifest dialog
+  ([#136](https://github.com/e7217/doorae/pull/136))
+- Bump agent generation on skill
+  attach/detach/delete/update
+  ([#122](https://github.com/e7217/doorae/pull/122))
+
+### Features — MCP server templates (#124)
+
+- Builtin + custom template catalog
+  ([#128](https://github.com/e7217/doorae/pull/128))
+- Simplify custom template editor UI
+  ([#196](https://github.com/e7217/doorae/pull/196))
+- Show/hide toggle for env value inputs in attach dialog
+  ([#201](https://github.com/e7217/doorae/pull/201))
+- Restore horizontal focus ring on input focus
+  ([#198](https://github.com/e7217/doorae/pull/198))
+
+### Features — orchestrator & speaker strategies (#159)
+
+- Speaker-strategy schema + welcome propagation (Phase A)
+  ([#164](https://github.com/e7217/doorae/pull/164))
+- Strategy dispatcher + `round_robin` (Phase B)
+  ([#168](https://github.com/e7217/doorae/pull/168))
+- Orchestrator + handoff tool + per-agent token UI
+  (Phase C+D) ([#178](https://github.com/e7217/doorae/pull/178))
+- Surface participant roster to `handoff_to` and
+  broadcast room settings
+  ([#224](https://github.com/e7217/doorae/pull/224))
+- Render orchestrator `[HANDOFF]` messages as
+  breathing-border cards
+  ([#239](https://github.com/e7217/doorae/pull/239))
+
+### Features — agent settings dialog
+
+- Customizable avatars (emoji/lucide) + per-agent
+  settings menu
+  ([#104](https://github.com/e7217/doorae/pull/104))
+- Unify avatar/manifest/rooms/activity into single
+  settings dialog
+  ([#163](https://github.com/e7217/doorae/pull/163))
+- Stack sections on a single page; tighten spacing;
+  divider + card refinements
+  ([#166](https://github.com/e7217/doorae/pull/166),
+  [#169](https://github.com/e7217/doorae/pull/169),
+  [#171](https://github.com/e7217/doorae/pull/171),
+  [#173](https://github.com/e7217/doorae/pull/173))
+- Model + reasoning_effort editing in Settings Overview
+  ([#218](https://github.com/e7217/doorae/pull/218))
+
+### Features — sidebar UX
+
+- Collapse/expand sidebar on desktop
+  ([#108](https://github.com/e7217/doorae/pull/108))
+- Hoist desktop collapse state into shared provider
+  ([#117](https://github.com/e7217/doorae/pull/117))
+- Apply `AgentSettingsMenu` to admin agent DM items
+  ([#107](https://github.com/e7217/doorae/pull/107))
+- Hide room-management UI in agent DMs
+  ([#118](https://github.com/e7217/doorae/pull/118))
+
+### Features — topology
+
+- Agent node redesign with name + engine logo + running
+  pulse ([#86](https://github.com/e7217/doorae/pull/86))
+- Highlight rooms with active typing
+  ([#88](https://github.com/e7217/doorae/pull/88))
+- Per-user draggable node positions with localStorage
+  persistence ([#236](https://github.com/e7217/doorae/pull/236))
+- Merge `represents` edge into `participates` flag
+  ([#228](https://github.com/e7217/doorae/pull/228))
+
+### Features — multi-session DM & shared files
+
+- Per-agent multi-session DM + cross-engine file memory +
+  ephemeral mode
+  ([#240](https://github.com/e7217/doorae/pull/240))
+- Room shared files copy-distributed to agent memory
+  ([#250](https://github.com/e7217/doorae/pull/250))
+
+### Features — context window (#148)
+
+- Per-room `context_window_enabled`
+  ([#149](https://github.com/e7217/doorae/pull/149))
+- Per-agent `context_window_opt_out`
+  ([#150](https://github.com/e7217/doorae/pull/150))
+- Wire `ingest_only` broadcast + agent opt-out
+  ([#151](https://github.com/e7217/doorae/pull/151))
+- Flip `context_window_enabled` default to `true` and
+  gate as admin-only
+  ([#230](https://github.com/e7217/doorae/pull/230))
+
+### Features — observability
+
+- Guard task-init reset-prefix abuse
+  ([#160](https://github.com/e7217/doorae/pull/160))
+- Detect semantic cycles in `decide_policy`
+  ([#161](https://github.com/e7217/doorae/pull/161))
+- Room token-stats API with per-agent breakdown
+  ([#162](https://github.com/e7217/doorae/pull/162))
+- Explicit request lifecycle + orphan sweeper
+  ([#210](https://github.com/e7217/doorae/pull/210))
+- Turn-level agent activity timeline
+  ([#223](https://github.com/e7217/doorae/pull/223))
+- Surface `starting` / `stopping` transitional states
+  ([#220](https://github.com/e7217/doorae/pull/220))
+
+### Features — engines
+
+- Refresh catalog with CLI-verified 2026-04-21 lineup
+  ([#216](https://github.com/e7217/doorae/pull/216))
+
+### Features — UI / avatars
+
+- Seed-based `EntityAvatar` for agents, DMs,
+  participants, messages
+  ([#99](https://github.com/e7217/doorae/pull/99))
+- Thread agent engine through `ParticipantOut`
+  ([#103](https://github.com/e7217/doorae/pull/103))
+- Upload/download agent manifest files from edit dialog
+  ([#100](https://github.com/e7217/doorae/pull/100))
+- Skill-aware manifest tree with engine filter +
+  script extensions
+  ([#114](https://github.com/e7217/doorae/pull/114))
+- Unify `AGENTS.md` into agent manifest file tree
+  ([#110](https://github.com/e7217/doorae/pull/110))
+
+### Fixes
+
+- Sync room shared files on agent respawn & mid-session
+  ([#256](https://github.com/e7217/doorae/pull/256))
+- Sidebar AGENTS Agent settings: surface Model/Reasoning
+  dropdowns ([#248](https://github.com/e7217/doorae/pull/248))
+- Sidebar agent row button alignment + DM rename/delete
+  menu + name tooltip + hover-hide count badge
+  ([#242](https://github.com/e7217/doorae/pull/242),
+  [#244](https://github.com/e7217/doorae/pull/244))
+- Bypass `ingest_only` stamp for human senders; move
+  orchestrator O1 ahead of stamp
+  ([#235](https://github.com/e7217/doorae/pull/235))
+- Sync runtime-room-add with agent lifecycle
+  ([#229](https://github.com/e7217/doorae/pull/229))
+- Topology: align representative edge shape with
+  `participates` ([#232](https://github.com/e7217/doorae/pull/232));
+  eliminate node re-render flicker on hover
+  ([#85](https://github.com/e7217/doorae/pull/85)).
+- Decouple agent DM rooms from project lifetime (#179)
+  ([#180](https://github.com/e7217/doorae/pull/180))
+- Silence welcome-race disconnect traceback in
+  `ws_room` ([#177](https://github.com/e7217/doorae/pull/177))
+- Run alembic migrate before `make dev`
+  ([#175](https://github.com/e7217/doorae/pull/175))
+- Deliver codex responses that span long tool turns
+  ([#194](https://github.com/e7217/doorae/pull/194))
+- Persist MCP Fernet key + refuse prod boot without one
+  ([#140](https://github.com/e7217/doorae/pull/140))
+- Write `claude-code` MCP config to `.mcp.json`
+  ([#143](https://github.com/e7217/doorae/pull/143))
+- Admin dialog CSS overflow + focus-ring clipping
+  ([#135](https://github.com/e7217/doorae/pull/135))
+- Emit UTC-aware ISO datetimes so KST clients don't
+  shift by 9h
+  ([#95](https://github.com/e7217/doorae/pull/95))
+- Dismiss historical chips and badge in-flight question
+  bubbles ([#96](https://github.com/e7217/doorae/pull/96))
+- Include source/responder `display_name` in
+  `room_query` / `room_query_result` metadata
+  ([#154](https://github.com/e7217/doorae/pull/154),
+  [#156](https://github.com/e7217/doorae/pull/156))
+
+### Refactors
+
+- Remove `codex-extra` virtual engine
+  ([#258](https://github.com/e7217/doorae/pull/258))
+- Wrap Settings dialog sections in cards on warm-white
+  body / restore whisper divider / tighten spacing
+  ([#169](https://github.com/e7217/doorae/pull/169),
+  [#171](https://github.com/e7217/doorae/pull/171),
+  [#173](https://github.com/e7217/doorae/pull/173))
 
 
 ## v0.3.2 (2026-04-17)
