@@ -33,15 +33,7 @@ class TestCatalog:
         assert "anthropic" in ENGINE_CATALOG
 
     def test_default_model_is_listed_in_models(self) -> None:
-        """Every engine's default_model must appear in its models list.
-
-        Virtual engines (e.g. ``codex-extra``) opt out: their models are
-        populated dynamically from ``llm_gateway_models`` at API time,
-        so both fields are intentionally empty in the static catalog.
-        """
         for entry in ENGINE_CATALOG.values():
-            if not entry.models and not entry.default_model:
-                continue  # virtual engine — model list filled at request time
             model_ids = [m.id for m in entry.models]
             assert entry.default_model in model_ids, (
                 f"{entry.engine}: default {entry.default_model} missing from {model_ids}"

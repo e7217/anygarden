@@ -374,7 +374,12 @@ class TestCodexTurnTimeout:
 
         captured: dict[str, object] = {}
 
-        def slow_run_text(content: str, *, signal: threading.Event | None = None):
+        def slow_run_text(
+            content: str,
+            turn_options=None,
+            *,
+            signal: threading.Event | None = None,
+        ):
             """Blocks until the signal fires or ~1s elapses.
 
             Mirrors how the codex SDK's signal watcher interrupts a stuck
@@ -433,8 +438,14 @@ class TestCodexTurnTimeout:
 
         captured: dict[str, object] = {}
 
-        def fast_run_text(content: str, *, signal: threading.Event | None = None):
+        def fast_run_text(
+            content: str,
+            turn_options=None,
+            *,
+            signal: threading.Event | None = None,
+        ):
             captured["signal"] = signal
+            captured["turn_options"] = turn_options
             return "ok"
 
         mock_thread.run_text = fast_run_text

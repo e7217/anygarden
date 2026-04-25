@@ -409,6 +409,57 @@ class TestSyncDesiredState:
         # Spawn should NOT have been called
         daemon._spawner.spawn.assert_not_called()
 
+    async def test_sync_forwards_engine_secrets_to_spawn(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Frame-delivered engine_secrets must reach SpawnManifest.
+
+        ManifestStore.save strips engine_secrets from disk, and the
+        reconcile loop spawns from a disk-loaded manifest. Without the
+        in-memory secrets cache, any engine that ships keys via
+        engine_secrets would receive ``{}`` after the save/load hop.
+        """
+        _capture_ws(daemon)
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-001"
+        mock_result.pid = 42
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "running",
+            "generation": 1,
+            "engine": "claude-code",
+            "name": "secret-agent",
+            "profile_yaml": "",
+            "rooms": ["room-1"],
+            "engine_secrets": {
+                "ANTHROPIC_API_KEY": "sk-test-secret",
+            },
+        }
+
+        async def handle_and_grant():
+            await asyncio.sleep(0.01)
+            await daemon._handle({
+                "type": "token_grant",
+                "agent_id": "agent-001",
+                "agent_token": "tok-xyz",
+            })
+
+        await asyncio.gather(
+            asyncio.create_task(daemon._handle(sync_data)),
+            asyncio.create_task(handle_and_grant()),
+        )
+
+        daemon._spawner.spawn.assert_called_once()
+        spawn_arg = daemon._spawner.spawn.call_args[0][0]
+        assert spawn_arg.engine_secrets == {
+            "ANTHROPIC_API_KEY": "sk-test-secret",
+        }
+
     async def test_sync_newer_generation_restarts(
         self, daemon: MachineDaemon
     ) -> None:

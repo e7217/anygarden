@@ -17,14 +17,13 @@ from doorae.db.models import (
     Agent,
     AgentFile,
     AgentToken,
-    LLMGatewayModel,
     Machine,
     MachineEngine,
     Participant,
     Room,
 )
 from doorae.dependencies import get_admin_identity, get_db
-from doorae.engines import get_engine_entry, is_gateway_engine
+from doorae.engines import get_engine_entry
 from doorae.rooms.membership import ensure_agent_in_room
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
@@ -551,11 +550,6 @@ async def get_engine_models(
     The ``reasoning_levels`` on each model narrow the engine-level
     levels. When a model's ``reasoning_levels`` is empty, the
     engine-level list applies. Clients should union them as needed.
-
-    For virtual engines that route through the LLM gateway (today:
-    ``codex-extra``), the model list is populated from
-    ``llm_gateway_models`` at request time — the static catalog's
-    ``models`` tuple is empty.
     """
     entry = get_engine_entry(engine)
     if entry is None:
@@ -571,36 +565,9 @@ async def get_engine_models(
         for m in entry.models
     ]
 
-    default_model = entry.default_model
-
-    if is_gateway_engine(engine):
-        rows = (
-            await db.execute(
-                select(LLMGatewayModel)
-                .where(LLMGatewayModel.enabled == True)  # noqa: E712
-                .order_by(LLMGatewayModel.model_name)
-            )
-        ).scalars().all()
-        gateway_models = [
-            EngineModelOut(
-                id=row.model_name,
-                label=f"{row.model_name} · {row.provider}",
-                # Gateway models inherit the engine-level reasoning levels;
-                # per-model narrowing isn't exposed via the admin form yet.
-                reasoning_levels=[],
-                source="gateway",
-            )
-            for row in rows
-        ]
-        models.extend(gateway_models)
-        # Pick the first gateway model as default when the static catalog
-        # didn't supply one (virtual engines set ``default_model=""``).
-        if not default_model and gateway_models:
-            default_model = gateway_models[0].id
-
     return EngineCatalogOut(
         engine=entry.engine,
-        default_model=default_model,
+        default_model=entry.default_model,
         models=models,
         reasoning_levels=list(entry.reasoning_levels),
     )

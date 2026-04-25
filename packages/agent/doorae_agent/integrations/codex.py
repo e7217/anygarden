@@ -16,7 +16,6 @@ from typing import Any
 
 import structlog
 
-from doorae_agent import secrets as agent_secrets
 from doorae_agent.client import ChatClient
 from doorae_agent.coordination.pending_context import (
     append_context_line,
@@ -27,18 +26,6 @@ from doorae_agent.integrations.base import EngineAdapter
 from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 
 logger = structlog.get_logger(__name__)
-
-
-# #197 — OpenAI-SDK env var names the codex SDK and its app-server
-# subprocess consume during construction. When doorae's LLM gateway
-# is enabled, the manifest carries per-agent values for these under
-# ``engine_secrets`` (see :mod:`doorae_agent.secrets`); we surface
-# them into ``os.environ`` around ``Codex()`` construction so both
-# the Python client and the spawned app-server pick them up.
-_OPENAI_SDK_ENV_KEYS = (
-    "OPENAI_BASE_URL",
-    "OPENAI_API_KEY",
-)
 
 
 # Issue #190 — upper bound on a single codex turn. The SDK's
@@ -199,6 +186,7 @@ class CodexAdapter(EngineAdapter):
         # ``codex.options`` submodule. Stays ``None`` until ``start()``
         # succeeds.
         self._thread_options_cls: Any = None
+        self._turn_options_cls: Any = None
         # #237 — owning client reference for the memory / ephemeral
         # suffix. Wired in ``integrate_with_codex``; tests that bypass
         # the integration factory leave it None and the suffix helper
@@ -227,7 +215,7 @@ class CodexAdapter(EngineAdapter):
         """Start the Codex client (spawns app-server internally)."""
         try:
             from codex import Codex
-            from codex.options import ThreadStartOptions
+            from codex.options import ThreadStartOptions, TurnOptions
         except ImportError:
             logger.warning(
                 "codex.sdk_not_found",
@@ -235,17 +223,9 @@ class CodexAdapter(EngineAdapter):
             )
             return
 
-        # #197 — ``Codex()`` reads ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``
-        # at construction and also spawns the codex app-server subprocess
-        # which inherits the current env. Surfacing the gateway values
-        # only for this call keeps them out of the long-running agent's
-        # ``/proc/self/environ`` while still letting both the client and
-        # its spawned app-server discover them. When ``engine_secrets``
-        # carries no such keys, ``secrets_in_env`` is a no-op and the
-        # SDK falls back to the host's default env / auth file discovery.
-        with agent_secrets.secrets_in_env(list(_OPENAI_SDK_ENV_KEYS)):
-            self._codex = Codex()
+        self._codex = Codex()
         self._thread_options_cls = ThreadStartOptions
+        self._turn_options_cls = TurnOptions
 
         # Issue #190 — install the parse_notification shim *after* the
         # SDK has been imported (so the target module definitely
@@ -297,6 +277,7 @@ class CodexAdapter(EngineAdapter):
                         options=self._thread_options_cls(
                             approval_policy="never",
                             sandbox=self._sandbox,
+                            model=self._model or None,
                         ),
                     )
                 else:
@@ -353,10 +334,18 @@ class CodexAdapter(EngineAdapter):
             # ``SupportsIsSet`` which the SDK's ``_SignalWatcher``
             # polls to interrupt the stream cleanly on abort.
             abort_signal = threading.Event()
+            run_text_kwargs: dict[str, Any] = {"signal": abort_signal}
+            if self._turn_options_cls is not None and (
+                self._model or self._reasoning_effort
+            ):
+                run_text_kwargs["turn_options"] = self._turn_options_cls(
+                    model=self._model or None,
+                    effort=self._reasoning_effort or None,
+                )
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
-                        thread.run_text, turn_content, signal=abort_signal
+                        thread.run_text, turn_content, **run_text_kwargs
                     ),
                     timeout=_CODEX_TURN_TIMEOUT,
                 )

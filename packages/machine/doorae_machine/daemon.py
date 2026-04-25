@@ -422,7 +422,10 @@ class MachineDaemon:
             name=manifest.name,
             agents_md=manifest.agents_md,
             files=dict(manifest.files),
-            engine_secrets=dict(manifest.engine_secrets),
+            # ``manifest`` came from ``ManifestStore.load`` which returns
+            # engine_secrets={} by design (disk storage strips secrets).
+            # The freshest frame's secrets live in the in-memory cache.
+            engine_secrets=self._manifest_store.get_secrets(agent_id),
             # Issue #237 — pass DB snapshot through so the spawner can
             # materialize ``memory/notes.md`` on cold start. ``getattr``
             # keeps compatibility with pre-#237 frames that omit the field.

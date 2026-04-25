@@ -333,13 +333,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # in sync with the code (new builtin → one restart away).
         await app.state.mcp_template_service.seed_builtins()
     if not getattr(app.state, "agent_lifecycle", None):
-        server_url = f"ws://{config.reachable_host()}:{config.port}"
         app.state.agent_lifecycle = AgentLifecycle(
             db_factory=app.state.session_factory,
             machine_bus=app.state.machine_bus,
-            server_url=server_url,
             mcp_template_service=app.state.mcp_template_service,
-            llm_gateway_enabled=config.llm_gateway_enabled,
             # #255 — lifecycle backfills room shared files when an agent
             # transitions into ``running`` (respawn path). The same
             # directory the /rooms/{id}/files upload route writes into.

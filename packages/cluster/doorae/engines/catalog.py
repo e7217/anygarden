@@ -188,47 +188,7 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
         ),
         reasoning_levels=("disabled", "enabled", "adaptive"),
     ),
-    # ── Virtual engines ───────────────────────────────────────────────
-    # "codex-extra" routes Codex CLI traffic through the embedded LiteLLM
-    # gateway. The model catalog is populated dynamically from
-    # ``llm_gateway_models`` at API time, not from this static list — so
-    # ``models`` stays empty here. ``default_model`` is left blank; the
-    # UI treats "no models registered" as a prompt to add one in the
-    # LLM Gateway page.
-    "codex-extra": EngineCatalogEntry(
-        engine="codex-extra",
-        default_model="",
-        models=(),
-        reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-    ),
 }
-
-
-# ── Virtual engine support ─────────────────────────────────────────────
-#
-# Virtual engines are user-facing engine IDs that don't correspond to a
-# distinct CLI binary. They reuse an underlying "base" engine's binary
-# and adapter, but differ in how credentials / base URLs are wired.
-# Today the only virtual engine is ``codex-extra`` (routes through the
-# embedded LiteLLM gateway instead of the host ChatGPT-account auth).
-VIRTUAL_ENGINE_TO_BASE: dict[str, str] = {
-    "codex-extra": "codex",
-}
-
-
-def base_engine(engine: str) -> str:
-    """Resolve ``engine`` to its underlying CLI engine.
-
-    Non-virtual engines are returned unchanged. Used by the scheduler
-    and machine spawner so they can keep working against the real
-    binary name (``codex``) while the DB/UI carry the virtual id.
-    """
-    return VIRTUAL_ENGINE_TO_BASE.get(engine, engine)
-
-
-def is_gateway_engine(engine: str) -> bool:
-    """Does this engine route through the embedded LLM gateway?"""
-    return engine in VIRTUAL_ENGINE_TO_BASE
 
 
 def get_engine_entry(engine: str) -> Optional[EngineCatalogEntry]:
