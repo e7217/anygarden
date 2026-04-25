@@ -4,6 +4,8 @@ import { Paperclip, Send, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
+import { parseSlashCommand } from '@/lib/slashCommands'
+import { apiFetch } from '@/lib/api'
 
 interface MessageInputProps {
   onSend: (content: string, metadata?: Record<string, unknown>) => void
@@ -40,6 +42,10 @@ export default function MessageInput({
   roomId,
 }: MessageInputProps) {
   const [value, setValue] = useState('')
+  // #269 — inline error from a malformed slash command (e.g. ``/task``
+  // without an assignee, or a server-side 4xx). Cleared whenever the
+  // user types again so a stale error doesn't linger after recovery.
+  const [slashError, setSlashError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -115,6 +121,51 @@ export default function MessageInput({
     // Resolve any remaining directly-typed `#RoomName` plaintext into room tokens.
     // Issue #53: previously only autocomplete selections were tokenized.
     content = resolveRoomMentionsInText(content, mentionRooms)
+
+    // #269 — Slash-command interception. Token resolution above must
+    // run first so the parser sees ``<@user:pid>`` rather than the
+    // legacy ``@DisplayName`` text. Unknown commands fall through to a
+    // normal send (a user typing a URL like ``/path/to/x`` should not
+    // be hijacked).
+    if (content.startsWith('/') && roomId) {
+      const dispatch = parseSlashCommand(content)
+      if (dispatch) {
+        const { command, parsed } = dispatch
+        if (!parsed.ok) {
+          setSlashError(parsed.error)
+          return
+        }
+        if (command === 'task') {
+          // Fire-and-forget; the WS task fanout will surface the new
+          // row in TaskPanel and the synthetic mention card in chat.
+          apiFetch(`/api/v1/rooms/${roomId}/tasks`, {
+            method: 'POST',
+            body: JSON.stringify({
+              title: parsed.payload.title,
+              assignee_participant_id: parsed.payload.assignee_pid,
+            }),
+          })
+            .then(async r => {
+              if (!r.ok) {
+                const detail = await r.text().catch(() => '')
+                setSlashError(`task 생성 실패 (${r.status}) ${detail}`)
+              } else {
+                setSlashError(null)
+              }
+            })
+            .catch(err => setSlashError(String(err)))
+          // Clear the input regardless — the API call is in flight,
+          // and a duplicate submission while waiting on the response
+          // would just race with itself.
+          setValue('')
+          trackedMentions.current = []
+          setMention(null)
+          onTyping(false)
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+          return
+        }
+      }
+    }
     // Attach-only messages: render a short marker so the message has
     // visible content. The MessageBubble renderer may still choose
     // to present the attachment pill as the primary affordance.
@@ -211,6 +262,9 @@ export default function MessageInput({
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value
     setValue(newValue)
+    // #269 — clear stale slash error as soon as the user keeps typing
+    // so a recovered input doesn't carry a red banner forever.
+    if (slashError) setSlashError(null)
     // Prune tracked mentions whose display text was edited/deleted
     trackedMentions.current = trackedMentions.current.filter(
       m => newValue.includes(m.displayText),
@@ -243,6 +297,14 @@ export default function MessageInput({
   return (
     <div className="border-t border-[var(--color-border)] bg-white px-4 py-3">
       <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
+        {slashError && (
+          <div
+            data-testid="slash-error"
+            className="text-xs text-red-600"
+          >
+            {slashError}
+          </div>
+        )}
         {(attachments.length > 0 || uploadError) && (
           <div className="flex flex-wrap items-center gap-1.5">
             {attachments.map(a => (
