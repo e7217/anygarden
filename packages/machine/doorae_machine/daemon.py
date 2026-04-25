@@ -437,6 +437,10 @@ class MachineDaemon:
             # ``getattr`` keeps compatibility with in-memory manifest
             # objects from earlier schema revisions in tests.
             runtime=getattr(manifest, "runtime", "python") or "python",
+            # Issue #277 — doorae self-MCP bearer token from the
+            # in-memory cache (manifest on disk strips it for the same
+            # reasons engine_secrets are stripped).
+            doorae_mcp_token=self._manifest_store.get_doorae_mcp_token(agent_id),
         )
 
         result = await self._spawner.spawn(spawn_manifest)

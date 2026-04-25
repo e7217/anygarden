@@ -5,9 +5,12 @@ Each agent's desired-state manifest is saved to:
 
 The file is owner-readable only (mode 0o600) and contains all fields
 from SyncDesiredStateFrame except ``type`` (a Pydantic discriminator
-with no operational value on disk) and ``engine_secrets`` (sensitive
-credentials that must not be persisted to disk). A ``saved_at`` ISO
-8601 timestamp is added on every write.
+with no operational value on disk), ``engine_secrets`` (sensitive
+credentials that must not be persisted to disk), and
+``doorae_mcp_token`` (#277 — the doorae self-MCP bearer token, also
+sensitive: rerun reconcile flow refreshes it from the cluster on
+every ``sync_desired_state``). A ``saved_at`` ISO 8601 timestamp is
+added on every write.
 """
 
 from __future__ import annotations
@@ -26,7 +29,9 @@ from doorae_machine.safefs import safe_write_text
 logger = logging.getLogger(__name__)
 
 # Fields stripped before writing to disk.
-_EXCLUDED_FIELDS: frozenset[str] = frozenset({"type", "engine_secrets"})
+_EXCLUDED_FIELDS: frozenset[str] = frozenset(
+    {"type", "engine_secrets", "doorae_mcp_token"}
+)
 
 
 class ManifestStore:
@@ -50,6 +55,17 @@ class ManifestStore:
         # the freshest frame's secrets here so ``get_secrets`` can hand
         # them to the spawner without writing them to disk.
         self._secrets_cache: dict[str, dict[str, str]] = {}
+        # Issue #277 — same in-memory pattern for the doorae self-MCP
+        # bearer token. The cluster mints a fresh token on every
+        # ``sync_desired_state``; persisting it on disk would defeat
+        # codex's ``bearer_token_env_var`` indirection (the whole point
+        # of which is to keep the token off disk). After a daemon
+        # cold start the cache is empty and the spawner runs without
+        # the token until the next reconcile frame arrives — codex
+        # tool calls fail with 401 in that gap, which is acceptable
+        # since the cluster always pushes a fresh frame on agent
+        # state transitions.
+        self._doorae_token_cache: dict[str, str] = {}
 
     # ── Write operations ─────────────────────────────────────────────
 
@@ -68,6 +84,13 @@ class ManifestStore:
         manifest_path = agent_dir / "manifest.json"
 
         self._secrets_cache[frame.agent_id] = dict(frame.engine_secrets or {})
+        # #277 — cache the doorae self-MCP bearer token in memory so
+        # the reconcile loop can hand it to the spawner without
+        # round-tripping through disk.
+        if frame.doorae_mcp_token:
+            self._doorae_token_cache[frame.agent_id] = frame.doorae_mcp_token
+        else:
+            self._doorae_token_cache.pop(frame.agent_id, None)
 
         data = self._frame_to_dict(frame)
         data["saved_at"] = datetime.now(tz=timezone.utc).isoformat()
@@ -92,6 +115,7 @@ class ManifestStore:
         except FileNotFoundError:
             pass
         self._secrets_cache.pop(agent_id, None)
+        self._doorae_token_cache.pop(agent_id, None)
 
     def get_secrets(self, agent_id: str) -> dict[str, str]:
         """Return the engine_secrets for *agent_id* from the in-memory cache.
@@ -103,6 +127,17 @@ class ManifestStore:
         agent with no gateway routing.
         """
         return dict(self._secrets_cache.get(agent_id, {}))
+
+    def get_doorae_mcp_token(self, agent_id: str) -> str | None:
+        """Return the cached doorae self-MCP bearer token (#277).
+
+        Same lifetime semantics as ``get_secrets``: ``None`` until the
+        cluster pushes a fresh ``sync_desired_state`` frame after a
+        daemon restart. Spawner injects this as ``DOORAE_AGENT_TOKEN``
+        in the agent process env so codex's ``bearer_token_env_var``
+        indirection resolves correctly.
+        """
+        return self._doorae_token_cache.get(agent_id)
 
     def update_desired_state(self, agent_id: str, desired_state: str) -> None:
         """Update only the ``desired_state`` field of an existing manifest.

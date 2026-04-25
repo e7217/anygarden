@@ -57,6 +57,13 @@ class DooraeSettings(BaseSettings):
     # accumulate attachments. Resolved lazily so tests can redirect
     # it without touching ``$HOME``.
     room_files_dir: Path = _DEFAULT_ROOM_FILES_DIR
+    # #277 — Public URL agents use to reach this cluster's MCP / REST
+    # endpoints. Empty string falls back to
+    # ``http://{reachable_host()}:{port}`` so loopback / single-host
+    # dev setups need no extra config. Production deployments behind a
+    # reverse proxy MUST set this explicitly
+    # (e.g. ``https://chat.example.com``).
+    cluster_external_url: str = ""
 
     model_config = SettingsConfigDict(env_prefix="DOORAE_")
 
@@ -72,3 +79,17 @@ class DooraeSettings(BaseSettings):
         if self.host in _UNDIALABLE_HOSTS:
             return "127.0.0.1"
         return self.host
+
+    def cluster_external_url_or_default(self) -> str:
+        """URL agents target for cluster-side MCP and REST calls.
+
+        When ``cluster_external_url`` is set (production / reverse
+        proxy), it wins after a single trailing-slash trim — the
+        ``/mcp/rpc`` suffix is appended at the consumer side and a
+        residual slash would yield ``//mcp/rpc``. When empty, fall
+        back to ``http://{reachable_host()}:{port}`` which works for
+        loopback / single-host dev (#277).
+        """
+        if self.cluster_external_url:
+            return self.cluster_external_url.rstrip("/")
+        return f"http://{self.reachable_host()}:{self.port}"

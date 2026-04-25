@@ -341,6 +341,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # transitions into ``running`` (respawn path). The same
             # directory the /rooms/{id}/files upload route writes into.
             room_files_dir=config.room_files_dir,
+            # #277 — URL the agent CLI tools (claude-code / codex /
+            # gemini-cli) call back into for the doorae self-MCP
+            # entry that ``_build_sync_frame`` bakes into spawn frames.
+            cluster_external_url=config.cluster_external_url_or_default(),
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state

@@ -38,6 +38,7 @@ class AgentLifecycle:
         *,
         mcp_template_service=None,
         room_files_dir: Path | None = None,
+        cluster_external_url: str | None = None,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -54,6 +55,12 @@ class AgentLifecycle:
         # ``/rooms/{id}/files`` HTTP route writes into, or the daemon
         # will receive stale bytes.
         self._room_files_dir = room_files_dir
+        # #277 — URL agents target for cluster-side MCP and REST
+        # calls. Stored here so ``_build_sync_frame`` can render the
+        # built-in doorae self-MCP entry without re-resolving settings
+        # on every call. ``None`` skips self-MCP injection (used by
+        # tests that don't exercise spawn-time MCP wiring).
+        self._cluster_external_url = cluster_external_url
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -559,20 +566,41 @@ class AgentLifecycle:
         # seeds a fresh one. ``MCPTemplateService.render_for_agent``
         # returns ``{}`` for agents with no attachments or engines
         # without MCP support, making this block cheap.
-        if self._mcp_template_service is not None:
-            from doorae.mcp_templates.merge import (
-                merge_for_engine,
-                render_instance,
-                settings_path_for_engine,
-            )
+        # #124 + #277 — overlay attached MCP server instances onto
+        # the engine-specific settings file, with the doorae self-MCP
+        # entry prepended to every supported engine. ``setdefault``-
+        # based merge in ``merge_for_engine`` means an admin who
+        # explicitly attaches an external server named ``doorae``
+        # still wins (escape hatch — see plan §3.2 for #277).
+        from doorae.mcp_templates.merge import (
+            DOORAE_BUILTIN_NAME,
+            doorae_default_entry,
+            merge_for_engine,
+            render_instance,
+            settings_path_for_engine,
+        )
 
-            mcp_engine = agent.engine
-            settings_path = settings_path_for_engine(mcp_engine)
-            if settings_path is not None:
+        mcp_engine = agent.engine
+        settings_path = settings_path_for_engine(mcp_engine)
+        # ``doorae_token`` lives at this scope so the spawn-frame
+        # builder below can echo it on the ``doorae_mcp_token`` field
+        # regardless of whether settings_path was None.
+        doorae_token: str | None = None
+        if settings_path is not None:
+            overlays = []
+
+            # Admin-attached external MCP templates first (existing
+            # #124). Order matters because ``merge_for_engine`` uses
+            # ``setdefault`` semantics — *earlier* entries win on key
+            # collision. Putting admin attachments first preserves
+            # the escape hatch from plan §3.2 결정 1: an admin who
+            # explicitly registers an external server named ``doorae``
+            # overrides the builtin instead of getting silently
+            # shadowed by it.
+            if self._mcp_template_service is not None:
                 pairs = await self._mcp_template_service.list_instances_for_agent(
                     db, agent.id,
                 )
-                overlays = []
                 secrets = self._mcp_template_service._secrets
                 for instance, template in pairs:
                     if not instance.enabled:
@@ -588,13 +616,46 @@ class AgentLifecycle:
                     )
                     if rendered is not None:
                         overlays.append(rendered)
-                if overlays:
-                    admin_content = files_map.get(settings_path)
-                    files_map[settings_path] = merge_for_engine(
+
+            # Built-in doorae self-MCP — issued only when we know how
+            # to reach the cluster externally. Tests that omit
+            # ``cluster_external_url`` skip this entirely so they
+            # don't have to mint per-spawn agent tokens.
+            if self._cluster_external_url:
+                default = doorae_default_entry(
+                    engine=mcp_engine,
+                    cluster_url=self._cluster_external_url,
+                    agent_token="<placeholder>",
+                )
+                if default is not None:
+                    # A new token is minted per spawn-frame because
+                    # the plaintext is unrecoverable from DB hashes
+                    # — so each fresh frame writes a fresh secret
+                    # into disk (claude-code/gemini) or env (codex).
+                    doorae_token = generate_token()
+                    token_hash, lookup_hint = hash_agent_token(doorae_token)
+                    db.add(AgentToken(
+                        agent_id=agent.id,
+                        token_hash=token_hash,
+                        lookup_hint=lookup_hint,
+                    ))
+                    # Re-render with the real token. The earlier
+                    # call is just for engine-support detection.
+                    real_default = doorae_default_entry(
                         engine=mcp_engine,
-                        admin_content=admin_content,
-                        overlays=overlays,
+                        cluster_url=self._cluster_external_url,
+                        agent_token=doorae_token,
                     )
+                    assert real_default is not None  # narrowed above
+                    overlays.append(real_default)
+
+            if overlays:
+                admin_content = files_map.get(settings_path)
+                files_map[settings_path] = merge_for_engine(
+                    engine=mcp_engine,
+                    admin_content=admin_content,
+                    overlays=overlays,
+                )
 
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
@@ -635,6 +696,19 @@ class AgentLifecycle:
             # machines ignore the unknown key and fall back to the
             # SpawnManifest default of ``"python"``.
             "runtime": getattr(agent, "runtime", "python") or "python",
+            # #277 — Plaintext bearer token for the doorae self-MCP
+            # entry the cluster just baked into ``files[<settings>]``.
+            # Codex agents need this exposed in their process env as
+            # ``DOORAE_AGENT_TOKEN`` because their .codex/config.toml
+            # references it via ``bearer_token_env_var`` rather than
+            # storing the secret on disk. claude-code / gemini-cli
+            # already see the literal ``Authorization`` header in the
+            # rendered settings file, so they don't strictly need
+            # this field — but the machine may still inject it for
+            # consistency. ``None`` means we did not register the
+            # builtin (e.g. cluster_external_url unset, or engine
+            # has no MCP support).
+            "doorae_mcp_token": doorae_token,
         }
 
 
