@@ -307,3 +307,45 @@ class TestManifestStoreDefaultRoot:
         store = ManifestStore()
         expected = Path.home() / ".doorae" / "agents"
         assert store.agents_root == expected
+
+
+class TestManifestStoreSecretsCache:
+    """save() caches engine_secrets in memory so the reconcile loop
+    can fetch them via get_secrets even though the disk manifest
+    deliberately strips them (security: see _EXCLUDED_FIELDS)."""
+
+    def test_get_secrets_returns_saved_secrets(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.save(make_frame(engine_secrets={"OPENAI_BASE_URL": "http://gw/v1"}))
+
+        assert store.get_secrets("agent-001") == {"OPENAI_BASE_URL": "http://gw/v1"}
+
+    def test_get_secrets_empty_before_save(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+
+        assert store.get_secrets("agent-001") == {}
+
+    def test_save_overwrites_cached_secrets(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.save(make_frame(engine_secrets={"OLD": "value"}))
+        store.save(make_frame(engine_secrets={"NEW": "value"}))
+
+        assert store.get_secrets("agent-001") == {"NEW": "value"}
+
+    def test_get_secrets_returns_copy(self, tmp_path: Path) -> None:
+        """Mutating the returned dict must not poison the cache."""
+        store = ManifestStore(agents_root=tmp_path)
+        store.save(make_frame(engine_secrets={"K": "v"}))
+
+        fetched = store.get_secrets("agent-001")
+        fetched["K"] = "tampered"
+
+        assert store.get_secrets("agent-001") == {"K": "v"}
+
+    def test_delete_clears_cached_secrets(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.save(make_frame(engine_secrets={"K": "v"}))
+
+        store.delete("agent-001")
+
+        assert store.get_secrets("agent-001") == {}

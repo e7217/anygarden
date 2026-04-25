@@ -199,6 +199,7 @@ class CodexAdapter(EngineAdapter):
         # ``codex.options`` submodule. Stays ``None`` until ``start()``
         # succeeds.
         self._thread_options_cls: Any = None
+        self._turn_options_cls: Any = None
         # #237 — owning client reference for the memory / ephemeral
         # suffix. Wired in ``integrate_with_codex``; tests that bypass
         # the integration factory leave it None and the suffix helper
@@ -227,7 +228,7 @@ class CodexAdapter(EngineAdapter):
         """Start the Codex client (spawns app-server internally)."""
         try:
             from codex import Codex
-            from codex.options import ThreadStartOptions
+            from codex.options import ThreadStartOptions, TurnOptions
         except ImportError:
             logger.warning(
                 "codex.sdk_not_found",
@@ -246,6 +247,7 @@ class CodexAdapter(EngineAdapter):
         with agent_secrets.secrets_in_env(list(_OPENAI_SDK_ENV_KEYS)):
             self._codex = Codex()
         self._thread_options_cls = ThreadStartOptions
+        self._turn_options_cls = TurnOptions
 
         # Issue #190 — install the parse_notification shim *after* the
         # SDK has been imported (so the target module definitely
@@ -297,6 +299,7 @@ class CodexAdapter(EngineAdapter):
                         options=self._thread_options_cls(
                             approval_policy="never",
                             sandbox=self._sandbox,
+                            model=self._model or None,
                         ),
                     )
                 else:
@@ -353,10 +356,18 @@ class CodexAdapter(EngineAdapter):
             # ``SupportsIsSet`` which the SDK's ``_SignalWatcher``
             # polls to interrupt the stream cleanly on abort.
             abort_signal = threading.Event()
+            run_text_kwargs: dict[str, Any] = {"signal": abort_signal}
+            if self._turn_options_cls is not None and (
+                self._model or self._reasoning_effort
+            ):
+                run_text_kwargs["turn_options"] = self._turn_options_cls(
+                    model=self._model or None,
+                    effort=self._reasoning_effort or None,
+                )
             try:
                 response = await asyncio.wait_for(
                     asyncio.to_thread(
-                        thread.run_text, turn_content, signal=abort_signal
+                        thread.run_text, turn_content, **run_text_kwargs
                     ),
                     timeout=_CODEX_TURN_TIMEOUT,
                 )

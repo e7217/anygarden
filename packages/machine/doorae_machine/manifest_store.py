@@ -44,6 +44,12 @@ class ManifestStore:
         self.agents_root: Path = (
             agents_root if agents_root is not None else Path.home() / ".doorae" / "agents"
         )
+        # In-memory only. ``engine_secrets`` are stripped on disk save
+        # (see ``_EXCLUDED_FIELDS``) so the reconcile loop that spawns
+        # from a disk-loaded manifest would otherwise lose them. Cache
+        # the freshest frame's secrets here so ``get_secrets`` can hand
+        # them to the spawner without writing them to disk.
+        self._secrets_cache: dict[str, dict[str, str]] = {}
 
     # ── Write operations ─────────────────────────────────────────────
 
@@ -60,6 +66,8 @@ class ManifestStore:
         agent_dir.mkdir(parents=True, exist_ok=True)
 
         manifest_path = agent_dir / "manifest.json"
+
+        self._secrets_cache[frame.agent_id] = dict(frame.engine_secrets or {})
 
         data = self._frame_to_dict(frame)
         data["saved_at"] = datetime.now(tz=timezone.utc).isoformat()
@@ -83,6 +91,18 @@ class ManifestStore:
             manifest_path.unlink()
         except FileNotFoundError:
             pass
+        self._secrets_cache.pop(agent_id, None)
+
+    def get_secrets(self, agent_id: str) -> dict[str, str]:
+        """Return the engine_secrets for *agent_id* from the in-memory cache.
+
+        Returns an empty dict when no frame has been saved this process
+        lifetime (e.g. right after machine daemon restart, before the
+        server has resent a full sync). The daemon should treat this as
+        "fall back to host auth discovery" — the same semantics as an
+        agent with no gateway routing.
+        """
+        return dict(self._secrets_cache.get(agent_id, {}))
 
     def update_desired_state(self, agent_id: str, desired_state: str) -> None:
         """Update only the ``desired_state`` field of an existing manifest.
