@@ -590,3 +590,61 @@ class TestCodexSharedContextReinjection:
         b_thread = adapter._threads["r-b"]
         assert "<shared-context>" not in a_thread.run_text.call_args_list[1].args[0]
         assert "<shared-context>" not in b_thread.run_text.call_args_list[1].args[0]
+
+
+class TestCodexRoomConversationWrapper:
+    """Issue #284 — drained pending context is wrapped in a
+    ``<room_conversation>`` XML block before being prepended to the
+    next turn's user content. For codex this matters extra because
+    the thread accumulates history natively, so a leaky wrapper
+    would pollute every subsequent turn."""
+
+    @pytest.mark.asyncio
+    async def test_drained_prefix_appears_inside_room_conversation_tags(
+        self,
+    ) -> None:
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+
+            # Stash one ambient message — server-side ``ingest_only``
+            # broadcast lands here as the next turn's prefix.
+            await adapter.ingest_context({
+                "room_id": "room-1",
+                "participant_id": "peer-agent",
+                "content": "비행 8시 출발입니다",
+                "metadata": {},
+            })
+            await adapter.on_message({"content": "다음 일정?", "room_id": "room-1"})
+
+        turn_content = mock_thread.run_text.call_args.args[0]
+        assert "<room_conversation>" in turn_content
+        assert "</room_conversation>" in turn_content
+        # Ambient line lands inside the wrapper.
+        open_idx = turn_content.index("<room_conversation>")
+        close_idx = turn_content.index("</room_conversation>")
+        assert open_idx < turn_content.index("[참고]") < close_idx
+        # Preamble's no-relay phrase must reach the prompt — the
+        # whole point of #284.
+        assert "전달하지 마세요" in turn_content
+        # Actual user question stays outside the wrapper so codex
+        # still sees it as the input to address.
+        user_idx = turn_content.index("다음 일정?")
+        assert user_idx > close_idx
+
+    @pytest.mark.asyncio
+    async def test_solo_turn_has_no_wrapper(self) -> None:
+        """Empty pending-context buffer must not produce wrapper tags
+        — pre-#284 byte-identical behaviour for the common case."""
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "안녕", "room_id": "room-1"})
+
+        turn_content = mock_thread.run_text.call_args.args[0]
+        assert "<room_conversation>" not in turn_content
+        # No memory_md cached → memory suffix path is also empty,
+        # so the bare content reaches the thread untouched.
+        assert turn_content == "안녕"

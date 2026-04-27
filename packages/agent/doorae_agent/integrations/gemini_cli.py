@@ -51,6 +51,7 @@ from doorae_agent.coordination.pending_context import (
     append_context_line,
     drain_context,
     format_context_line,
+    wrap_as_room_conversation,
 )
 from doorae_agent.integrations.base import EngineAdapter
 from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
@@ -146,7 +147,15 @@ class GeminiCliAdapter(EngineAdapter):
         # model means the prefix flows into this turn's transcript
         # and also stays in the per-room ``_conversations`` history,
         # so subsequent turns keep the breadcrumb as prior context.
+        #
+        # Issue #284 — wrap the drained block in
+        # ``<room_conversation>`` so Gemini reads it as awareness
+        # context (the user has already seen these messages) rather
+        # than relay-target input. Empty prefix → no wrap → pre-#284
+        # solo turns stay byte-identical.
         prefix = drain_context(self._pending_context, room_id)
+        if prefix:
+            prefix = wrap_as_room_conversation(prefix)
         turn_content = f"{prefix}\n\n{content}" if prefix else content
 
         # Build prompt with per-room conversation context.

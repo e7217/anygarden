@@ -16,6 +16,13 @@
   prompt. Solo agents see the prompt unchanged; collaborative
   agents receive the roster + hint even when they are not the
   room's orchestrator.
+- Wrap drained pending context (ambient room messages) in a
+  `<room_conversation>` XML block before injecting into the LLM
+  prompt (#284). The Korean preamble explicitly tells the model the
+  block is awareness context — already visible to the user — and
+  not to relay or summarize it. Empty buffers short-circuit so
+  pre-#284 solo turns stay byte-identical. Applied uniformly to
+  claude_code, codex, and gemini_cli adapters.
 
 ## v0.4.0 (2026-04-25)
 

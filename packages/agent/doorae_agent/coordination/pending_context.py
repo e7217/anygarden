@@ -97,3 +97,49 @@ def drain_context(
     cutoff = now - PENDING_CONTEXT_TTL_SEC
     lines = [line for ts, line in buf if ts >= cutoff]
     return "\n".join(lines)
+
+
+# Issue #284 — preamble injected before the drained pending context
+# inside the ``<room_conversation>`` wrapper. Spells out three things
+# the LLM must follow:
+#   1) what the wrapped block actually is (room conversation),
+#   2) that the user has already seen these messages,
+#   3) what NOT to do (relay / summarize back to the user).
+# Phrased in Korean to match Doorae's default operator + user locale
+# and the surrounding system-prompt ergonomics (#283 collab hint also
+# uses Korean examples). Localisation fallbacks belong to a separate
+# follow-up.
+ROOM_CONVERSATION_PREAMBLE = (
+    "다음은 같은 방의 다른 참가자들이 나눈 대화입니다. "
+    "사용자도 이 메시지들을 이미 보았습니다. "
+    "답변하거나 요약하거나 사용자에게 다시 전달하지 마세요. "
+    "현재 사용자 질문의 맥락으로만 사용하세요."
+)
+
+
+def wrap_as_room_conversation(prefix: str) -> str:
+    """Wrap a drained pending-context prefix in a ``<room_conversation>``
+    XML block (#284).
+
+    Pre-#284 the drained prefix was prepended verbatim to the next
+    turn's user content as ``[참고] ...\\n\\n<user_msg>``, which the
+    LLM frequently mistook for a relay-target item — agents would
+    "kindly forward" the peer's answer back to the user even though
+    the user had already seen it in the room. XML wrapping plus a
+    short Korean preamble shifts the block into "context, not input"
+    territory; Anthropic's prompt guide explicitly recommends XML
+    tags for this kind of structural disambiguation, and the same
+    pattern works on Codex / Gemini engines we ship with.
+
+    Empty input → empty output. Callers can keep their existing
+    ``if prefix else <bare content>`` short-circuit and pre-#284
+    prompts stay byte-identical when the buffer was empty.
+    """
+    if not prefix:
+        return ""
+    return (
+        "<room_conversation>\n"
+        f"{ROOM_CONVERSATION_PREAMBLE}\n\n"
+        f"{prefix}\n"
+        "</room_conversation>"
+    )
