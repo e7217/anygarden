@@ -380,6 +380,13 @@ class Spawner:
         shared_dir = memory_dir / "shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(shared_dir, 0o700)
+        # #290 — symmetrical drop zone for the outbound flow: the
+        # agent writes a file here and the daemon's outbox poller
+        # ships it back to the cluster as a room artifact. Pre-creating
+        # the directory lets the agent treat it as always-present.
+        outbox_dir = memory_dir / "outbox"
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(outbox_dir, 0o700)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():

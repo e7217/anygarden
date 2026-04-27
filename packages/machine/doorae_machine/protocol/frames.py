@@ -259,12 +259,40 @@ class AgentMemoryUpdateFrame(BaseModel):
     memory_md: str
 
 
+class RoomArtifactProducedFrame(BaseModel):
+    """Machine ships a file the agent dropped under
+    ``<agent_root>/memory/outbox/`` to the cluster (#290 Phase B).
+
+    Polling lives next to ``_flush_memory_updates`` in the daemon; the
+    sha256 cache short-circuits unchanged files so reconnect / restart
+    storms don't churn the wire. The cluster fans the artifact out to
+    every room the producing agent is currently placed in (decision
+    D8 in the implementation plan — "fan-out + sha256 dedup" for
+    Phase B's first cut).
+
+    ``content_b64`` carries the bytes verbatim (binary mime is
+    permitted — image/png is the headline use case). The 768 KiB raw
+    cap keeps the WebSocket frame under the 1 MiB envelope after
+    base64 inflation; daemons skip larger files instead of trying to
+    chunk them — the HTTP upstream channel is a follow-up issue.
+    """
+
+    type: Literal["room_artifact_produced"] = "room_artifact_produced"
+    agent_id: str
+    filename: str
+    mime: str
+    content_b64: str
+    sha256: str
+    size_bytes: int
+
+
 MachineFrame = Union[
     RegisterFrame,
     ReportActualStateFrame,
     TokenRequestFrame,
     RequestReplacementFrame,
     AgentMemoryUpdateFrame,
+    RoomArtifactProducedFrame,
 ]
 
 
