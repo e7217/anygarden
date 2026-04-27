@@ -53,7 +53,7 @@ def _alembic_config(db_path: str) -> Config:
 
 
 class TestRoomArtifactsMigration:
-    def test_035_creates_table_with_expected_columns(self) -> None:
+    def test_036_creates_table_with_expected_columns(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
         try:
@@ -98,13 +98,13 @@ class TestRoomArtifactsMigration:
             except OSError:
                 pass
 
-    def test_035_round_trip_downgrade_drops_table(self) -> None:
+    def test_036_round_trip_downgrade_drops_table(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
         try:
             cfg = _alembic_config(db_path)
             command.upgrade(cfg, "head")
-            command.downgrade(cfg, "034")
+            command.downgrade(cfg, "035")
 
             engine = create_engine(f"sqlite:///{db_path}")
             with engine.connect() as conn:
