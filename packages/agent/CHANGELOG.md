@@ -33,6 +33,21 @@
   adapters identically; future augmentations now land in one place.
   Conversion result is byte-identical — no behavioural change.
 
+### Fix — separate mention-as-routing from mention-as-reference (#288)
+
+- Stop emitting raw `<@user:UUID>` routing tokens in the roster
+  suffix. Live tokens encouraged the LLM to copy them into prose
+  when merely recommending or comparing peers, which the server
+  parsed as actionable mentions and woke unintended agents. The
+  roster now lists peers as `display_name (id: UUID, kind: ...)`
+  with a header that explicitly says to use display names in
+  prose and construct `<@user:PARTICIPANT_ID>` only when
+  intentionally calling a peer. The collaborative usage hint
+  reinforces the same rule with a "never put a routing token in
+  prose that merely mentions or lists peers" line. orchestrator
+  `handoff_to` MCP calls and user-side mention parsing are
+  unaffected.
+
 ## v0.4.0 (2026-04-25)
 
 ### Features — orchestrator & speaker strategies (#159)
