@@ -41,8 +41,8 @@ class TestProfileLoading:
         """Load a YAML profile and validate it against AgentProfile schema."""
         profile_data = {
             "name": "TestBot",
-            "engine": "openai",
-            "model": "gpt-4o",
+            "engine": "claude-code",
+            "model": "claude-sonnet-4-6",
             "system_prompt": "You are a test bot.",
             "rooms": ["main"],
             "mcp_servers": [],
@@ -52,7 +52,7 @@ class TestProfileLoading:
 
         profile = load_profile("testbot", agents_dir=tmp_path)
         assert profile.name == "TestBot"
-        assert profile.engine == "openai"
+        assert profile.engine == "claude-code"
         assert profile.rooms == ["main"]
 
 

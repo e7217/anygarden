@@ -22,19 +22,13 @@ dependencies = [
     # out of the box without extra install flags.
     "codex-python>=1.114",
     "claude-agent-sdk>=0.1.0",
-    "openai>=1.30",
-    "anthropic>=0.25",
 ]
 
 [project.optional-dependencies]
 # Kept for backward compatibility (pip install doorae-agent[claude-code])
 claude-code = []
 gemini-cli = []
-openai = []
-anthropic = []
 codex = []
-openhands = []
-deep-agents = []
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

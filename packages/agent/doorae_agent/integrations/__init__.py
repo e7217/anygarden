@@ -1,4 +1,4 @@
-"""Engine integrations -- adapters for Claude Code, OpenAI, Anthropic, Codex, Gemini CLI, OpenHands, Deep Agents."""
+"""Engine integrations -- adapters for Claude Code, Codex, and Gemini CLI."""
 
 from __future__ import annotations
 
@@ -18,10 +18,6 @@ ENGINES: dict[str, str] = {
     "claude-code": "doorae_agent.integrations.claude_code",
     "codex": "doorae_agent.integrations.codex",
     "gemini-cli": "doorae_agent.integrations.gemini_cli",
-    "openhands": "doorae_agent.integrations.openhands",
-    "deep-agents": "doorae_agent.integrations.deep_agents",
-    "openai": "doorae_agent.integrations.openai",
-    "anthropic": "doorae_agent.integrations.anthropic",
 }
 
 # Engine name -> adapter class name
@@ -29,10 +25,6 @@ _ADAPTER_CLASSES: dict[str, str] = {
     "claude-code": "ClaudeCodeAdapter",
     "codex": "CodexAdapter",
     "gemini-cli": "GeminiCliAdapter",
-    "openhands": "OpenHandsAdapter",
-    "deep-agents": "DeepAgentsAdapter",
-    "openai": "OpenAIAdapter",
-    "anthropic": "AnthropicAdapter",
 }
 
 
@@ -40,7 +32,7 @@ def get_adapter(engine: str, **kwargs: Any) -> EngineAdapter:
     """Lazy-load and instantiate an engine adapter by name.
 
     Args:
-        engine: Engine identifier (e.g. "openai", "claude-code").
+        engine: Engine identifier (e.g. "claude-code").
         **kwargs: Keyword arguments forwarded to the adapter constructor.
 
     Returns:

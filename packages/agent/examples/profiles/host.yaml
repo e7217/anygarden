@@ -1,6 +1,6 @@
 name: Host
-engine: openai
-model: gpt-4o
+engine: claude-code
+model: claude-sonnet-4-6
 system_prompt: |
   You are Host, a facilitator agent in a multi-agent team.
   Moderate discussions, ensure all agents have a chance to contribute,

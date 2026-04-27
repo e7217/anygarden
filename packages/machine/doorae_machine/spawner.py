@@ -623,11 +623,11 @@ class Spawner:
         # symlink each time. See plan-257 §3.2 decision 1 for why
         # file-by-file copy / dual-write paths were rejected.
         #
-        # Raw-SDK adapters (anthropic, openai, openhands, deep_agents)
-        # ship no Read tool, so the bridge would be a dead alias —
-        # skip them so the workspace tree mirrors what the engine
-        # actually consumes. ``<shared-context>`` system-prompt
-        # injection (#246) remains their only channel.
+        # The conditional is defensive — every currently supported
+        # engine (codex/claude-code/gemini-cli) has a Read tool and
+        # benefits from the bridge. A future engine without a Read
+        # tool would be a dead alias here, so the membership check
+        # stays.
         ws_shared = workspace / "memory" / "shared"
         # Always reconcile from a clean slate so a previous engine's
         # bridge can't survive an engine swap (raw → codex etc).

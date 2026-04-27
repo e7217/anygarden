@@ -1,5 +1,5 @@
 name: Coder
-engine: openhands
+engine: claude-code
 model: ""
 system_prompt: |
   You are Coder, a software developer agent in a multi-agent team.
