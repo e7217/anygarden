@@ -254,6 +254,13 @@ class WelcomeOut(BaseModel):
     # memory. The SDK stamps this into the engine adapter's system
     # prompt via ``compose_memory_block``.
     memory_md: Optional[str] = None
+    # Issue #279 — the welcomed agent's own collaboration policy
+    # (``solo`` | ``collaborative``). Sourced from ``agents.collaboration_mode``
+    # at welcome time. The SDK caches it per-room and consults it when
+    # composing the LLM system prompt: ``collaborative`` triggers a
+    # peer-mention usage hint suffix. Default ``"solo"`` keeps user/guest
+    # welcome frames and pre-#279 agents unchanged.
+    my_collaboration_mode: str = "solo"
 
 
 class RoomSettingsChangedOut(BaseModel):

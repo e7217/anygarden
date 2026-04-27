@@ -59,6 +59,14 @@ class AgentCreate(BaseModel):
     # Capped at 200 chars to keep the per-turn token cost predictable
     # when the agent runtime appends it inline to every system prompt.
     description: Optional[str] = Field(default=None, max_length=200)
+    # Issue #279 — collaboration policy. ``solo`` (default) preserves
+    # pre-#279 behaviour. ``collaborative`` makes the agent SDK append a
+    # peer-mention usage hint to the LLM system prompt so the agent
+    # delegates via mentions and synthesizes peer replies. Validated by
+    # the field pattern.
+    collaboration_mode: str = Field(
+        default="solo", pattern="^(solo|collaborative)$"
+    )
 
 
 class AgentUpdate(BaseModel):
@@ -117,6 +125,13 @@ class AgentUpdate(BaseModel):
     # ``AgentCreate``.
     description: Optional[str] = Field(default=None, max_length=200)
     description_set: bool = False
+    # Issue #279 — collaboration policy toggle. Same ``_set`` flag
+    # pattern so a PATCH that only renames the agent doesn't silently
+    # reset the mode back to ``solo``.
+    collaboration_mode: Optional[str] = Field(
+        default=None, pattern="^(solo|collaborative)$"
+    )
+    collaboration_mode_set: bool = False
 
 
 class AgentOut(BaseModel):
@@ -159,6 +174,9 @@ class AgentOut(BaseModel):
     # that have never set one; otherwise capped at 200 chars and
     # surfaced through the WS welcome frame to peers and the LLM roster.
     description: Optional[str] = None
+    # Issue #279 — collaboration policy surfaced so the admin UI can
+    # render a toggle without a second query.
+    collaboration_mode: str = "solo"
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -233,6 +251,7 @@ async def create_agent(
         restart_policy=body.restart_policy,
         runtime=body.runtime,
         description=body.description,
+        collaboration_mode=body.collaboration_mode,
     )
     db.add(agent)
     await db.flush()
@@ -355,6 +374,14 @@ async def update_agent(
         # so it's treated as peer metadata. Peers pick up the new value
         # on their next welcome (room join, reconnect, or new spawn).
         agent.description = body.description
+        peer_metadata_changed = True
+    if body.collaboration_mode_set and body.collaboration_mode is not None:
+        # #279 — the agent SDK reads this on every welcome frame and
+        # uses it to decide whether to append the peer-mention hint to
+        # the LLM system prompt. Treated as peer metadata: peers see
+        # the new value on their next welcome (a reconnect or new
+        # message turn rebuilds the system prompt), no respawn needed.
+        agent.collaboration_mode = body.collaboration_mode
         peer_metadata_changed = True
 
     if runtime_changed or peer_metadata_changed:

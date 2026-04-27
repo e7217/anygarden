@@ -210,6 +210,16 @@ class CodexAdapter(EngineAdapter):
         #                   appears after the first turn.
         #   - value sha   → sha256 hex of the last injected suffix.
         self._memory_injected: dict[str, str] = {}
+        # Issue #279 — same sha-tracked prefix injection as
+        # ``_memory_injected`` but for the room participants roster
+        # (#221) plus the optional collaborative usage hint. Codex
+        # threads persist history, so we must avoid re-injecting an
+        # unchanged roster every turn. When the roster *changes* (a
+        # peer joined/left, or the agent flipped to collaborative
+        # mid-session) the new sha triggers a re-injection labelled
+        # ``[팀 구성 업데이트]`` so the model treats it as a delta
+        # rather than a duplicate.
+        self._roster_injected: dict[str, str] = {}
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
@@ -327,6 +337,36 @@ class CodexAdapter(EngineAdapter):
                             f"{memory_suffix}\n\n{turn_content}"
                         )
                     self._memory_injected[room_id] = new_sha
+
+            # Issue #279 — sha-tracked roster injection, mirroring the
+            # memory block above. Codex agents don't currently host
+            # the orchestrator ``handoff_to`` MCP tool (claude_code
+            # owns that wiring), so the trigger is purely the
+            # ``collaborative`` flag. Pre-#221 servers leave the
+            # roster empty; the helper returns "" and we skip
+            # injection entirely so codex threads stay byte-identical
+            # to legacy behaviour for solo agents.
+            client = self._client
+            if client is not None and client.is_collaborative(room_id):
+                roster_suffix = client.compose_roster_suffix(
+                    room_id, with_collaborative_hint=True
+                )
+                if roster_suffix:
+                    import hashlib
+
+                    rs_new_sha = hashlib.sha256(
+                        roster_suffix.encode("utf-8")
+                    ).hexdigest()
+                    rs_last_sha = self._roster_injected.get(room_id)
+                    if rs_new_sha != rs_last_sha:
+                        if rs_last_sha is None:
+                            turn_content = f"{roster_suffix}\n\n{turn_content}"
+                        else:
+                            turn_content = (
+                                "[팀 구성 업데이트]\n"
+                                f"{roster_suffix}\n\n{turn_content}"
+                            )
+                        self._roster_injected[room_id] = rs_new_sha
 
             # Issue #190 — bound the turn with an explicit timeout so
             # a stuck codex call doesn't freeze the room's WS receive

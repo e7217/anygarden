@@ -1055,6 +1055,107 @@ class TestAgentManifestAPI:
         assert body["context_window_opt_out"] is True  # untouched
 
     @pytest.mark.asyncio
+    async def test_update_agent_collaboration_mode_toggle(
+        self, agents_env
+    ) -> None:
+        """#279 — admin can toggle ``collaboration_mode`` via PUT.
+
+        Same ``_set`` flag pattern as #148: a rename PATCH without
+        the flag must not reset the mode, and the field round-trips
+        through GET. Treated as peer metadata (no generation bump).
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        # Arrange — new agent defaults to ``solo``.
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "collab-mode"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["collaboration_mode"] == "solo"
+        agent_id = resp.json()["id"]
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            gen_before = agent.generation
+
+        # Act — flip to collaborative.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "collaboration_mode": "collaborative",
+                "collaboration_mode_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["collaboration_mode"] == "collaborative"
+
+        # Assert persisted; peer metadata change → no generation bump.
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.collaboration_mode == "collaborative"
+            assert agent.generation == gen_before
+
+        # Rename without the _set flag must not reset the mode.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"name": "renamed", "collaboration_mode": "solo"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["name"] == "renamed"
+        assert body["collaboration_mode"] == "collaborative"
+
+        # Invalid enum is rejected by Pydantic pattern.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "collaboration_mode": "telepath",
+                "collaboration_mode_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_agent_with_collaboration_mode(self, agents_env) -> None:
+        """#279 — POST accepts ``collaboration_mode`` and rejects garbage."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "born-collab",
+                "collaboration_mode": "collaborative",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["collaboration_mode"] == "collaborative"
+
+        resp = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "garbage-mode",
+                "collaboration_mode": "argumentative",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_create_agent_with_description(self, agents_env) -> None:
         """#271 — POST accepts ``description`` and round-trips it on GET."""
         client = agents_env["client"]

@@ -668,6 +668,118 @@ class TestOrchestratorRosterPrompt:
         assert len(desc_in_line) == 200
         assert "\n" not in desc_in_line
 
+    @pytest.mark.asyncio
+    async def test_collaborative_non_orchestrator_gets_roster_with_hint(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Issue #279 — a collaborative agent that is *not* the room's
+        orchestrator still receives the roster, plus a peer-mention
+        usage hint paragraph that solo agents never see."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Buddy")
+        client._agent_id = "agent-buddy"
+        client._my_participant_ids = {"buddy-pid"}
+        # Note: orchestrator points at a *different* agent — Buddy is
+        # collaborative but not the orchestrator. Pre-#279 Buddy
+        # received nothing; #279 makes Buddy receive the roster + hint.
+        client._orchestrator_agent_id["room-a"] = "agent-other"
+        client._collaboration_mode_by_room["room-a"] = "collaborative"
+        client._participants_by_room["room-a"] = {
+            "buddy-pid": {
+                "id": "buddy-pid",
+                "display_name": "Buddy",
+                "kind": "agent",
+                "agent_id": "agent-buddy",
+            },
+            "peer-pid": {
+                "id": "peer-pid",
+                "display_name": "peer",
+                "kind": "agent",
+                "agent_id": "agent-peer",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(
+            system_prompt="You are Buddy.", client=client
+        )
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
+        assert "<@user:peer-pid>" in prompt
+        # Buddy must not see itself — peer-mention to self is a no-op.
+        assert "<@user:buddy-pid>" not in prompt
+        # The collaborative hint paragraph must be present.
+        assert "If you need help from a peer" in prompt
+        assert "synthesize a final answer" in prompt
+
+    @pytest.mark.asyncio
+    async def test_solo_non_orchestrator_prompt_unchanged(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Issue #279 — solo agents that aren't the orchestrator must
+        receive the prompt byte-for-byte identical to pre-#279, with
+        no roster and no collaborative hint."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Solo")
+        client._agent_id = "agent-solo"
+        client._orchestrator_agent_id["room-a"] = "agent-other"
+        # collaboration_mode default ("solo") — explicit for clarity.
+        client._collaboration_mode_by_room["room-a"] = "solo"
+        client._participants_by_room["room-a"] = {
+            "peer-pid": {
+                "id": "peer-pid",
+                "display_name": "peer",
+                "kind": "agent",
+                "agent_id": "agent-peer",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(
+            system_prompt="You are Solo.", client=client
+        )
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        assert opts.get("system_prompt") == "You are Solo."
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_collaborative_combination_attaches_hint(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Issue #279 — when an agent is both the orchestrator and
+        collaborative, the roster + collaborative hint must coexist
+        with the handoff_to MCP wiring (mcp_servers stays populated)."""
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._collaboration_mode_by_room["room-a"] = "collaborative"
+        client._participants_by_room["room-a"] = {
+            "peer-pid": {
+                "id": "peer-pid",
+                "display_name": "peer",
+                "kind": "agent",
+                "agent_id": "agent-beta",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        opts = fake_sdk[-1]["options"].kwargs
+        prompt = opts.get("system_prompt", "")
+        assert "<@user:peer-pid>" in prompt
+        assert "If you need help from a peer" in prompt
+        # Orchestrator wiring must remain — collaborative is additive.
+        assert "mcp_servers" in opts
+
 
 class TestIngestContext:
     """Issue #74 — `ingest_context` absorbs ambient messages into a

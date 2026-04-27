@@ -23,10 +23,14 @@ from doorae.observability.metrics import (
 )
 from doorae.ws.manager import ConnectionManager
 from doorae.orchestration.rules import (
+    MAX_PEER_DEPTH,
+    MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN,
     CooldownManager,
     GuestRoomAggregateLimiter,
     TypingTracker,
+    is_peer_mention,
     parse_mentions,
+    strip_peer_mentions_from_content,
 )
 from doorae.ws.protocol import (
     ErrorOut,
@@ -344,6 +348,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         app.state, "guest_room_limiter", None
     )
     typing_tracker: TypingTracker = app.state.typing_tracker
+    # Issue #279 — peer-mention budget; tests that bypass the
+    # lifespan can leave this None and the safety net falls back to
+    # depth-only enforcement.
+    peer_handoff_budget = getattr(app.state, "peer_handoff_budget", None)
 
     # -- Authentication via Sec-WebSocket-Protocol --
     raw_protocols = websocket.headers.get("sec-websocket-protocol", "")
@@ -393,6 +401,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # frame so the SDK can inject it into the engine's system prompt.
     # None for user/guest connections.
     agent_memory_md: str | None = None
+    # Issue #279 — the welcomed agent's own collaboration policy.
+    # Default ``solo`` is the safe pre-#279 value; it stays ``solo``
+    # for user/guest welcomes since they don't run an LLM that would
+    # consume a peer-mention hint.
+    agent_collaboration_mode: str = "solo"
     # Issue #159 Phase A — speaker strategy fields cached from the
     # Room row so the SDK can dispatch in ``decide_policy``. Defaults
     # here reproduce the pre-#159 behaviour for welcome flows that
@@ -414,16 +427,23 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             # round-trip. ``scalar_one_or_none`` guards the (unlikely)
             # case where the agent row was deleted between auth and
             # welcome.
+            #
+            # Issue #279 — pull ``collaboration_mode`` in the same
+            # round-trip so the SDK can decide whether to append the
+            # peer-mention hint when composing the LLM system prompt.
             opt_out_row = (
                 await db.execute(
-                    select(Agent.context_window_opt_out, Agent.memory_md).where(
-                        Agent.id == identity.id
-                    )
+                    select(
+                        Agent.context_window_opt_out,
+                        Agent.memory_md,
+                        Agent.collaboration_mode,
+                    ).where(Agent.id == identity.id)
                 )
             ).first()
             if opt_out_row is not None:
                 agent_opt_out = bool(opt_out_row[0])
                 agent_memory_md = opt_out_row[1]
+                agent_collaboration_mode = opt_out_row[2] or "solo"
         connected_pids = await manager.connected_participant_ids()
         connected_room_ids = {
             pid_to_room[pid] for pid in pid_to_room if pid in connected_pids
@@ -476,6 +496,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         participants=participants_brief,
         ephemeral=bool(room_ephemeral),
         memory_md=agent_memory_md,
+        my_collaboration_mode=agent_collaboration_mode,
     )
     # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
     # try/except (which starts at the ``try:`` on the Subscribe block
@@ -628,6 +649,116 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
                 if mentions:
                     metadata["mentions"] = mentions
+
+                # Issue #279 — peer-mention safety net.
+                #
+                # Two caps stack on top of one another inside a single
+                # user turn (defined as: from a human/guest send up to
+                # the next one):
+                #
+                # - ``MAX_PEER_DEPTH`` — how many sequential layers of
+                #   agent-to-agent fanout are allowed (1 = original
+                #   agent may peer-ask once; the peer's reply must NOT
+                #   contain another peer mention).
+                # - ``MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN`` — total
+                #   peer-mention events allowed in the room across
+                #   the whole turn, regardless of layer.
+                #
+                # Both express depth as ``budget.consume()``-derived
+                # used count: 1st peer-ask of the turn yields used=1,
+                # which is layer 1. Triggering both caps simultaneously
+                # is the same write so we keep one budget object.
+                #
+                # Human/guest sends open a fresh turn → budget reset
+                # below. Agent sends with peer mentions trigger the
+                # consume-and-check. Pre-spawn-of-budget tests skip the
+                # safety net entirely so legacy fixtures don't break.
+                is_agent_for_peer = (
+                    identity is not None and identity.kind == "agent"
+                )
+                if is_agent_for_peer and mentions and peer_handoff_budget is not None:
+                    async with session_factory() as peer_db:
+                        peer_rows = (
+                            await peer_db.execute(
+                                select(
+                                    Participant.id, Participant.agent_id
+                                ).where(
+                                    Participant.room_id == room_id,
+                                    Participant.agent_id.isnot(None),
+                                )
+                            )
+                        ).all()
+                    agent_participants = {pid: aid for pid, aid in peer_rows}
+                    sender_agent_id = (
+                        identity.id if identity is not None else None
+                    )
+                    peer_mentions = [
+                        m
+                        for m in mentions
+                        if is_peer_mention(
+                            m,
+                            sender_agent_id=sender_agent_id,
+                            agent_participants=agent_participants,
+                        )
+                    ]
+                    if peer_mentions:
+                        ok = peer_handoff_budget.consume(room_id)
+                        used = (
+                            MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN
+                            - peer_handoff_budget.remaining(room_id)
+                        )
+                        block = (not ok) or (used > MAX_PEER_DEPTH)
+                        if block:
+                            peer_pids = {
+                                str(m["id"])
+                                for m in peer_mentions
+                                if m.get("type") == "user"
+                            }
+                            frame_in.content = strip_peer_mentions_from_content(
+                                frame_in.content, peer_pids=peer_pids
+                            )
+                            mentions = [m for m in mentions if m not in peer_mentions]
+                            if mentions:
+                                metadata["mentions"] = mentions
+                            else:
+                                metadata.pop("mentions", None)
+                            # Stamp the (would-be) depth so observability
+                            # can tell the blocked event apart from a
+                            # successful pass-through.
+                            metadata["peer_depth"] = (
+                                MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN + 1
+                                if not ok
+                                else used
+                            )
+                            metadata["peer_blocked"] = True
+                            logger.warning(
+                                "ws.peer_mention_blocked",
+                                room_id=room_id,
+                                sender_agent_id=sender_agent_id,
+                                used=used,
+                                budget_ok=ok,
+                            )
+                        else:
+                            metadata["peer_depth"] = used
+                            # First peer-ask in the turn → ``peer_query``;
+                            # everything after → ``peer_response`` (the
+                            # initiating agent reading a reply that itself
+                            # carried mentions, which is the depth-2
+                            # territory we strip; in practice this branch
+                            # only fires when ``MAX_PEER_DEPTH`` is bumped
+                            # above 1 by an admin override).
+                            metadata["kind"] = (
+                                "peer_query" if used == 1 else "peer_response"
+                            )
+                elif (
+                    not is_agent_for_peer
+                    and not is_guest
+                    and peer_handoff_budget is not None
+                ):
+                    # Human send opens a fresh user turn — restore the
+                    # peer-mention budget so the first agent in the new
+                    # turn starts with a clean slate.
+                    peer_handoff_budget.reset(room_id)
 
                 # Room mention → representative agent routing.
                 # Guests can't reach this block — their mentions had

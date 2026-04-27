@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Features — collaboration mode wiring (#279)
+
+- Lift `_build_roster_suffix` from the claude_code adapter to
+  `ChatClient.compose_roster_suffix(...)` so codex and gemini_cli
+  share the same logic. Adds an optional
+  `with_collaborative_hint` flag that appends a peer-mention usage
+  paragraph instructing the agent to delegate via `<@user:UUID>`
+  syntax and synthesize the replies.
+- Cache `my_collaboration_mode` per room from welcome frames; the
+  three engine adapters consult it when assembling the LLM system
+  prompt. Solo agents see the prompt unchanged; collaborative
+  agents receive the roster + hint even when they are not the
+  room's orchestrator.
+
 ## v0.4.0 (2026-04-25)
 
 ### Features — orchestrator & speaker strategies (#159)

@@ -32,6 +32,11 @@ export interface Agent {
   // (LLM roster + mention popover + participant list). Capped at 200
   // chars by the REST layer; null when unset.
   description?: string | null;
+  // Issue #279 — collaboration policy. ``solo`` keeps the legacy
+  // behaviour; ``collaborative`` makes the agent SDK append a
+  // peer-mention usage hint to the LLM system prompt. Server defaults
+  // existing rows to ``solo``; the field is always populated post-#279.
+  collaboration_mode?: 'solo' | 'collaborative';
 }
 
 export interface EngineModel {
@@ -235,6 +240,11 @@ export function useAgents() {
       // an admin clear the field (description=null + description_set=true).
       description?: string | null;
       description_set?: boolean;
+      // Issue #279 — collaboration policy toggle. ``_set`` idiom
+      // protects the value from being silently reset by an unrelated
+      // PATCH (server enforces the same pattern).
+      collaboration_mode?: 'solo' | 'collaborative';
+      collaboration_mode_set?: boolean;
     },
   ) => {
     const resp = await apiFetch(`/api/v1/agents/${id}`, {

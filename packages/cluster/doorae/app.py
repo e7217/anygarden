@@ -379,6 +379,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     if not getattr(app.state, "typing_tracker", None):
         app.state.typing_tracker = TypingTracker(ttl_seconds=5.0)
+    # Issue #279 — per-room peer-mention budget. Resets on every
+    # human/guest send so the cap applies to a single user turn.
+    if not getattr(app.state, "peer_handoff_budget", None):
+        from doorae.orchestration.rules import PeerHandoffBudget
+
+        app.state.peer_handoff_budget = PeerHandoffBudget()
 
     # v2: No stale agent reset. Machines reconnect and report actual state.
     # Server reconciles via sync_batch on reconnect.

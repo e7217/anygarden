@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any
 
 
 # ── Cooldown Token Bucket ────────────────────────────────────────────
@@ -128,6 +130,148 @@ def parse_mentions(content: str) -> list[dict[str, str]]:
         for m in _LEGACY_MENTION_PATTERN.finditer(content):
             mentions.append({"type": "legacy", "name": m.group(1)})
     return mentions
+
+
+# ── Peer-mention safety net (#279) ───────────────────────────────────
+
+# How deep the agent-to-agent mention chain may go inside a single
+# user turn before the server starts stripping peer mentions. ``1``
+# means: agent A asks agent B (depth 0 → outbound depth 1); B's
+# reply targeting A is depth-2 territory and gets its mentions
+# stripped. Tuned for 2026-04 telemetry: most "useful" peer asks
+# converge in one hop; depth ≥ 2 is overwhelmingly a runaway loop
+# (agents re-asking each other on synthesis prompts).
+MAX_PEER_DEPTH: int = 1
+
+# How many peer mentions may be broadcast within one ``user_turn``
+# (a turn boundary opens whenever a human/guest sends a message).
+# Hit-rate caps catastrophic fan-outs that depth alone misses
+# (e.g. depth-1 agent peer-asking eight teammates simultaneously).
+MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN: int = 8
+
+
+def is_peer_mention(
+    mention: dict[str, Any],
+    *,
+    sender_agent_id: str | None,
+    agent_participants: dict[str, str],
+) -> bool:
+    """Return True when *mention* targets a peer agent.
+
+    A "peer agent" is any agent participant that is not the sender.
+    User and guest mentions never count, nor do legacy ``@name``
+    mentions (we can't resolve a name to a participant_id at the
+    server boundary, and the safety-net machinery only meaningfully
+    governs ID-based delegation).
+
+    ``agent_participants`` maps ``participant_id -> agent_id`` for
+    the room — the caller assembles it once per turn so the helper
+    is O(1).
+    """
+    if mention.get("type") != "user":
+        return False
+    target_pid = mention.get("id")
+    if not isinstance(target_pid, str):
+        return False
+    target_agent_id = agent_participants.get(target_pid)
+    if target_agent_id is None:
+        return False  # mention targets a human/guest
+    if sender_agent_id is not None and target_agent_id == sender_agent_id:
+        return False  # self-mention is not a peer ask
+    return True
+
+
+def compute_outbound_peer_depth(
+    incoming_metadata: dict[str, Any] | None,
+) -> int:
+    """Outbound peer_depth = incoming + 1 (or 0 when undefined).
+
+    Used by the broadcast pipeline to stamp a depth counter on every
+    agent message that contains at least one peer mention. Pure
+    arithmetic; lifting it out of the handler keeps the safety-net
+    logic testable in isolation.
+    """
+    if not incoming_metadata:
+        return 0
+    raw = incoming_metadata.get("peer_depth")
+    try:
+        depth = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return depth + 1 if depth >= 0 else 0
+
+
+_PEER_MENTION_TOKEN = re.compile(r"\s*<@user:[^>]+>\s*")
+
+
+def strip_peer_mentions_from_content(
+    content: str,
+    *,
+    peer_pids: Iterable[str],
+) -> str:
+    """Remove ``<@user:PID>`` tokens for the supplied peer ids.
+
+    Used when ``peer_depth`` or the per-turn budget would otherwise
+    let an agent broadcast another peer ask. Preserves the rest of
+    the message verbatim so the user still sees the agent's prose
+    answer; only the mention machinery is muted.
+    """
+    pid_set = set(peer_pids)
+    if not pid_set:
+        return content
+
+    def _drop(match: re.Match[str]) -> str:
+        token = match.group(0).strip()
+        # Extract the bare pid — token shape: ``<@user:PID>``
+        try:
+            pid = token[len("<@user:") : -1]
+        except Exception:
+            return match.group(0)
+        if pid in pid_set:
+            # Collapse surrounding whitespace to a single space so
+            # the prose stays readable.
+            return " "
+        return match.group(0)
+
+    return _PEER_MENTION_TOKEN.sub(_drop, content)
+
+
+class PeerHandoffBudget:
+    """Per-room counter that resets on every human/guest message.
+
+    Each call to :meth:`consume` decrements the room's remaining
+    quota and returns whether the consumer is still under the cap.
+    A :meth:`reset` is invoked when a non-agent sender opens a new
+    user turn — that's the only valid restart event, because every
+    other message could be the agent that just ran out of quota
+    trying to sneak in one more handoff.
+
+    In-memory only: matches the precision of
+    :class:`GuestRoomAggregateLimiter` and avoids a Redis dependency
+    for what is, in practice, a per-process cap. Single-process
+    Doorae deployments see exact accounting; multi-process would see
+    ±1 slop, which is the same slop already accepted upstream.
+    """
+
+    def __init__(self, capacity: int = MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN) -> None:
+        self._capacity = capacity
+        self._remaining: dict[str, int] = {}
+
+    def reset(self, room_id: str) -> None:
+        """Restore the room's quota to the configured capacity."""
+        self._remaining[room_id] = self._capacity
+
+    def consume(self, room_id: str, count: int = 1) -> bool:
+        """Try to consume *count* slots. Returns True if allowed."""
+        remaining = self._remaining.get(room_id, self._capacity)
+        if remaining < count:
+            return False
+        self._remaining[room_id] = remaining - count
+        return True
+
+    def remaining(self, room_id: str) -> int:
+        """Read-only peek used by tests and observability."""
+        return self._remaining.get(room_id, self._capacity)
 
 
 # ── Typing State ─────────────────────────────────────────────────────
