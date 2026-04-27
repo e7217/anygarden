@@ -433,12 +433,23 @@ class ChatClient:
             + "\n".join(lines)
         )
         if with_collaborative_hint:
+            # Issue #279 follow-up: an earlier draft instructed the
+            # agent to "synthesize a final answer" after every
+            # peer-ask. In a group-chat model that's redundant — the
+            # peer's reply is already broadcast to the user, who can
+            # read it directly. The mandatory synthesis pass also
+            # encouraged the agent to chain another peer ask just to
+            # have something to summarise, defeating the
+            # cascade-cutoff guard. Reframe the hint so synthesis is
+            # opt-in (user-requested or genuinely conflicting peer
+            # answers) rather than the default.
             suffix += (
                 "\n\nIf you need help from a peer, mention them in your "
                 "response body using the <@user:UUID> format from the list "
-                "above. Their reply will reach you, and you'll synthesize a "
-                "final answer for the user. Don't peer-ask for trivial "
-                "greetings or meta questions — answer those yourself."
+                "above. Their reply reaches the user directly — you only "
+                "need to synthesize if the user explicitly asks (e.g. "
+                "\"정리해줘\") or peer answers conflict. Don't peer-ask for "
+                "trivial greetings or meta questions — answer those yourself."
             )
         return suffix
 
