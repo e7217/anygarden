@@ -386,29 +386,35 @@ class ChatClient:
         with_collaborative_hint: bool = False,
     ) -> str:
         """Compose the participants roster appended to the LLM prompt
-        (#221 → #279).
+        (#221 → #279 → #288).
 
-        Lines are formatted as ``- <@user:{uuid}> {name} ({kind})`` so
-        the LLM's mention-syntax pattern matching keeps the UUID
-        intact when it echoes or reasons about the roster. When the
-        peer carries a ``description`` (#271), it's appended after an
-        em-dash so the LLM can recognize *what* each peer does, not
-        just *who* they are. Newlines inside the description collapse
-        to single spaces and the visible portion is capped at 200
-        chars to keep the per-turn token cost predictable; peers
-        without a description fall back to the legacy "name only"
-        line so the change is non-breaking for older agents.
+        Each line lists a peer as ``- {name} (id: {uuid}, kind: ...)``
+        with the ``description`` (#271) appended after an em-dash
+        when present. Newlines inside the description collapse to
+        single spaces and the visible portion is capped at 200 chars
+        so the per-turn token cost stays predictable.
+
+        #288 — pre-#288 the roster embedded a *live* ``<@user:{uuid}>``
+        routing token in front of every name. That made the token
+        trivially copy-pasteable, which is exactly the problem: an
+        agent recommending peers ("for UI questions ask <@user:abc>")
+        accidentally woke the recommended peers because the server's
+        ``parse_mentions`` treats every such token as an actionable
+        mention. Splitting *display name* from the *id-as-data* lets
+        the model address peers by name in prose and only assemble a
+        routing token when intentionally calling one (handoff_to MCP
+        tool, or — for collaborative agents — the explicit
+        ``<@user:PARTICIPANT_ID>`` placeholder pattern guidance below).
 
         Self is excluded — an orchestrator handing off to itself would
-        be a no-op cycle. Returns an empty string when the roster cache
-        is absent (pre-#221 server) or contains only self, letting
-        the caller skip the ``system_prompt`` rewrite entirely.
+        be a no-op cycle. Returns an empty string when the roster
+        cache is absent (pre-#221 server) or contains only self,
+        letting the caller skip the ``system_prompt`` rewrite entirely.
 
         ``with_collaborative_hint`` (#279) appends a usage paragraph
-        instructing the agent to peer-mention via ``<@user:UUID>`` in
-        the response body and synthesize the replies. Adapters set
-        this from ``client.is_collaborative(room_id)``; ``solo`` agents
-        never see the hint, preserving pre-#279 prompt bytes exactly.
+        teaching the agent how — and when — to construct a routing
+        token. ``solo`` agents never see the hint, preserving pre-#279
+        prompt bytes exactly.
         """
         roster = self._participants_by_room.get(room_id) or {}
         if not roster:
@@ -425,31 +431,37 @@ class ChatClient:
             raw_desc = brief.get("description") or ""
             desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
             desc_part = f" — {desc}" if desc else ""
-            lines.append(f"- <@user:{pid}> {name} ({kind}){desc_part}")
+            lines.append(f"- {name} (id: {pid}, kind: {kind}){desc_part}")
         if not lines:
             return ""
         suffix = (
-            "Room participants (use the UUID verbatim when calling handoff_to):\n"
+            "Room participants. Refer to peers by display name in prose. "
+            "Construct a routing token <@user:PARTICIPANT_ID> ONLY when "
+            "intentionally calling a specific peer for a reply — never "
+            "when merely listing, recommending, or describing peers.\n"
             + "\n".join(lines)
         )
         if with_collaborative_hint:
-            # Issue #279 follow-up: an earlier draft instructed the
-            # agent to "synthesize a final answer" after every
-            # peer-ask. In a group-chat model that's redundant — the
-            # peer's reply is already broadcast to the user, who can
-            # read it directly. The mandatory synthesis pass also
-            # encouraged the agent to chain another peer ask just to
-            # have something to summarise, defeating the
-            # cascade-cutoff guard. Reframe the hint so synthesis is
-            # opt-in (user-requested or genuinely conflicting peer
-            # answers) rather than the default.
+            # Issue #279 follow-up (#283 / #288): synthesis is opt-in,
+            # and the routing-token-vs-display-name split is enforced
+            # explicitly so the model doesn't copy live tokens out of
+            # the roster header into prose. The two paragraphs below
+            # carry both rules; any future copy edit that drops either
+            # half is caught by the regression assertions in
+            # ``test_claude_code.py``.
             suffix += (
-                "\n\nIf you need help from a peer, mention them in your "
-                "response body using the <@user:UUID> format from the list "
-                "above. Their reply reaches the user directly — you only "
-                "need to synthesize if the user explicitly asks (e.g. "
-                "\"정리해줘\") or peer answers conflict. Don't peer-ask for "
-                "trivial greetings or meta questions — answer those yourself."
+                "\n\nWhen you need a peer to actively answer, build the "
+                "routing token by substituting that peer's id from the "
+                "list above into <@user:PARTICIPANT_ID>. The peer's "
+                "reply reaches the user directly — you only need to "
+                "synthesize if the user explicitly asks (e.g. "
+                "\"정리해줘\") or peer answers conflict.\n\n"
+                "For recommendations, comparisons, status reports, or "
+                "any descriptive reference to a peer, use only the "
+                "display name. Never put a routing token in prose that "
+                "merely mentions or lists peers — that token wakes the "
+                "peer for an unwanted reply. Don't peer-ask for trivial "
+                "greetings or meta questions — answer those yourself."
             )
         return suffix
 

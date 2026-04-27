@@ -459,8 +459,10 @@ class TestOrchestratorRosterPrompt:
     async def test_orchestrator_prompt_includes_room_roster(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        """Roster lines carry ``<@user:uuid>`` annotations so the LLM's
-        mention-syntax pattern matching preserves the UUID."""
+        """Roster lines carry the participant_id as data (``id: uuid``)
+        rather than as a live ``<@user:uuid>`` routing token (#288).
+        The LLM still has the UUID for ``handoff_to`` calls but no
+        copyable token to spray across prose."""
         from doorae_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
@@ -495,15 +497,22 @@ class TestOrchestratorRosterPrompt:
         opts = fake_sdk[-1]["options"].kwargs
         prompt = opts.get("system_prompt", "")
         assert prompt.startswith("You are Orc.")
-        assert "<@user:worker-pid>" in prompt
-        assert "<@user:user-pid>" in prompt
+        # ID is exposed as data, not as a live routing token.
+        assert "id: worker-pid" in prompt
+        assert "id: user-pid" in prompt
         # The orchestrator must not see itself in the roster —
         # ``handoff_to me`` would be a no-op cycle.
-        assert "<@user:orc-pid>" not in prompt
-        # The display_name should appear alongside the UUID so the LLM
-        # can reason about *who* to hand off to, not just UUIDs.
+        assert "id: orc-pid" not in prompt
+        # The display_name still appears so the LLM can reason about
+        # *who* to address, not just UUIDs.
         assert "worker" in prompt
         assert "alice" in prompt
+        # #288 regression guard — no peer-specific routing token may
+        # appear in the assembled prompt (the literal placeholder
+        # ``<@user:PARTICIPANT_ID>`` from the usage hint is allowed
+        # but real UUIDs in token form are not).
+        assert "<@user:worker-pid>" not in prompt
+        assert "<@user:user-pid>" not in prompt
 
     @pytest.mark.asyncio
     async def test_non_orchestrator_prompt_unchanged(
@@ -565,7 +574,9 @@ class TestOrchestratorRosterPrompt:
         opts = fake_sdk[-1]["options"].kwargs
         prompt = opts.get("system_prompt")
         assert prompt is not None
-        assert "<@user:worker-pid>" in prompt
+        # #288 — peer is exposed as data, not as a live token.
+        assert "id: worker-pid" in prompt
+        assert "<@user:worker-pid>" not in prompt
 
     @pytest.mark.asyncio
     async def test_orchestrator_with_empty_roster_leaves_prompt_unchanged(
@@ -623,13 +634,18 @@ class TestOrchestratorRosterPrompt:
         await adapter.on_message({"content": "hi", "room_id": "room-a"})
 
         prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
+        # #288 — id appears as data, not as a routing token. Description
+        # still rides along on the same line for routing intent.
         assert (
-            "- <@user:worker-pid> frontend-bot (agent) — "
+            "- frontend-bot (id: worker-pid, kind: agent) — "
             "Reviews React components and accessibility"
         ) in prompt
-        # Legacy peer keeps the old format unchanged.
-        assert "- <@user:legacy-pid> legacy-bot (agent)\n" in prompt + "\n"
-        assert "legacy-bot (agent) —" not in prompt
+        # Legacy peer (no description) — same id-as-data format.
+        assert "- legacy-bot (id: legacy-pid, kind: agent)\n" in prompt + "\n"
+        assert "legacy-bot (id: legacy-pid, kind: agent) —" not in prompt
+        # No raw routing token for either peer.
+        assert "<@user:worker-pid>" not in prompt
+        assert "<@user:legacy-pid>" not in prompt
 
     @pytest.mark.asyncio
     async def test_orchestrator_roster_truncates_long_description(
@@ -660,9 +676,10 @@ class TestOrchestratorRosterPrompt:
         await adapter.on_message({"content": "hi", "room_id": "room-a"})
 
         prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
-        # Locate the roster line for ``p1`` and assert the trailing
+        # #288 — locate the roster line for ``p1`` via ``id: p1``
+        # (the post-#288 data form) and assert the trailing
         # description is exactly 200 chars (no newline leaked through).
-        line = next(line for line in prompt.splitlines() if "<@user:p1>" in line)
+        line = next(line for line in prompt.splitlines() if "id: p1" in line)
         assert " — " in line
         desc_in_line = line.split(" — ", 1)[1]
         assert len(desc_in_line) == 200
@@ -707,18 +724,30 @@ class TestOrchestratorRosterPrompt:
         await adapter.on_message({"content": "hi", "room_id": "room-a"})
 
         prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
-        assert "<@user:peer-pid>" in prompt
+        # #288 — peer id is data, not a routing token.
+        assert "id: peer-pid" in prompt
         # Buddy must not see itself — peer-mention to self is a no-op.
-        assert "<@user:buddy-pid>" not in prompt
-        # The collaborative hint paragraph must be present, and the
-        # post-#279 follow-up reframes synthesis as opt-in rather
-        # than mandatory. Asserting both halves so a future copy edit
-        # that drops either half fails loudly.
-        assert "If you need help from a peer" in prompt
+        assert "id: buddy-pid" not in prompt
+        # No raw token for the peer in the prompt.
+        assert "<@user:peer-pid>" not in prompt
+        # The collaborative hint paragraph must be present. Both
+        # halves of the rewritten guidance are asserted so a future
+        # copy edit that drops either half fails loudly.
+        assert "build the routing token" in prompt
         assert "reaches the user directly" in prompt
         assert "only need to synthesize if the user explicitly asks" in prompt
+        # The reference-vs-routing guidance must explicitly tell the
+        # model to use display name only for non-call references.
+        assert "use only the display name" in prompt
+        assert (
+            "Never put a routing token in prose that merely "
+            "mentions or lists peers"
+        ) in prompt
+        # The placeholder pattern must be advertised so the model
+        # builds a real token by substitution rather than copying.
+        assert "<@user:PARTICIPANT_ID>" in prompt
         # Negative guard — the old "always synthesize" framing must
-        # NOT come back. This is the entire point of the follow-up.
+        # NOT come back. This is the entire point of the #283 follow-up.
         assert "synthesize a final answer" not in prompt
 
     @pytest.mark.asyncio
@@ -782,10 +811,86 @@ class TestOrchestratorRosterPrompt:
 
         opts = fake_sdk[-1]["options"].kwargs
         prompt = opts.get("system_prompt", "")
-        assert "<@user:peer-pid>" in prompt
-        assert "If you need help from a peer" in prompt
+        # #288 — peer id appears as data, not a routing token.
+        assert "id: peer-pid" in prompt
+        assert "<@user:peer-pid>" not in prompt
+        # Collaborative hint phrasing reflects #283 + #288.
+        assert "build the routing token" in prompt
         # Orchestrator wiring must remain — collaborative is additive.
         assert "mcp_servers" in opts
+
+
+class TestRosterRoutingVsReference:
+    """Issue #288 — guard against accidental peer-invocation when
+    the LLM is merely recommending or listing peers.
+
+    The structural invariant we keep: in the assembled system prompt,
+    the only ``<@user:...>`` substrings are the placeholder
+    ``<@user:PARTICIPANT_ID>`` from the usage hint. No real
+    participant_id ever appears inside a ``<@user:...>`` token,
+    because the roster lines list ids as data (``id: <uuid>``)
+    rather than as live tokens. This is what stops the
+    parse_mentions pipeline on the cluster from spuriously waking
+    peers when the agent's prose copies a roster line."""
+
+    @pytest.mark.asyncio
+    async def test_roster_assembly_emits_no_real_routing_tokens(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        from doorae_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
+        client._agent_id = "agent-alpha"
+        client._my_participant_ids = {"orc-pid"}
+        client._orchestrator_agent_id["room-a"] = "agent-alpha"
+        client._collaboration_mode_by_room["room-a"] = "collaborative"
+        client._participants_by_room["room-a"] = {
+            "claude2-pid": {
+                "id": "claude2-pid",
+                "display_name": "claude2",
+                "kind": "agent",
+                "agent_id": "agent-claude2",
+            },
+            "codex-pid": {
+                "id": "codex-pid",
+                "display_name": "codex",
+                "kind": "agent",
+                "agent_id": "agent-codex",
+            },
+            "gemini-pid": {
+                "id": "gemini-pid",
+                "display_name": "gemini",
+                "kind": "agent",
+                "agent_id": "agent-gemini",
+            },
+        }
+
+        adapter = ClaudeCodeAdapter(system_prompt="You are Orc.", client=client)
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "room-a"})
+
+        prompt = fake_sdk[-1]["options"].kwargs["system_prompt"]
+
+        # Names show up as prose-friendly references.
+        assert "claude2" in prompt
+        assert "codex" in prompt
+        assert "gemini" in prompt
+        # IDs show up as data.
+        assert "id: claude2-pid" in prompt
+        assert "id: codex-pid" in prompt
+        assert "id: gemini-pid" in prompt
+        # CRITICAL: every ``<@user:...>`` substring in the assembled
+        # prompt must be the literal placeholder, never a real id.
+        # If any real id ever lands inside a routing token here, an
+        # agent that recommends peers will wake them.
+        import re
+
+        tokens = re.findall(r"<@user:[^>]+>", prompt)
+        for token in tokens:
+            assert token == "<@user:PARTICIPANT_ID>", (
+                f"unexpected routing token in prompt: {token!r}; only "
+                "the placeholder may appear in prompt-side text"
+            )
 
 
 class TestIngestContext:
