@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _DEFAULT_DB_DIR = Path.home() / ".doorae"
 _DEFAULT_DB_URL = f"sqlite+aiosqlite:///{_DEFAULT_DB_DIR / 'doorae.db'}"
 _DEFAULT_ROOM_FILES_DIR = _DEFAULT_DB_DIR / "room_files"
+_DEFAULT_ARTIFACT_FILES_DIR = _DEFAULT_DB_DIR / "artifact_files"
 
 # Bind addresses that listen on every interface aren't valid dial targets.
 # When we build a URL for an agent to connect back to us, map these to a
@@ -57,6 +58,11 @@ class DooraeSettings(BaseSettings):
     # accumulate attachments. Resolved lazily so tests can redirect
     # it without touching ``$HOME``.
     room_files_dir: Path = _DEFAULT_ROOM_FILES_DIR
+    # #290 — Sibling directory for agent-produced artifacts. Kept
+    # separate from ``room_files_dir`` so the two flows can carry
+    # divergent retention / quota policies later without mass-moving
+    # files. Same on-disk layout: ``<artifact_files_dir>/<room_id>/<id>``.
+    artifact_files_dir: Path = _DEFAULT_ARTIFACT_FILES_DIR
     # #277 — Public URL agents use to reach this cluster's MCP / REST
     # endpoints. Empty string falls back to
     # ``http://{reachable_host()}:{port}`` so loopback / single-host

@@ -311,6 +311,27 @@ class TaskUpdateOut(BaseModel):
     task: dict[str, Any]
 
 
+class RoomArtifactAddedOut(BaseModel):
+    """A new agent-produced artifact landed in the room (#290 Phase B).
+
+    Emitted to every subscriber so the right-hand artifact panel can
+    refresh without polling. ``artifact`` mirrors the REST list
+    payload — frontend treats it as opaque metadata it merges into
+    local state, identical to the TaskUpdate flow above.
+    """
+
+    type: Literal["room_artifact.added"] = "room_artifact.added"
+    artifact: dict[str, Any]
+
+
+class RoomArtifactRemovedOut(BaseModel):
+    """An artifact was deleted from the room (#290 Phase B)."""
+
+    type: Literal["room_artifact.removed"] = "room_artifact.removed"
+    room_id: str
+    artifact_id: str
+
+
 OutgoingFrame = (
     MessageOut
     | RoomCreatedOut
@@ -323,5 +344,7 @@ OutgoingFrame = (
     | WelcomeOut
     | RoomSettingsChangedOut
     | TaskUpdateOut
+    | RoomArtifactAddedOut
+    | RoomArtifactRemovedOut
     | ErrorOut
 )
