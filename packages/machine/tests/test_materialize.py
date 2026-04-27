@@ -1077,3 +1077,47 @@ class TestWorkspaceSharedBridge:
         assert bridge.is_symlink()
         assert bridge.resolve() == canonical.resolve()
 
+
+class TestWorkspaceOutboxBridge:
+    """#290 — symmetric bridge for the outbound flow. Tool-based engines
+    write to ``workspace/memory/outbox/<file>`` (cwd-anchored), so the
+    canonical ``<agent_root>/memory/outbox/`` that the daemon polls
+    must be reachable through the workspace bridge.
+    """
+
+    @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
+    def test_bridge_is_symlink_to_canonical(
+        self, spawner: Spawner, agent_dirs_root: Path, engine: str
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
+        bridge = agent_root / "workspace" / "memory" / "outbox"
+        canonical = agent_root / "memory" / "outbox"
+        assert bridge.is_symlink(), f"{engine} outbox bridge must be a symlink"
+        assert bridge.resolve() == canonical.resolve()
+
+    def test_files_written_via_bridge_land_in_canonical_dir(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        """Files dropped through the workspace alias must show up under
+        the canonical path the daemon polls — that's the whole point of
+        the bridge for the agent → user direction."""
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        via_bridge = agent_root / "workspace" / "memory" / "outbox" / "snap.png"
+        via_bridge.write_bytes(b"\x89PNG\r\n\x1a\n payload")
+
+        canonical = agent_root / "memory" / "outbox" / "snap.png"
+        assert canonical.is_file()
+        assert canonical.read_bytes().startswith(b"\x89PNG")
+
+    def test_respawn_recreates_fresh_outbox_bridge(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        msg = _msg(engine="claude-code")
+        spawner._materialize_agent_dir(msg)
+        agent_root = spawner._materialize_agent_dir(msg)
+
+        bridge = agent_root / "workspace" / "memory" / "outbox"
+        canonical = agent_root / "memory" / "outbox"
+        assert bridge.is_symlink()
+        assert bridge.resolve() == canonical.resolve()
+

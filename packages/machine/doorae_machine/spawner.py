@@ -660,13 +660,15 @@ class Spawner:
         # tool would be a dead alias here, so the membership check
         # stays.
         ws_shared = workspace / "memory" / "shared"
+        ws_outbox = workspace / "memory" / "outbox"
         # Always reconcile from a clean slate so a previous engine's
         # bridge can't survive an engine swap (raw → codex etc).
-        if ws_shared.is_symlink() or ws_shared.exists():
-            if ws_shared.is_symlink() or ws_shared.is_file():
-                ws_shared.unlink()
-            else:
-                shutil.rmtree(ws_shared)
+        for ws_link in (ws_shared, ws_outbox):
+            if ws_link.is_symlink() or ws_link.exists():
+                if ws_link.is_symlink() or ws_link.is_file():
+                    ws_link.unlink()
+                else:
+                    shutil.rmtree(ws_link)
         if msg.engine in ("codex", "claude-code", "gemini-cli"):
             ws_memory = workspace / "memory"
             ws_memory.mkdir(parents=True, exist_ok=True)
@@ -677,6 +679,16 @@ class Spawner:
             # Two ``..`` hops: one up out of ``workspace``, one because
             # the link itself sits inside ``workspace/memory/``.
             ws_shared.symlink_to("../../memory/shared")
+            # #290 — symmetric bridge for the outbound flow. cwd-pinned
+            # engines write to ``workspace/memory/outbox/`` because that
+            # is how the AGENTS.md guidance reads when resolved against
+            # their cwd; the daemon's poller watches the canonical
+            # ``<agent_root>/memory/outbox/`` one level up. Without the
+            # link, files land in the wrong place and never reach the
+            # room. (Discovered via E2E: codex wrote two artifacts to
+            # ``workspace/memory/outbox/`` on the test VM and they were
+            # invisible to the watcher.)
+            ws_outbox.symlink_to("../../memory/outbox")
 
         return agent_root
 
