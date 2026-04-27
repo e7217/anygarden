@@ -40,6 +40,7 @@ from doorae_agent.coordination.pending_context import (
     append_context_line,
     drain_context,
     format_context_line,
+    wrap_as_room_conversation,
 )
 from doorae_agent.integrations.base import EngineAdapter
 from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
@@ -171,7 +172,15 @@ class ClaudeCodeAdapter(EngineAdapter):
         # them as external breadcrumbs, not as new user turns it
         # must also address. Consumed once — the SDK session keeps
         # them from the next turn on.
+        #
+        # Issue #284 — wrap the drained block in
+        # ``<room_conversation>`` so the LLM treats it as awareness
+        # context rather than relay-target input. ``wrap_*`` is a
+        # no-op when the prefix is empty, preserving the pre-#284
+        # solo-turn prompt byte-for-byte.
         prefix = self._drain_pending_context(room_id)
+        if prefix:
+            prefix = wrap_as_room_conversation(prefix)
         prompt = f"{prefix}\n\n{content}" if prefix else content
 
         # Issue #159 Phase C — expose the current room to the

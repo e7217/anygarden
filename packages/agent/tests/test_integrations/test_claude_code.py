@@ -997,3 +997,59 @@ class TestIngestContext:
 
         assert len(fake_sdk) == 1
         assert "[참고]" in fake_sdk[0]["prompt"]
+
+
+class TestRoomConversationWrapper:
+    """Issue #284 — drained pending context is wrapped in a
+    ``<room_conversation>`` XML block so the LLM treats it as
+    awareness rather than relay-target input. The wrapper must be
+    a no-op for solo turns (empty buffer) so unrelated prompts stay
+    byte-identical.
+    """
+
+    @pytest.mark.asyncio
+    async def test_drained_prefix_appears_inside_room_conversation_tags(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        await adapter.ingest_context({
+            "room_id": "r1",
+            "participant_id": "peer-agent",
+            "content": "비행 8시 출발입니다",
+            "metadata": {},
+        })
+        await adapter.on_message({"content": "다음 일정?", "room_id": "r1"})
+
+        prompt = fake_sdk[-1]["prompt"]
+        # Wrapper present and well-formed.
+        assert "<room_conversation>" in prompt
+        assert "</room_conversation>" in prompt
+        # Drained line lives *inside* the wrapper.
+        open_idx = prompt.index("<room_conversation>")
+        close_idx = prompt.index("</room_conversation>")
+        assert open_idx < prompt.index("[참고]") < close_idx
+        # Preamble's relay-prohibition phrase must reach the prompt
+        # — that's the whole point of #284.
+        assert "전달하지 마세요" in prompt
+        # User question stays *outside* the wrapper so the LLM still
+        # sees it as the actual input to address.
+        user_idx = prompt.index("다음 일정?")
+        assert user_idx > close_idx
+
+    @pytest.mark.asyncio
+    async def test_solo_turn_prompt_has_no_wrapper(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """Empty pending-context buffer → no wrap → the prompt is the
+        bare user content, byte-identical to pre-#284. Without this
+        guard the wrapper could leak into every turn and inflate
+        token cost."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+        await adapter.on_message({"content": "안녕하세요", "room_id": "r1"})
+
+        prompt = fake_sdk[-1]["prompt"]
+        assert "<room_conversation>" not in prompt
+        assert prompt == "안녕하세요"

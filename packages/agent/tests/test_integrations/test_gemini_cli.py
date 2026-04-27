@@ -265,3 +265,63 @@ class TestIntegrateWithGeminiCli:
 
         assert len(client._message_handlers) == 1
         assert isinstance(adapter, GeminiCliAdapter)
+
+
+class TestGeminiRoomConversationWrapper:
+    """Issue #284 — drained pending context is wrapped in
+    ``<room_conversation>`` before being prepended to the next
+    turn's user content for the Gemini CLI adapter as well."""
+
+    @pytest.mark.asyncio
+    async def test_drained_prefix_appears_inside_room_conversation_tags(
+        self,
+    ) -> None:
+        adapter = GeminiCliAdapter()
+        adapter._gemini_path = "/usr/bin/gemini"
+
+        captured: list[str] = []
+
+        async def capture(prompt: str) -> str | None:
+            captured.append(prompt)
+            return "ok"
+
+        with patch.object(adapter, "_call_gemini", new=capture):
+            await adapter.ingest_context({
+                "room_id": "r1",
+                "participant_id": "peer-agent",
+                "content": "비행 8시 출발입니다",
+                "metadata": {},
+            })
+            await adapter.on_message({
+                "content": "다음 일정?",
+                "room_id": "r1",
+            })
+
+        assert captured, "_call_gemini should have been invoked"
+        prompt = captured[-1]
+        assert "<room_conversation>" in prompt
+        assert "</room_conversation>" in prompt
+        open_idx = prompt.index("<room_conversation>")
+        close_idx = prompt.index("</room_conversation>")
+        assert open_idx < prompt.index("[참고]") < close_idx
+        assert "전달하지 마세요" in prompt
+        # The actual user question stays *outside* the wrapper.
+        user_idx = prompt.index("다음 일정?")
+        assert user_idx > close_idx
+
+    @pytest.mark.asyncio
+    async def test_solo_turn_has_no_wrapper(self) -> None:
+        adapter = GeminiCliAdapter()
+        adapter._gemini_path = "/usr/bin/gemini"
+
+        captured: list[str] = []
+
+        async def capture(prompt: str) -> str | None:
+            captured.append(prompt)
+            return "ok"
+
+        with patch.object(adapter, "_call_gemini", new=capture):
+            await adapter.on_message({"content": "안녕", "room_id": "r1"})
+
+        assert captured
+        assert "<room_conversation>" not in captured[-1]
