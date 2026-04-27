@@ -987,12 +987,25 @@ function AgentDMListAdmin({
   )
 
   // Per-row dialogs — mirrors AdminMachines.tsx state shape so the
-  // #158 — collapsed into a single settings dialog. ``settingsAgent``
-  // mirrors the previous AdminMachines pattern (agent_id → full record
-  // lookup) so the dialog always sees the latest Agent fields after
-  // an update.
+  // two routes never disagree on dialog wiring.
+  //
+  // #158 — collapsed into a single settings dialog. #281 — store only
+  // the open agent's ID; derive the Agent object from the live
+  // ``agents`` list each render so an in-dialog edit (which triggers
+  // ``updateAgent → fetchAgents``) is reflected immediately. The
+  // earlier snapshot-based ``useState<Agent | null>`` left the dialog
+  // showing stale model/reasoning/collaboration values until close-
+  // and-reopen. See AgentSettingsDialog.test.tsx — "parent state
+  // pattern (#281)" for the regression test.
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null)
+  const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null)
+  const settingsAgent = useMemo<Agent | null>(
+    () =>
+      settingsAgentId
+        ? agents.find(a => a.id === settingsAgentId) ?? null
+        : null,
+    [agents, settingsAgentId],
+  )
   // #241 — DM rename dialog. ``editDMRoomId`` mirrors the project
   // rooms ``editRoomId`` state in the Sidebar root; kept local here
   // because AgentDMListAdmin owns the DM tree and the root doesn't
@@ -1031,9 +1044,8 @@ function AgentDMListAdmin({
   )
 
   const handleOpenSettings = (agentId: string) => {
-    const full = agents.find(a => a.id === agentId)
-    if (!full) return
-    setSettingsAgent(full)
+    if (!agents.some(a => a.id === agentId)) return
+    setSettingsAgentId(agentId)
     setSettingsOpen(true)
   }
 
@@ -1280,7 +1292,13 @@ function AgentDMListAdmin({
       <AgentSettingsDialog
         agent={settingsAgent}
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={open => {
+          setSettingsOpen(open)
+          // #281 — drop the tracked ID on close so an externally-
+          // deleted agent doesn't leave the dialog re-opening into a
+          // ``null`` derived prop on the next admin click.
+          if (!open) setSettingsAgentId(null)
+        }}
         fetchAgentFiles={fetchAgentFiles}
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
