@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -22,14 +23,25 @@ from sqlalchemy.orm import selectinload
 
 from doorae.api.v1.invites import _require_room_admin_or_owner
 from doorae.auth.dependencies import Identity, GuestClaims
-from doorae.db.models import Agent, Participant, Room, RoomSharedFile, User
+from doorae.db.models import (
+    Agent,
+    Participant,
+    Room,
+    RoomArtifact,
+    RoomSharedFile,
+    User,
+)
 from doorae.dependencies import (
     forbid_guest,
     get_admin_identity,
     get_current_identity,
     get_db,
 )
-from doorae.rooms import shared_files as shared_files_service
+from doorae.rooms import (
+    artifacts as artifacts_service,
+    shared_files as shared_files_service,
+)
+from doorae.rooms import artifact_storage
 from doorae.rooms.file_storage import FileTooLargeError
 from doorae.rooms.membership import add_user_to_room, ensure_agent_in_room
 from doorae.rooms.service import (
@@ -1436,3 +1448,132 @@ async def delete_room_shared_file(
             )
 
     background.add_task(_fan_out_delete)
+
+
+# ---------------------------------------------------------------------------
+# Room artifacts (#290 Phase B) — agent-produced files, surfaced in the
+# right-hand sidebar panel. Read/delete only here; ingestion happens
+# over the WebSocket via ``room_artifact_produced`` frames.
+# ---------------------------------------------------------------------------
+
+
+class RoomArtifactOut(BaseModel):
+    id: str
+    room_id: str
+    produced_by_agent_id: Optional[str]
+    filename: str
+    sha256: str
+    size_bytes: int
+    mime: str
+    created_at: datetime
+
+    @classmethod
+    def from_row(cls, row: RoomArtifact) -> "RoomArtifactOut":
+        return cls(
+            id=row.id,
+            room_id=row.room_id,
+            produced_by_agent_id=row.produced_by_agent_id,
+            filename=row.filename,
+            sha256=row.sha256,
+            size_bytes=row.size_bytes,
+            mime=row.mime,
+            created_at=row.created_at,
+        )
+
+
+@router.get(
+    "/{room_id}/artifacts", response_model=list[RoomArtifactOut]
+)
+async def list_room_artifacts(
+    room_id: str,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> list[RoomArtifactOut]:
+    """List artifacts produced into the room. Participants only."""
+    await _require_room_participant(room_id, identity, db)
+    rows = await artifacts_service.list_artifacts(db, room_id=room_id)
+    return [RoomArtifactOut.from_row(r) for r in rows]
+
+
+@router.get("/{room_id}/artifacts/{artifact_id}")
+async def download_room_artifact(
+    room_id: str,
+    artifact_id: str,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream the artifact bytes back to the requester. Participants
+    only. ``Content-Disposition`` is set so browsers offer a sensible
+    save-as dialog while still rendering inline previews when the MIME
+    permits (image/*, text/*).
+    """
+    from fastapi.responses import Response
+
+    await _require_room_participant(room_id, identity, db)
+    row = await artifacts_service.get_artifact(
+        db, room_id=room_id, artifact_id=artifact_id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    config = request.app.state.config
+    try:
+        body = await asyncio.to_thread(
+            artifact_storage.read_bytes,
+            config.artifact_files_dir,
+            row.storage_path,
+        )
+    except FileNotFoundError:
+        # DB row exists but the disk file is gone — surface as 404
+        # so clients can refresh; log the integrity gap on the server.
+        raise HTTPException(status_code=404, detail="Artifact bytes missing")
+
+    # ``inline`` lets <img src="..."> work directly from the URL while
+    # still suggesting a filename for explicit Save As.
+    safe_name = row.filename.replace('"', "")
+    return Response(
+        content=body,
+        media_type=row.mime,
+        headers={
+            "Content-Disposition": f'inline; filename="{safe_name}"',
+            "Content-Length": str(row.size_bytes),
+        },
+    )
+
+
+@router.delete(
+    "/{room_id}/artifacts/{artifact_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_room_artifact(
+    room_id: str,
+    artifact_id: str,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Remove an artifact (row + disk blob). Participants only.
+
+    Broadcasts ``room_artifact.removed`` so other subscribers refresh
+    their panel without having to poll.
+    """
+    await _require_room_participant(room_id, identity, db)
+    config = request.app.state.config
+    ok = await artifacts_service.delete_artifact(
+        db,
+        artifact_files_dir=config.artifact_files_dir,
+        room_id=room_id,
+        artifact_id=artifact_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    connection_manager = getattr(request.app.state, "connection_manager", None)
+    if connection_manager is not None:
+        from doorae.ws.protocol import RoomArtifactRemovedOut
+
+        await connection_manager.broadcast(
+            room_id,
+            RoomArtifactRemovedOut(room_id=room_id, artifact_id=artifact_id),
+        )
