@@ -266,6 +266,30 @@ class Spawner:
             "and machine migration."
         )
 
+        # ── Outbox / artifacts (#290) ────────────────────────────
+        sections.append("")
+        sections.append("## Sharing artifacts with the user")
+        sections.append("")
+        sections.append(
+            "When you want to show the user an image, screenshot, "
+            "chart, log dump, or other file that won't fit cleanly "
+            "in a chat message, drop the file into `memory/outbox/` "
+            "(relative to your agent directory). The machine watches "
+            "this folder and pushes new files to the room's right-hand "
+            "*Artifacts* panel where the user can preview and "
+            "download them.\n\n"
+            "Constraints:\n"
+            "- One file per artifact, ≤ 768 KiB each.\n"
+            "- Allowed types: PNG / JPEG / GIF / WebP / SVG images, "
+            "and the same text/markdown/json/yaml/csv MIMEs the room "
+            "shared-files flow accepts.\n"
+            "- Use a descriptive filename — it's what the user sees "
+            "in the panel and on download.\n"
+            "- Files surface in *every* room you're a participant of "
+            "at the time you write them; same-content re-writes are "
+            "deduped server-side."
+        )
+
         # Only add trailing newline if we appended extra sections.
         if len(sections) > 1:
             sections.append("")

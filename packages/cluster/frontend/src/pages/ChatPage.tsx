@@ -5,6 +5,7 @@ import SidebarExpandButton from '@/components/SidebarExpandButton'
 import RoomHeader from '@/components/RoomHeader'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
+import RoomArtifactsDialog from '@/components/RoomArtifactsDialog'
 import RoomSharedFilesDialog from '@/components/RoomSharedFilesDialog'
 import TypingIndicator from '@/components/TypingIndicator'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
@@ -20,7 +21,7 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu, Search, ListTodo, Paperclip } from 'lucide-react'
+import { MessageSquare, Menu, Search, ListTodo, Paperclip, Image as ImageIcon } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 
 export interface Participant {
@@ -67,6 +68,7 @@ export default function ChatPage() {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [sharedFilesOpen, setSharedFilesOpen] = useState(false)
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState(false)
@@ -573,7 +575,16 @@ export default function ChatPage() {
                   participants={participants}
                   myParticipantId={myParticipantId}
                 />
-                <div className="flex justify-end px-4 pt-1">
+                <div className="flex justify-end gap-3 px-4 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setArtifactsOpen(true)}
+                    className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
+                    title="에이전트가 만든 산출물 보기"
+                  >
+                    <ImageIcon className="h-3 w-3" />
+                    산출물
+                  </button>
                   <button
                     type="button"
                     onClick={() => setSharedFilesOpen(true)}
@@ -612,6 +623,11 @@ export default function ChatPage() {
               roomId={selectedRoom}
               open={sharedFilesOpen}
               onOpenChange={setSharedFilesOpen}
+            />
+            <RoomArtifactsDialog
+              roomId={selectedRoom}
+              open={artifactsOpen}
+              onOpenChange={setArtifactsOpen}
             />
             <CreateSubRoomDialog
               parentRoomId={selectedRoom}
