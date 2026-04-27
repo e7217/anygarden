@@ -217,13 +217,27 @@ export default function AdminMachines() {
   // (MachineAgent) that misses fields the dialog needs (agents_md,
   // model, restart_policy, etc.), so we look up the full record from
   // the cluster-wide ``agents`` list when opening settings.
+  //
+  // #281 — keep only the agent ID and derive the Agent object from
+  // the live ``agents`` list every render. The earlier
+  // ``useState<Agent | null>`` snapshot left the dialog showing stale
+  // model/reasoning/collaboration values after an in-dialog edit
+  // (the edit triggers ``updateAgent → fetchAgents`` which refreshes
+  // the list, but a snapshot doesn't track that). See
+  // AgentSettingsDialog.test.tsx — "parent state pattern (#281)".
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [settingsAgent, setSettingsAgent] = useState<Agent | null>(null)
+  const [settingsAgentId, setSettingsAgentId] = useState<string | null>(null)
+  const settingsAgent = useMemo<Agent | null>(
+    () =>
+      settingsAgentId
+        ? agents.find(a => a.id === settingsAgentId) ?? null
+        : null,
+    [agents, settingsAgentId],
+  )
 
   const handleOpenSettings = (agentId: string) => {
-    const full = agents.find(a => a.id === agentId)
-    if (!full) return
-    setSettingsAgent(full)
+    if (!agents.some(a => a.id === agentId)) return
+    setSettingsAgentId(agentId)
     setSettingsOpen(true)
   }
 
@@ -901,7 +915,13 @@ export default function AdminMachines() {
       <AgentSettingsDialog
         agent={settingsAgent}
         open={settingsOpen}
-        onOpenChange={setSettingsOpen}
+        onOpenChange={open => {
+          setSettingsOpen(open)
+          // #281 — drop the tracked ID on close so an externally-
+          // deleted agent doesn't leave the dialog re-opening into a
+          // ``null`` derived prop on the next admin click.
+          if (!open) setSettingsAgentId(null)
+        }}
         fetchAgentFiles={fetchAgentFiles}
         updateAgent={updateAgent}
         upsertAgentFile={upsertAgentFile}
