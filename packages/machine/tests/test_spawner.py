@@ -475,7 +475,7 @@ class TestSpawn:
         assert result.success is True
         assert "CODEX_HOME" not in captured_env
 
-    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli", "openhands"])
+    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli"])
     async def test_spawn_does_not_set_codex_home_for_other_engines(
         self, spawner: Spawner, engine: str
     ) -> None:
@@ -492,7 +492,7 @@ class TestSpawn:
             profile_yaml="",
             rooms=["r"],
             server_url="wss://localhost:8000/ws/agent",
-            files={".codex/config.toml": "[x]\n"} if engine != "openhands" else {},
+            files={".codex/config.toml": "[x]\n"},
         )
 
         captured_env: dict[str, str] = {}

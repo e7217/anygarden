@@ -29,8 +29,6 @@ class TestCatalog:
         assert "codex" in ENGINE_CATALOG
         assert "claude-code" in ENGINE_CATALOG
         assert "gemini-cli" in ENGINE_CATALOG
-        assert "openai" in ENGINE_CATALOG
-        assert "anthropic" in ENGINE_CATALOG
 
     def test_default_model_is_listed_in_models(self) -> None:
         for entry in ENGINE_CATALOG.values():

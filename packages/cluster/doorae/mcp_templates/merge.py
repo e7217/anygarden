@@ -49,9 +49,9 @@ GEMINI_SETTINGS_PATH = ".gemini/settings.json"
 def settings_path_for_engine(engine: str) -> str | None:
     """Return the per-agent settings file path for ``engine``, or None.
 
-    Returns ``None`` for engines that don't support MCP (``openai``,
-    ``anthropic``, ``echo``) so the caller can skip rendering without
-    a guard at every callsite.
+    Returns ``None`` for engines that don't support MCP (``echo`` or
+    any unknown engine identifier) so the caller can skip rendering
+    without a guard at every callsite.
     """
     return {
         "claude-code": CLAUDE_SETTINGS_PATH,

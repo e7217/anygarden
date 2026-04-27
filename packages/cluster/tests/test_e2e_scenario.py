@@ -63,7 +63,7 @@ async def e2e_env():
         await db.flush()
 
         # 2. 에이전트 생성
-        agent = Agent(name="PM", engine="openai", desired_state="running", actual_state="running")
+        agent = Agent(name="PM", engine="claude-code", desired_state="running", actual_state="running")
         db.add(agent)
         await db.flush()
 

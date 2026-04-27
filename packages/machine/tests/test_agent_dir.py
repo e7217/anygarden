@@ -28,7 +28,6 @@ class TestAllowedPaths:
             ".claude/skills/helper/SKILL.md",
             ".gemini/settings.json",
             ".gemini/.env",
-            ".openhands/microagents/kb.md",
             "skills/a/b/c/refs/deep.md",
             # Issue #112 — script extensions admitted for skills that
             # CLIs invoke (bash/python/node-based tooling).

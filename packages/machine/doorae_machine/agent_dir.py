@@ -38,7 +38,6 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
     ".codex/",
     ".claude/",
     ".gemini/",
-    ".openhands/",
 )
 
 # Issue #142 — workspace-root exact-match whitelist. Kept in

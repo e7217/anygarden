@@ -125,15 +125,7 @@ async def _setup_engine(
     reasoning_effort: str | None = None,
 ) -> None:
     """Lazy-import and wire the chosen engine to the client."""
-    if engine == "openai":
-        from doorae_agent.integrations.openai import integrate_with_openai
-
-        await integrate_with_openai(
-            client,
-            model=model or "gpt-4o",
-            system_prompt=system_prompt or "You are a helpful assistant.",
-        )
-    elif engine == "claude-code":
+    if engine == "claude-code":
         from doorae_agent.integrations.claude_code import integrate_with_claude_code
 
         # Leave system_prompt None by default so CLAUDE.md (which
@@ -148,14 +140,6 @@ async def _setup_engine(
                 "system_prompt": system_prompt,
                 "model": model,
             },
-        )
-    elif engine == "anthropic":
-        from doorae_agent.integrations.anthropic import integrate_with_anthropic
-
-        await integrate_with_anthropic(
-            client,
-            model=model or "claude-sonnet-4-20250514",
-            system_prompt=system_prompt or "You are a helpful assistant.",
         )
     elif engine == "codex":
         from doorae_agent.integrations.codex import integrate_with_codex
@@ -175,14 +159,6 @@ async def _setup_engine(
             system_prompt=system_prompt or "You are a helpful coding assistant.",
             reasoning_effort=reasoning_effort,
         )
-    elif engine == "openhands":
-        from doorae_agent.integrations.openhands import integrate_with_openhands
-
-        await integrate_with_openhands(client)
-    elif engine == "deep-agents":
-        from doorae_agent.integrations.deep_agents import integrate_with_deep_agents
-
-        await integrate_with_deep_agents(client)
     else:
         click.echo(f"Engine '{engine}' is not yet implemented.", err=True)
         sys.exit(1)

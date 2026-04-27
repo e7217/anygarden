@@ -6,7 +6,7 @@ verified by probing ``--help``, triggering validation errors, and
 reading the shipped binaries' model-name tables — not by trusting the
 vendor marketing docs, which lag behind the actual CLIs.
 
-Exception: ``gpt-5.5`` (codex/openai) was added on the 2026-04-25
+Exception: ``gpt-5.5`` (codex) was added on the 2026-04-25
 announcement and is not yet round-tripped against a live ``codex exec``
 call. If ChatGPT-account auth rejects it at runtime, roll the
 ``default_model`` back to ``gpt-5.4`` — Codex does no client-side
@@ -175,34 +175,6 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             EngineModel(id="gemini-2.5-flash", label="Gemini 2.5 Flash"),
         ),
         reasoning_levels=("low", "medium", "high"),
-    ),
-    # Direct OpenAI API engine (no Codex CLI). Mirrors the subset of
-    # models Doorae agents wire through the plain Responses API.
-    "openai": EngineCatalogEntry(
-        engine="openai",
-        default_model="gpt-5.5",
-        models=(
-            # gpt-5.5: announcement-only on 2026-04-25; runtime
-            # verification pending. See module docstring.
-            EngineModel(id="gpt-5.5", label="GPT-5.5"),
-            EngineModel(id="gpt-5.4", label="GPT-5.4"),
-            EngineModel(id="gpt-5.4-mini", label="GPT-5.4 Mini"),
-        ),
-        reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-    ),
-    # Direct Anthropic API engine (no Claude Code CLI). Uses the
-    # Messages API's extended-thinking vocabulary, which *does* have
-    # enable/disable/adaptive semantics (distinct from the CLI's
-    # effort scale above).
-    "anthropic": EngineCatalogEntry(
-        engine="anthropic",
-        default_model="claude-opus-4-7",
-        models=(
-            EngineModel(id="claude-opus-4-7", label="Claude Opus 4.7"),
-            EngineModel(id="claude-sonnet-4-6", label="Claude Sonnet 4.6"),
-            EngineModel(id="claude-haiku-4-5", label="Claude Haiku 4.5"),
-        ),
-        reasoning_levels=("disabled", "enabled", "adaptive"),
     ),
 }
 

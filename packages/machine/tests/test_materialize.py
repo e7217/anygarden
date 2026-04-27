@@ -624,14 +624,14 @@ class TestClaudeCodeDefaultSettings:
         path = agent_root / ".claude" / "settings.json"
         assert path.stat().st_mode & 0o777 == 0o600
 
-    @pytest.mark.parametrize("engine", ["codex", "gemini-cli", "openhands"])
+    @pytest.mark.parametrize("engine", ["codex", "gemini-cli"])
     def test_no_default_for_other_engines(
         self, spawner: Spawner, engine: str
     ) -> None:
         """``.claude/settings.json``은 claude-code 전용이다. 다른
-        엔진은 자기 엔진 디렉토리(.codex/, .gemini/, .openhands/)
-        만 본다 — 빈 .claude/ 디렉토리가 남으면 prune 일관성도
-        깨지고 디스크 노이즈가 된다.
+        엔진은 자기 엔진 디렉토리(.codex/, .gemini/) 만 본다 — 빈
+        .claude/ 디렉토리가 남으면 prune 일관성도 깨지고 디스크
+        노이즈가 된다.
         """
         agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
         assert not (agent_root / ".claude" / "settings.json").exists()
@@ -683,7 +683,7 @@ class TestClaudeCodeDefaultSettings:
         # 링크를 따라가면 실제 settings.json 이 보여야 한다.
         assert (link / "settings.json").is_file()
 
-    @pytest.mark.parametrize("engine", ["codex", "gemini-cli", "openhands"])
+    @pytest.mark.parametrize("engine", ["codex", "gemini-cli"])
     def test_no_workspace_claude_symlink_for_other_engines(
         self, spawner: Spawner, engine: str
     ) -> None:
@@ -819,7 +819,7 @@ class TestCodexHostAuthSymlink:
         assert path.read_text() == admin_auth
 
     @pytest.mark.parametrize(
-        "engine", ["claude-code", "gemini-cli", "openhands"]
+        "engine", ["claude-code", "gemini-cli"]
     )
     def test_non_codex_engines_do_not_get_auth_symlink(
         self,
@@ -1023,10 +1023,11 @@ class TestWorkspaceSharedBridge:
     Canonical bytes still live one level up; the bridge is purely
     a cwd-anchored alias.
 
-    Raw-SDK adapters (anthropic, openai, openhands, deep_agents) skip
-    the bridge — they have no Read tool, so the bridge would be a
-    dead alias and just adds noise to the workspace tree. The
-    ``<shared-context>`` system-prompt block remains their only channel.
+    All currently-supported engines (codex, claude-code, gemini-cli)
+    have a Read tool and get the bridge. The defensive engine check
+    in ``Spawner._materialize_agent_dir`` remains so adding a future
+    engine without a Read tool stays a one-line conditional rather
+    than a missing-feature surprise.
     """
 
     @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
@@ -1043,17 +1044,6 @@ class TestWorkspaceSharedBridge:
         canonical = agent_root / "memory" / "shared"
         assert bridge.is_symlink(), f"{engine} bridge must be a symlink"
         assert bridge.resolve() == canonical.resolve()
-
-    def test_raw_sdk_engine_has_no_bridge(
-        self, spawner: Spawner, agent_dirs_root: Path
-    ) -> None:
-        """``anthropic`` (representative raw-SDK engine) has no Read tool;
-        creating a bridge for it would be a dead alias. The slot stays
-        absent so the workspace tree mirrors what the engine actually
-        consumes."""
-        agent_root = spawner._materialize_agent_dir(_msg(engine="anthropic"))
-        bridge = agent_root / "workspace" / "memory" / "shared"
-        assert not bridge.exists() and not bridge.is_symlink()
 
     def test_bridge_resolves_files_written_by_daemon_after_spawn(
         self, spawner: Spawner, agent_dirs_root: Path
@@ -1087,19 +1077,3 @@ class TestWorkspaceSharedBridge:
         assert bridge.is_symlink()
         assert bridge.resolve() == canonical.resolve()
 
-    def test_stale_bridge_from_previous_engine_is_replaced(
-        self, spawner: Spawner, agent_dirs_root: Path
-    ) -> None:
-        """If a previous spawn left a bridge and the agent's engine
-        changed to a raw-SDK adapter (or vice versa), the slot must
-        be reconciled — never a stale symlink to the old shape."""
-        # First spawn as codex: bridge exists.
-        msg_codex = _msg(engine="codex")
-        agent_root = spawner._materialize_agent_dir(msg_codex)
-        bridge = agent_root / "workspace" / "memory" / "shared"
-        assert bridge.is_symlink()
-
-        # Re-spawn the same agent as anthropic (raw SDK): bridge gone.
-        msg_anthropic = _msg(engine="anthropic")
-        agent_root = spawner._materialize_agent_dir(msg_anthropic)
-        assert not bridge.exists() and not bridge.is_symlink()

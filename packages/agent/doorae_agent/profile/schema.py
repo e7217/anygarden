@@ -11,7 +11,7 @@ class AgentProfile(BaseModel):
     """Schema for ``~/.doorae/agents/<name>.yaml``."""
 
     name: str
-    engine: str  # e.g. "openai", "claude-code", "anthropic"
+    engine: str  # e.g. "claude-code", "codex", "gemini-cli"
     system_prompt: str = "You are a helpful assistant."
     rooms: list[str] = []
     mcp_servers: list[str] = []
