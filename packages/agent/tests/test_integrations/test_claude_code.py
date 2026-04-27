@@ -710,9 +710,16 @@ class TestOrchestratorRosterPrompt:
         assert "<@user:peer-pid>" in prompt
         # Buddy must not see itself — peer-mention to self is a no-op.
         assert "<@user:buddy-pid>" not in prompt
-        # The collaborative hint paragraph must be present.
+        # The collaborative hint paragraph must be present, and the
+        # post-#279 follow-up reframes synthesis as opt-in rather
+        # than mandatory. Asserting both halves so a future copy edit
+        # that drops either half fails loudly.
         assert "If you need help from a peer" in prompt
-        assert "synthesize a final answer" in prompt
+        assert "reaches the user directly" in prompt
+        assert "only need to synthesize if the user explicitly asks" in prompt
+        # Negative guard — the old "always synthesize" framing must
+        # NOT come back. This is the entire point of the follow-up.
+        assert "synthesize a final answer" not in prompt
 
     @pytest.mark.asyncio
     async def test_solo_non_orchestrator_prompt_unchanged(
