@@ -191,34 +191,18 @@ class CodexAdapter(EngineAdapter):
         # the integration factory leave it None and the suffix helper
         # degrades to an empty string.
         self._client: Any = None
-        # Track the sha256 of the last ``<shared-context>``/memory
-        # block injected into each room's thread. #237 established
-        # that Codex threads persist history natively, so identical
-        # content must not be re-injected every turn (pollutes the
-        # conversation with duplicate "policy" text). #255 extends
-        # this: when the upstream content *changes* (new room shared
-        # file uploaded, backfill arrived mid-session) the adapter
-        # must re-inject — but tagged as an update so the model
-        # notices the refresh rather than treating it as a duplicate.
-        #
-        # Value semantics:
-        #   - key absent  → room never injected yet (first turn)
-        #   - value ""    → sentinel for "nothing worth injecting"
-        #                   was composed last turn (empty suffix);
-        #                   kept so we can notice when content
-        #                   appears after the first turn.
-        #   - value sha   → sha256 hex of the last injected suffix.
-        self._memory_injected: dict[str, str] = {}
-        # Issue #279 — same sha-tracked prefix injection as
-        # ``_memory_injected`` but for the room participants roster
-        # (#221) plus the optional collaborative usage hint. Codex
-        # threads persist history, so we must avoid re-injecting an
-        # unchanged roster every turn. When the roster *changes* (a
-        # peer joined/left, or the agent flipped to collaborative
-        # mid-session) the new sha triggers a re-injection labelled
-        # ``[팀 구성 업데이트]`` so the model treats it as a delta
-        # rather than a duplicate.
-        self._roster_injected: dict[str, str] = {}
+        # Issue #293 — sha-tracked memory + roster injector. Codex
+        # threads persist history natively, so identical blocks must
+        # not be re-injected (pollutes the conversation with duplicate
+        # text). When the upstream content *changes* (new shared file,
+        # roster delta) the injector emits a delta-labelled re-emission
+        # so the model treats the repeat as an update rather than a
+        # duplicate paste. Pre-#293 codex held two separate sha dicts
+        # (``_memory_injected`` / ``_roster_injected``); the helper now
+        # owns both with the same semantics.
+        from doorae_agent.integrations.base import ShaTrackedInjector
+
+        self._injector = ShaTrackedInjector()
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
@@ -305,67 +289,33 @@ class CodexAdapter(EngineAdapter):
             # the base method's docstring for the full rationale.
             turn_content = self.assemble_user_content(room_id, content)
 
-            # #237 / #255 — inject the memory / ephemeral / shared-
-            # context block as a prompt prefix, BUT only when the
-            # block's content has changed since the last injection
-            # in this room. Codex threads persist history, so
+            # Issue #237 / #255 / #279 / #293 — sha-tracked memory +
+            # roster injection. Codex threads persist history, so
             # identical repeats pollute the conversation; a changed
-            # block however must land — it carries backfilled files
-            # that arrived after the room's first turn.
+            # block however must land with a delta label so the model
+            # treats it as an update rather than a duplicate paste.
+            # The injector centralises both halves; codex agents do
+            # not host the orchestrator ``handoff_to`` MCP tool
+            # (claude_code owns that wiring) so roster gating is
+            # purely the ``collaborative`` flag.
             from doorae_agent.integrations.base import compose_memory_suffix
 
             memory_suffix = compose_memory_suffix(self._client, room_id)
-            if memory_suffix:
-                import hashlib
-
-                new_sha = hashlib.sha256(
-                    memory_suffix.encode("utf-8")
-                ).hexdigest()
-                last_sha = self._memory_injected.get(room_id)
-                if new_sha != last_sha:
-                    if last_sha is None:
-                        # First turn — no header needed.
-                        turn_content = f"{memory_suffix}\n\n{turn_content}"
-                    else:
-                        # Mid-session update. The explicit label makes
-                        # the delta unambiguous to the model: fresh
-                        # files / memory just arrived, not a duplicate
-                        # paste of the opening block.
-                        turn_content = (
-                            "[공유 자료 업데이트]\n"
-                            f"{memory_suffix}\n\n{turn_content}"
-                        )
-                    self._memory_injected[room_id] = new_sha
-
-            # Issue #279 — sha-tracked roster injection, mirroring the
-            # memory block above. Codex agents don't currently host
-            # the orchestrator ``handoff_to`` MCP tool (claude_code
-            # owns that wiring), so the trigger is purely the
-            # ``collaborative`` flag. Pre-#221 servers leave the
-            # roster empty; the helper returns "" and we skip
-            # injection entirely so codex threads stay byte-identical
-            # to legacy behaviour for solo agents.
             client = self._client
+            roster_suffix = ""
             if client is not None and client.is_collaborative(room_id):
                 roster_suffix = client.compose_roster_suffix(
                     room_id, with_collaborative_hint=True
                 )
-                if roster_suffix:
-                    import hashlib
-
-                    rs_new_sha = hashlib.sha256(
-                        roster_suffix.encode("utf-8")
-                    ).hexdigest()
-                    rs_last_sha = self._roster_injected.get(room_id)
-                    if rs_new_sha != rs_last_sha:
-                        if rs_last_sha is None:
-                            turn_content = f"{roster_suffix}\n\n{turn_content}"
-                        else:
-                            turn_content = (
-                                "[팀 구성 업데이트]\n"
-                                f"{roster_suffix}\n\n{turn_content}"
-                            )
-                        self._roster_injected[room_id] = rs_new_sha
+            prefix = self._injector.apply(
+                room_id,
+                memory_suffix=memory_suffix,
+                roster_suffix=roster_suffix,
+                memory_label="[공유 자료 업데이트]",
+                roster_label="[팀 구성 업데이트]",
+            )
+            if prefix:
+                turn_content = f"{prefix}\n\n{turn_content}"
 
             # Issue #190 — bound the turn with an explicit timeout so
             # a stuck codex call doesn't freeze the room's WS receive

@@ -204,35 +204,32 @@ class GeminiCliAdapter(EngineAdapter):
         if self._system_prompt:
             parts.append(self._system_prompt)
             parts.append("")
-        # Issue #237 — cross-engine memory suffix. Appended to the
-        # system-prompt preamble (before the dialogue state) so the
-        # agent reads it first.
-        from doorae_agent.integrations.base import compose_memory_suffix
-
-        memory_suffix = compose_memory_suffix(
-            getattr(self, "_client", None), room_id
-        )
-        if memory_suffix:
-            parts.append(memory_suffix)
-            parts.append("")
-        # Issue #279 — when the agent is collaborative, append the
-        # room roster + peer-mention usage hint. The Gemini CLI
+        # Issue #237 / #279 / #293 — cross-engine memory + roster
+        # suffix. Appended to the system-prompt preamble (before the
+        # dialogue state) so the agent reads it first. Gemini CLI
         # non-interactive mode is stateless (each ``-p`` invocation
         # spawns a fresh process) so re-injecting every turn is
-        # cheap and consistent. Solo agents see the same prompt as
-        # before #279.
+        # cheap and consistent — no sha tracking needed. Solo agents
+        # see the pre-#279 prompt byte-for-byte (helper returns "").
+        from doorae_agent.integrations.base import (
+            compose_session_context_suffix,
+        )
+
         client = getattr(self, "_client", None)
-        if (
+        is_collab = (
             client is not None
             and room_id is not None
             and client.is_collaborative(room_id)
-        ):
-            roster_suffix = client.compose_roster_suffix(
-                room_id, with_collaborative_hint=True
-            )
-            if roster_suffix:
-                parts.append(roster_suffix)
-                parts.append("")
+        )
+        suffix = compose_session_context_suffix(
+            client,
+            room_id,
+            include_roster=is_collab,
+            with_collaborative_hint=is_collab,
+        )
+        if suffix:
+            parts.append(suffix)
+            parts.append("")
         for turn in conversation:
             role = turn["role"]
             text = turn["content"]

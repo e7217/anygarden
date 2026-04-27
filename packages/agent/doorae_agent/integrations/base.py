@@ -176,6 +176,149 @@ def compose_memory_suffix(
     return memory_block + shared_block
 
 
+def compose_session_context_suffix(
+    client: "ChatClient | None",
+    room_id: str | None,
+    *,
+    include_roster: bool,
+    with_collaborative_hint: bool,
+) -> str:
+    """Combine memory + roster into a single session-context suffix.
+
+    Issue #293 — three CLI engines (claude_code, codex, gemini_cli) all
+    inject the same two contextual blocks ahead of the user's turn:
+    the memory / shared-context block (#237 / #246 / #255) and the
+    optional room roster (#221 / #279 / #288). Each adapter previously
+    inlined the same compose-and-concat block; this helper centralises
+    the assembly so a future block (a fourth context layer) lands in
+    one file.
+
+    Order is **memory then roster**, matching the natural reading
+    order ("here's the working set, then here's the team"). All three
+    adapters now produce this order; pre-#293 codex inlined them in
+    the reverse order as an artifact of the prepend implementation,
+    which #293 normalises.
+
+    Parameters
+    ----------
+    client:
+        The owning ``ChatClient``, or ``None`` for adapters that did
+        not wire one. Memory and roster both no-op without the client.
+    room_id:
+        The active room. Required to pick the room-specific ephemeral
+        flag and roster.
+    include_roster:
+        Whether the agent should know the team this turn. Caller
+        decides — ``claude_code`` activates this when the agent is the
+        room's orchestrator (handoff_to MCP path) **or** when the
+        agent's collaboration mode is collaborative; ``codex`` and
+        ``gemini_cli`` activate this only when collaborative.
+    with_collaborative_hint:
+        Whether the roster body should append the peer-mention usage
+        hint (#288). Forwarded to ``client.compose_roster_suffix``;
+        ``True`` for collaborative agents, ``False`` for the
+        orchestrator-only handoff path.
+
+    Returns
+    -------
+    The joined suffix or ``""`` when both blocks are empty. The output
+    never has a leading or trailing newline so callers can choose how
+    to attach it (system-prompt append vs turn-prefix prepend) without
+    accumulating blank lines.
+    """
+    parts: list[str] = []
+
+    memory = compose_memory_suffix(client, room_id)
+    if memory:
+        parts.append(memory)
+
+    if include_roster and client is not None and room_id is not None:
+        roster = client.compose_roster_suffix(
+            room_id, with_collaborative_hint=with_collaborative_hint
+        )
+        if roster:
+            parts.append(roster)
+
+    return "\n\n".join(parts)
+
+
+class ShaTrackedInjector:
+    """Per-room sha tracker for delta-labelled context re-injection.
+
+    Issue #293 — engines whose session natively accumulates message
+    history (codex's ``thread.run_text``) must avoid re-injecting an
+    unchanged memory or roster block every turn — the LLM would see
+    the same text repeated as fresh user content. Sha-track each
+    block per room and re-emit only when it changes, with a delta
+    label on every emission after the first so the model treats the
+    repeat as an explicit update rather than a duplicate paste.
+
+    Engines that *don't* accumulate (``claude_code`` rebuilds
+    ``ClaudeAgentOptions`` per turn, ``gemini_cli`` spawns a fresh
+    subprocess per turn) bypass this class — they call
+    :func:`compose_session_context_suffix` directly and apply the
+    output without delta tracking.
+
+    Two independent sha dicts (memory, roster) so a change in one
+    block doesn't invalidate the other.
+
+    Order on emission is **memory then roster**, matching the
+    standard order in :func:`compose_session_context_suffix`.
+    """
+
+    def __init__(self) -> None:
+        self._memory_sha: dict[str, str] = {}
+        self._roster_sha: dict[str, str] = {}
+
+    def apply(
+        self,
+        room_id: str,
+        *,
+        memory_suffix: str,
+        roster_suffix: str,
+        memory_label: str,
+        roster_label: str,
+    ) -> str:
+        """Return the prefix to prepend to this turn's user content.
+
+        Returns ``""`` when neither block changed since the last call
+        for ``room_id`` — the caller should leave the user content
+        untouched in that case. When a block did change, the
+        returned text starts with that block's delta label (omitted
+        on the very first emission per room) and ends without a
+        trailing newline so the caller can join with the user
+        content using its own separator.
+
+        Memory is emitted before roster when both change in the same
+        call.
+        """
+        import hashlib
+
+        parts: list[str] = []
+
+        if memory_suffix:
+            new_sha = hashlib.sha256(memory_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._memory_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(memory_suffix)
+                else:
+                    parts.append(f"{memory_label}\n{memory_suffix}")
+                self._memory_sha[room_id] = new_sha
+
+        if roster_suffix:
+            new_sha = hashlib.sha256(roster_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._roster_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(roster_suffix)
+                else:
+                    parts.append(f"{roster_label}\n{roster_suffix}")
+                self._roster_sha[room_id] = new_sha
+
+        return "\n\n".join(parts)
+
+
 def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     """Unified 3-state gate: how should the agent handle this message?
 

@@ -259,18 +259,6 @@ class ClaudeCodeAdapter(EngineAdapter):
         }
         if self._system_prompt is not None:
             kwargs["system_prompt"] = self._system_prompt
-        # Issue #237 — append the cross-engine memory / ephemeral block.
-        # Done AFTER ``self._system_prompt`` so the base prompt (typically
-        # AGENTS.md-derived) still drives the personality and the memory
-        # suffix acts as an override at the end.
-        from doorae_agent.integrations.base import compose_memory_suffix
-
-        memory_suffix = compose_memory_suffix(self._client, room_id)
-        if memory_suffix:
-            existing = kwargs.get("system_prompt")
-            kwargs["system_prompt"] = (
-                f"{existing}\n\n{memory_suffix}" if existing else memory_suffix
-            )
         if self._model is not None:
             kwargs["model"] = self._model
         session_id = self._sessions.get(room_id)
@@ -286,26 +274,32 @@ class ClaudeCodeAdapter(EngineAdapter):
                 # in the SDK's allow-list. Pin only what we actually
                 # register so a future addition is explicit.
                 kwargs["allowed_tools"] = ["mcp__doorae__handoff_to"]
-        # Issue #221 / #279 — inject the room roster so the LLM can
-        # address peers by their UUID. Originally bound to the
-        # orchestrator-only ``handoff_to`` codepath; #279 broadens it
-        # to ``collaborative`` agents that delegate via mention syntax
-        # in the response body rather than a tool call. The compose
-        # helper lives on ``ChatClient`` so codex/gemini share the
-        # same logic; this branch only decides *when* to call it.
+
+        # Issue #237 / #279 / #293 — append the centralised memory
+        # + roster suffix. The roster gate fires either for the
+        # orchestrator (handoff_to MCP path, no peer-mention hint)
+        # or for a collaborative agent (mention-based delegation,
+        # hint included). Done AFTER the base ``system_prompt`` so
+        # AGENTS.md-derived personality still drives behaviour and
+        # the suffix acts as an override at the end.
+        from doorae_agent.integrations.base import (
+            compose_session_context_suffix,
+        )
+
         client = self._client
         is_collab = client is not None and client.is_collaborative(room_id)
-        if (is_orchestrator or is_collab) and client is not None:
-            roster_suffix = client.compose_roster_suffix(
-                room_id, with_collaborative_hint=is_collab
+        suffix = compose_session_context_suffix(
+            client,
+            room_id,
+            include_roster=is_orchestrator or is_collab,
+            with_collaborative_hint=is_collab,
+        )
+        if suffix:
+            existing = kwargs.get("system_prompt")
+            kwargs["system_prompt"] = (
+                f"{existing}\n\n{suffix}" if existing else suffix
             )
-            if roster_suffix:
-                existing = kwargs.get("system_prompt")
-                kwargs["system_prompt"] = (
-                    f"{existing}\n\n{roster_suffix}"
-                    if existing
-                    else roster_suffix
-                )
+
         return self._options_cls(**kwargs)
 
     def _is_orchestrator_of(self, room_id: str) -> bool:
