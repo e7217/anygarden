@@ -19,9 +19,7 @@ import structlog
 from doorae_agent.client import ChatClient
 from doorae_agent.coordination.pending_context import (
     append_context_line,
-    drain_context,
     format_context_line,
-    wrap_as_room_conversation,
 )
 from doorae_agent.integrations.base import EngineAdapter
 from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
@@ -301,19 +299,11 @@ class CodexAdapter(EngineAdapter):
                     sandbox=self._sandbox,
                 )
 
-            # #74: drain pending context into a prefix so ingested
-            # breadcrumbs land in this turn's user content before
-            # the actual question.
-            #
-            # Issue #284 — wrap the drained block in
-            # ``<room_conversation>`` so codex (a GPT-class model)
-            # treats it as room awareness rather than user-facing
-            # relay material. The wrapper short-circuits to "" on
-            # empty input, so unrelated turns stay byte-identical.
-            prefix = drain_context(self._pending_context, room_id)
-            if prefix:
-                prefix = wrap_as_room_conversation(prefix)
-            turn_content = f"{prefix}\n\n{content}" if prefix else content
+            # Issue #286 — drain + ``<room_conversation>`` wrap +
+            # concat lives on ``EngineAdapter.assemble_user_content``
+            # so all three session adapters share one pipeline; see
+            # the base method's docstring for the full rationale.
+            turn_content = self.assemble_user_content(room_id, content)
 
             # #237 / #255 — inject the memory / ephemeral / shared-
             # context block as a prompt prefix, BUT only when the

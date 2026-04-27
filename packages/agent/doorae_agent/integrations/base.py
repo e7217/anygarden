@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from doorae_agent.coordination.pending_context import (
+    drain_context,
+    wrap_as_room_conversation,
+)
 from doorae_agent.integrations.cycle_guard import is_cycle_detected
 
 if TYPE_CHECKING:
@@ -42,7 +46,20 @@ class EngineAdapter(ABC):
 
     Each adapter bridges incoming chat messages to an LLM engine
     and returns the engine's response (or None to skip).
+
+    Issue #286 — session-based adapters (Claude Code, Codex, Gemini
+    CLI) all maintain a per-room ``_pending_context`` buffer for
+    ``INGEST_ONLY`` messages and apply the same drain → wrap → concat
+    pipeline before injecting the result into the next turn. The
+    type annotation here lets the default ``assemble_user_content``
+    method below operate on that buffer; concrete subclasses keep
+    initializing the dict in their own ``__init__`` so init structure
+    stays adapter-specific. Adapters that don't accumulate ambient
+    context simply leave the buffer empty and the default method
+    short-circuits to the bare input.
     """
+
+    _pending_context: dict[str, list[tuple[float, str]]]
 
     @abstractmethod
     async def on_message(self, msg: dict[str, Any]) -> str | None:
@@ -58,6 +75,31 @@ class EngineAdapter(ABC):
 
     async def stop(self) -> None:
         """Cleanup resources. Override if the engine needs teardown."""
+
+    def assemble_user_content(self, room_id: str, raw_content: str) -> str:
+        """Standard user-content augmentation pipeline (#286).
+
+        Drains the room's pending-context buffer (#74 / #148 Part 3),
+        wraps any ambient lines in ``<room_conversation>`` XML
+        (#284), and prepends the result to ``raw_content``. An
+        empty buffer short-circuits the function so the adapter
+        emits ``raw_content`` byte-identical to the bare-input path.
+
+        Why this lives on the base class: pre-#286 each session
+        adapter (Claude Code, Codex, Gemini CLI) inlined the same
+        three-step block right above its engine call. Adding a new
+        augmentation in #279 / #283 / #284 cost three identical
+        edits per shipment. Centralising here means the next
+        augmentation lands in one place and propagates to every
+        session adapter automatically. Subclasses may override for
+        engine-specific dedupe (codex's sha-tracked re-injection
+        guard for *system-prompt* augmentation is a separate
+        codepath and not affected).
+        """
+        prefix = drain_context(self._pending_context, room_id)
+        if prefix:
+            prefix = wrap_as_room_conversation(prefix)
+        return f"{prefix}\n\n{raw_content}" if prefix else raw_content
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Absorb a message into the engine's context without replying.

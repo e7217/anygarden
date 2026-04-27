@@ -24,6 +24,15 @@
   pre-#284 solo turns stay byte-identical. Applied uniformly to
   claude_code, codex, and gemini_cli adapters.
 
+### Refactor — centralize user-content augmentation (#286)
+
+- Promote the drain → wrap → concat pipeline from the three session
+  adapters (claude_code, codex, gemini_cli) up to
+  `EngineAdapter.assemble_user_content(room_id, raw)`. The previous
+  wave of changes (#279 / #283 / #284) had to touch all three
+  adapters identically; future augmentations now land in one place.
+  Conversion result is byte-identical — no behavioural change.
+
 ## v0.4.0 (2026-04-25)
 
 ### Features — orchestrator & speaker strategies (#159)
