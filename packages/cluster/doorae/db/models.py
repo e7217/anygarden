@@ -607,6 +607,60 @@ class RoomSharedFile(Base):
     room: Mapped["Room"] = relationship("Room")
 
 
+class RoomArtifact(Base):
+    """A file produced by an agent and surfaced in the room's right-hand
+    artifact panel (#290 Phase B).
+
+    Distinct from :class:`RoomSharedFile`: that flow is user-uploaded
+    text consumed by agents (system-prompt input). This flow is the
+    inverse — the agent drops a file under
+    ``<agent_root>/memory/outbox/`` and the machine daemon polls the
+    directory, sha256s each file, and ships the bytes to the server
+    via ``RoomArtifactProducedFrame``. The server stores the bytes
+    under ``settings.artifact_files_dir/<room_id>/<id>`` and keeps
+    metadata + sha256 here.
+
+    Re-delivery is idempotent thanks to the ``(room_id, sha256)``
+    unique constraint — the daemon may re-emit the same file on
+    reconnect/backfill and the server treats the duplicate as a
+    no-op without per-server bookkeeping.
+    """
+
+    __tablename__ = "room_artifacts"
+    __table_args__ = (
+        UniqueConstraint("room_id", "sha256", name="uq_room_artifact_sha"),
+        Index("ix_room_artifacts_room_id", "room_id"),
+    )
+
+    # ``id`` doubles as the on-disk filename under
+    # ``<artifact_files_dir>/<room_id>/<id>``. uuid keeps user-supplied
+    # filenames out of the filesystem path.
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    # ``SET NULL`` so deleting the producer doesn't cascade-delete its
+    # past artifacts — they belong to the room, not the agent that
+    # happened to drop them.
+    produced_by_agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    # Display name as authored by the agent (basename of the outbox
+    # file). Sanitised on the daemon side before the wire frame.
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Path relative to ``settings.artifact_files_dir`` (``<room_id>/<id>``).
+    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+    room: Mapped["Room"] = relationship("Room")
+
+
 class AgentFile(Base):
     """A single file in an agent's per-agent directory manifest.
 
