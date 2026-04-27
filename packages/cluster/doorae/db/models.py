@@ -300,6 +300,16 @@ class Agent(Base):
     # Application layer caps this at 200 chars; DB stays Text for
     # forward flexibility.
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # Issue #279 — per-agent collaboration policy. ``solo`` (default)
+    # preserves pre-#279 behaviour: the agent answers within its own
+    # turn. ``collaborative`` triggers a server-supplied hint suffix in
+    # the LLM system prompt instructing the agent to peer-mention
+    # teammates and synthesize their replies. Stored as a small string
+    # rather than an enum type so cross-DB (sqlite/postgres) batch
+    # migrations stay simple.
+    collaboration_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="solo", server_default=sa_text("'solo'")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")

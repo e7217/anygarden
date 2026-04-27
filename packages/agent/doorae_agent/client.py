@@ -164,6 +164,17 @@ class ChatClient:
         # so the adapter's iteration stays safe.
         self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
 
+        # Issue #279 — per-room collaboration mode for *this* agent,
+        # cached from welcome frames (server reads
+        # ``agents.collaboration_mode`` and stamps it as
+        # ``my_collaboration_mode``). ``solo`` (default) preserves
+        # pre-#279 behaviour; ``collaborative`` makes
+        # ``compose_roster_suffix`` append a peer-mention usage hint
+        # so the LLM delegates and synthesizes peer replies. Per-room
+        # rather than agent-level so future "force solo in this DM"
+        # overrides can land here without a schema change.
+        self._collaboration_mode_by_room: dict[str, str] = {}
+
         # Issue #157 Phase B — per-room ring buffer of recent message
         # fingerprints (sender, hash). Feeds ``cycle_guard`` in
         # ``decide_policy``: when the same (sender, hash) pair has
@@ -360,6 +371,76 @@ class ChatClient:
             self._http = None
 
     # ── Internal ─────────────────────────────────────────────────────
+
+    def is_collaborative(self, room_id: str) -> bool:
+        """Issue #279 — has the server marked this agent ``collaborative``
+        in *room_id*? Returns False for unknown rooms (legacy welcome,
+        pre-#279 servers) so the default behaviour stays solo.
+        """
+        return self._collaboration_mode_by_room.get(room_id) == "collaborative"
+
+    def compose_roster_suffix(
+        self,
+        room_id: str,
+        *,
+        with_collaborative_hint: bool = False,
+    ) -> str:
+        """Compose the participants roster appended to the LLM prompt
+        (#221 → #279).
+
+        Lines are formatted as ``- <@user:{uuid}> {name} ({kind})`` so
+        the LLM's mention-syntax pattern matching keeps the UUID
+        intact when it echoes or reasons about the roster. When the
+        peer carries a ``description`` (#271), it's appended after an
+        em-dash so the LLM can recognize *what* each peer does, not
+        just *who* they are. Newlines inside the description collapse
+        to single spaces and the visible portion is capped at 200
+        chars to keep the per-turn token cost predictable; peers
+        without a description fall back to the legacy "name only"
+        line so the change is non-breaking for older agents.
+
+        Self is excluded — an orchestrator handing off to itself would
+        be a no-op cycle. Returns an empty string when the roster cache
+        is absent (pre-#221 server) or contains only self, letting
+        the caller skip the ``system_prompt`` rewrite entirely.
+
+        ``with_collaborative_hint`` (#279) appends a usage paragraph
+        instructing the agent to peer-mention via ``<@user:UUID>`` in
+        the response body and synthesize the replies. Adapters set
+        this from ``client.is_collaborative(room_id)``; ``solo`` agents
+        never see the hint, preserving pre-#279 prompt bytes exactly.
+        """
+        roster = self._participants_by_room.get(room_id) or {}
+        if not roster:
+            return ""
+        my_pids = self._my_participant_ids
+        lines: list[str] = []
+        for pid, brief in roster.items():
+            if pid in my_pids:
+                continue
+            if not isinstance(brief, dict):
+                continue
+            name = brief.get("display_name") or "?"
+            kind = brief.get("kind") or "user"
+            raw_desc = brief.get("description") or ""
+            desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
+            desc_part = f" — {desc}" if desc else ""
+            lines.append(f"- <@user:{pid}> {name} ({kind}){desc_part}")
+        if not lines:
+            return ""
+        suffix = (
+            "Room participants (use the UUID verbatim when calling handoff_to):\n"
+            + "\n".join(lines)
+        )
+        if with_collaborative_hint:
+            suffix += (
+                "\n\nIf you need help from a peer, mention them in your "
+                "response body using the <@user:UUID> format from the list "
+                "above. Their reply will reach you, and you'll synthesize a "
+                "final answer for the user. Don't peer-ask for trivial "
+                "greetings or meta questions — answer those yourself."
+            )
+        return suffix
 
     def _record_recent_message(
         self, room_id: str, msg: dict[str, Any]
@@ -564,6 +645,12 @@ class ChatClient:
                 for entry in roster_list
                 if isinstance(entry, dict) and entry.get("id")
             }
+            # Issue #279 — cache this agent's collaboration policy
+            # for the room. Default ``solo`` covers pre-#279 servers
+            # that omit the field and user/guest welcome frames.
+            self._collaboration_mode_by_room[room_id] = (
+                data.get("my_collaboration_mode") or "solo"
+            )
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:

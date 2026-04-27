@@ -70,6 +70,8 @@ interface Props {
       reasoning_effort_set?: boolean
       description?: string | null
       description_set?: boolean
+      collaboration_mode?: 'solo' | 'collaborative'
+      collaboration_mode_set?: boolean
     },
   ) => Promise<Agent>
   /** Issue #217 — populate the Model / Reasoning dropdowns. Optional
@@ -241,6 +243,26 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       await updateAgent(agent.id, {
         reasoning_effort: nextVal,
         reasoning_effort_set: true,
+      })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  // #279 — collaboration mode is a small enum: ``solo`` | ``collaborative``.
+  // onChange commits immediately (same pattern as model/reasoning).
+  // The ``*_set`` flag protects the value from being clobbered by an
+  // unrelated PATCH that happens to carry ``collaboration_mode: undefined``.
+  const handleCollaborationChange = async (raw: string) => {
+    if (raw !== 'solo' && raw !== 'collaborative') return
+    if ((agent.collaboration_mode ?? 'solo') === raw) return
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, {
+        collaboration_mode: raw,
+        collaboration_mode_set: true,
       })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
@@ -483,6 +505,33 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             </dd>
           </>
         ) : null}
+
+        {/* #279 — Collaboration policy. ``solo`` (default) keeps the
+            agent answering within its own turn; ``collaborative``
+            tells the agent to peer-mention teammates and synthesize
+            their replies. The hint paragraph is appended to the LLM
+            system prompt by the agent SDK on the next welcome / turn,
+            so the toggle takes effect without a respawn. */}
+        <dt className="text-[var(--color-foreground-muted)]">Collaboration</dt>
+        <dd>
+          <select
+            value={agent.collaboration_mode ?? 'solo'}
+            onChange={e => void handleCollaborationChange(e.target.value)}
+            disabled={configSaving}
+            aria-label="Agent collaboration mode"
+            data-testid="overview-collaboration-select"
+            className={SELECT_CSS}
+          >
+            <option value="solo">Solo — answer within own turn</option>
+            <option value="collaborative">
+              Collaborative — peer-mention teammates and synthesize
+            </option>
+          </select>
+          <div className="mt-1 text-[11px] text-[var(--color-foreground-subtle)]">
+            Recommend keeping at most one or two collaborative agents per room
+            so they don't peer-ping each other in a loop.
+          </div>
+        </dd>
 
         <dt className="text-[var(--color-foreground-muted)]">State</dt>
         <dd className="flex items-center gap-2">

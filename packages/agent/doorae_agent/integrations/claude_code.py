@@ -275,7 +275,8 @@ class ClaudeCodeAdapter(EngineAdapter):
         if session_id is not None:
             kwargs["resume"] = session_id
 
-        if self._is_orchestrator_of(room_id):
+        is_orchestrator = self._is_orchestrator_of(room_id)
+        if is_orchestrator:
             self._ensure_handoff_server_config()
             if self._handoff_server_config is not None:
                 kwargs["mcp_servers"] = {"doorae": self._handoff_server_config}
@@ -283,63 +284,27 @@ class ClaudeCodeAdapter(EngineAdapter):
                 # in the SDK's allow-list. Pin only what we actually
                 # register so a future addition is explicit.
                 kwargs["allowed_tools"] = ["mcp__doorae__handoff_to"]
-            # Issue #221 — inject the room roster so the LLM can call
-            # ``handoff_to`` with a valid participant UUID instead of
-            # guessing a display name. Pre-#221 servers leave the
-            # roster empty; the suffix helper returns "" in that case,
-            # so the original prompt flows through unchanged.
-            roster_suffix = self._build_roster_suffix(room_id)
+        # Issue #221 / #279 — inject the room roster so the LLM can
+        # address peers by their UUID. Originally bound to the
+        # orchestrator-only ``handoff_to`` codepath; #279 broadens it
+        # to ``collaborative`` agents that delegate via mention syntax
+        # in the response body rather than a tool call. The compose
+        # helper lives on ``ChatClient`` so codex/gemini share the
+        # same logic; this branch only decides *when* to call it.
+        client = self._client
+        is_collab = client is not None and client.is_collaborative(room_id)
+        if (is_orchestrator or is_collab) and client is not None:
+            roster_suffix = client.compose_roster_suffix(
+                room_id, with_collaborative_hint=is_collab
+            )
             if roster_suffix:
                 existing = kwargs.get("system_prompt")
                 kwargs["system_prompt"] = (
-                    f"{existing}\n\n{roster_suffix}" if existing else roster_suffix
+                    f"{existing}\n\n{roster_suffix}"
+                    if existing
+                    else roster_suffix
                 )
         return self._options_cls(**kwargs)
-
-    def _build_roster_suffix(self, room_id: str) -> str:
-        """Compose the participants roster appended to the LLM prompt.
-
-        Lines are formatted as ``- <@user:{uuid}> {name} ({kind})`` so
-        the LLM's mention-syntax pattern matching keeps the UUID
-        intact when it echoes or reasons about the roster. When the
-        peer carries a ``description`` (#271), it's appended after an
-        em-dash so the LLM can recognize *what* each peer does, not
-        just *who* they are. Newlines inside the description collapse
-        to single spaces and the visible portion is capped at 200
-        chars to keep the per-turn token cost predictable; peers
-        without a description fall back to the legacy "name only"
-        line so the change is non-breaking for older agents.
-
-        Self is excluded — an orchestrator handing off to itself would
-        be a no-op cycle. Returns an empty string when the roster cache
-        is absent (pre-#221 server) or contains only self, letting
-        the caller skip the ``system_prompt`` rewrite entirely.
-        """
-        client = self._client
-        if client is None:
-            return ""
-        roster = getattr(client, "_participants_by_room", {}).get(room_id) or {}
-        if not roster:
-            return ""
-        my_pids = getattr(client, "_my_participant_ids", set()) or set()
-        lines: list[str] = []
-        for pid, brief in roster.items():
-            if pid in my_pids:
-                continue
-            if not isinstance(brief, dict):
-                continue
-            name = brief.get("display_name") or "?"
-            kind = brief.get("kind") or "user"
-            raw_desc = brief.get("description") or ""
-            desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
-            desc_part = f" — {desc}" if desc else ""
-            lines.append(f"- <@user:{pid}> {name} ({kind}){desc_part}")
-        if not lines:
-            return ""
-        return (
-            "Room participants (use the UUID verbatim when calling handoff_to):\n"
-            + "\n".join(lines)
-        )
 
     def _is_orchestrator_of(self, room_id: str) -> bool:
         """Check whether the owning client is the room's orchestrator.

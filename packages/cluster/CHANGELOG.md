@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## Unreleased
+
+### Features — per-agent collaboration mode (#279)
+
+- Add `agents.collaboration_mode` enum (`solo` | `collaborative`,
+  default `solo`) so admins can flip an agent into "delegate via peer
+  mention" without piling another enum onto the `rooms` table. The
+  agent SDK reads this via the welcome frame's
+  `my_collaboration_mode` slot and appends a usage hint to the LLM
+  system prompt; pre-#279 behaviour is byte-identical for solo agents.
+- Server-side peer-mention safety net: every agent message that
+  targets another agent participant gets stamped with
+  `metadata.peer_depth` and `metadata.kind`
+  (`peer_query`/`peer_response`); a per-room `PeerHandoffBudget`
+  resets on each human/guest send and trips on `MAX_PEER_DEPTH`
+  (1 layer) or `MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN` (8 events).
+  Mentions over the cap are stripped from the broadcast content
+  while the prose answer flows through.
+
 ## v0.4.0 (2026-04-25)
 
 ### Features — embedded LLM gateway (#197)
