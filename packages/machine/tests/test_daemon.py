@@ -1471,3 +1471,168 @@ class TestSharedFileHandlers:
             }
         )
         assert not (shared_dir / "spec.md").exists()
+
+
+class TestOutboxArtifactSyncBack290:
+    """Issue #290 — daemon polls each running agent's
+    ``memory/outbox/`` and emits ``room_artifact_produced`` frames for
+    new / changed files.
+    """
+
+    async def test_emits_artifact_for_new_outbox_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        import base64
+        import hashlib
+
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        # Fake PNG (real-image-like prefix isn't required — mimetypes
+        # uses the extension and the daemon doesn't introspect content).
+        body = b"\x89PNG\r\n\x1a\n" + b"placeholder-bytes"
+        (outbox / "screenshot.png").write_bytes(body)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        artifact_frames = [
+            f for f in sent if f.get("type") == "room_artifact_produced"
+        ]
+        assert len(artifact_frames) == 1
+        f = artifact_frames[0]
+        assert f["agent_id"] == "a1"
+        assert f["filename"] == "screenshot.png"
+        assert f["mime"] == "image/png"
+        assert f["size_bytes"] == len(body)
+        assert f["sha256"] == hashlib.sha256(body).hexdigest()
+        assert base64.b64decode(f["content_b64"]) == body
+
+    async def test_skips_unchanged_artifact_on_next_tick(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "snap.png").write_bytes(b"same")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+        first = sum(1 for f in sent if f.get("type") == "room_artifact_produced")
+        await daemon._report_actual_state()
+        second = sum(1 for f in sent if f.get("type") == "room_artifact_produced")
+        assert first == 1
+        assert second == 1  # cache hit, no re-emit
+
+    async def test_emits_new_frame_when_artifact_body_changes(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        target = outbox / "snap.png"
+        target.write_bytes(b"v1")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+        target.write_bytes(b"v2-different-bytes")
+        await daemon._report_actual_state()
+
+        artifact_frames = [
+            f for f in sent if f.get("type") == "room_artifact_produced"
+        ]
+        assert len(artifact_frames) == 2
+        assert artifact_frames[0]["sha256"] != artifact_frames[1]["sha256"]
+
+    async def test_skips_oversize_files(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from doorae_machine.daemon import ARTIFACT_MAX_BYTES
+
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        # One byte over the limit triggers the skip-with-log branch.
+        (outbox / "huge.png").write_bytes(b"\x00" * (ARTIFACT_MAX_BYTES + 1))
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_skips_disallowed_mime(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "binary.exe").write_bytes(b"MZ\x90\x00")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_skips_subdirs_inside_outbox(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        nested = outbox / "subdir"
+        nested.mkdir(parents=True)
+        (nested / "trapped.png").write_bytes(b"hidden")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_handles_missing_outbox_silently(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        agent_root.mkdir()  # no memory/outbox/ subtree at all
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types

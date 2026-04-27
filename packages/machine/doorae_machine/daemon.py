@@ -44,6 +44,38 @@ TOKEN_REQUEST_TIMEOUT = 30  # seconds to wait for a token_grant
 # take tens of seconds (engine boot, first tool load).
 TRANSITIONAL_LEAK_GRACE = 60.0
 
+# Issue #290 — outbox artifact constraints. The cap leaves headroom
+# under the 1 MiB WebSocket frame limit after base64 inflation
+# (768 KiB raw → ~1024 KiB encoded plus envelope). MIME whitelist
+# matches the server-side check; daemon enforcement is purely an
+# optimisation (don't burn a frame on something the server will
+# reject). text/* is broad on purpose — anything the existing
+# RoomSharedFile flow accepts as text fits here too.
+ARTIFACT_MAX_BYTES = 768 * 1024
+ARTIFACT_ALLOWED_MIMES: frozenset[str] = frozenset({
+    # Images — the headline use case (codex screenshot story).
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    # Text — symmetrical with the existing user→agent shared file
+    # whitelist. Lets agents drop diagnostic logs / data dumps too.
+    "text/plain",
+    "text/markdown",
+    "text/x-markdown",
+    "text/csv",
+    "text/yaml",
+    "text/x-yaml",
+    "application/json",
+    "application/yaml",
+    "application/x-yaml",
+    "text/x-python",
+    "application/xml",
+    "text/xml",
+    "text/html",
+})
+
 
 def _base_url_from_machine_url(machine_ws_url: str) -> str:
     """Trim the ``/ws/machines/<id>`` endpoint suffix off the daemon URL.
@@ -136,6 +168,14 @@ class MachineDaemon:
         # last sync. Populated lazily on first read. Wiped when the
         # agent stops so a re-spawn performs a clean first-read.
         self._memory_last_hash: dict[str, str] = {}
+
+        # Issue #290 — per-(agent_id, filename) sha256 cache for the
+        # ``memory/outbox/`` watcher. Same idea as the notes hash but
+        # keyed by filename because one agent can have many outbox
+        # files in parallel. Cleared when the agent stops so re-spawn
+        # forces re-emission (which the server dedups via
+        # ``UniqueConstraint(room_id, sha256)``).
+        self._artifact_last_hash: dict[tuple[str, str], str] = {}
 
     # ── Main loop ──────────────────────────────────────────────────────
 
@@ -676,6 +716,12 @@ class MachineDaemon:
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("memory_flush_failed", error=str(exc))
 
+        # Issue #290 — same cadence for the room-artifact outbox.
+        try:
+            await self._flush_outbox_artifacts()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("artifact_flush_failed", error=str(exc))
+
     async def _flush_memory_updates(self) -> None:
         """Detect ``memory/notes.md`` changes for each running agent and
         emit ``agent_memory_update`` frames.
@@ -726,6 +772,114 @@ class MachineDaemon:
                 agent_id=agent_id,
                 bytes=len(body),
             )
+
+    async def _flush_outbox_artifacts(self) -> None:
+        """Detect new / changed files under each running agent's
+        ``memory/outbox/`` and emit ``room_artifact_produced`` frames.
+
+        Mirrors :meth:`_flush_memory_updates` but the body is binary
+        (base64'd on the wire) and the cache is keyed by filename
+        because one agent can drop many artifacts in parallel.
+
+        Skipped silently:
+          - non-regular entries (subdirs, symlinks)
+          - filenames that look path-traversal-y (``/`` or
+            ``..``-anchored — shouldn't happen since we only
+            ``listdir`` the outbox, but defence in depth)
+          - files exceeding ``ARTIFACT_MAX_BYTES`` (just logged so
+            the operator can spot oversize uploads)
+          - MIME types outside ``ARTIFACT_ALLOWED_MIMES``
+
+        Re-delivery is intentional after a daemon restart (the cache
+        starts empty); the cluster's ``UniqueConstraint(room_id,
+        sha256)`` makes that a server-side no-op.
+        """
+        import base64
+        import hashlib
+        import mimetypes
+
+        for info in self._spawner.list_running():
+            agent_id = info["agent_id"]
+            try:
+                agent_root = self._spawner.get_agent_root(agent_id)
+            except AttributeError:
+                # Stubbed spawner in tests — same skip rationale as
+                # ``_flush_memory_updates``.
+                continue
+            outbox = agent_root / "memory" / "outbox"
+            if not outbox.is_dir():
+                continue
+
+            for entry in sorted(outbox.iterdir()):
+                if not entry.is_file() or entry.is_symlink():
+                    continue
+                name = entry.name
+                if "/" in name or name in ("", ".", ".."):
+                    continue
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    continue
+                if size > ARTIFACT_MAX_BYTES:
+                    log.warning(
+                        "outbox_too_large",
+                        agent_id=agent_id,
+                        filename=name,
+                        size_bytes=size,
+                        cap=ARTIFACT_MAX_BYTES,
+                    )
+                    continue
+                mime, _ = mimetypes.guess_type(name)
+                if mime not in ARTIFACT_ALLOWED_MIMES:
+                    # Unknown / disallowed MIME — log once per file
+                    # change. Use a sentinel hash entry so we don't
+                    # spam the log on every report tick.
+                    sentinel = f"unsupported:{mime}"
+                    if (
+                        self._artifact_last_hash.get((agent_id, name))
+                        != sentinel
+                    ):
+                        log.info(
+                            "outbox_skipped_mime",
+                            agent_id=agent_id,
+                            filename=name,
+                            mime=mime,
+                        )
+                        self._artifact_last_hash[(agent_id, name)] = sentinel
+                    continue
+                try:
+                    raw = entry.read_bytes()
+                except OSError as exc:
+                    log.warning(
+                        "outbox_read_failed",
+                        agent_id=agent_id,
+                        filename=name,
+                        error=str(exc),
+                    )
+                    continue
+                digest = hashlib.sha256(raw).hexdigest()
+                if self._artifact_last_hash.get((agent_id, name)) == digest:
+                    continue
+                self._artifact_last_hash[(agent_id, name)] = digest
+
+                from doorae_machine.protocol.frames import RoomArtifactProducedFrame
+
+                frame = RoomArtifactProducedFrame(
+                    agent_id=agent_id,
+                    filename=name,
+                    mime=mime,
+                    content_b64=base64.b64encode(raw).decode("ascii"),
+                    sha256=digest,
+                    size_bytes=size,
+                )
+                await self._send(frame.model_dump())
+                log.info(
+                    "outbox_artifact_synced",
+                    agent_id=agent_id,
+                    filename=name,
+                    mime=mime,
+                    size_bytes=size,
+                )
 
     # ── Transitional state helpers (#219) ──────────────────────────────
 

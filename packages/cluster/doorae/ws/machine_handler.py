@@ -132,6 +132,39 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                         )
                         await db.commit()
 
+            elif frame_type == "room_artifact_produced":
+                # #290 Phase B — agent dropped a file under
+                # ``memory/outbox/`` and the daemon shipped it. Persist
+                # to disk + DB and broadcast ``room_artifact.added`` to
+                # live subscribers in every target room.
+                from doorae.rooms.artifacts import handle_artifact_produced
+                from doorae.ws.protocol import RoomArtifactAddedOut
+
+                async with session_factory() as db:
+                    inserted = await handle_artifact_produced(
+                        db,
+                        data,
+                        artifact_files_dir=config.artifact_files_dir,
+                    )
+                connection_manager = getattr(
+                    app.state, "connection_manager", None
+                )
+                if connection_manager is not None:
+                    for row in inserted:
+                        out = RoomArtifactAddedOut(
+                            artifact={
+                                "id": row.id,
+                                "room_id": row.room_id,
+                                "produced_by_agent_id": row.produced_by_agent_id,
+                                "filename": row.filename,
+                                "sha256": row.sha256,
+                                "size_bytes": row.size_bytes,
+                                "mime": row.mime,
+                                "created_at": row.created_at.isoformat(),
+                            }
+                        )
+                        await connection_manager.broadcast(row.room_id, out)
+
             else:
                 logger.warning(
                     "machine_ws.unknown_frame",

@@ -103,6 +103,18 @@ export function useWebSocket(roomId: string | null) {
         window.dispatchEvent(
           new CustomEvent('doorae:task:updated', { detail: data }),
         );
+      } else if (data.type === 'room_artifact.added') {
+        // #290 — agent dropped a new file in memory/outbox/. The
+        // RoomArtifactsDialog (and any future right-rail panel)
+        // listens on the window so it doesn't need to be wired into
+        // the WS hook's prop tree. Detail mirrors the server frame.
+        window.dispatchEvent(
+          new CustomEvent('doorae:room_artifact:added', { detail: data }),
+        );
+      } else if (data.type === 'room_artifact.removed') {
+        window.dispatchEvent(
+          new CustomEvent('doorae:room_artifact:removed', { detail: data }),
+        );
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         if (data.is_typing) {

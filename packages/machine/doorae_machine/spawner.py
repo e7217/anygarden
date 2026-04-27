@@ -266,6 +266,30 @@ class Spawner:
             "and machine migration."
         )
 
+        # ── Outbox / artifacts (#290) ────────────────────────────
+        sections.append("")
+        sections.append("## Sharing artifacts with the user")
+        sections.append("")
+        sections.append(
+            "When you want to show the user an image, screenshot, "
+            "chart, log dump, or other file that won't fit cleanly "
+            "in a chat message, drop the file into `memory/outbox/` "
+            "(relative to your agent directory). The machine watches "
+            "this folder and pushes new files to the room's right-hand "
+            "*Artifacts* panel where the user can preview and "
+            "download them.\n\n"
+            "Constraints:\n"
+            "- One file per artifact, ≤ 768 KiB each.\n"
+            "- Allowed types: PNG / JPEG / GIF / WebP / SVG images, "
+            "and the same text/markdown/json/yaml/csv MIMEs the room "
+            "shared-files flow accepts.\n"
+            "- Use a descriptive filename — it's what the user sees "
+            "in the panel and on download.\n"
+            "- Files surface in *every* room you're a participant of "
+            "at the time you write them; same-content re-writes are "
+            "deduped server-side."
+        )
+
         # Only add trailing newline if we appended extra sections.
         if len(sections) > 1:
             sections.append("")
@@ -380,6 +404,13 @@ class Spawner:
         shared_dir = memory_dir / "shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(shared_dir, 0o700)
+        # #290 — symmetrical drop zone for the outbound flow: the
+        # agent writes a file here and the daemon's outbox poller
+        # ships it back to the cluster as a room artifact. Pre-creating
+        # the directory lets the agent treat it as always-present.
+        outbox_dir = memory_dir / "outbox"
+        outbox_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(outbox_dir, 0o700)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():
