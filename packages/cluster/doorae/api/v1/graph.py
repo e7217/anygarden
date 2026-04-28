@@ -215,6 +215,11 @@ async def _build_global_graph(
                     "actual_state": a.actual_state,
                     "desired_state": a.desired_state,
                     "model": a.model,
+                    # #309 — surface the permission tier so the
+                    # AgentNode can render a small ⚠ when the agent
+                    # is ``trusted`` (host access). NULL/standard
+                    # leaves the node visually unchanged.
+                    "permission_level": a.permission_level,
                     "placed_on_machine_id": a.placed_on_machine_id,
                     "last_heartbeat_at": (
                         a.last_heartbeat_at.isoformat()
@@ -432,6 +437,11 @@ async def _build_personal_graph(
                     "actual_state": a.actual_state,
                     "desired_state": a.desired_state,
                     "model": a.model,
+                    # #309 — surface the permission tier so the
+                    # AgentNode can render a small ⚠ when the agent
+                    # is ``trusted`` (host access). NULL/standard
+                    # leaves the node visually unchanged.
+                    "permission_level": a.permission_level,
                     "placed_on_machine_id": safe_placement,
                     "last_heartbeat_at": (
                         a.last_heartbeat_at.isoformat()
