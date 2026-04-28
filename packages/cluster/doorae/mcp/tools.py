@@ -30,9 +30,18 @@ from doorae.skills_library.service import (
     SkillOwnershipError,
 )
 
-# Allowed task status values for ``mark_task_status`` (#266). Mirrored
-# in the JSON Schema below so the LLM gets a clear enum hint.
-TASK_STATUS_VALUES: tuple[str, ...] = ("todo", "in_progress", "done", "blocked")
+# Allowed task status values for ``mark_task_status`` (#266, #319).
+# ``failed`` (#319) joined the legal set when the goals sweeper started
+# stamping it on pickup/execution timeouts; before that the LLM-facing
+# enum and the sweeper's stored value drifted, so an agent that wanted
+# to mark its own task as failed got a 4xx from the MCP RPC.
+TASK_STATUS_VALUES: tuple[str, ...] = (
+    "todo",
+    "in_progress",
+    "done",
+    "blocked",
+    "failed",
+)
 
 # ── Tool schemas ────────────────────────────────────────────────
 

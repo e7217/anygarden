@@ -303,9 +303,15 @@ class TestHandoffTool:
     async def test_handoff_tool_exposed_when_orchestrator(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        """Client's orchestrator map points at me → options carry an
-        ``mcp_servers`` entry and ``allowed_tools`` with the handoff
-        tool name prefixed as ``mcp__<server>__<tool>``."""
+        """Orchestrator → options carry an ``mcp_servers`` entry under
+        the ``handoff`` key (#319 — name disambiguated from the cluster's
+        HTTP doorae entry the spawner writes into ``.mcp.json``).
+
+        ``allowed_tools`` is intentionally *not* set so the cluster's
+        doorae HTTP MCP (``mark_task_status`` etc.) and any admin-attached
+        third-party MCP server (e.g. GitHub) remain reachable from the
+        orchestrator turn.
+        """
         from doorae_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
@@ -319,8 +325,13 @@ class TestHandoffTool:
 
         opts = fake_sdk[-1]["options"].kwargs
         assert "mcp_servers" in opts
-        assert "doorae" in opts["mcp_servers"]
-        assert "mcp__doorae__handoff_to" in opts.get("allowed_tools", [])
+        assert "handoff" in opts["mcp_servers"]
+        # #319 — the cluster's HTTP doorae MCP must NOT be shadowed by
+        # an in-process server reusing the same name.
+        assert "doorae" not in opts["mcp_servers"]
+        # #319 — no narrow whitelist; cluster + admin MCP entries
+        # autoload from ``.mcp.json`` and need to stay reachable.
+        assert "allowed_tools" not in opts
 
     @pytest.mark.asyncio
     async def test_handoff_tool_hidden_when_not_orchestrator(
@@ -389,7 +400,7 @@ class TestHandoffTool:
         # ``_current_room_id`` is still set — we simulate that by
         # re-setting it before invoking the handler.
         opts = fake_sdk[-1]["options"].kwargs
-        server_cfg = opts["mcp_servers"]["doorae"]
+        server_cfg = opts["mcp_servers"]["handoff"]
         handoff_tool = next(
             t for t in server_cfg["tools"] if t.name == "handoff_to"
         )
@@ -438,7 +449,7 @@ class TestHandoffTool:
 
         opts = fake_sdk[-1]["options"].kwargs
         handoff_tool = next(
-            t for t in opts["mcp_servers"]["doorae"]["tools"]
+            t for t in opts["mcp_servers"]["handoff"]["tools"]
             if t.name == "handoff_to"
         )
         adapter._current_room_id = "room-a"
