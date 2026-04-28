@@ -20,6 +20,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
 
       - name: Sync workspace
         run: uv sync --all-packages --all-extras
@@ -49,6 +50,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
 
       - name: Sync workspace
         run: uv sync --all-packages --all-extras
