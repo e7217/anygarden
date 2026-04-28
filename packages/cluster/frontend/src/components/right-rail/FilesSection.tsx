@@ -71,7 +71,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           <div
             key={f.id}
             data-testid={`right-rail-file-row-${f.id}`}
-            className="group flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
           >
             <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
             <div className="min-w-0 flex-1">
@@ -81,13 +81,16 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
               >
                 {f.filename}
               </p>
-              <p className="text-[10px] text-[var(--color-foreground-subtle)]">
+              <p className="truncate text-[10px] text-[var(--color-foreground-subtle)]">
                 {formatBytes(f.size_bytes)} · {f.mime}
               </p>
             </div>
+            {/* #325 — delete is absolute so the meta column reaches
+                the row's inner right edge at rest, aligning with the
+                section header's right-side counter. */}
             <button
               onClick={() => handleDelete(f.id, f.filename)}
-              className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all shrink-0"
+              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
               aria-label={`Delete ${f.filename}`}
             >
               <Trash2 className="h-3 w-3" />

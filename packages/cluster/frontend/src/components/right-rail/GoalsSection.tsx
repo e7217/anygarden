@@ -131,7 +131,7 @@ export default function GoalsSection({
           <div
             key={g.id}
             data-testid={`right-rail-goal-row-${g.id}`}
-            className="group flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
           >
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
@@ -173,7 +173,12 @@ export default function GoalsSection({
                 )}
               </p>
             </div>
-            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            {/* #325 — actions absolute so the meta column extends to
+                the row's inner right edge at rest, aligning with the
+                section header's right-aligned counter/action button.
+                ``backdrop-blur`` + slight bg lets the buttons stay
+                readable when they overlay the longest meta text. */}
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--color-surface-alt)]/80 rounded-[var(--radius-sm)]">
               <Button
                 variant="ghost"
                 size="icon"

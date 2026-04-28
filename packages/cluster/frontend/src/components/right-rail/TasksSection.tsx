@@ -208,7 +208,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       <div
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
-        className="group flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+        className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
       >
         <button
           onClick={() => cycleStatus(task)}
@@ -241,17 +241,18 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         >
           {task.title}
         </span>
-        {/* Assignee slot (#323) — single 7rem column that swaps a
-            read-only chip for the reassign ``<select>`` on hover or
-            keyboard focus. Both elements share the same box via
-            ``absolute inset-0`` so the row's title column never has
-            its truncate budget shrunk by hover-time UI. ``""`` value
-            on the select = Unassigned, allowed because Tasks (unlike
-            Goals) tolerate a NULL assignee. */}
+        {/* Assignee slot (#323/#325) — last flex child so its right
+            edge is the row's inner right (px-2 inset). Chip is
+            ``text-right`` so the resting visual right edge matches the
+            section header's right-aligned counter/action button. The
+            ``<select>`` shares the same box via ``absolute inset-0``;
+            its ``pr-5`` carves a clean column for the absolute-anchored
+            delete button below to land in without overlapping live
+            text. ``""`` value = Unassigned (Tasks tolerate NULL). */}
         <div className="relative shrink-0 w-[7rem]">
           <span
             aria-hidden="true"
-            className="block truncate text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
+            className="block truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
             title={assignee?.display_name ?? 'Unassigned'}
           >
             {assignee?.display_name ?? '—'}
@@ -260,7 +261,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             value={task.assignee_participant_id ?? ''}
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
-            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate"
+            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
             aria-label={`Reassign ${task.title}`}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >
@@ -272,9 +273,14 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             ))}
           </select>
         </div>
+        {/* #325 — delete is absolute so it doesn't reserve a hidden
+            24px gutter at rest. On hover it lands at ``right-2`` which
+            is the row's inner right edge, exactly where the section
+            header's action button sits — keeping the rail's right
+            column visually aligned. */}
         <button
           onClick={() => remove(task.id)}
-          className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all shrink-0"
+          className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
           aria-label={`Delete ${task.title}`}
         >
           <Trash2 className="h-3 w-3" />
