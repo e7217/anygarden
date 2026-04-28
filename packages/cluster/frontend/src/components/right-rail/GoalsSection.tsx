@@ -1,17 +1,21 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Plus, Pause, Play, Trash2, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useRoomGoals } from '@/hooks/useRoomGoals'
-import GoalForm from '@/components/goal-form/GoalForm'
+import GoalForm, {
+  type GoalFormAgentOption,
+} from '@/components/goal-form/GoalForm'
 import type { Goal } from '@/lib/goals'
+import type { Participant } from '@/pages/ChatPage'
 
 interface GoalsSectionProps {
   roomId: string
-  /** Set of agent ids that can be picked when creating a goal from
-   *  the right rail. The first one is used as the default — the
-   *  rail is room-scoped so the user is implicitly creating a
-   *  responsibility for an agent already in the room. */
-  candidateAgentIds: string[]
+  /** #312 — full agent participants (id + display_name + agent_id)
+   *  so the form can render an explicit picker and rows can show
+   *  the assignee name. Replaces the pre-#312 ``candidateAgentIds``
+   *  prop which only carried ids and forced an ``useAgents()``
+   *  round-trip just to label rows. */
+  agentParticipants: Participant[]
 }
 
 function formatNextRun(iso: string | null): string {
@@ -48,12 +52,35 @@ function statusDot(status: Goal['status']): string {
  */
 export default function GoalsSection({
   roomId,
-  candidateAgentIds,
+  agentParticipants,
 }: GoalsSectionProps) {
   const { goals, refresh, remove, runNow, pause, resume } =
     useRoomGoals(roomId)
   const [showForm, setShowForm] = useState(false)
-  const defaultAgent = candidateAgentIds[0] ?? null
+
+  // #312 — derive {id, name} options for the form. Map back to
+  // ``Agent.id`` (not Participant.id) because Goal.assignee_agent_id
+  // references the agent, and the API call from GoalForm needs the
+  // agent id.
+  const formAgents = useMemo<GoalFormAgentOption[]>(
+    () =>
+      agentParticipants
+        .filter((p) => p.agent_id)
+        .map((p) => ({ id: p.agent_id as string, name: p.display_name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [agentParticipants],
+  )
+  const hasCandidates = formAgents.length > 0
+
+  // Map agent_id → display_name so the goal rows can show the
+  // assignee name without an extra fetch. Agents that have left the
+  // room since the goal was created keep the goal pointing at their
+  // id; we fall back to the raw id slice in that case.
+  const agentNameById = useMemo<Record<string, string>>(() => {
+    const out: Record<string, string> = {}
+    for (const opt of formAgents) out[opt.id] = opt.name
+    return out
+  }, [formAgents])
 
   return (
     <section className="flex flex-col">
@@ -65,7 +92,7 @@ export default function GoalsSection({
           <span className="text-[11px] text-[var(--color-foreground-subtle)]">
             {goals.length}
           </span>
-          {defaultAgent && (
+          {hasCandidates && (
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
@@ -80,10 +107,10 @@ export default function GoalsSection({
         </div>
       </header>
 
-      {showForm && defaultAgent && (
+      {showForm && hasCandidates && (
         <div className="mx-1 mb-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white">
           <GoalForm
-            agentId={defaultAgent}
+            roomAgents={formAgents}
             defaultReportRoomId={roomId}
             onCreated={async () => {
               setShowForm(false)
@@ -118,6 +145,18 @@ export default function GoalsSection({
                 {g.title}
               </p>
               <p className="text-[10px] text-[var(--color-foreground-subtle)]">
+                {/* #312 — show assignee first so the user sees "who"
+                    before "how often". Falls back to a short id slice
+                    when the assignee agent has left the room (rare;
+                    the row goes stale rather than disappearing). */}
+                <span
+                  className="text-[var(--color-foreground-muted)]"
+                  data-testid={`right-rail-goal-assignee-${g.id}`}
+                >
+                  {agentNameById[g.assignee_agent_id] ??
+                    `agent ${g.assignee_agent_id.slice(0, 6)}`}
+                </span>
+                {' · '}
                 {g.trigger_type}
                 {g.trigger_type !== 'manual' && (
                   <> · next {formatNextRun(g.next_run_at)}</>

@@ -8,8 +8,28 @@ import {
   type GoalTriggerType,
 } from '@/lib/goals'
 
+/** #312 — minimal shape needed to render the Agent picker. We only
+ *  need ``id`` for the value and ``name`` for the label; any
+ *  ``Agent`` from ``useAgents()`` satisfies this. Keeping the type
+ *  narrow lets callers in the right rail pass a derived list (room
+ *  agent participants) without resolving full ``Agent`` rows. */
+export interface GoalFormAgentOption {
+  id: string
+  name: string
+}
+
 interface GoalFormProps {
-  agentId: string
+  /** #312 — explicit candidate list. Always required so the form is
+   *  forced to render an Agent picker; callers that only have one
+   *  candidate (AgentSettingsDialog single-agent context) pass a
+   *  one-element array. The form renders a select but disables it
+   *  in the single-candidate case so the UI is informative without
+   *  asking for a redundant click. */
+  roomAgents: GoalFormAgentOption[]
+  /** Pre-selected agent id. Defaults to the first ``roomAgents``
+   *  entry if omitted — matches the implicit "first-agent" behaviour
+   *  pre-#312, but the field is now visible and editable. */
+  defaultAgentId?: string | null
   /** Pre-fill the report room (current room when launched from the
    *  right rail). User can change. */
   defaultReportRoomId?: string | null
@@ -29,13 +49,24 @@ interface GoalFormProps {
  * the 422 ``detail`` message inline.
  */
 export default function GoalForm({
-  agentId,
+  roomAgents,
+  defaultAgentId = null,
   defaultReportRoomId = null,
   onCreated,
   onCancel,
 }: GoalFormProps) {
   const [title, setTitle] = useState('')
   const [spec, setSpec] = useState('')
+  // #312 — explicit assignee field. Defaults to ``defaultAgentId`` if
+  // the caller pre-picked one (e.g. AgentSettingsDialog has a fixed
+  // agent); otherwise the first candidate so the implicit pre-#312
+  // behaviour is preserved when ``roomAgents.length >= 1``. Empty
+  // ``roomAgents`` is a degenerate state — the caller should not
+  // open this form when no agents are available, but we render the
+  // disabled select rather than crashing.
+  const [assigneeAgentId, setAssigneeAgentId] = useState<string>(
+    defaultAgentId ?? roomAgents[0]?.id ?? '',
+  )
   const [reportRoomId, setReportRoomId] = useState<string>(
     defaultReportRoomId ?? '',
   )
@@ -60,6 +91,14 @@ export default function GoalForm({
       setError('제목과 spec은 필수입니다.')
       return
     }
+    if (!assigneeAgentId) {
+      // Goals require a non-null assignee at the schema level
+      // (``agent_goals.assignee_agent_id`` is NOT NULL). Catch the
+      // empty case here so the error is actionable rather than a
+      // server 422.
+      setError('Agent 를 선택해 주세요.')
+      return
+    }
     setSubmitting(true)
     try {
       const input: GoalCreateInput = {
@@ -70,7 +109,7 @@ export default function GoalForm({
         materialize,
         report_room_id: reportRoomId.trim() || null,
       }
-      const goal = await createGoal(agentId, input)
+      const goal = await createGoal(assigneeAgentId, input)
       onCreated(goal)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -91,6 +130,37 @@ export default function GoalForm({
           placeholder="예: 매일 호스트 리소스 점검"
           className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm"
         />
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
+          Agent
+        </label>
+        <select
+          value={assigneeAgentId}
+          onChange={(e) => setAssigneeAgentId(e.target.value)}
+          disabled={roomAgents.length <= 1}
+          aria-label="Pick assignee agent"
+          aria-required="true"
+          data-testid="goal-form-assignee-select"
+          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm disabled:opacity-70"
+        >
+          {roomAgents.length === 0 && (
+            <option value="" disabled>
+              (no agents available)
+            </option>
+          )}
+          {roomAgents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+        {roomAgents.length === 1 && (
+          <p className="text-[10px] text-[var(--color-foreground-subtle)]">
+            룸에 에이전트가 한 명이라 자동 선택됩니다.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-1">

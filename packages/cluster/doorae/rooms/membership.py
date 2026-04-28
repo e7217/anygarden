@@ -20,7 +20,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import Participant
+from doorae.db.models import Participant, Room
 from doorae.observability.metrics import agent_joinroom_drop_total
 from doorae.ws.manager import ConnectionManager
 from doorae.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
@@ -70,6 +70,17 @@ async def ensure_agent_in_room(
             role=role,
         )
         db.add(participant)
+        await db.flush()  # populate participant.id without ending the txn
+        # #312 — auto-fill the room's representative slot when it's
+        # NULL. Lets #313's batch auto-route always have a guaranteed
+        # entity to delegate to without an explicit admin pick. Admin
+        # ``representative_agent_id`` writes always win because we
+        # only fill the NULL case.
+        room = (
+            await db.execute(select(Room).where(Room.id == room_id))
+        ).scalar_one_or_none()
+        if room is not None and room.representative_agent_id is None:
+            room.representative_agent_id = agent_id
         await db.commit()
         await db.refresh(participant)
         created = True
@@ -118,6 +129,58 @@ async def ensure_agent_in_room(
                 await manager.send_to(pid, frame)
 
     return participant, created
+
+
+async def _set_next_rep_after_removal(
+    db: AsyncSession,
+    *,
+    room_id: str,
+    removed_agent_id: str,
+    removed_participant_id: str,
+) -> str | None:
+    """If the removed agent held the room's rep slot, hand the role to
+    the next agent (#312).
+
+    Caller must already have:
+      - removed the Participant row (or planned to remove it; we
+        filter by ``Participant.id != removed_participant_id`` so a
+        late commit doesn't include the corpse)
+      - kept the surrounding transaction open so this write lands
+        atomically with the deletion
+
+    Returns the new ``representative_agent_id`` (or ``None`` when the
+    room ended up with no agents). The caller is responsible for the
+    final ``commit``.
+
+    Ordering: ``joined_at ASC, id ASC``. ``joined_at`` matches the
+    user-facing intent ("the agent who's been here longest takes
+    over"); ``id`` is the deterministic tie-breaker for the rare
+    same-timestamp case so two replicas resolve identically.
+    """
+    room = (
+        await db.execute(select(Room).where(Room.id == room_id))
+    ).scalar_one_or_none()
+    if room is None:
+        return None
+    if room.representative_agent_id != removed_agent_id:
+        # Removing a non-rep participant — nothing to do.
+        return room.representative_agent_id
+
+    next_agent_id = (
+        await db.execute(
+            select(Participant.agent_id)
+            .where(
+                Participant.room_id == room_id,
+                Participant.agent_id.is_not(None),
+                Participant.id != removed_participant_id,
+            )
+            .order_by(Participant.joined_at.asc(), Participant.id.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    room.representative_agent_id = next_agent_id
+    return next_agent_id
 
 
 async def add_user_to_room(

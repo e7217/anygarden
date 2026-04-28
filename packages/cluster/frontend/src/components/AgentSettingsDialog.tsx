@@ -230,7 +230,10 @@ export default function AgentSettingsDialog({
                 to over time" is a higher-level question than "what's
                 open right now". */}
             <Section id="goals" title="Responsibilities">
-              <GoalsPanel agentId={agent?.id ?? null} />
+              <GoalsPanel
+                agentId={agent?.id ?? null}
+                agentName={agent?.name ?? ''}
+              />
             </Section>
 
             {/* Tasks (#266) — cross-room aggregation of work currently

@@ -7,6 +7,10 @@ import type { Goal } from '@/lib/goals'
 
 interface GoalsPanelProps {
   agentId: string | null
+  /** #312 — display name surfaced from AgentSettingsDialog so the
+   *  GoalForm picker can render a proper label. The dialog is
+   *  always single-agent so the picker has exactly one option. */
+  agentName?: string
 }
 
 function statusDot(status: Goal['status']): string {
@@ -30,7 +34,7 @@ function statusDot(status: Goal['status']): string {
  * over time" is a higher-level question than "what's open right
  * now". Inline create form opens via the ``+ Add goal`` button.
  */
-export default function GoalsPanel({ agentId }: GoalsPanelProps) {
+export default function GoalsPanel({ agentId, agentName = '' }: GoalsPanelProps) {
   const { goals, refresh, remove, runNow, pause, resume } =
     useAgentGoals(agentId)
   const [showForm, setShowForm] = useState(false)
@@ -61,7 +65,9 @@ export default function GoalsPanel({ agentId }: GoalsPanelProps) {
       {showForm && (
         <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white">
           <GoalForm
-            agentId={agentId}
+            roomAgents={[
+              { id: agentId, name: agentName || agentId.slice(0, 6) },
+            ]}
             onCreated={async () => {
               setShowForm(false)
               await refresh()
