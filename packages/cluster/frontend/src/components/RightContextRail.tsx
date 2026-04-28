@@ -38,14 +38,14 @@ export default function RightContextRail({
 }: RightContextRailProps) {
   const { collapsed } = useRightSidebarLayout()
 
-  // Pull every agent participant of the current room — the Goals
-  // section uses these to seed the inline create form (a goal must
-  // be assigned to an agent that's actually a member of the room).
-  const candidateAgentIds = useMemo(
+  // #312 — pass full agent participants (not just ids) to
+  // ``GoalsSection`` so the form can render an explicit picker and
+  // rows can resolve agent names locally without an extra fetch.
+  const agentParticipants = useMemo(
     () =>
-      Object.values(participants)
-        .filter((p) => p.kind === 'agent' && p.agent_id)
-        .map((p) => p.agent_id as string),
+      Object.values(participants).filter(
+        (p) => p.kind === 'agent' && p.agent_id,
+      ),
     [participants],
   )
 
@@ -104,7 +104,7 @@ export default function RightContextRail({
         <ScrollArea className="flex-1">
           <GoalsSection
             roomId={roomId}
-            candidateAgentIds={candidateAgentIds}
+            agentParticipants={agentParticipants}
           />
           <TasksSection roomId={roomId} participants={participants} />
           <FilesSection roomId={roomId} />

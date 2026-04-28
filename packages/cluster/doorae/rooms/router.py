@@ -556,13 +556,22 @@ async def remove_participant(
             )
 
     # 5. If the removed participant is the room's representative
-    #    agent, clear the field BEFORE deleting the row — keeps the
-    #    FK invariant even if the DB skips the SET NULL cascade.
+    #    agent, hand the role to the next agent (#312). The helper
+    #    fetches the room, picks the next agent by joined_at ASC,
+    #    id ASC, and updates ``representative_agent_id`` (or sets it
+    #    to NULL when no agent remains). We pass the target id so
+    #    the candidate query can exclude the row that's about to be
+    #    deleted — the actual delete happens at step 8 inside the
+    #    same transaction so the helper's view stays consistent.
     if target.agent_id is not None:
-        room_stmt = select(Room).where(Room.id == room_id)
-        room = (await db.execute(room_stmt)).scalar_one_or_none()
-        if room is not None and room.representative_agent_id == target.agent_id:
-            room.representative_agent_id = None
+        from doorae.rooms.membership import _set_next_rep_after_removal
+
+        await _set_next_rep_after_removal(
+            db,
+            room_id=room_id,
+            removed_agent_id=target.agent_id,
+            removed_participant_id=target.id,
+        )
 
     # 6. Capture a snapshot for the broadcast BEFORE the delete — we
     #    still want ``user_id`` (or empty string for agent removals)
