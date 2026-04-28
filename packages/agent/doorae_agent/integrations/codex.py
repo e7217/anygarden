@@ -27,6 +27,42 @@ from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 logger = structlog.get_logger(__name__)
 
 
+# Issue #309 — semantic permission tier → codex native dial mapping.
+# Cluster-side ``Agent.permission_level`` is a user-facing abstraction
+# that each engine adapter resolves into its own knobs. For codex the
+# knobs are ``sandbox`` (``read-only`` / ``workspace-write`` /
+# ``danger-full-access``) and ``approval_policy``. Keeping the table
+# in one place keeps test coverage exhaustive and makes future codex
+# SDK changes (e.g. a renamed approval mode) a single-edit fix.
+_CODEX_TIER_FLAGS: dict[str, tuple[str, str]] = {
+    "restricted": ("read-only", "untrusted"),
+    "standard":   ("workspace-write", "never"),
+    "trusted":    ("danger-full-access", "never"),
+}
+
+
+def _resolve_codex_flags(
+    permission_level: str | None,
+) -> tuple[str, str]:
+    """Translate a ``permission_level`` tier into ``(sandbox, approval_policy)``.
+
+    ``None`` falls back to ``standard`` so existing pre-#309 rows
+    keep their hardcoded behaviour without a backfill migration.
+    Anything else raises ``ValueError`` so a typo (e.g.
+    ``"trustred"``) fails loud at adapter construction rather than
+    silently downgrading the agent's privilege.
+    """
+    if permission_level is None:
+        return _CODEX_TIER_FLAGS["standard"]
+    try:
+        return _CODEX_TIER_FLAGS[permission_level]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown permission_level: {permission_level!r} — "
+            f"expected one of {sorted(_CODEX_TIER_FLAGS)}"
+        ) from exc
+
+
 # Issue #190 — upper bound on a single codex turn. The SDK's
 # ``thread.run_text`` otherwise waits forever on ``stream.wait()``,
 # which serialises the room's WS receive loop in ``_handle`` and can
@@ -166,11 +202,27 @@ class CodexAdapter(EngineAdapter):
         system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
         sandbox: str = "workspace-write",
         reasoning_effort: str | None = None,
+        permission_level: str | None = None,
+        approval_policy: str | None = None,
     ) -> None:
         self._model = model or "gpt-5.5"
         self._system_prompt = system_prompt
         self._reasoning_effort = reasoning_effort
-        self._sandbox = sandbox
+        # Issue #309 — when ``permission_level`` is set, derive the
+        # native dials from the tier (overrides any explicit
+        # ``sandbox`` / ``approval_policy`` so the cluster's
+        # admin-set tier always wins). Direct callers that pass
+        # ``sandbox`` / ``approval_policy`` and skip
+        # ``permission_level`` keep the legacy signature unchanged.
+        if permission_level is not None or approval_policy is None:
+            resolved_sandbox, resolved_approval = _resolve_codex_flags(
+                permission_level
+            )
+            self._sandbox = resolved_sandbox
+            self._approval_policy = resolved_approval
+        else:
+            self._sandbox = sandbox
+            self._approval_policy = approval_policy
         self._codex: Any = None  # Codex instance
         self._threads: dict[str, Any] = {}  # room_id → Thread
         # Per-room pending context buffer (#74 Stage B). Stashed by
@@ -268,7 +320,7 @@ class CodexAdapter(EngineAdapter):
                 if self._thread_options_cls is not None:
                     thread = self._codex.start_thread(
                         options=self._thread_options_cls(
-                            approval_policy="never",
+                            approval_policy=self._approval_policy,
                             sandbox=self._sandbox,
                             model=self._model or None,
                         ),
@@ -279,7 +331,7 @@ class CodexAdapter(EngineAdapter):
                 logger.info(
                     "codex.thread_created",
                     room_id=room_id,
-                    approval_policy="never",
+                    approval_policy=self._approval_policy,
                     sandbox=self._sandbox,
                 )
 
@@ -386,13 +438,29 @@ async def integrate_with_codex(
     model: str | None = None,
     system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
     reasoning_effort: str | None = None,
+    permission_level: str | None = None,
 ) -> CodexAdapter:
     """Hook incoming messages to the Codex app-server.
 
     The host machine must have `codex` installed and authenticated.
     Returns the adapter instance for lifecycle management.
+
+    ``permission_level`` (#309) is the cluster-side semantic tier
+    (``restricted``/``standard``/``trusted``). When ``None`` the
+    spawner's ``DOORAE_AGENT_PERMISSION_LEVEL`` env var is consulted
+    so the CLI entry can stay tier-agnostic (the cluster pushes the
+    value as env, the adapter resolves to native dials).
     """
-    adapter = CodexAdapter(model=model, system_prompt=system_prompt, reasoning_effort=reasoning_effort)
+    if permission_level is None:
+        env_tier = os.environ.get("DOORAE_AGENT_PERMISSION_LEVEL")
+        if env_tier:
+            permission_level = env_tier
+    adapter = CodexAdapter(
+        model=model,
+        system_prompt=system_prompt,
+        reasoning_effort=reasoning_effort,
+        permission_level=permission_level,
+    )
     # #237 — hook client reference so Codex can pull memory / ephemeral
     # suffix from the welcome-frame cache.
     adapter._client = client

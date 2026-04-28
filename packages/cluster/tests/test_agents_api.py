@@ -13,7 +13,18 @@ from doorae.app import create_app
 from doorae.auth.jwt import create_user_token
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentFile, Base, Machine, MachineEngine, Participant, Project, Room, User
+from doorae.db.models import (
+    ActivityLog,
+    Agent,
+    AgentFile,
+    Base,
+    Machine,
+    MachineEngine,
+    Participant,
+    Project,
+    Room,
+    User,
+)
 from doorae.scheduler.lifecycle import AgentLifecycle
 from doorae.scheduler.machine_bus import MachineBus
 
@@ -1676,3 +1687,186 @@ class TestAgentAutoDM:
             ).scalar_one_or_none()
             assert survivor is not None, "DM room was cascade-deleted with the project"
             assert survivor.project_id is None
+
+
+class TestAgentPermissionLevel:
+    """#309 — per-agent permission tier admin PATCH + audit log."""
+
+    @pytest_asyncio.fixture
+    async def agent_id(self, agents_env) -> str:
+        """Create a single agent and return its id. Reused across the
+        permission-level tests so they don't each pay the create cost."""
+        resp = await agents_env["client"].post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "perm-agent"},
+            headers={"Authorization": f"Bearer {agents_env['token']}"},
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    @pytest.mark.asyncio
+    async def test_default_permission_level_is_null(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """Newly created agents have ``permission_level=None`` so the
+        adapter falls back to the standard tier (= pre-#309 hardcoded
+        behaviour). Confirms the migration's NULL default round-trips
+        through ``GET /agents/{id}``."""
+        resp = await agents_env["client"].get(
+            f"/api/v1/agents/{agent_id}",
+            headers={"Authorization": f"Bearer {agents_env['token']}"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "permission_level" in body
+        assert body["permission_level"] is None
+
+    @pytest.mark.asyncio
+    async def test_admin_can_set_permission_level(
+        self, agents_env, agent_id: str
+    ) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "trusted",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["permission_level"] == "trusted"
+
+    @pytest.mark.asyncio
+    async def test_admin_can_clear_permission_level(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """Sending ``permission_level=null, _set=true`` clears the
+        field — the same explicit-clear contract as ``description`` /
+        ``memory_md`` etc."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        # Set, then clear.
+        await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "restricted",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": None,
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["permission_level"] is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_permission_level_rejected(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """Pydantic pattern guard — only restricted/standard/trusted
+        and ``null`` are accepted."""
+        resp = await agents_env["client"].put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "godmode",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {agents_env['token']}"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_set_permission_level(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """The PATCH endpoint is admin-only at the dependency layer
+        (``get_admin_identity``). Regular users get 403 regardless of
+        which field they try to flip."""
+        resp = await agents_env["client"].put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "trusted",
+                "permission_level_set": True,
+            },
+            headers={
+                "Authorization": f"Bearer {agents_env['regular_token']}"
+            },
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_permission_change_writes_activity_log(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """Audit trail — every transition lands in ``activity_logs``
+        with ``event_type='agent_permission_changed'`` and the
+        from/to/by_user_id details so security review can reconstruct
+        who flipped what when."""
+        await agents_env["client"].put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "trusted",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {agents_env['token']}"},
+        )
+        async with agents_env["factory"]() as db:
+            row = (
+                await db.execute(
+                    select(ActivityLog).where(
+                        ActivityLog.agent_id == agent_id,
+                        ActivityLog.event_type == "agent_permission_changed",
+                    )
+                )
+            ).scalar_one()
+        assert row.details is not None
+        assert row.details["from"] is None
+        assert row.details["to"] == "trusted"
+        assert row.details["by_user_id"] == agents_env["admin"].id
+
+    @pytest.mark.asyncio
+    async def test_no_audit_when_value_unchanged(
+        self, agents_env, agent_id: str
+    ) -> None:
+        """Re-PATCHing the *same* value is a no-op for the audit log —
+        otherwise repeated saves from the UI would multiply rows."""
+        client = agents_env["client"]
+        token = agents_env["token"]
+        await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "standard",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={
+                "permission_level": "standard",
+                "permission_level_set": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        async with agents_env["factory"]() as db:
+            count = len(
+                (
+                    await db.execute(
+                        select(ActivityLog).where(
+                            ActivityLog.agent_id == agent_id,
+                            ActivityLog.event_type == "agent_permission_changed",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert count == 1

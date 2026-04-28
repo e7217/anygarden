@@ -52,6 +52,12 @@ class SpawnManifest:
     memory_md: str | None = None
     reasoning_effort: str | None = None
     model: str | None = None
+    # Issue #309 — semantic permission tier ("restricted" |
+    # "standard" | "trusted"). The spawner exports this as
+    # ``DOORAE_AGENT_PERMISSION_LEVEL`` in the child env so each
+    # engine adapter can resolve it into native dials. ``None``
+    # means the adapter's "standard" mapping is used.
+    permission_level: str | None = None
     sub_rooms: list[dict] = field(default_factory=list)
     # Issue #73 — which runtime process should host this agent.
     # ``"python"`` (default) spawns the existing Python ``doorae-agent``
@@ -770,6 +776,15 @@ class Spawner:
         # symmetric across engines.
         if msg.doorae_mcp_token:
             env["DOORAE_AGENT_TOKEN"] = msg.doorae_mcp_token
+
+        # Issue #309 — semantic permission tier. The agent process's
+        # engine adapter resolves this into native dials (codex
+        # ``sandbox``+``approval_policy``; gemini ``--approval-mode``;
+        # claude-code allow-list). ``None`` is treated as "standard"
+        # by the adapter so the env var is set unconditionally —
+        # adapters can rely on its presence and don't have to
+        # special-case the missing key.
+        env["DOORAE_AGENT_PERMISSION_LEVEL"] = msg.permission_level or "standard"
 
         # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` ONLY when
         # the manifest actually carries a codex overlay (MCP templates

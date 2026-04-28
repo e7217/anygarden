@@ -253,6 +253,17 @@ class Agent(Base):
     model: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True, default=None
     )
+    # Issue #309 — semantic permission tier translated by each engine
+    # adapter into native dials. Values: "restricted" | "standard"
+    # (default behaviour) | "trusted" (host access). NULL means
+    # "fall back to the standard tier" — chosen so pre-#309 rows
+    # stay byte-identical without a backfill migration. See
+    # ``doorae_agent.integrations.codex._resolve_codex_flags`` for the
+    # codex translation; gemini-cli + claude-code mappings land in
+    # the follow-up PR (#309 PR-B).
+    permission_level: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None
+    )
     restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
     generation: Mapped[int] = mapped_column(Integer, default=0)
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)

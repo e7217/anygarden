@@ -687,6 +687,10 @@ class AgentLifecycle:
             "engine_secrets": {},
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
+            # #309 — semantic permission tier; the machine forwards it
+            # into the agent process env (``DOORAE_AGENT_PERMISSION_LEVEL``)
+            # and each engine adapter translates to native dials.
+            "permission_level": agent.permission_level,
             "sub_rooms": sub_rooms_info,
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,
