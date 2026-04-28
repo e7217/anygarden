@@ -1117,6 +1117,53 @@ async def list_agent_tasks(
     ]
 
 
+# Terminal statuses are the only ones an admin can sweep for an agent.
+# Active states (todo/in_progress/blocked) are owned by the agent runtime
+# and clearing them out from under the loop is a recipe for stuck work.
+# (#320 plan §3.1)
+_TERMINAL_TASK_STATUSES = frozenset({"done", "failed"})
+
+
+@router.delete("/{agent_id}/tasks")
+async def bulk_delete_agent_tasks(
+    agent_id: str,
+    status: str,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete every terminal-state task assigned to *agent_id*.
+
+    Powers the "Clear all" button on the agent settings Tasks panel
+    (#320). Same join contract as ``list_agent_tasks`` — scoped by
+    ``assignee_participant_id`` → ``Participant.agent_id`` — so the
+    sweep never touches another agent's rows in the same room. Only
+    terminal statuses (``done``, ``failed``) are accepted; active states
+    are rejected at the boundary with 400.
+    """
+    if status not in _TERMINAL_TASK_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "status must be one of: " + ", ".join(sorted(_TERMINAL_TASK_STATUSES))
+            ),
+        )
+
+    # Two-step delete keeps us inside SQLAlchemy's "no synchronize-able
+    # delete with a join" guarantee on SQLite — resolve the IDs first,
+    # then delete by primary key.
+    id_stmt = (
+        select(Task.id)
+        .join(Participant, Task.assignee_participant_id == Participant.id)
+        .where(Participant.agent_id == agent_id)
+        .where(Task.status == status)
+    )
+    target_ids = list((await db.execute(id_stmt)).scalars().all())
+    if target_ids:
+        await db.execute(delete(Task).where(Task.id.in_(target_ids)))
+        await db.commit()
+    return {"deleted_count": len(target_ids)}
+
+
 @router.get("/{agent_id}/activity", response_model=list[ActivityLogOut])
 async def get_agent_activity(
     agent_id: str,
