@@ -155,6 +155,16 @@ class Spawner:
     # policy ship their own ``.claude/settings.json`` via the spawn
     # manifest — that file is written first and the "is the slot
     # empty?" check below skips the default.
+    #
+    # Issue #309 — the allow-list now varies by ``permission_level``:
+    # ``restricted`` agents lose Bash/Write/Edit/Task so the LLM can
+    # only read and search; ``standard`` keeps the pre-#309 allow
+    # list verbatim; ``trusted`` is identical to ``standard`` because
+    # claude-code has no separate "host access" dial — Bash already
+    # lets the agent shell out wherever the OS lets it. The mapping
+    # is the canonical translation of the cluster's permission tier
+    # for claude-code, and ``_claude_code_default_settings()`` is the
+    # single call site every code path goes through.
     _CLAUDE_CODE_DEFAULT_SETTINGS = (
         '{\n'
         '  "permissions": {\n'
@@ -173,6 +183,44 @@ class Spawner:
         '  }\n'
         '}\n'
     )
+
+    _CLAUDE_CODE_RESTRICTED_SETTINGS = (
+        '{\n'
+        '  "permissions": {\n'
+        '    "allow": [\n'
+        '      "WebSearch",\n'
+        '      "WebFetch",\n'
+        '      "Read",\n'
+        '      "Glob",\n'
+        '      "Grep"\n'
+        '    ]\n'
+        '  }\n'
+        '}\n'
+    )
+
+    @classmethod
+    def _claude_code_default_settings(
+        cls, permission_level: str | None
+    ) -> str:
+        """Return the JSON body to materialize at
+        ``.claude/settings.json`` when the admin didn't ship one.
+
+        ``restricted`` strips Bash/Write/Edit/Task so the agent can
+        only inspect files. ``standard``/``trusted``/None keep the
+        pre-#309 broad allow-list. ``ValueError`` on unknown tiers
+        — same fail-loud contract as the codex/gemini mappings.
+        """
+        if permission_level is None or permission_level in (
+            "standard",
+            "trusted",
+        ):
+            return cls._CLAUDE_CODE_DEFAULT_SETTINGS
+        if permission_level == "restricted":
+            return cls._CLAUDE_CODE_RESTRICTED_SETTINGS
+        raise ValueError(
+            f"unknown permission_level: {permission_level!r} — "
+            "expected one of ('restricted', 'standard', 'trusted')"
+        )
 
     @staticmethod
     def _compose_agents_md(msg: SpawnManifest) -> str:
@@ -467,9 +515,14 @@ class Spawner:
             if not settings_path.exists():
                 settings_path.parent.mkdir(parents=True, exist_ok=True)
                 secure_chmod(settings_path.parent, 0o700)
+                # #309 — pick the allow-list that matches the agent's
+                # permission tier. Admin-supplied settings still win
+                # via the ``settings_path.exists()`` short-circuit
+                # above; this default is only used when the manifest
+                # left the slot empty.
                 safe_write_text(
                     settings_path,
-                    self._CLAUDE_CODE_DEFAULT_SETTINGS,
+                    self._claude_code_default_settings(msg.permission_level),
                     mode=0o600,
                 )
 

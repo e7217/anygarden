@@ -60,6 +60,41 @@ from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 logger = structlog.get_logger(__name__)
 
 
+# Issue #309 — semantic permission tier → gemini-cli native flag
+# mapping. Gemini's surface differs from codex: it has no OS-level
+# sandbox, only ``--approval-mode`` (yolo / default) and the
+# ``--skip-trust`` workspace trust opt-in. ``standard`` matches the
+# pre-#309 behaviour (yolo + skip-trust); ``restricted`` drops both
+# so gemini refuses tool calls instead of auto-approving and the
+# workspace is not granted folder trust. ``trusted`` keeps the
+# pre-#309 flags — gemini can already invoke shell tools freely
+# under yolo, so there is no extra dial to relax.
+def _resolve_gemini_flags(
+    permission_level: str | None,
+) -> dict[str, bool]:
+    """Translate a permission tier into the gemini cli flag set.
+
+    Returns a dict with ``approval_yolo`` and ``skip_trust`` booleans;
+    the adapter's ``_call_gemini`` reads these to decide which CLI
+    flags to append. Unknown tiers raise ``ValueError`` so a typo
+    fails loud rather than silently falling back to ``standard``.
+    """
+    if permission_level is None or permission_level == "standard":
+        return {"approval_yolo": True, "skip_trust": True}
+    if permission_level == "restricted":
+        return {"approval_yolo": False, "skip_trust": False}
+    if permission_level == "trusted":
+        # Same as standard for gemini — there's no host-access dial
+        # beyond what yolo already grants. The tier label still
+        # propagates so future gemini features (e.g. an explicit
+        # ``--dangerously-allow-host-access`` flag) can plug in here.
+        return {"approval_yolo": True, "skip_trust": True}
+    raise ValueError(
+        f"unknown permission_level: {permission_level!r} — "
+        "expected one of ('restricted', 'standard', 'trusted')"
+    )
+
+
 def _subprocess_group_kwargs() -> dict[str, Any]:
     """Cross-platform Popen kwargs that put the child in its own group.
 
@@ -114,10 +149,18 @@ class GeminiCliAdapter(EngineAdapter):
         model: str | None = None,
         system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
         reasoning_effort: str | None = None,
+        permission_level: str | None = None,
     ) -> None:
         self._model = model
         self._system_prompt = system_prompt
         self._reasoning_effort = reasoning_effort
+        # Issue #309 — semantic permission tier. ``None`` is treated
+        # as ``standard`` (= pre-#309 hardcoded yolo + skip-trust)
+        # via ``_resolve_gemini_flags``. ``restricted`` swaps to
+        # default approval mode (gemini will refuse tool calls
+        # rather than auto-approve) and drops ``--skip-trust`` so
+        # the workspace is not granted folder trust.
+        self._permission_level = permission_level
         self._gemini_path: str | None = None
         # Per-room conversation history to prevent cross-room leaks.
         # Gemini CLI in headless mode is stateless per invocation, so
@@ -292,25 +335,34 @@ class GeminiCliAdapter(EngineAdapter):
         hierarchical memory — it would behave like a stock session.
         """
         agent_root = Path.cwd().parent
+        # Issue #309 — derive the approval/trust flags from the
+        # permission tier. ``restricted`` agents skip yolo (gemini
+        # refuses tool calls non-interactively) and skip the trust
+        # opt-in. ``standard`` (incl. ``None`` / ``trusted``)
+        # preserves the pre-#309 hardcoded combination.
+        flags = _resolve_gemini_flags(self._permission_level)
         cmd = [
             self._gemini_path,
             "-p", prompt,
             "--output-format", "json",
+        ]
+        if flags["approval_yolo"]:
             # Auto-approve all tool calls. Non-interactive gemini
             # otherwise blocks on the default "prompt for approval"
             # mode the moment a skill asks it to run a shell command
             # or read a file, and there is no human behind the
-            # subprocess to say "yes" — the call just hangs until
-            # the timeout. The same trust model applies to our
-            # codex and claude-code adapters (both run unattended).
-            "--approval-mode", "yolo",
+            # subprocess to say "yes". Same trust model as the
+            # codex / claude-code adapters under ``standard``.
+            cmd.extend(["--approval-mode", "yolo"])
+        if flags["skip_trust"]:
             # #261 — gemini 0.39.x silently downgrades yolo to
             # "default" when cwd is not in trustedFolders.json,
             # then exits 55 in non-interactive mode. agent_root is
             # a fresh UUID dir per spawn so it can't be pre-trusted;
             # this flag trusts the workspace for this session only.
-            "--skip-trust",
-        ]
+            # ``restricted`` deliberately drops it so the workspace
+            # stays untrusted and gemini's stricter posture kicks in.
+            cmd.append("--skip-trust")
         if self._model:
             cmd.extend(["--model", self._model])
         if self._reasoning_effort:
@@ -387,13 +439,28 @@ async def integrate_with_gemini_cli(
     model: str | None = None,
     system_prompt: str = "You are a helpful team member in a multi-agent chat. Answer concisely.",
     reasoning_effort: str | None = None,
+    permission_level: str | None = None,
 ) -> GeminiCliAdapter:
     """Hook incoming messages to the Gemini CLI.
 
     The host machine must have ``gemini`` installed and authenticated.
     Returns the adapter instance for lifecycle management.
+
+    ``permission_level`` (#309) — when None, the spawner's
+    ``DOORAE_AGENT_PERMISSION_LEVEL`` env var is consulted so the
+    CLI entry can stay tier-agnostic (cluster pushes the value as
+    env, the adapter resolves to native flags).
     """
-    adapter = GeminiCliAdapter(model=model, system_prompt=system_prompt, reasoning_effort=reasoning_effort)
+    if permission_level is None:
+        env_tier = os.environ.get("DOORAE_AGENT_PERMISSION_LEVEL")
+        if env_tier:
+            permission_level = env_tier
+    adapter = GeminiCliAdapter(
+        model=model,
+        system_prompt=system_prompt,
+        reasoning_effort=reasoning_effort,
+        permission_level=permission_level,
+    )
     # #237 — hook the client so ``_build_prompt`` can pull the memory /
     # ephemeral suffix from the welcome-frame cache.
     adapter._client = client

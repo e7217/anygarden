@@ -229,26 +229,52 @@ export default function ActivityPanel({ agentId }: Props) {
             System events
           </h4>
           <ul className="space-y-1">
-            {system.map(evt => (
-              <li
-                key={evt.id}
-                className="flex items-center gap-2 text-xs"
-              >
-                <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${
-                  evt.event_type === 'start_requested'
-                    ? 'bg-[var(--color-success)]'
-                    : evt.event_type === 'stop_requested'
-                    ? 'bg-[var(--color-foreground-subtle)]'
-                    : 'bg-[var(--color-warning)]'
-                }`} />
-                <span className="font-medium text-[var(--color-foreground)]">
-                  {evt.event_type}
-                </span>
-                <span className="text-[var(--color-foreground-muted)]">
-                  {new Date(evt.timestamp).toLocaleString()}
-                </span>
-              </li>
-            ))}
+            {system.map(evt => {
+              // #309 — render permission transitions inline so admins
+              // see "from → to" without expanding details JSON. Other
+              // system rows keep their compact one-liner.
+              const isPermChange = evt.event_type === 'agent_permission_changed'
+              const fromTier =
+                typeof evt.details?.from === 'string'
+                  ? (evt.details.from as string)
+                  : evt.details?.from === null
+                  ? 'default'
+                  : null
+              const toTier =
+                typeof evt.details?.to === 'string'
+                  ? (evt.details.to as string)
+                  : evt.details?.to === null
+                  ? 'default'
+                  : null
+              return (
+                <li
+                  key={evt.id}
+                  className="flex items-center gap-2 text-xs"
+                  data-testid={
+                    isPermChange ? 'activity-permission-row' : undefined
+                  }
+                >
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${
+                    evt.event_type === 'start_requested'
+                      ? 'bg-[var(--color-success)]'
+                      : evt.event_type === 'stop_requested'
+                      ? 'bg-[var(--color-foreground-subtle)]'
+                      : 'bg-[var(--color-warning)]'
+                  }`} />
+                  <span className="font-medium text-[var(--color-foreground)]">
+                    {isPermChange ? 'permission_changed' : evt.event_type}
+                  </span>
+                  {isPermChange && fromTier && toTier && (
+                    <span className="text-[var(--color-foreground-muted)] font-mono">
+                      {fromTier} → {toTier}
+                    </span>
+                  )}
+                  <span className="text-[var(--color-foreground-muted)]">
+                    {new Date(evt.timestamp).toLocaleString()}
+                  </span>
+                </li>
+              )
+            })}
           </ul>
         </section>
       )}
