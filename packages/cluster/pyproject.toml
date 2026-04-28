@@ -35,6 +35,11 @@ dependencies = [
     # available only transitively via doorae-machine; pinned directly
     # now that llm_gateway/config_writer.py consumes it.
     "pyyaml>=6.0",
+    # #302 — cron parsing for the autonomous responsibility scheduler
+    # (``goals.policy.compute_next_run_at``). Tiny (~3KB) and predates
+    # APScheduler; picked because the MVP scheduler is a single-instance
+    # polling loop and doesn't need a persistent jobstore.
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]

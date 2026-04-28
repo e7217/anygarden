@@ -979,7 +979,15 @@ class MachineActivityLog(Base):
 
 
 class Task(Base):
-    """A task associated with a room."""
+    """A task associated with a room.
+
+    Issue #302 (Phase 2) — extended to absorb scheduled "Goal runs" as
+    rows of the same table. Manual tasks have ``goal_id IS NULL``;
+    Goal-derived tasks carry the link plus a snapshot of the Goal
+    spec at trigger time + execution metadata. The legacy columns
+    (``room_id`` / ``title`` / ``status`` / ``assignee_participant_id``)
+    keep their semantics so #266 dual-view queries are unaffected.
+    """
 
     __tablename__ = "tasks"
     __table_args__ = (
@@ -989,6 +997,11 @@ class Task(Base):
         # is covered by ``ix_tasks_room_status``; this is its dual for
         # the 2차 view (에이전트 프로필).
         Index("ix_tasks_assignee_status", "assignee_participant_id", "status"),
+        # Issue #302 — Goal detail view's "recent runs" panel issues
+        # ``WHERE goal_id = ? ORDER BY created_at DESC LIMIT N``. The
+        # composite keeps that scan cheap even when a high-frequency
+        # Goal accumulates thousands of rows.
+        Index("ix_tasks_goal_created", "goal_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1004,6 +1017,147 @@ class Task(Base):
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+    # ── Issue #302 (Phase 2) — Goal-derived task fields ────────────
+    # All nullable + sensible defaults so the migration leaves
+    # pre-existing manual rows untouched.
+    goal_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("agent_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    """Link back to the originating Goal. NULL for manual tasks."""
+
+    triggered_by: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual"
+    )
+    """How the task came to exist — ``manual`` (user / agent created it)
+    or ``scheduler`` (a Goal trigger fired). Future values: ``webhook``,
+    ``orchestrator``."""
+
+    spec: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    """Snapshot of the Goal's spec at trigger time. We snapshot rather
+    than join so editing a Goal mid-run doesn't retroactively rewrite
+    history. NULL for manual tasks."""
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    agent_session_id: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    tokens_used: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
+    result_markdown: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
+    error: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
+    is_interesting: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    """Used by ``materialize='interesting_only'`` Goals to decide
+    whether a successful run still earns a Task row. Errors are
+    auto-flagged interesting; agents may opt successes in via the
+    ``[INTERESTING]`` marker (Phase 3)."""
+
+
+class Goal(Base):
+    """A repeating responsibility owned by an agent (#302).
+
+    Goals carry the *definition* of a recurring duty — when to run,
+    what spec to inject, which room to report into, how loud the
+    output should be. Each trigger fire produces a ``Task`` row
+    (subject to the ``materialize`` policy) which carries the actual
+    execution metadata. Goal vs Task split mirrors "schedule" vs
+    "instance" — see plan-302 §3.2 D11/D12 for the rationale behind
+    not introducing a parallel ``goal_runs`` table.
+    """
+
+    __tablename__ = "agent_goals"
+    __table_args__ = (
+        # Scheduler hot path — "give me every active goal whose
+        # next_run_at has elapsed". The composite serves the
+        # ``WHERE status='active' AND next_run_at <= now()`` scan.
+        Index("ix_agent_goals_status_next_run", "status", "next_run_at"),
+        # Owner / room views ("which goals does this agent have?",
+        # "what's reporting into this room?").
+        Index("ix_agent_goals_assignee", "assignee_agent_id"),
+        Index("ix_agent_goals_report_room", "report_room_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+
+    assignee_agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    """The agent that owns and executes the responsibility. NOT NULL —
+    a goal without an owner has no one to run it."""
+
+    owner_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    """The user who registered the goal. Drives ownership-based
+    permissions for pause / edit / delete (admins also pass)."""
+
+    report_room_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
+    """Room to which the goal posts results. NULL = silent goal (the
+    AgentSettingsDialog is the only surface). Room deletion downgrades
+    to NULL rather than cascading the goal away."""
+
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    spec: Mapped[str] = mapped_column(Text, nullable=False)
+    """Markdown — the actual instructions injected into the agent at
+    each trigger. Edits take effect on the *next* run; in-flight runs
+    keep their snapshot in ``Task.spec``."""
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    """active | paused | completed | failed | abandoned. The scheduler
+    only fires for ``active``; ``paused`` keeps the row but skips
+    triggers; ``completed`` / ``failed`` / ``abandoned`` are terminal."""
+
+    trigger_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    """cron | interval | manual."""
+
+    trigger_config: Mapped[dict] = mapped_column(JSON, nullable=False)
+    """jsonb. Shape varies by trigger_type:
+       - cron     : {"cron": "0 9 * * *"}
+       - interval : {"interval_seconds": 600}
+       - manual   : {} (no automatic trigger)
+    """
+
+    materialize: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="interesting_only"
+    )
+    """full | interesting_only. Default conservative — quiet goals
+    don't clutter Tasks UI. ``digest`` reserved for Phase 2 (requires
+    auxiliary log table + summarisation cron)."""
+
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    """Reset to 0 on every success. When this hits the policy
+    threshold (default 3) the scheduler flips ``status='paused'``
+    and posts a heads-up to ``report_room_id``."""
+
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
 
 
 # ── LLM Gateway (#197) ─────────────────────────────────────────────────
