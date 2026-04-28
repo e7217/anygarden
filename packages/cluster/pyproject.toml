@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "doorae-cluster"
-version = "0.4.1"
+version = "0.5.0"
 description = "Lightweight multi-agent chat server"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
