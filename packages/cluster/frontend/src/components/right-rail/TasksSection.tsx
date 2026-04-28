@@ -249,7 +249,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             its ``pr-5`` carves a clean column for the absolute-anchored
             delete button below to land in without overlapping live
             text. ``""`` value = Unassigned (Tasks tolerate NULL). */}
-        <div className="relative shrink-0 w-[7rem]">
+        <div className="relative shrink-0 w-[8rem]">
           <span
             aria-hidden="true"
             className="block truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
@@ -261,7 +261,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             value={task.assignee_participant_id ?? ''}
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
-            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
+            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity appearance-none bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
             aria-label={`Reassign ${task.title}`}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >

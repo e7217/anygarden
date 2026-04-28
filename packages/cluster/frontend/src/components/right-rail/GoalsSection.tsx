@@ -176,9 +176,12 @@ export default function GoalsSection({
             {/* #325 — actions absolute so the meta column extends to
                 the row's inner right edge at rest, aligning with the
                 section header's right-aligned counter/action button.
-                ``backdrop-blur`` + slight bg lets the buttons stay
-                readable when they overlay the longest meta text. */}
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--color-surface-alt)]/80 rounded-[var(--radius-sm)]">
+                #327 — opaque ``bg-surface-alt`` so meta text under the
+                cluster doesn't bleed through on hover; the row's hover
+                state paints the same surface, so the cluster blends
+                seamlessly. ``shadow-sm`` gives a faint lift so the
+                cluster reads as floating over the row, not glued. */}
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--color-surface-alt)] rounded-[var(--radius-sm)] shadow-sm">
               <Button
                 variant="ghost"
                 size="icon"
