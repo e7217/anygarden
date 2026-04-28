@@ -241,33 +241,37 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         >
           {task.title}
         </span>
-        {/* Reassign picker — visible-on-hover so the row stays calm
-            at rest. #312: restoring the legacy ``TaskPanel`` UX in
-            the rail. ``""`` value = Unassigned, allowed because Tasks
-            (unlike Goals) tolerate a NULL assignee. */}
-        <select
-          value={task.assignee_participant_id ?? ''}
-          onChange={(e) => reassign(task, e.target.value)}
-          onClick={(e) => e.stopPropagation()}
-          className="opacity-0 group-hover:opacity-100 transition-opacity bg-transparent text-[10px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 max-w-[6rem] truncate"
-          aria-label={`Reassign ${task.title}`}
-          data-testid={`right-rail-task-assignee-${task.id}`}
-        >
-          <option value="">— Unassigned —</option>
-          {agentParticipants.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.display_name}
-            </option>
-          ))}
-        </select>
-        {assignee && (
+        {/* Assignee slot (#323) — single 7rem column that swaps a
+            read-only chip for the reassign ``<select>`` on hover or
+            keyboard focus. Both elements share the same box via
+            ``absolute inset-0`` so the row's title column never has
+            its truncate budget shrunk by hover-time UI. ``""`` value
+            on the select = Unassigned, allowed because Tasks (unlike
+            Goals) tolerate a NULL assignee. */}
+        <div className="relative shrink-0 w-[7rem]">
           <span
-            className="shrink-0 text-[10px] text-[var(--color-foreground-subtle)] truncate max-w-[6ch]"
-            title={assignee.display_name}
+            aria-hidden="true"
+            className="block truncate text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
+            title={assignee?.display_name ?? 'Unassigned'}
           >
-            {assignee.display_name}
+            {assignee?.display_name ?? '—'}
           </span>
-        )}
+          <select
+            value={task.assignee_participant_id ?? ''}
+            onChange={(e) => reassign(task, e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate"
+            aria-label={`Reassign ${task.title}`}
+            data-testid={`right-rail-task-assignee-${task.id}`}
+          >
+            <option value="">— Unassigned —</option>
+            {agentParticipants.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.display_name}
+              </option>
+            ))}
+          </select>
+        </div>
         <button
           onClick={() => remove(task.id)}
           className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all shrink-0"
