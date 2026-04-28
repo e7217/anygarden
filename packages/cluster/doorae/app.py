@@ -37,6 +37,7 @@ from doorae.api.v1.saved import router as saved_router
 from doorae.api.v1.search import router as search_router
 from doorae.api.v1.tasks import router as tasks_router
 from doorae.api.v1.goals import router as goals_router
+from doorae.routing.router import router as routing_router
 from doorae.orchestration.rules import (
     CooldownManager,
     GuestRoomAggregateLimiter,
@@ -688,6 +689,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(search_router)
     app.include_router(tasks_router)
     app.include_router(goals_router)
+    app.include_router(routing_router)
     # #197 — LLM gateway reverse proxy + admin CRUD. Both are always
     # included; their handlers 503 when ``app.state.llm_gateway_*``
     # isn't wired (feature flag off) so this is harmless.

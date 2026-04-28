@@ -1003,6 +1003,34 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         sender_agent_id=sender_agent_id,
                     )
 
+                    # #313 — auto-route response detection. If this
+                    # message carries the rep agent's reply to an
+                    # earlier ``POST /auto-route-unassigned`` request
+                    # we resolve the matching Future + tag the
+                    # message so the frontend can hide it from the
+                    # chat thread (it's an internal protocol echo,
+                    # not user-facing). Non-routing messages walk
+                    # through unchanged.
+                    if identity is not None and identity.kind == "agent":
+                        from doorae.routing.protocol import (
+                            try_parse_routing_response,
+                        )
+
+                        parsed = try_parse_routing_response(frame_in.content)
+                        if parsed is not None:
+                            request_id, result = parsed
+                            futures = getattr(
+                                websocket.app.state, "routing_futures", None
+                            )
+                            if futures is not None:
+                                fut = futures.pop(request_id, None)
+                                if fut is not None and not fut.done():
+                                    fut.set_result(result)
+                            if metadata is None:
+                                metadata = {}
+                            metadata["system_origin"] = "auto_route_response"
+                            metadata["routing_request_id"] = request_id
+
                     msg = await append_message(
                         db,
                         room_id=room_id,
