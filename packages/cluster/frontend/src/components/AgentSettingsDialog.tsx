@@ -35,6 +35,7 @@ import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
 import TasksPanel from '@/components/agent-settings/TasksPanel'
+import GoalsPanel from '@/components/agent-settings/GoalsPanel'
 import { ChevronRight } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -222,6 +223,14 @@ export default function AgentSettingsDialog({
 
             <Section id="rooms" title="Rooms">
               <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
+            </Section>
+
+            {/* Goals (#302) — recurring responsibilities the agent
+                owns. Above Tasks because "what is this agent committed
+                to over time" is a higher-level question than "what's
+                open right now". */}
+            <Section id="goals" title="Responsibilities">
+              <GoalsPanel agentId={agent?.id ?? null} />
             </Section>
 
             {/* Tasks (#266) — cross-room aggregation of work currently

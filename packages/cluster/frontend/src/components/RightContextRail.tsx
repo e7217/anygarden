@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import TasksSection from '@/components/right-rail/TasksSection'
 import FilesSection from '@/components/right-rail/FilesSection'
+import GoalsSection from '@/components/right-rail/GoalsSection'
 import type { Participant } from '@/pages/ChatPage'
 
 interface RightContextRailProps {
@@ -21,13 +22,13 @@ interface RightContextRailProps {
  * (``Sidebar.tsx:354-376``) so users carry one mental model.
  *
  * Sections rendered top-to-bottom:
- *   - Tasks (#266 / #302) — current room's tasks
- *   - Shared Files (#246) — current room's uploaded files
+ *   - Goals (#302 Phase 3) — recurring responsibilities reporting here
+ *   - Tasks (#266 / #302)  — current room's tasks (manual + scheduled)
+ *   - Shared Files (#246)  — current room's uploaded files
  *
- * The ``Goals`` section lands in #302 Phase 2 alongside the Goal
- * scheduler. The container is intentionally generic so adding a new
- * <GoalsSection/> above <TasksSection/> requires zero structural
- * changes here.
+ * The "Responsibilities" section is at the top because it's the most
+ * proactive — it shapes what the agents *will* do, while Tasks shows
+ * what they *are* doing and Files shows what's available.
  */
 export default function RightContextRail({
   roomId,
@@ -36,6 +37,17 @@ export default function RightContextRail({
   onClose,
 }: RightContextRailProps) {
   const { collapsed } = useRightSidebarLayout()
+
+  // Pull every agent participant of the current room — the Goals
+  // section uses these to seed the inline create form (a goal must
+  // be assigned to an agent that's actually a member of the room).
+  const candidateAgentIds = useMemo(
+    () =>
+      Object.values(participants)
+        .filter((p) => p.kind === 'agent' && p.agent_id)
+        .map((p) => p.agent_id as string),
+    [participants],
+  )
 
   // ESC closes the mobile drawer. Desktop is handled by the toggle
   // button — there is no full-screen overlay state to escape from.
@@ -90,6 +102,10 @@ export default function RightContextRail({
         </div>
 
         <ScrollArea className="flex-1">
+          <GoalsSection
+            roomId={roomId}
+            candidateAgentIds={candidateAgentIds}
+          />
           <TasksSection roomId={roomId} participants={participants} />
           <FilesSection roomId={roomId} />
         </ScrollArea>
