@@ -258,6 +258,19 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
             // border. Returning null here (not just an empty bubble)
             // keeps the gap from spacing-y vestigial.
             if (hiddenMessageIds.has(msg.id)) return null
+            // #313 — auto-route protocol echoes (request/response
+            // synthetic messages) are internal plumbing, not chat
+            // content. The cluster persists them so the audit
+            // trail is complete; we just hide them from the
+            // user-facing thread.
+            const sysOrigin = (msg.metadata as Record<string, unknown> | undefined)
+              ?.system_origin
+            if (
+              sysOrigin === 'auto_route_request' ||
+              sysOrigin === 'auto_route_response'
+            ) {
+              return null
+            }
             return (
               <div key={msg.seq || i} data-message-id={msg.id}>
                 <MessageBubble

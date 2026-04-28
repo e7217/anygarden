@@ -1,7 +1,16 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Plus, CheckCircle2, Circle, Clock, Trash2 } from 'lucide-react'
+import {
+  Plus,
+  CheckCircle2,
+  Circle,
+  Clock,
+  Trash2,
+  Wand2,
+  Loader2,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
+import { autoRouteUnassigned } from '@/lib/routing'
 import type { Participant } from '@/pages/ChatPage'
 
 interface TasksSectionProps {
@@ -37,10 +46,16 @@ const STATUS_LABEL: Record<string, string> = {
  * the chip is read-only — there is only one valid choice.
  */
 export default function TasksSection({ roomId, participants }: TasksSectionProps) {
-  const { tasks, create, update, remove } = useRoomTasks(roomId)
+  const { tasks, refresh, create, update, remove } = useRoomTasks(roomId)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
   const [adding, setAdding] = useState(false)
+  // #313 — auto-route batch state. ``routing`` blocks duplicate
+  // clicks and feeds the spinner; ``routeMessage`` is shown for
+  // 4 seconds as an inline toast under the header so the user
+  // sees the outcome without an extra notification system.
+  const [routing, setRouting] = useState(false)
+  const [routeMessage, setRouteMessage] = useState<string | null>(null)
 
   // Agent participants only — humans are not eligible Task assignees
   // in the rail (mirrors the legacy TaskPanel default; rooms with
@@ -67,6 +82,63 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       setNewAssignee('')
     }
   }, [singleAgentId, agentParticipants, newAssignee])
+
+  // #313 — count of unassigned items. Drives the auto-route
+  // button's enabled state (no point in routing when nothing is
+  // unassigned). Excludes ``done`` tasks because they are terminal.
+  const unassignedCount = useMemo(
+    () =>
+      tasks.filter(
+        (t) => t.assignee_participant_id === null && t.status !== 'done',
+      ).length,
+    [tasks],
+  )
+
+  const handleAutoRoute = async () => {
+    setRouting(true)
+    setRouteMessage(null)
+    try {
+      const result = await autoRouteUnassigned(roomId)
+      const routedCount = result.routed.length
+      const skippedCount = result.skipped.length
+      if (routedCount === 0 && skippedCount === 0) {
+        setRouteMessage('No tasks to route')
+      } else {
+        const routedNames = result.routed
+          .map((r) => {
+            const ap = Object.values(participants).find(
+              (p) => p.agent_id === r.assignee_agent_id,
+            )
+            return ap?.display_name ?? r.assignee_agent_id.slice(0, 6)
+          })
+          .reduce<Record<string, number>>((acc, name) => {
+            acc[name] = (acc[name] ?? 0) + 1
+            return acc
+          }, {})
+        const breakdown = Object.entries(routedNames)
+          .map(([name, n]) => `${n} → ${name}`)
+          .join(', ')
+        const suffix =
+          skippedCount > 0 ? ` (${skippedCount} skipped)` : ''
+        setRouteMessage(
+          routedCount > 0 ? `Routed: ${breakdown}${suffix}` : `${skippedCount} skipped`,
+        )
+      }
+      // refetch is implicit via the WS task.updated stream from
+      // ``inject_task_assignment_message``, but force a refresh in
+      // case the user is on a slow connection.
+      await refresh()
+    } catch (e) {
+      setRouteMessage(
+        e instanceof Error ? e.message : 'Auto-route failed',
+      )
+    } finally {
+      setRouting(false)
+      // Clear the toast after a few seconds so the header stays
+      // calm — long-lived banners crowd the 320px column.
+      window.setTimeout(() => setRouteMessage(null), 4000)
+    }
+  }
 
   const grouped = useMemo(() => {
     const groups: Record<string, Task[]> = { todo: [], in_progress: [], done: [] }
@@ -179,10 +251,43 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
           Tasks
         </h3>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)]">
-          {tasks.length}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+            {tasks.length}
+          </span>
+          {/* #313 — Auto-route via room representative. Disabled
+              when nothing is unassigned (avoids a wasted LLM
+              roundtrip) or while a request is in flight. */}
+          <button
+            type="button"
+            onClick={handleAutoRoute}
+            disabled={routing || unassignedCount === 0}
+            aria-label="Auto-route unassigned tasks via room representative"
+            title={
+              unassignedCount === 0
+                ? 'No unassigned tasks'
+                : `Auto-route ${unassignedCount} unassigned task${unassignedCount === 1 ? '' : 's'}`
+            }
+            data-testid="right-rail-auto-route-button"
+            className="rounded-[var(--radius-sm)] p-0.5 text-[var(--color-foreground-muted)] hover:bg-black/5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {routing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
       </header>
+      {routeMessage && (
+        <p
+          className="px-3 pb-1 text-[11px] text-[var(--color-foreground-muted)]"
+          role="status"
+          data-testid="right-rail-route-toast"
+        >
+          {routeMessage}
+        </p>
+      )}
       <div className="px-1">
         {tasks.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
