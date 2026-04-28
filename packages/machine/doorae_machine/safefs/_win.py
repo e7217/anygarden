@@ -57,6 +57,14 @@ INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 DACL_SECURITY_INFORMATION = 0x00000004
 PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000
 
+# FILE_ALL_ACCESS = STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | FILE_GENERIC_ALL.
+# This is the Windows equivalent of POSIX "owner full control" — and
+# critically includes ``DELETE`` and ``FILE_DELETE_CHILD``, which are
+# required to ``unlink()`` a file (POSIX grants delete via parent-dir
+# write; Windows requires explicit DELETE on the file or
+# FILE_DELETE_CHILD on the parent dir).
+FILE_ALL_ACCESS = 0x001F01FF
+
 TOKEN_QUERY = 0x0008
 TokenUser = 1
 
@@ -314,25 +322,26 @@ def _build_owner_only_dacl(sid_blob: bytes, access_mask: int) -> ctypes.Array:
 def _mode_to_access_mask(mode: int) -> int:
     """Map POSIX owner mode bits to Windows access rights.
 
-    * Read+write (rw_): ``GENERIC_READ | GENERIC_WRITE``
-    * Read only (r__): ``GENERIC_READ``
-    * Write only (_w_): ``GENERIC_WRITE``
-    * Execute (__x): folded into GENERIC_READ for directories — Windows
-      treats directory traversal as part of the read right.
+    * Owner write set (``0o2``): ``FILE_ALL_ACCESS`` — POSIX "rw" or
+      "rwx" implies the owner can also delete, which on Windows
+      requires explicit ``DELETE`` and ``FILE_DELETE_CHILD``. Every
+      doorae call site uses ``0o600`` or ``0o700``, both of which
+      mean "owner full control"; Full Access is the natural
+      equivalent.
+    * Owner read-only (``0o4``): ``GENERIC_READ`` — locked file
+      (e.g. ``0o400`` for engine binaries that must not be modified).
+    * Pure execute (``0o1`` only, no read/write): folded into
+      ``GENERIC_READ`` for traversal — rare in practice.
+    * No bits: zero mask, file is fully locked.
     """
     owner_bits = (mode >> 6) & 0o7
+    if owner_bits & 0o2:
+        return FILE_ALL_ACCESS
     mask = 0
     if owner_bits & 0o4:
         mask |= GENERIC_READ
-    if owner_bits & 0o2:
-        mask |= GENERIC_WRITE
     if owner_bits & 0o1 and not mask:
-        # Pure execute (rare) — treat as read for traversal.
         mask |= GENERIC_READ
-    if mask == 0:
-        # Empty mode means no access — still create a DACL with zero
-        # rights so the file is locked rather than world-readable.
-        mask = 0
     return mask
 
 

@@ -162,3 +162,54 @@ class TestSecureChmodDacl:
     def test_chmod_missing_path_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             secure_chmod(tmp_path / "no-such-file", 0o600)
+
+
+class TestSecureChmodAllowsOwnerDelete:
+    """Issue #304 regression: ``secure_chmod(0o600)`` previously emitted
+    a DACL with ``GENERIC_READ | GENERIC_WRITE`` only. On Windows that
+    omits ``DELETE``, so a subsequent ``unlink()`` failed with
+    ``ERROR_ACCESS_DENIED`` — breaking spawner.materialize's prune step
+    on every agent re-spawn. The fix maps any owner-write mode to
+    ``FILE_ALL_ACCESS`` (POSIX "owner can delete" is implicit; Windows
+    needs explicit ``DELETE``)."""
+
+    def test_owner_can_unlink_file_after_chmod_600(self, tmp_path: Path) -> None:
+        target = tmp_path / "manifest.json"
+        target.write_text('{"k":"v"}')
+        secure_chmod(target, 0o600)
+
+        # Pre-fix: this raises PermissionError (WinError 5).
+        target.unlink()
+        assert not target.exists()
+
+    def test_owner_can_rmdir_after_chmod_700(self, tmp_path: Path) -> None:
+        d = tmp_path / "agent_dir"
+        d.mkdir()
+        secure_chmod(d, 0o700)
+
+        d.rmdir()
+        assert not d.exists()
+
+    def test_owner_can_delete_child_in_chmod_700_dir(self, tmp_path: Path) -> None:
+        d = tmp_path / "agent_dir"
+        d.mkdir()
+        secure_chmod(d, 0o700)
+        child = d / "manifest.json"
+        child.write_text("x")
+        secure_chmod(child, 0o600)
+
+        # Both file DELETE and parent FILE_DELETE_CHILD must be present
+        # for the materialize prune step to succeed.
+        child.unlink()
+        assert not child.exists()
+
+    def test_chmod_400_locks_writes(self, tmp_path: Path) -> None:
+        """0o400 stays read-only — verify the mode bit logic didn't
+        accidentally fall through to FILE_ALL_ACCESS for read-only."""
+        target = tmp_path / "ro"
+        target.write_text("locked")
+        secure_chmod(target, 0o400)
+
+        # Writing should fail because the DACL grants READ only.
+        with pytest.raises(PermissionError):
+            target.write_text("attempted overwrite")
