@@ -75,6 +75,11 @@ interface RoomHeaderProps {
    *  renders read-only. */
   ephemeral?: boolean
   onToggleEphemeral?: (next: boolean) => void
+  /** #302 — slot for the right context rail toggle button. ChatPage
+   *  passes <RightRailToggle/>; the header just gives it a place to
+   *  live next to the settings menu. ``undefined`` hides it (e.g.
+   *  guest pages or routes that don't host the rail). */
+  rightRailSlot?: import('react').ReactNode
 }
 
 /**
@@ -118,6 +123,7 @@ export default function RoomHeader({
   onToggleParticipants,
   ephemeral,
   onToggleEphemeral,
+  rightRailSlot,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
   const hasParent = parentBreadcrumb && parentBreadcrumb.length > 0
@@ -264,6 +270,7 @@ export default function RoomHeader({
           onStopAllAgents={onStopAllAgents}
           onDeleteRoom={onDeleteRoom}
         />
+        {rightRailSlot}
       </div>
     </div>
   )
