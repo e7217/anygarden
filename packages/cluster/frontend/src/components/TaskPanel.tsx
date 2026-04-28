@@ -1,18 +1,10 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, CheckCircle2, Circle, Clock, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/lib/api'
 import { EntityAvatar } from '@/components/EntityAvatar'
+import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import type { Participant } from '@/pages/ChatPage'
-
-interface Task {
-  id: string
-  room_id: string
-  title: string
-  status: string
-  assignee_participant_id: string | null
-  created_at: string
-}
 
 interface TaskPanelProps {
   roomId: string
@@ -35,12 +27,18 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
-  const [tasks, setTasks] = useState<Task[]>([])
   const [filter, setFilter] = useState<string | null>(null)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
   const [adding, setAdding] = useState(false)
   const [allowHumanAssignment, setAllowHumanAssignment] = useState(false)
+
+  // #302 — data plane lives in useRoomTasks. The right-rail TasksSection
+  // consumes the same hook, guaranteeing the legacy panel and the new
+  // sidebar render the same list against the same WS event stream.
+  const { tasks, create, update, remove } = useRoomTasks(roomId, {
+    status: filter,
+  })
 
   // Group participants once per render — agents on top, humans below
   // when the room opts in. We keep the lists separate so the dropdown
@@ -56,15 +54,6 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
     humans.sort((a, b) => a.display_name.localeCompare(b.display_name))
     return { agentParticipants: agents, humanParticipants: humans }
   }, [participants])
-
-  const fetchTasks = useCallback(async () => {
-    const params = filter ? `?status=${filter}` : ''
-    const resp = await apiFetch(`/api/v1/rooms/${roomId}/tasks${params}`)
-    if (resp.ok) setTasks(await resp.json())
-    else setTasks([])
-  }, [roomId, filter])
-
-  useEffect(() => { fetchTasks() }, [fetchTasks])
 
   // Pull the room's allow_human_assignment flag once per room change.
   // We keep this self-contained (vs. lifting to ChatPage) so TaskPanel
@@ -82,62 +71,26 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
     return () => { cancelled = true }
   }, [roomId])
 
-  // #266 — refetch when the server pushes a task.updated frame.
-  // Listening on ``window`` keeps this hook independent of the WS
-  // connection's React tree position (useWebSocket is owned by
-  // ChatPage and only handles per-room messages).
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as
-        | { task?: { room_id?: string } }
-        | undefined
-      if (!detail?.task) return
-      // Ignore events for other rooms — the panel only mirrors the
-      // currently selected room's task list.
-      if (detail.task.room_id && detail.task.room_id !== roomId) return
-      fetchTasks()
-    }
-    window.addEventListener('doorae:task:updated', handler)
-    return () => window.removeEventListener('doorae:task:updated', handler)
-  }, [roomId, fetchTasks])
-
   const createTask = async () => {
     if (!newTitle.trim()) return
     setAdding(true)
-    await apiFetch(`/api/v1/rooms/${roomId}/tasks`, {
-      method: 'POST',
-      body: JSON.stringify({
-        title: newTitle.trim(),
-        assignee_participant_id: newAssignee || null,
-      }),
+    await create({
+      title: newTitle.trim(),
+      assignee_participant_id: newAssignee || null,
     })
     setNewTitle('')
     setNewAssignee('')
     setAdding(false)
-    fetchTasks()
   }
 
   const cycleStatus = async (task: Task) => {
     const idx = STATUS_CYCLE.indexOf(task.status as typeof STATUS_CYCLE[number])
     const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
-    await apiFetch(`/api/v1/tasks/${task.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ status: next }),
-    })
-    fetchTasks()
-  }
-
-  const deleteTask = async (id: string) => {
-    await apiFetch(`/api/v1/tasks/${id}`, { method: 'DELETE' })
-    fetchTasks()
+    await update(task.id, { status: next })
   }
 
   const reassign = async (task: Task, participantId: string) => {
-    await apiFetch(`/api/v1/tasks/${task.id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ assignee_participant_id: participantId || null }),
-    })
-    fetchTasks()
+    await update(task.id, { assignee_participant_id: participantId || null })
   }
 
   const filters = [
@@ -220,7 +173,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                 />
               ) : null}
               <button
-                onClick={() => deleteTask(task.id)}
+                onClick={() => remove(task.id)}
                 className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
                 title="Delete task"
               >

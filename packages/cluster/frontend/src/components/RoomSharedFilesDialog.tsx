@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect } from 'react'
 import { FileText, Paperclip, Trash2 } from 'lucide-react'
 import {
   Dialog,
@@ -8,11 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import {
-  deleteRoomFile,
-  listRoomFiles,
-  type RoomSharedFile,
-} from '@/lib/roomFiles'
+import { useRoomFiles } from '@/hooks/useRoomFiles'
 
 interface RoomSharedFilesDialogProps {
   roomId: string | null
@@ -30,43 +26,33 @@ function formatBytes(bytes: number): string {
  * the room header and participants get a list of every file the
  * room has on its agents' ``memory/shared/``; deleting here also
  * pushes a delete frame to every placed agent so their copy goes
- * with it. */
+ * with it.
+ *
+ * #302 — data plane lives in ``useRoomFiles``. The right-rail
+ * ``FilesSection`` consumes the same hook so the dialog and the
+ * sidebar render the same list with one cache. The dialog is kept
+ * around for the legacy entry point (#246 header button); ChatPage
+ * may drop the entry point once the right rail ships.
+ */
 export default function RoomSharedFilesDialog({
   roomId,
   open,
   onOpenChange,
 }: RoomSharedFilesDialogProps) {
-  const [files, setFiles] = useState<RoomSharedFile[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { files, loading, error, refresh, remove } = useRoomFiles(roomId)
 
-  const refresh = useCallback(async () => {
-    if (!roomId) return
-    setLoading(true)
-    setError(null)
-    try {
-      setFiles(await listRoomFiles(roomId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [roomId])
-
+  // The hook auto-fetches on roomId change. We only want to *force* a
+  // refresh when the dialog re-opens (the user may have edited files
+  // elsewhere — e.g. via the right-rail FilesSection — between opens).
   useEffect(() => {
-    if (open) void refresh()
-  }, [open, refresh])
+    if (open && roomId) void refresh()
+  }, [open, roomId, refresh])
 
   const handleDelete = async (fileId: string) => {
     if (!roomId) return
     if (!confirm('이 파일을 룸에서 제거할까요? 참여 에이전트의 복사본도 함께 삭제됩니다.'))
       return
-    try {
-      await deleteRoomFile(roomId, fileId)
-      setFiles(prev => prev.filter(f => f.id !== fileId))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    }
+    await remove(fileId)
   }
 
   return (

@@ -14,14 +14,15 @@ import RoomEditDialog from '@/components/RoomEditDialog'
 import RoomInviteDialog from '@/components/RoomInviteDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
-import TaskPanel from '@/components/TaskPanel'
+import RightContextRail from '@/components/RightContextRail'
+import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu, Search, ListTodo, Paperclip, Image as ImageIcon } from 'lucide-react'
+import { MessageSquare, Menu, Search, Image as ImageIcon } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 
 export interface Participant {
@@ -77,7 +78,11 @@ export default function ChatPage() {
   // <Sidebar> + <SidebarExpandButton>, backed by <SidebarLayoutProvider>.
   // ChatPage no longer owns any sidebar-collapse state.
   const [searchOpen, setSearchOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'chat' | 'tasks'>('chat')
+  // #302 — right context rail mobile drawer state. Desktop collapse
+  // is owned by <RightSidebarLayoutProvider> (see App.tsx). The mobile
+  // overlay (<md viewport) is local to ChatPage because only the chat
+  // route hosts the rail right now.
+  const [rightRailOpen, setRightRailOpen] = useState(false)
   const [participantsVersion, setParticipantsVersion] = useState(0)
 
   const currentRoom = useMemo<Room | null>(() => {
@@ -513,6 +518,12 @@ export default function ChatPage() {
                       }
                     : undefined
                 }
+                rightRailSlot={
+                  <RightRailToggle
+                    roomId={selectedRoom}
+                    onMobileOpen={() => setRightRailOpen(true)}
+                  />
+                }
               />
               {/* #116 — no participant toggle in DMs means the
                   popover has no entry point; skipping the mount
@@ -529,30 +540,11 @@ export default function ChatPage() {
                 />
               )}
             </div>
-            {/* Chat / Tasks tab bar + Search */}
-            <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4">
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setActiveTab('chat')}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
-                    activeTab === 'chat'
-                      ? 'border-[var(--color-brand)] text-[var(--color-brand)]'
-                      : 'border-transparent text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'
-                  }`}
-                >
-                  <MessageSquare className="h-3.5 w-3.5" /> Chat
-                </button>
-                <button
-                  onClick={() => setActiveTab('tasks')}
-                  className={`flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors ${
-                    activeTab === 'tasks'
-                      ? 'border-[var(--color-brand)] text-[var(--color-brand)]'
-                      : 'border-transparent text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'
-                  }`}
-                >
-                  <ListTodo className="h-3.5 w-3.5" /> Tasks
-                </button>
-              </div>
+            {/* #302 — Search lives on its own slim row now that the
+                Chat/Tasks tab toggle has been replaced by the right
+                context rail. The search button stays at the top so
+                ⌘K stays discoverable. */}
+            <div className="flex items-center justify-end border-b border-[var(--color-border)] px-4">
               <button
                 onClick={() => setSearchOpen(true)}
                 className="flex items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1 text-xs text-[var(--color-foreground-muted)] hover:bg-black/5"
@@ -562,54 +554,40 @@ export default function ChatPage() {
                 <kbd className="hidden rounded border border-[var(--color-border)] px-1 py-0.5 text-[10px] sm:inline">⌘K</kbd>
               </button>
             </div>
-            {activeTab === 'chat' ? (
-              <>
-                <ChatArea
-                  messages={messages}
-                  participants={participants}
-                  myParticipantId={myParticipantId}
-                  typingUsers={typingUsers}
-                />
-                <TypingIndicator
-                  typingUsers={typingUsers}
-                  participants={participants}
-                  myParticipantId={myParticipantId}
-                />
-                <div className="flex justify-end gap-3 px-4 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setArtifactsOpen(true)}
-                    className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
-                    title="에이전트가 만든 산출물 보기"
-                  >
-                    <ImageIcon className="h-3 w-3" />
-                    산출물
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSharedFilesOpen(true)}
-                    className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
-                    title="이 룸에 공유된 파일 관리"
-                  >
-                    <Paperclip className="h-3 w-3" />
-                    공유 파일
-                  </button>
-                </div>
-                <MessageInput
-                  onSend={send}
-                  onTyping={sendTyping}
-                  disabled={!connected}
-                  mentionUsers={mentionUsers}
-                  mentionRooms={mentionRooms}
-                  roomId={selectedRoom}
-                />
-              </>
-            ) : (
-              <TaskPanel
-                roomId={selectedRoom}
-                participants={participants}
-              />
-            )}
+            <ChatArea
+              messages={messages}
+              participants={participants}
+              myParticipantId={myParticipantId}
+              typingUsers={typingUsers}
+            />
+            <TypingIndicator
+              typingUsers={typingUsers}
+              participants={participants}
+              myParticipantId={myParticipantId}
+            />
+            <div className="flex justify-end gap-3 px-4 pt-1">
+              <button
+                type="button"
+                onClick={() => setArtifactsOpen(true)}
+                className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
+                title="에이전트가 만든 산출물 보기"
+              >
+                <ImageIcon className="h-3 w-3" />
+                산출물
+              </button>
+              {/* #302 — the "공유 파일" entry point moved to the
+                  right-rail FilesSection. The legacy dialog is kept
+                  around for older deep links but is no longer linked
+                  from the chat surface. */}
+            </div>
+            <MessageInput
+              onSend={send}
+              onTyping={sendTyping}
+              disabled={!connected}
+              mentionUsers={mentionUsers}
+              mentionRooms={mentionRooms}
+              roomId={selectedRoom}
+            />
             {user?.is_admin && (
               <ManageRoomAgentsDialog
                 open={agentDialogOpen}
@@ -687,6 +665,18 @@ export default function ChatPage() {
           </>
         )}
       </div>
+
+      {/* #302 — right context rail. Rendered as a sibling to the main
+          flex column so it can either push (desktop, expanded) or
+          overlay (mobile, drawer). The rail itself early-returns null
+          when ``roomId`` is null, so it's safe to mount unconditionally
+          on routes that may not yet have a selected room. */}
+      <RightContextRail
+        roomId={selectedRoom}
+        participants={participants}
+        open={rightRailOpen}
+        onClose={() => setRightRailOpen(false)}
+      />
     </div>
   )
 }

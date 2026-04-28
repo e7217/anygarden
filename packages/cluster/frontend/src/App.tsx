@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { RoomsProvider } from '@/hooks/useRooms'
 import { SidebarLayoutProvider } from '@/hooks/useSidebarLayout'
+import { RightSidebarLayoutProvider } from '@/hooks/useRightSidebarLayout'
 import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
@@ -52,7 +53,11 @@ export default function App() {
             guest pages) because the provider has zero side effects
             until a consumer mounts. */}
         <SidebarLayoutProvider>
-          <Routes>
+          {/* #302 — Right context rail collapse state. Sibling to the
+              left SidebarLayoutProvider; default *closed* so the chat
+              canvas wins width until the user opts in. */}
+          <RightSidebarLayoutProvider>
+            <Routes>
             <Route path="/login" element={<LoginPage />} />
             {/* Guest entry + single-room shell. Intentionally NOT
                 wrapped in ProtectedRoute — the guest flow has its own
@@ -96,7 +101,8 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
-          </Routes>
+            </Routes>
+          </RightSidebarLayoutProvider>
         </SidebarLayoutProvider>
       </RoomsProvider>
     </BrowserRouter>
