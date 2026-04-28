@@ -33,6 +33,17 @@ from croniter import CroniterBadCronError, croniter
 MIN_INTERVAL_SECONDS: int = 60
 GOAL_FAILURE_PAUSE_THRESHOLD: int = 3
 
+# #314 — task pickup / execution timeouts. Measured from
+# ``Task.assigned_at`` (todo) and ``Task.started_at`` (in_progress).
+# Picked conservatively: pickup of <30s is the normal case for a
+# healthy agent receiving a fresh task-assignment frame, and
+# executions almost always finish in well under 5 minutes. Crossing
+# either bound is a strong "agent is wedged or never woke" signal,
+# so the sweeper flips the row to ``failed`` and lets
+# ``apply_completion`` feed the ``consecutive_failures`` counter.
+TASK_PICKUP_TIMEOUT_SECONDS: int = 120
+TASK_EXECUTION_TIMEOUT_SECONDS: int = 600
+
 
 class InvalidTriggerConfig(ValueError):
     """Raised by ``validate_trigger_config`` when the API receives a

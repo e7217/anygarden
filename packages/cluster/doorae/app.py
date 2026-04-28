@@ -535,7 +535,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not getattr(app.state, "goal_scheduler", None):
         from doorae.goals.scheduler import GoalScheduler
 
-        app.state.goal_scheduler = GoalScheduler(app.state.session_factory)
+        # #314 — pass the live ConnectionManager so scheduler-fired
+        # task assignment messages actually reach the agent's WS
+        # session. Without this the synthetic mention is persisted but
+        # never broadcast, and the agent never wakes.
+        app.state.goal_scheduler = GoalScheduler(
+            app.state.session_factory,
+            manager=getattr(app.state, "connection_manager", None),
+        )
     if hasattr(app.state.goal_scheduler, "start"):
         app.state.goal_scheduler.start()
 

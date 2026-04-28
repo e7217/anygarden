@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "037"
+                assert version == "038"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -250,6 +250,97 @@ class TestMigrations:
             except OSError:
                 pass
 
+    def test_038_backfills_assigned_at_for_assigned_tasks(self) -> None:
+        """Migration 038 backfills ``tasks.assigned_at`` from
+        ``created_at`` for rows with an assignee, and leaves
+        unassigned rows NULL. Guards against a future edit that
+        silently breaks #314 sweeper's NULL-skip semantics."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            # Stop at 037 to seed ``tasks`` rows before 038 backfills.
+            command.upgrade(cfg, "037")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.begin() as conn:
+                # FK targets: a user, a project, a room, a participant.
+                conn.execute(
+                    text(
+                        "INSERT INTO users (id, email, password_hash, is_admin, "
+                        "is_anonymous, created_at) VALUES "
+                        "('u-1', 'u@x', 'h', 0, 0, '2026-01-01T00:00:00+00:00')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO projects (id, name, created_at) "
+                        "VALUES ('p-1', 'P', '2026-01-01T00:00:00+00:00')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO rooms (id, project_id, name, created_at, is_dm, "
+                        "context_window_enabled, speaker_strategy, "
+                        "current_speaker_index, ephemeral, allow_human_assignment) "
+                        "VALUES ('r-1', 'p-1', 'R', '2026-01-01T00:00:00+00:00', "
+                        "0, 0, 'mentioned_only', 0, 0, 0)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO participants (id, room_id, user_id, role, "
+                        "joined_at) VALUES "
+                        "('part-1', 'r-1', 'u-1', 'member', "
+                        "'2026-01-01T00:00:00+00:00')"
+                    )
+                )
+                # Two tasks: one assigned, one not.
+                conn.execute(
+                    text(
+                        "INSERT INTO tasks (id, room_id, title, status, "
+                        "assignee_participant_id, created_by, created_at, "
+                        "triggered_by, is_interesting) VALUES "
+                        "('t-assigned', 'r-1', 'A', 'todo', 'part-1', 'u-1', "
+                        "'2026-01-02T03:04:05+00:00', 'manual', 0)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO tasks (id, room_id, title, status, "
+                        "assignee_participant_id, created_by, created_at, "
+                        "triggered_by, is_interesting) VALUES "
+                        "('t-unassigned', 'r-1', 'B', 'todo', NULL, 'u-1', "
+                        "'2026-01-02T03:04:05+00:00', 'manual', 0)"
+                    )
+                )
+            engine.dispose()
+
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                row_a = conn.execute(
+                    text(
+                        "SELECT assigned_at, created_at FROM tasks "
+                        "WHERE id='t-assigned'"
+                    )
+                ).one()
+                # Backfilled to created_at (string compare on ISO is fine).
+                assert row_a[0] == row_a[1]
+                row_b = conn.execute(
+                    text(
+                        "SELECT assigned_at FROM tasks WHERE id='t-unassigned'"
+                    )
+                ).one()
+                assert row_b[0] is None
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
     def test_downgrade_to_base_and_back(self) -> None:
         """Full round-trip: head → base → head must succeed."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -307,7 +398,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "037"
+                assert version == "038"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -347,7 +438,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "037"
+                assert version == "038"
             sync_engine.dispose()
         finally:
             try:
@@ -381,7 +472,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "037"
+            assert head == "038"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -483,7 +574,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "037"
+                assert version == "038"
             sync_engine.dispose()
         finally:
             try:

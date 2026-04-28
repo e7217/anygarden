@@ -307,3 +307,166 @@ class TestUpdateTask:
         assert resp.status_code == 200
         # Reassigning to a human does NOT trigger another injection.
         assert await _count_task_messages(tasks_env["factory"], room.id) == 1
+
+
+class TestAssignedAt:
+    """#314 — ``assigned_at`` is the sweeper's pickup-timeout clock.
+    Must be stamped on creation when an assignee is present, refreshed
+    on every reassignment, and left NULL when no one is assigned (so
+    the sweeper's IS NOT NULL guard skips the row)."""
+
+    @pytest.mark.asyncio
+    async def test_create_with_assignee_stamps_assigned_at(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        a_pid = tasks_env["agent_a_p_id"]
+
+        resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x", "assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["id"]
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            row = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            assert row.assigned_at is not None
+
+    @pytest.mark.asyncio
+    async def test_create_without_assignee_leaves_assigned_at_null(
+        self, tasks_env
+    ) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+
+        resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "later"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 201
+        task_id = resp.json()["id"]
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            row = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            assert row.assigned_at is None
+
+    @pytest.mark.asyncio
+    async def test_assigning_after_create_stamps_assigned_at(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        a_pid = tasks_env["agent_a_p_id"]
+
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            row = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            assert row.assigned_at is not None
+
+    @pytest.mark.asyncio
+    async def test_reassign_refreshes_assigned_at(self, tasks_env) -> None:
+        """Each reassignment is a fresh pickup window for the new
+        assignee — the previous assignee's timer must not carry over."""
+        import asyncio
+
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        a_pid = tasks_env["agent_a_p_id"]
+        b_pid = tasks_env["agent_b_p_id"]
+
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x", "assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            first = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            t1 = first.assigned_at
+
+        await asyncio.sleep(0.01)  # ensure timestamp moves forward
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"assignee_participant_id": b_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            second = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            t2 = second.assigned_at
+
+        assert t1 is not None and t2 is not None
+        assert t2 > t1
+
+    @pytest.mark.asyncio
+    async def test_status_only_change_does_not_touch_assigned_at(
+        self, tasks_env
+    ) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        a_pid = tasks_env["agent_a_p_id"]
+
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x", "assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            before = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            t1 = before.assigned_at
+
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"status": "in_progress"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+
+        async with tasks_env["factory"]() as db:
+            from doorae.db.models import Task as TaskRow
+
+            after = (
+                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+            ).scalar_one()
+            assert after.assigned_at == t1

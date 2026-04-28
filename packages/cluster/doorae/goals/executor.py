@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,9 @@ from doorae.goals.policy import (
     materialize_decision,
 )
 from doorae.messages.service import inject_task_assignment_message
+
+if TYPE_CHECKING:
+    from doorae.ws.manager import ConnectionManager
 
 log = logging.getLogger(__name__)
 
@@ -74,12 +78,18 @@ async def trigger_goal(
     goal: Goal,
     *,
     trigger_source: str = "scheduler",
+    manager: "ConnectionManager | None" = None,
 ) -> Task:
     """Fire one execution of *goal*. Returns the freshly-created Task.
 
     Caller is responsible for ``await db.commit()`` — we keep it
     transactional so a failure to inject the mention rolls back the
     Task creation cleanly.
+
+    ``manager`` is forwarded to ``inject_task_assignment_message`` so
+    the synthetic mention frame actually reaches the agent's WS
+    session (#314). Defaults to ``None`` for legacy callers / unit
+    tests that don't wire up a ``ConnectionManager``.
     """
     if not goal.report_room_id:
         # Silent goals (no report room) aren't fireable in the MVP —
@@ -112,6 +122,7 @@ async def trigger_goal(
         title=goal.title,
         status="todo",
         assignee_participant_id=participant.id,
+        assigned_at=now,  # #314 — sweeper pickup-timeout clock starts here
         created_by=goal.owner_id,
         # #302 — goal-derived fields
         goal_id=goal.id,
@@ -124,12 +135,18 @@ async def trigger_goal(
     await db.flush()  # populate task.id before message inject
 
     # Reuse #266 auto-execution: synthetic mention wakes the agent.
+    # ``manager`` is forwarded so the helper also broadcasts the
+    # ``MessageOut`` frame on the room channel — without this fanout
+    # the mention sits silently in the DB and the agent never wakes
+    # (#314). ``None`` is accepted for tests that don't wire up a
+    # ConnectionManager.
     await inject_task_assignment_message(
         db,
         room=room,
         task=task,
         sender_participant_id=None,  # system-origin
         event="assigned",
+        manager=manager,
     )
 
     # Update goal bookkeeping. ``last_run_at`` always tracks the

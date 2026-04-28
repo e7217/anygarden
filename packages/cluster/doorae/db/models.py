@@ -1017,6 +1017,14 @@ class Task(Base):
         String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    assigned_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    """Timestamp the assignee was first attached (or last reassigned).
+    Used by the goal-scheduler sweeper (#314) to detect pickup-timeout
+    on assigned-but-never-started tasks. NULL when the task has no
+    assignee. Updated whenever ``assignee_participant_id`` transitions
+    NULL → not-NULL or value → different value."""
 
     # ── Issue #302 (Phase 2) — Goal-derived task fields ────────────
     # All nullable + sensible defaults so the migration leaves
