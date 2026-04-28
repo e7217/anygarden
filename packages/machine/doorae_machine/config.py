@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+from doorae_machine.safefs import secure_chmod
 
 DOORAE_DIR = Path.home() / ".doorae"
 CONFIG_PATH = DOORAE_DIR / "machine.toml"
@@ -73,4 +74,4 @@ def save_token(token: str, path: Path | None = None) -> None:
     token_path = path or TOKEN_PATH
     token_path.parent.mkdir(parents=True, exist_ok=True)
     token_path.write_text(token + "\n")
-    os.chmod(token_path, 0o600)
+    secure_chmod(token_path, 0o600)

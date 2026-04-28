@@ -6,7 +6,6 @@ import asyncio
 import json
 import os
 import shutil
-import signal
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -19,7 +18,8 @@ from doorae_machine.agent_dir import (
     validate_agent_file_path,
     validate_agent_id,
 )
-from doorae_machine.safefs import safe_write_text
+from doorae_machine.proc_kill import subprocess_group_kwargs, terminate_tree
+from doorae_machine.safefs import safe_write_text, secure_chmod
 from doorae_machine.supervisor import watch_process
 
 log = structlog.get_logger()
@@ -345,7 +345,7 @@ class Spawner:
             )
 
         agent_root.mkdir(parents=True, exist_ok=True)
-        os.chmod(agent_root, 0o700)
+        secure_chmod(agent_root, 0o700)
 
         # --- Prune: wipe everything except workspace/ ------------------
         #
@@ -393,7 +393,7 @@ class Spawner:
         # round-trip converges.
         memory_dir = agent_root / "memory"
         memory_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(memory_dir, 0o700)
+        secure_chmod(memory_dir, 0o700)
         notes_path = memory_dir / "notes.md"
         safe_write_text(notes_path, msg.memory_md or "", mode=0o600)
         # #246 — ``memory/shared/`` is the drop zone for room-shared
@@ -403,20 +403,20 @@ class Spawner:
         # one when no files have been shared yet).
         shared_dir = memory_dir / "shared"
         shared_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(shared_dir, 0o700)
+        secure_chmod(shared_dir, 0o700)
         # #290 — symmetrical drop zone for the outbound flow: the
         # agent writes a file here and the daemon's outbox poller
         # ships it back to the cluster as a room artifact. Pre-creating
         # the directory lets the agent treat it as always-present.
         outbox_dir = memory_dir / "outbox"
         outbox_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(outbox_dir, 0o700)
+        secure_chmod(outbox_dir, 0o700)
 
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():
             target = agent_root / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
-            os.chmod(target.parent, 0o700)
+            secure_chmod(target.parent, 0o700)
             safe_write_text(target, content, mode=0o600)
 
         # --- Synthetic symlinks (engine convention aliases) -----------
@@ -439,7 +439,7 @@ class Spawner:
                 (agent_root / ".claude" / "skills", "../skills"),
             ):
                 alias_dir.parent.mkdir(parents=True, exist_ok=True)
-                os.chmod(alias_dir.parent, 0o700)
+                secure_chmod(alias_dir.parent, 0o700)
                 if alias_dir.exists() or alias_dir.is_symlink():
                     # iterdir pruning above may not have removed these
                     # if they already existed as dirs; unlink now.
@@ -460,7 +460,7 @@ class Spawner:
             settings_path = agent_root / ".claude" / "settings.json"
             if not settings_path.exists():
                 settings_path.parent.mkdir(parents=True, exist_ok=True)
-                os.chmod(settings_path.parent, 0o700)
+                secure_chmod(settings_path.parent, 0o700)
                 safe_write_text(
                     settings_path,
                     self._CLAUDE_CODE_DEFAULT_SETTINGS,
@@ -514,7 +514,7 @@ class Spawner:
         # Only chmod if we just created it; don't clobber permissions
         # the agent may have set on its own runtime files.
         try:
-            os.chmod(workspace, 0o700)
+            secure_chmod(workspace, 0o700)
         except PermissionError:
             pass
 
@@ -673,7 +673,7 @@ class Spawner:
             ws_memory = workspace / "memory"
             ws_memory.mkdir(parents=True, exist_ok=True)
             try:
-                os.chmod(ws_memory, 0o700)
+                secure_chmod(ws_memory, 0o700)
             except PermissionError:
                 pass
             # Two ``..`` hops: one up out of ``workspace``, one because
@@ -733,7 +733,7 @@ class Spawner:
             profile_path = Path(tmp_path)
             with os.fdopen(fd, "w") as f:
                 f.write(msg.profile_yaml)
-            os.chmod(profile_path, 0o600)
+            secure_chmod(profile_path, 0o600)
         except OSError as exc:
             return SpawnResult(
                 success=False,
@@ -915,6 +915,10 @@ class Spawner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                # Put the agent in its own process group so terminate_tree
+                # can reliably reach grandchildren (e.g. shells, runtime
+                # workers) on both POSIX and Windows.
+                **subprocess_group_kwargs(),
             )
         except OSError as exc:
             profile_path.unlink(missing_ok=True)
@@ -978,29 +982,32 @@ class Spawner:
         self._cleanup(agent_id)
 
     async def kill(self, agent_id: str) -> dict[str, Any]:
-        """Kill a running agent: SIGTERM -> 10s wait -> SIGKILL."""
+        """Kill a running agent: terminate-tree (graceful) -> kill survivors.
+
+        Goes through ``proc_kill.terminate_tree`` so the whole process
+        group (agent + any child shells / language runtimes it
+        spawned) is reaped together. On POSIX this maps to
+        SIGTERM → SIGKILL; on Windows to TerminateProcess on the new
+        process group.
+        """
         agent = self._agents.get(agent_id)
         if agent is None:
             return {"success": False, "error": f"Agent {agent_id} not found"}
 
         proc = agent.proc
-        try:
-            proc.send_signal(signal.SIGTERM)
-            log.info("agent_sigterm", agent_id=agent_id, pid=agent.pid)
-        except ProcessLookupError:
+        if proc.returncode is not None:
             self._cleanup(agent_id)
             return {"success": True, "note": "Process already exited"}
 
+        log.info("agent_terminate_tree", agent_id=agent_id, pid=agent.pid)
+        await asyncio.to_thread(terminate_tree, agent.pid, timeout=KILL_TIMEOUT)
         try:
-            await asyncio.wait_for(proc.wait(), timeout=KILL_TIMEOUT)
-            log.info("agent_terminated", agent_id=agent_id)
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()  # SIGKILL
-                log.warning("agent_sigkill", agent_id=agent_id, pid=agent.pid)
-                await proc.wait()
-            except ProcessLookupError:
-                pass
+            # Drain the asyncio.subprocess state machine; the process
+            # is already dead by now, so this returns immediately.
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        log.info("agent_terminated", agent_id=agent_id)
 
         self._cleanup(agent_id)
         return {"success": True, "agent_id": agent_id}

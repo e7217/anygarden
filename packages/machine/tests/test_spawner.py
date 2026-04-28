@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_machine.spawner import SpawnManifest, Spawner, SpawnResult
+from doorae_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner, SpawnResult
 
 
 @pytest.fixture
@@ -342,9 +341,9 @@ class TestSpawn:
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = None
         mock_proc.stderr = None
         mock_proc.stdin = AsyncMock()
-        mock_proc.send_signal = MagicMock()
 
         with patch(
             "doorae_machine.spawner.asyncio.create_subprocess_exec",
@@ -352,14 +351,16 @@ class TestSpawn:
         ), patch(
             "doorae_machine.spawner.shutil.which",
             return_value="/usr/local/bin/doorae-agent",
-        ):
+        ), patch(
+            "doorae_machine.spawner.terminate_tree"
+        ) as mock_terminate:
             first = await spawner.spawn(spawn_msg)
             assert first.success is True
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        # The old process should have received SIGTERM
-        mock_proc.send_signal.assert_called_with(signal.SIGTERM)
+        # The old process group should have been terminated by PID.
+        mock_terminate.assert_called_with(42, timeout=KILL_TIMEOUT)
 
     async def test_spawn_passes_token_via_env(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """Agent token must be passed via DOORAE_TOKEN env var, not argv."""
@@ -725,12 +726,14 @@ class TestGetRunning:
 class TestKill:
     """Tests for killing agent processes."""
 
-    async def test_kill_sigterm(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
-        """Should send SIGTERM and wait for process to exit."""
+    async def test_kill_terminates_tree(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Kill should terminate the agent's full process tree by PID."""
         mock_proc = MagicMock()
         mock_proc.pid = 42
         mock_proc.wait = AsyncMock(return_value=0)
-        mock_proc.send_signal = MagicMock()
+        mock_proc.returncode = None
         mock_proc.stderr = None
         mock_proc.stdin = AsyncMock()
 
@@ -743,9 +746,38 @@ class TestKill:
         ):
             await spawner.spawn(spawn_msg)
 
-        result = await spawner.kill("agent-test-001")
+        with patch("doorae_machine.spawner.terminate_tree") as mock_terminate:
+            result = await spawner.kill("agent-test-001")
+
         assert result["success"] is True
-        mock_proc.send_signal.assert_called_once_with(signal.SIGTERM)
+        mock_terminate.assert_called_once_with(42, timeout=KILL_TIMEOUT)
+
+    async def test_kill_skips_already_exited(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Should short-circuit when the process has already exited."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.returncode = 0  # already exited
+        mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            await spawner.spawn(spawn_msg)
+
+        with patch("doorae_machine.spawner.terminate_tree") as mock_terminate:
+            result = await spawner.kill("agent-test-001")
+
+        assert result["success"] is True
+        assert "already exited" in result.get("note", "")
+        mock_terminate.assert_not_called()
 
     async def test_kill_nonexistent_agent(self, spawner: Spawner) -> None:
         """Should return error for unknown agent_id."""

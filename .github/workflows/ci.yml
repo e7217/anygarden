@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Sync workspace
+        run: uv sync --all-packages --all-extras
+
+      - name: Test machine
+        working-directory: packages/machine
+        run: uv run pytest -x
+
+      - name: Test agent
+        working-directory: packages/agent
+        run: uv run pytest -x
+
+      - name: Test cluster
+        working-directory: packages/cluster
+        run: uv run pytest -x
+
+  test-windows:
+    name: Test (Windows native)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Sync workspace
+        run: uv sync --all-packages --all-extras
+
+      # Windows scope is intentionally narrow: only the test files this
+      # PR introduces (safefs Windows backend + cross-platform
+      # proc_kill). Existing tests across the machine/agent suites
+      # carry hardcoded POSIX mode-bit assertions (``st_mode & 0o777
+      # == 0o600``) that surface as 0o666 on Windows because Windows
+      # ACL state doesn't round-trip through ``stat``. Migrating those
+      # to a platform-aware helper is a separate cleanup; until then
+      # the broad suite stays on Linux.
+      - name: Test safefs Windows backend
+        working-directory: packages/machine
+        run: uv run pytest tests/test_safefs_win.py tests/test_proc_kill.py -v
+
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: packages/cluster/frontend/package-lock.json
+
+      - name: Install
+        working-directory: packages/cluster/frontend
+        run: npm ci
+
+      - name: Build (typecheck + bundle)
+        working-directory: packages/cluster/frontend
+        run: npm run build

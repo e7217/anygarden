@@ -4,7 +4,7 @@
 
 Usage: cd doorae-server && uv run python scripts/e2e_multiprocess.py
 """
-import asyncio, json, os, secrets, shutil, signal, subprocess, sys, tempfile, time
+import asyncio, json, os, secrets, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 async def run():
@@ -204,7 +204,7 @@ asyncio.run(MachineDaemon(
 
     finally:
         for p in procs:
-            try: p.send_signal(signal.SIGTERM); p.wait(timeout=5)
+            try: p.terminate(); p.wait(timeout=5)
             except: pass
             try: p.kill()
             except: pass

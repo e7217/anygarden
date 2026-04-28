@@ -12,6 +12,8 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from sqlalchemy import select, text
 
+from doorae_machine.safefs import secure_chmod
+
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
 from doorae.db.models import Base
@@ -224,7 +226,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         else:
             config.jwt_secret = secrets.token_urlsafe(64)
             secret_file.write_text(config.jwt_secret)
-            secret_file.chmod(0o600)
+            secure_chmod(secret_file, 0o600)
 
     # Configure structured logging
     configure_logging(config.log_level)
@@ -309,7 +311,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 else:
                     resolved_key = Fernet.generate_key().decode("ascii")
                     mcp_key_file.write_text(resolved_key)
-                    mcp_key_file.chmod(0o600)
+                    secure_chmod(mcp_key_file, 0o600)
             except OSError:
                 # Can't read or write the persistence file — let the
                 # configured fallback handle it based on ``dev`` mode.

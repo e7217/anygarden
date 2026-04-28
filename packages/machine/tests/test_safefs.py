@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from doorae_machine.safefs import safe_write_bytes, safe_write_text
+from doorae_machine.safefs import safe_write_bytes, safe_write_text, secure_chmod
 
 
 class TestSafeWriteText:
@@ -106,3 +106,27 @@ class TestParentDirUnaffected:
 
         # The write landed in the real dir (followed parent symlink).
         assert (real_dir / "file.txt").read_text() == "ok"
+
+
+class TestSecureChmod:
+    """``secure_chmod`` is the cross-platform replacement for
+    ``os.chmod``. On POSIX it pins the exact mode bits. On Windows it
+    applies an owner-only DACL (covered by Windows-only tests)."""
+
+    def test_pins_owner_only_mode(self, tmp_path: Path) -> None:
+        target = tmp_path / "secret"
+        target.write_text("x")
+        secure_chmod(target, 0o600)
+        assert (target.stat().st_mode & 0o777) == 0o600
+
+    def test_pins_directory_mode(self, tmp_path: Path) -> None:
+        d = tmp_path / "private"
+        d.mkdir()
+        secure_chmod(d, 0o700)
+        assert (d.stat().st_mode & 0o777) == 0o700
+
+    def test_accepts_str_path(self, tmp_path: Path) -> None:
+        target = tmp_path / "f"
+        target.write_text("x")
+        secure_chmod(str(target), 0o600)
+        assert (target.stat().st_mode & 0o777) == 0o600

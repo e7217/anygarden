@@ -1147,10 +1147,15 @@ class TestRotateToken:
         assert daemon.machine_token == "mch_new_token_xyz"
         assert token_file.exists()
         assert token_file.read_text().strip() == "mch_new_token_xyz"
-        # File must be chmod 600
-        import stat
-        mode = token_file.stat().st_mode & 0o777
-        assert mode == 0o600
+        # On POSIX, secure_chmod pins the mode bits. On Windows the
+        # equivalent DACL doesn't surface through ``st_mode`` — that
+        # path is covered by the dedicated DACL tests in
+        # ``test_safefs_win.py``; here we only verify the rotate flow
+        # called the secure helper.
+        import sys
+        if sys.platform != "win32":
+            mode = token_file.stat().st_mode & 0o777
+            assert mode == 0o600
 
     async def test_handle_rotate_token_save_failure_keeps_old_token(
         self, daemon: MachineDaemon
