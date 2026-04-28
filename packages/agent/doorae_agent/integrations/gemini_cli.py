@@ -41,9 +41,12 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+import psutil
 import structlog
 
 from doorae_agent.client import ChatClient
@@ -55,6 +58,40 @@ from doorae_agent.integrations.base import EngineAdapter
 from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 
 logger = structlog.get_logger(__name__)
+
+
+def _subprocess_group_kwargs() -> dict[str, Any]:
+    """Cross-platform Popen kwargs that put the child in its own group.
+
+    POSIX: ``setsid`` so children can be terminated as a tree.
+    Windows: ``CREATE_NEW_PROCESS_GROUP`` for the analogous isolation.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _terminate_tree(pid: int, timeout: float) -> None:
+    """Terminate *pid* and all descendants. Tolerates already-dead PIDs."""
+    try:
+        root = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        return
+    try:
+        victims = [root, *root.children(recursive=True)]
+    except psutil.NoSuchProcess:
+        victims = [root]
+    for proc in victims:
+        try:
+            proc.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, alive = psutil.wait_procs(victims, timeout=timeout)
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 # Gemini CLI call timeout. The codex adapter (Issue #190) uses 600s
 # because its tool turns can reason for several minutes; gemini's
@@ -288,21 +325,17 @@ class GeminiCliAdapter(EngineAdapter):
             cwd=str(agent_root),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,  # own process group for clean kill
+            **_subprocess_group_kwargs(),  # own process group for clean kill
         )
         try:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=_GEMINI_TIMEOUT
             )
         except asyncio.TimeoutError:
-            # Kill the entire process group (gemini + child bash/npm/node).
+            # Kill the entire process tree (gemini + child bash/npm/node).
             # Without this, proc.kill() only hits the direct child and
-            # grandchildren survive as orphans under PID 1.
-            import os, signal
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            # grandchildren survive as orphans.
+            await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
             await proc.wait()
             logger.error("gemini.timeout", timeout=_GEMINI_TIMEOUT)
             return None

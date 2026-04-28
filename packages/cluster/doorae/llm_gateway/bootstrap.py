@@ -30,6 +30,8 @@ import structlog
 from fastapi import FastAPI
 from sqlalchemy import select
 
+from doorae_machine.safefs import secure_chmod
+
 from doorae.config import DooraeSettings
 from doorae.db.models import LLMGatewayModel, LLMGatewaySecret
 from doorae.llm_gateway.config_writer import render_config
@@ -163,7 +165,7 @@ def _build_spawn_params_factory(
         tmp.write_text(rendered)
         tmp.replace(config_path)
         try:
-            config_path.chmod(0o600)
+            secure_chmod(config_path, 0o600)
         except OSError:
             pass
 

@@ -19,7 +19,6 @@ import json
 import os
 import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -333,7 +332,7 @@ async def run():
         print()
 
     finally:
-        server_proc.send_signal(signal.SIGTERM)
+        server_proc.terminate()
         try:
             server_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
