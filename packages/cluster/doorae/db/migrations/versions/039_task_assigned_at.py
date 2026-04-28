@@ -1,8 +1,15 @@
 """Add tasks.assigned_at + backfill assigned rows.
 
-Revision ID: 038
-Revises: 037
+Revision ID: 039
+Revises: 038
 Create Date: 2026-04-28
+
+Note: originally landed on ``main`` as revision 038, racing with #309's
+``038_agent_permission_level`` which had merged first. Both files
+claimed ``revision='038' down_revision='037'``, so alembic refused to
+boot with a "multiple heads" error. Renumbered to 039 stacking on top
+of ``038_agent_permission_level`` to unbreak ``main``. The schema
+change itself is unchanged.
 
 Rationale
 ---------
@@ -30,8 +37,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "038"
-down_revision: str = "037"
+revision: str = "039"
+down_revision: str = "038"
 branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 
