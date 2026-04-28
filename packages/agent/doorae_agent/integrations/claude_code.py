@@ -269,11 +269,39 @@ class ClaudeCodeAdapter(EngineAdapter):
         if is_orchestrator:
             self._ensure_handoff_server_config()
             if self._handoff_server_config is not None:
-                kwargs["mcp_servers"] = {"doorae": self._handoff_server_config}
-                # Tool names route through ``mcp__<server>__<tool>``
-                # in the SDK's allow-list. Pin only what we actually
-                # register so a future addition is explicit.
-                kwargs["allowed_tools"] = ["mcp__doorae__handoff_to"]
+                # Issue #319 — register the in-process server under
+                # ``"handoff"`` rather than ``"doorae"`` to avoid
+                # colliding with the cluster's HTTP MCP server which
+                # the spawner wrote into ``.mcp.json`` under that
+                # exact name (see ``mcp_templates/merge.py``
+                # ``doorae_default_entry`` for ``claude-code``). Both
+                # entries should reach the LLM:
+                #   - ``mcp__handoff__handoff_to`` (in-process, this
+                #     adapter): orchestrator-only turn-order tool.
+                #   - ``mcp__doorae__*`` (cluster HTTP, autoloaded
+                #     from ``.mcp.json``): ``mark_task_status``,
+                #     ``ack_mention``, ``send_message``,
+                #     ``create_task``, etc.
+                # Pre-#319 we passed ``mcp_servers={"doorae": …}``
+                # *and* ``allowed_tools=["mcp__doorae__handoff_to"]``
+                # which (a) shadowed the cluster HTTP doorae entry
+                # because the SDK's ``--mcp-config`` flag overrode
+                # the same name from ``.mcp.json`` and (b) used a
+                # single-element whitelist that blocked every other
+                # cluster tool, so the LLM literally couldn't call
+                # ``mark_task_status`` on its own task.
+                kwargs["mcp_servers"] = {
+                    "handoff": self._handoff_server_config
+                }
+                # ``allowed_tools`` is intentionally not set: the
+                # spawner-written ``.mcp.json`` already lists the
+                # cluster's doorae HTTP MCP and any admin-attached
+                # third-party MCPs (e.g. GitHub). Pinning a narrow
+                # whitelist here would re-introduce the original
+                # blockade for those entries. The SDK serialises an
+                # empty whitelist as a missing ``--allowedTools``
+                # flag, which the CLI treats as "trust the bypass
+                # permission_mode" — already in force above.
 
         # Issue #237 / #279 / #293 — append the centralised memory
         # + roster suffix. The roster gate fires either for the

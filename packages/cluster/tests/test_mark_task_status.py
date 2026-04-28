@@ -73,6 +73,21 @@ async def test_assignee_agent_can_mark_done(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_assignee_agent_can_mark_failed(db) -> None:
+    """#319 — `failed` joined the legal enum so an agent that gives up
+    on a task can stamp the same status the goals sweeper would, instead
+    of getting a 4xx that forces the workflow into ``blocked``.
+    """
+    task, agent, _ = await _make_task_assigned_to(db)
+    result = await mark_task_status(
+        db, agent_id=agent.id, arguments={"task_id": task.id, "status": "failed"}
+    )
+    assert result["isError"] is False
+    await db.refresh(task)
+    assert task.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_non_assignee_is_forbidden(db) -> None:
     task, _, _ = await _make_task_assigned_to(db, agent_name="bot-A")
     intruder = Agent(name="bot-B", engine="echo")

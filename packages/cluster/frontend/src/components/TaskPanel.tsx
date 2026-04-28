@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, CheckCircle2, Circle, Clock, X } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  CheckCircle2,
+  Circle,
+  Clock,
+  PauseCircle,
+  XCircle,
+  X,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/lib/api'
 import { EntityAvatar } from '@/components/EntityAvatar'
@@ -14,16 +23,22 @@ interface TaskPanelProps {
   participants: Record<string, Participant>
 }
 
+// #319 — see ``TasksSection`` for the rationale; both panels share the
+// same status vocabulary and only differ in the layout chrome.
 const STATUS_CYCLE = ['todo', 'in_progress', 'done'] as const
 const STATUS_ICON: Record<string, typeof Circle> = {
   todo: Circle,
   in_progress: Clock,
   done: CheckCircle2,
+  blocked: PauseCircle,
+  failed: XCircle,
 }
 const STATUS_LABEL: Record<string, string> = {
   todo: 'Todo',
   in_progress: 'In Progress',
   done: 'Done',
+  blocked: 'Blocked',
+  failed: 'Failed',
 }
 
 export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
@@ -84,8 +99,13 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
   }
 
   const cycleStatus = async (task: Task) => {
+    // #319 — system-set statuses (``blocked`` / ``failed``) are not in
+    // the user toggle cycle. Click on a row in those buckets resets to
+    // ``todo`` so the user can re-engage without a separate control.
     const idx = STATUS_CYCLE.indexOf(task.status as typeof STATUS_CYCLE[number])
-    const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
+    const next = idx === -1
+      ? STATUS_CYCLE[0]
+      : STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
     await update(task.id, { status: next })
   }
 
@@ -97,6 +117,8 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
     { key: null, label: 'All' },
     { key: 'todo', label: 'Todo' },
     { key: 'in_progress', label: 'In Progress' },
+    { key: 'blocked', label: 'Blocked' },
+    { key: 'failed', label: 'Failed' },
     { key: 'done', label: 'Done' },
   ]
 
@@ -133,9 +155,27 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               className="group flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
             >
               <button onClick={() => cycleStatus(task)} title={`Status: ${STATUS_LABEL[task.status] ?? task.status}`}>
-                <Icon className={`h-4 w-4 ${task.status === 'done' ? 'text-green-600' : task.status === 'in_progress' ? 'text-[var(--color-brand)]' : 'text-[var(--color-foreground-subtle)]'}`} />
+                <Icon
+                  className={`h-4 w-4 ${
+                    task.status === 'done'
+                      ? 'text-green-600'
+                      : task.status === 'in_progress'
+                        ? 'text-[var(--color-brand)]'
+                        : task.status === 'failed'
+                          ? 'text-rose-600'
+                          : task.status === 'blocked'
+                            ? 'text-amber-600'
+                            : 'text-[var(--color-foreground-subtle)]'
+                  }`}
+                />
               </button>
-              <span className={`flex-1 text-sm ${task.status === 'done' ? 'line-through text-[var(--color-foreground-muted)]' : 'text-[var(--color-foreground)]'}`}>
+              <span
+                className={`flex-1 text-sm ${
+                  task.status === 'done' || task.status === 'failed'
+                    ? 'line-through text-[var(--color-foreground-muted)]'
+                    : 'text-[var(--color-foreground)]'
+                }`}
+              >
                 {task.title}
               </span>
               {/* Assignee picker — collapsed avatar by default, expanded

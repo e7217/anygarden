@@ -4,6 +4,8 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  PauseCircle,
+  XCircle,
   Trash2,
   Wand2,
   Loader2,
@@ -18,16 +20,26 @@ interface TasksSectionProps {
   participants: Record<string, Participant>
 }
 
+// #319 — ``blocked`` / ``failed`` are system-set statuses (the goals
+// sweeper stamps ``failed`` on pickup/execution timeouts; agents can
+// stamp ``blocked`` themselves via ``mark_task_status``). They render
+// in their own status group but are deliberately *not* in the user
+// toggle cycle — the click toggle stays on actionable transitions.
 const STATUS_CYCLE = ['todo', 'in_progress', 'done'] as const
+const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'failed', 'done'] as const
 const STATUS_ICON: Record<string, typeof Circle> = {
   todo: Circle,
   in_progress: Clock,
   done: CheckCircle2,
+  blocked: PauseCircle,
+  failed: XCircle,
 }
 const STATUS_LABEL: Record<string, string> = {
   todo: 'Todo',
   in_progress: 'In Progress',
   done: 'Done',
+  blocked: 'Blocked',
+  failed: 'Failed',
 }
 
 /**
@@ -141,7 +153,17 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }
 
   const grouped = useMemo(() => {
-    const groups: Record<string, Task[]> = { todo: [], in_progress: [], done: [] }
+    // #319 — pre-seed every known status so the iteration order in
+    // STATUS_ORDER is deterministic and ``blocked`` / ``failed``
+    // sections render even when the only items in those buckets
+    // arrived via a sweeper or agent self-report.
+    const groups: Record<string, Task[]> = {
+      todo: [],
+      in_progress: [],
+      blocked: [],
+      failed: [],
+      done: [],
+    }
     for (const t of tasks) {
       const bucket = groups[t.status] ?? (groups[t.status] = [])
       bucket.push(t)
@@ -150,8 +172,14 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }, [tasks])
 
   const cycleStatus = async (task: Task) => {
+    // #319 — when the current status is system-set (``blocked`` /
+    // ``failed``) it is not in the cycle. Re-entering the cycle from
+    // ``todo`` keeps the click toggle predictable and lets the user
+    // unblock a task without a separate "reset" affordance.
     const idx = STATUS_CYCLE.indexOf(task.status as typeof STATUS_CYCLE[number])
-    const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
+    const next = idx === -1
+      ? STATUS_CYCLE[0]
+      : STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
     await update(task.id, { status: next })
   }
 
@@ -193,7 +221,11 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
                 ? 'text-green-600'
                 : task.status === 'in_progress'
                   ? 'text-[var(--color-brand)]'
-                  : 'text-[var(--color-foreground-subtle)]'
+                  : task.status === 'failed'
+                    ? 'text-rose-600'
+                    : task.status === 'blocked'
+                      ? 'text-amber-600'
+                      : 'text-[var(--color-foreground-subtle)]'
             }`}
           />
         </button>
@@ -201,7 +233,9 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           className={`flex-1 truncate text-[13px] ${
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
-              : 'text-[var(--color-foreground)]'
+              : task.status === 'failed'
+                ? 'line-through text-[var(--color-foreground-muted)]'
+                : 'text-[var(--color-foreground)]'
           }`}
           title={task.title}
         >
@@ -294,7 +328,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             No tasks yet
           </div>
         )}
-        {(['todo', 'in_progress', 'done'] as const).map((status) => {
+        {STATUS_ORDER.map((status) => {
           const items = grouped[status] ?? []
           if (items.length === 0) return null
           return (
