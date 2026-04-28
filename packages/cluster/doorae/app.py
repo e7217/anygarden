@@ -36,6 +36,7 @@ from doorae.api.v1.invites import router as invites_router
 from doorae.api.v1.saved import router as saved_router
 from doorae.api.v1.search import router as search_router
 from doorae.api.v1.tasks import router as tasks_router
+from doorae.api.v1.goals import router as goals_router
 from doorae.orchestration.rules import (
     CooldownManager,
     GuestRoomAggregateLimiter,
@@ -527,6 +528,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 name="orphan_sweeper",
             )
 
+    # #302 — autonomous responsibility (Goal) scheduler. Single
+    # in-process polling loop; multi-replica coordination lands in
+    # Phase 3 with PostgreSQL advisory locks. Tests may pre-set
+    # ``app.state.goal_scheduler`` to a stub to bypass the timer.
+    if not getattr(app.state, "goal_scheduler", None):
+        from doorae.goals.scheduler import GoalScheduler
+
+        app.state.goal_scheduler = GoalScheduler(app.state.session_factory)
+    if hasattr(app.state.goal_scheduler, "start"):
+        app.state.goal_scheduler.start()
+
     yield
 
     # #197 — Tear down the gateway before the engine / session factory
@@ -547,6 +559,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+    # #302 — stop the goal scheduler. ``stop`` is idempotent and
+    # safe to call when no scheduler ever started.
+    scheduler = getattr(app.state, "goal_scheduler", None)
+    if scheduler is not None and hasattr(scheduler, "stop"):
+        try:
+            await scheduler.stop()
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
 
     if not engine_provided:
         await app.state.engine.dispose()
@@ -666,6 +687,7 @@ def create_app(config: DooraeSettings | None = None) -> FastAPI:
     app.include_router(saved_router)
     app.include_router(search_router)
     app.include_router(tasks_router)
+    app.include_router(goals_router)
     # #197 — LLM gateway reverse proxy + admin CRUD. Both are always
     # included; their handlers 503 when ``app.state.llm_gateway_*``
     # isn't wired (feature flag off) so this is harmless.

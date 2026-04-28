@@ -41,6 +41,12 @@ class TaskOut(BaseModel):
     assignee_participant_id: Optional[str] = None
     created_by: Optional[str] = None
     created_at: str
+    # #302 — goal-derived task fields. NULL on manual rows. Surfaced
+    # so the frontend can render an "⚙ from <Goal title>" attribution
+    # chip without a second round-trip.
+    goal_id: Optional[str] = None
+    triggered_by: str = "manual"
+    is_interesting: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -54,6 +60,9 @@ def _to_out(task: Task) -> TaskOut:
         assignee_participant_id=task.assignee_participant_id,
         created_by=task.created_by,
         created_at=task.created_at.isoformat(),
+        goal_id=task.goal_id,
+        triggered_by=task.triggered_by,
+        is_interesting=task.is_interesting,
     )
 
 
@@ -219,13 +228,19 @@ async def create_task(
 async def list_tasks(
     room_id: str,
     status: Optional[str] = None,
+    goal_id: Optional[str] = None,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """List tasks in a room, optionally filtered by status."""
+    """List tasks in a room, optionally filtered by status and/or
+    ``goal_id`` (#302). The Goal detail's "recent runs" panel uses
+    ``?goal_id=<id>`` to scope the room's tasks down to a single
+    responsibility — backed by the ``ix_tasks_goal_created`` index."""
     stmt = select(Task).where(Task.room_id == room_id)
     if status:
         stmt = stmt.where(Task.status == status)
+    if goal_id:
+        stmt = stmt.where(Task.goal_id == goal_id)
     stmt = stmt.order_by(Task.created_at)
     rows = (await db.execute(stmt)).scalars().all()
     return [_to_out(t) for t in rows]
@@ -260,6 +275,10 @@ async def update_task(
             db, task.room_id, body.assignee_participant_id
         )
 
+    # Capture pre-state so the materialize hook (#302) can detect a
+    # transition into a terminal status.
+    previous_status = task.status
+
     if body.title is not None:
         task.title = body.title
     if body.status is not None:
@@ -268,6 +287,24 @@ async def update_task(
         task.assignee_participant_id = body.assignee_participant_id
 
     await db.flush()
+
+    # #302 — materialize hook for goal-derived tasks. When the agent
+    # marks a goal-derived task as ``done`` or ``failed``, run the
+    # policy: increment/reset failure counter, optionally pause the
+    # goal, and (for ``interesting_only`` silent successes) drop the
+    # task row so the rail doesn't accumulate "all green" noise.
+    task_was_deleted = False
+    if (
+        task.goal_id is not None
+        and body.status is not None
+        and body.status in ("done", "failed")
+        and previous_status != body.status
+    ):
+        from doorae.goals.executor import apply_completion
+
+        task_was_deleted = await apply_completion(
+            db, task, final_status=body.status
+        )
 
     injected: Optional[Message] = None
     room: Optional[Room] = None
@@ -292,13 +329,46 @@ async def update_task(
             await db.execute(select(Room).where(Room.id == task.room_id))
         ).scalar_one_or_none()
 
+    # Snapshot pre-commit so the WS frame can survive a delete on the
+    # silent-success path. ``_to_out`` reads attributes that detach
+    # after ``db.delete`` + ``commit`` — building the WS payload from
+    # the snapshot keeps the response shape consistent.
+    task_snapshot_for_response = _to_out(task) if not task_was_deleted else None
+
     await db.commit()
-    await db.refresh(task)
 
     manager = _connection_manager(request)
     if injected is not None and manager is not None:
         await db.refresh(injected)
         await manager.broadcast(task.room_id, _message_to_frame(injected))
+
+    if task_was_deleted:
+        # Treat the silent-success delete as a regular task delete on
+        # the wire so subscribers prune the row from their local cache.
+        if room is not None:
+            await fanout_task_event(
+                db,
+                manager=manager,
+                event="deleted",
+                task=task,
+                room_name=room.name,
+            )
+        # Mirror the legacy DELETE handler's response shape so the
+        # client can detect the row vanished and update its UI.
+        return TaskOut(
+            id=task.id,
+            room_id=task.room_id,
+            title=task.title,
+            status=body.status or task.status,
+            assignee_participant_id=task.assignee_participant_id,
+            created_by=task.created_by,
+            created_at=task.created_at.isoformat(),
+            goal_id=task.goal_id,
+            triggered_by=task.triggered_by,
+            is_interesting=task.is_interesting,
+        )
+
+    await db.refresh(task)
     if room is not None:
         await fanout_task_event(
             db,
@@ -308,7 +378,7 @@ async def update_task(
             room_name=room.name,
         )
 
-    return _to_out(task)
+    return task_snapshot_for_response or _to_out(task)
 
 
 @router.delete("/api/v1/tasks/{task_id}", status_code=200)
