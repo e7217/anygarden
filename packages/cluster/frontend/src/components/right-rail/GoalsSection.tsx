@@ -144,19 +144,24 @@ export default function GoalsSection({
               >
                 {g.title}
               </p>
-              <p className="text-[10px] text-[var(--color-foreground-subtle)]">
-                {/* #312 — show assignee first so the user sees "who"
-                    before "how often". Falls back to a short id slice
-                    when the assignee agent has left the room (rare;
-                    the row goes stale rather than disappearing). */}
-                <span
-                  className="text-[var(--color-foreground-muted)]"
-                  data-testid={`right-rail-goal-assignee-${g.id}`}
-                >
-                  {agentNameById[g.assignee_agent_id] ??
-                    `agent ${g.assignee_agent_id.slice(0, 6)}`}
-                </span>
-                {' · '}
+              {/* #323 — split the meta into two lines so the narrow
+                  rail can show both "who" and "how often / when /
+                  failures" without truncating either. ``manual`` goals
+                  drop the second line's "next" segment but keep the
+                  trigger label so the row never has a dead second
+                  line. ``#312`` ordering preserved: assignee first. */}
+              <p
+                className="truncate text-[10px] text-[var(--color-foreground-muted)]"
+                data-testid={`right-rail-goal-assignee-${g.id}`}
+                title={
+                  agentNameById[g.assignee_agent_id] ??
+                  `agent ${g.assignee_agent_id.slice(0, 6)}`
+                }
+              >
+                {agentNameById[g.assignee_agent_id] ??
+                  `agent ${g.assignee_agent_id.slice(0, 6)}`}
+              </p>
+              <p className="truncate text-[10px] text-[var(--color-foreground-subtle)]">
                 {g.trigger_type}
                 {g.trigger_type !== 'manual' && (
                   <> · next {formatNextRun(g.next_run_at)}</>

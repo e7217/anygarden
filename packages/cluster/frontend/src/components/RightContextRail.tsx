@@ -79,12 +79,12 @@ export default function RightContextRail({
         aria-hidden={collapsed && !open ? true : undefined}
         aria-label="Room context rail"
         className={`
-          fixed inset-y-0 right-0 z-40 flex h-full w-80 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
+          fixed inset-y-0 right-0 z-40 flex h-full w-96 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
           transform transition-all duration-200 ease-out
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
             ? 'md:translate-x-full md:w-0 md:overflow-hidden md:border-l-0'
-            : 'md:static md:z-auto md:translate-x-0 md:w-80'}
+            : 'md:static md:z-auto md:translate-x-0 md:w-96'}
         `}
       >
         <div className="flex h-12 items-center justify-between border-b border-[var(--color-border)] px-3">
