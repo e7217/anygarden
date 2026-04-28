@@ -62,6 +62,7 @@ async def inject_task_assignment_message(
     task: "Task",
     sender_participant_id: str | None,
     event: Literal["assigned", "reassigned"] = "assigned",
+    manager: "ConnectionManager | None" = None,
 ) -> Message:
     """Drop a synthetic mention-bearing message into *room* announcing
     that *task* has been (re)assigned to its current assignee.
@@ -78,6 +79,12 @@ async def inject_task_assignment_message(
     persisted with a NULL ``participant_id`` and stamped with
     ``metadata.system_origin = "task_assignment"`` so renderers can
     distinguish it from a stray no-participant message.
+
+    ``manager`` — when provided, the persisted row is also broadcast as
+    a ``MessageOut`` frame on the room's WS channel, mirroring the
+    ``fanout_task_event`` pattern. Without this fanout the agent never
+    receives the wake-up frame even though the row sits in the DB
+    (#314). ``None`` is accepted for tests / unit isolation.
     """
     assignee_pid = task.assignee_participant_id
     if not assignee_pid:
@@ -117,13 +124,38 @@ async def inject_task_assignment_message(
         '차단되면 `status="blocked"`.)_'
     )
 
-    return await _repo_append(
+    msg = await _repo_append(
         db,
         room.id,
         sender_participant_id,
         content,
         metadata,
     )
+
+    # #314 — fanout the persisted row as a ``MessageOut`` frame so the
+    # agent's WS session receives the wake-up signal. Without this the
+    # row sits silently in the DB until the agent reconnects and
+    # ``replay_since_seq`` catches up — for an always-on agent that's
+    # effectively never. Mirrors the api/v1/tasks.py path where the
+    # router broadcasts after commit; here we accept that scheduler-
+    # injected frames can race the commit, but the receiver's frame
+    # already carries the full message content (no DB lookup needed)
+    # and any reconnect will reconcile via ``replay_since_seq``.
+    if manager is not None:
+        from doorae.ws.protocol import MessageOut
+
+        frame = MessageOut(
+            id=msg.id,
+            room_id=msg.room_id,
+            participant_id=msg.participant_id,
+            content=msg.content,
+            seq=msg.seq,
+            created_at=msg.created_at,
+            metadata=msg.extra_metadata,
+        )
+        await manager.broadcast(room.id, frame)
+
+    return msg
 
 
 async def _build_task_ws_payload(

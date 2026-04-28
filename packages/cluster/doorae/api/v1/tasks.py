@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -190,11 +191,16 @@ async def create_task(
             db, room_id, body.assignee_participant_id
         )
 
+    # #314 — start the sweeper's pickup-timeout clock the moment the
+    # row gets an assignee. Stays NULL on unassigned tasks so the
+    # sweeper's IS NOT NULL guard skips them.
+    now = datetime.now(timezone.utc)
     task = Task(
         room_id=room_id,
         title=body.title,
         status=body.status,
         assignee_participant_id=body.assignee_participant_id,
+        assigned_at=now if body.assignee_participant_id else None,
         created_by=identity.id if identity.kind == "user" else None,
     )
     db.add(task)
@@ -285,6 +291,10 @@ async def update_task(
         task.status = body.status
     if body.assignee_participant_id is not None:
         task.assignee_participant_id = body.assignee_participant_id
+        # #314 — refresh the pickup-timeout clock on every (re)assignment
+        # so the new assignee gets a fresh window.
+        if body.assignee_participant_id != previous_assignee:
+            task.assigned_at = datetime.now(timezone.utc)
 
     await db.flush()
 

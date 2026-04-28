@@ -28,12 +28,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from doorae.db.models import Goal
 from doorae.goals.executor import GoalExecutionError, trigger_goal
+from doorae.goals.sweeper import sweep_stuck_tasks
+
+if TYPE_CHECKING:
+    from doorae.ws.manager import ConnectionManager
 
 log = logging.getLogger(__name__)
 
@@ -62,9 +67,15 @@ class GoalScheduler:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        manager: "ConnectionManager | None" = None,
     ) -> None:
         self._session_factory = session_factory
         self._poll_interval = poll_interval_seconds
+        # #314 — held so each ``trigger_goal`` call can fanout the
+        # synthetic mention frame on the room channel. ``None`` is the
+        # backwards-compatible default for tests / callers that don't
+        # wire one up.
+        self._manager = manager
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
 
@@ -104,6 +115,15 @@ class GoalScheduler:
                 # already logged by ``_tick`` for the per-goal path;
                 # this catches anything from session setup.
                 log.exception("goal_scheduler_tick_failed")
+            # #314 — stuck-task sweep runs in its own session so a
+            # sweep error can't corrupt the goal-trigger transaction
+            # above and vice versa. Same poll cadence as the trigger
+            # path: ~30s is enough granularity for 2-minute pickup /
+            # 10-minute execution timeouts.
+            try:
+                await self._sweep()
+            except Exception:  # pragma: no cover — defensive
+                log.exception("goal_scheduler_sweep_failed")
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(), timeout=self._poll_interval
@@ -130,7 +150,7 @@ class GoalScheduler:
             log.debug("goal_scheduler_due", extra={"count": len(due)})
             for goal in due:
                 try:
-                    await trigger_goal(db, goal)
+                    await trigger_goal(db, goal, manager=self._manager)
                     await db.commit()
                 except GoalExecutionError as exc:
                     # Pause the goal so the loop doesn't retry the
@@ -150,3 +170,16 @@ class GoalScheduler:
                         extra={"goal_id": goal.id},
                     )
                     await db.rollback()
+
+    async def _sweep(self) -> None:
+        """Run one stuck-task sweep in its own short session (#314).
+
+        Isolated from ``_tick`` so a sweep error doesn't roll back
+        the goal-trigger commits and vice versa. The sweeper itself
+        scopes per-task work; we just commit once at the end.
+        """
+        async with self._session_factory() as db:
+            await sweep_stuck_tasks(
+                db, manager=self._manager, now=_utcnow()
+            )
+            await db.commit()

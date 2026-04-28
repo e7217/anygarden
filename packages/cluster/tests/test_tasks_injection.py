@@ -156,6 +156,82 @@ async def test_content_includes_mark_task_status_self_instruction(db):
     assert "done" in msg.content
 
 
+class _FakeManager:
+    """Captures broadcast invocations for unit-testing without WS."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    async def broadcast(self, room_id, frame, **_kwargs):  # noqa: D401
+        self.calls.append((room_id, frame))
+
+
+@pytest.mark.asyncio
+async def test_inject_broadcasts_message_frame_when_manager_supplied(db):
+    """#314 — When a ``ConnectionManager`` is supplied the helper must
+    fanout a ``MessageOut`` frame on the room channel. Without this
+    fanout the persisted row sits silently in the DB and the agent's
+    ``decide_policy`` mention path never fires (this is *the* bug
+    that #314 fixes)."""
+    from doorae.ws.protocol import MessageOut
+
+    room, _, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="ping",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    fake = _FakeManager()
+    msg = await inject_task_assignment_message(
+        db,
+        room=room,
+        task=task,
+        sender_participant_id=None,
+        manager=fake,  # type: ignore[arg-type]
+    )
+
+    assert len(fake.calls) == 1
+    room_id, frame = fake.calls[0]
+    assert room_id == room.id
+    assert isinstance(frame, MessageOut)
+    assert frame.id == msg.id
+    assert frame.room_id == room.id
+    assert frame.seq == msg.seq
+    assert frame.content == msg.content
+    # Metadata is forwarded verbatim — agent SDK relies on
+    # ``mentions[type=user, id=<assignee_pid>]`` to wake.
+    assert frame.metadata == msg.extra_metadata
+
+
+@pytest.mark.asyncio
+async def test_inject_does_not_broadcast_when_manager_omitted(db):
+    """Backwards-compatible default: legacy callers and unit tests pass
+    no ``manager`` and the helper stays DB-only. Guards against a
+    future regression that quietly couples broadcast to persistence."""
+    room, _, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="ping",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    # No manager kwarg — must not raise and must produce a row.
+    msg = await inject_task_assignment_message(
+        db,
+        room=room,
+        task=task,
+        sender_participant_id=None,
+    )
+    assert msg.id is not None
+
+
 @pytest.mark.asyncio
 async def test_inject_reassigned_event_is_propagated(db):
     room, creator, assignee = await _seed_room_with_assignee(db)
