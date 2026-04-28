@@ -15,6 +15,11 @@ export interface Agent {
   agents_md?: string | null;
   reasoning_effort?: string | null;
   model?: string | null;
+  // Issue #309 — semantic permission tier. ``null`` means the
+  // adapter falls back to the ``standard`` tier (= pre-#309
+  // hardcoded behaviour); the UI renders ``null`` as ``Default``
+  // and only admins can mutate the field.
+  permission_level?: 'restricted' | 'standard' | 'trusted' | null;
   // Lifecycle populates this on crash or refused dispatch
   // (e.g. ``spawn_refused_no_rooms``). The admin-agents table
   // surfaces it as a tooltip on ``pending`` / ``crashed`` state

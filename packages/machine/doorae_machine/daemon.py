@@ -472,6 +472,10 @@ class MachineDaemon:
             memory_md=getattr(manifest, "memory_md", None),
             reasoning_effort=manifest.reasoning_effort,
             model=manifest.model,
+            # Issue #309 — semantic permission tier propagated from
+            # the cluster's sync frame. ``getattr`` keeps in-memory
+            # manifests from pre-#309 schema revisions compatible.
+            permission_level=getattr(manifest, "permission_level", None),
             sub_rooms=list(manifest.sub_rooms),
             # Issue #73 — runtime passes through from the server frame.
             # ``getattr`` keeps compatibility with in-memory manifest

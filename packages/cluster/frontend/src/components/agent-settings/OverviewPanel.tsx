@@ -68,6 +68,8 @@ interface Props {
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean
+      permission_level?: string | null
+      permission_level_set?: boolean
       description?: string | null
       description_set?: boolean
       collaboration_mode?: 'solo' | 'collaborative'
@@ -243,6 +245,26 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       await updateAgent(agent.id, {
         reasoning_effort: nextVal,
         reasoning_effort_set: true,
+      })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  // #309 — permission tier is a small enum: ``restricted`` | ``standard``
+  // | ``trusted`` (or null = adapter default = standard). Same blur-
+  // commit shape as ``handleReasoningChange``; the API layer enforces
+  // admin-only mutation, so this handler stays UI-side simple.
+  const handlePermissionLevelChange = async (raw: string) => {
+    const nextVal = raw === '' ? null : raw
+    if ((agent.permission_level ?? null) === nextVal) return
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, {
+        permission_level: nextVal,
+        permission_level_set: true,
       })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
@@ -505,6 +527,38 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             </dd>
           </>
         ) : null}
+
+        {/* #309 — Permission tier. Sits next to Model / Reasoning so
+            it groups with the other adapter-spawn parameters. The
+            REST endpoint is admin-only so non-admin users get a 403
+            on PATCH; UI gating is "best effort" — we still render
+            the select so non-admins see the current value, but the
+            change is rejected at the API. ``trusted`` carries an
+            inline ⚠ to flag host access. */}
+        <dt className="text-[var(--color-foreground-muted)]">Permission</dt>
+        <dd>
+          <select
+            value={agent.permission_level ?? ''}
+            onChange={e => void handlePermissionLevelChange(e.target.value)}
+            disabled={configSaving}
+            aria-label="Agent permission tier"
+            data-testid="overview-permission-select"
+            className={SELECT_CSS}
+          >
+            <option value="">Default (standard)</option>
+            <option value="restricted">Restricted — read-only</option>
+            <option value="standard">Standard — workspace only</option>
+            <option value="trusted">⚠ Trusted — host access</option>
+          </select>
+          {agent.permission_level === 'trusted' ? (
+            <p
+              className="mt-1 text-[11px] text-[var(--color-foreground-muted)]"
+              data-testid="overview-permission-trusted-warning"
+            >
+              호스트 정보·명령 접근 가능. 신중히 사용하세요.
+            </p>
+          ) : null}
+        </dd>
 
         {/* #279 — Collaboration policy. ``solo`` (default) keeps the
             agent answering within its own turn; ``collaborative``

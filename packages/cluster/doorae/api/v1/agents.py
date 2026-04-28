@@ -92,6 +92,15 @@ class AgentUpdate(BaseModel):
     reasoning_effort_set: bool = False
     model: Optional[str] = None
     model_set: bool = False
+    # Issue #309 — semantic permission tier. Validated against the
+    # tier set; ``_set`` flag follows the established pattern so a
+    # rename PATCH can't silently flip the level. Admin-only is
+    # enforced in the PATCH handler via the ``Identity.is_admin``
+    # check, not the schema.
+    permission_level: Optional[str] = Field(
+        default=None, pattern="^(restricted|standard|trusted)$"
+    )
+    permission_level_set: bool = False
     # Issue #73 — runtime is editable post-creation. A real change
     # requires a restart (bump_generation → machine respawns with
     # the new runtime) which ``update_agent`` already triggers.
@@ -151,6 +160,10 @@ class AgentOut(BaseModel):
     # failed.
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    # Issue #309 — semantic permission tier. NULL means the adapter
+    # falls back to the ``standard`` tier (= pre-#309 hardcoded
+    # behaviour); the UI renders NULL as "Default".
+    permission_level: Optional[str] = None
     # Issue #73 — exposed read-only so the admin UI can render a
     # badge next to the engine picker without re-querying.
     runtime: str = "python"
@@ -340,6 +353,31 @@ async def update_agent(
         runtime_changed = True
     if body.model_set:
         agent.model = body.model
+        runtime_changed = True
+    if body.permission_level_set:
+        # #309 — admin-only permission tier. The pattern matches
+        # ``reasoning_effort`` / ``model``: capture the previous
+        # value, swap, write an ``ActivityLog`` row tagged
+        # ``agent_permission_changed`` so security-relevant
+        # transitions are auditable. Validation (one of
+        # restricted/standard/trusted, or null) is enforced by the
+        # Pydantic field pattern; here we only record the change.
+        previous_permission = agent.permission_level
+        agent.permission_level = body.permission_level
+        if previous_permission != body.permission_level:
+            db.add(
+                ActivityLog(
+                    agent_id=agent.id,
+                    event_type="agent_permission_changed",
+                    details={
+                        "from": previous_permission,
+                        "to": body.permission_level,
+                        "by_user_id": identity.id
+                        if identity.kind == "user"
+                        else None,
+                    },
+                )
+            )
         runtime_changed = True
     if body.runtime_set and body.runtime is not None:
         # Issue #73 — runtime change needs a respawn to take effect,

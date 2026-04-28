@@ -52,6 +52,14 @@ class SyncDesiredStateFrame(BaseModel):
     # Per-agent engine model (e.g. "gpt-5.4-mini"). None = adapter default.
     model: str | None = None
 
+    # Issue #309 — semantic permission tier ("restricted" |
+    # "standard" | "trusted"). The machine spawner exports this as
+    # ``DOORAE_AGENT_PERMISSION_LEVEL`` in the agent process env;
+    # each engine adapter resolves it into its native dial. None
+    # means the adapter's "standard" mapping is used (= current
+    # hardcoded behaviour pre-#309).
+    permission_level: str | None = None
+
     # Sub-rooms this agent can delegate to (v2 delegation)
     # Each entry: {"name": "...", "description": "..." or null}
     sub_rooms: list[dict[str, str | None]] = Field(default_factory=list)
