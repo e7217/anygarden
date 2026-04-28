@@ -47,7 +47,8 @@ GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
-CREATE_ALWAYS = 2
+OPEN_ALWAYS = 4
+FILE_BEGIN = 0
 FILE_ATTRIBUTE_NORMAL = 0x00000080
 FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
@@ -107,10 +108,14 @@ def _raise_winerror(path: Path, default_errno: int = errno.EIO) -> None:
 def _open_no_reparse(path: Path) -> int:
     """``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT``.
 
-    Returns the raw handle. If the file exists and is a reparse point
-    (symlink, junction, mount point), the handle is closed and
-    ``OSError(ELOOP)`` is raised — emulating the POSIX
-    ``O_NOFOLLOW`` contract.
+    Uses ``OPEN_ALWAYS`` (open existing or create new) rather than
+    ``CREATE_ALWAYS`` because the latter would silently overwrite a
+    pre-existing reparse point with a regular file. ``OPEN_ALWAYS``
+    plus the reparse flag returns a handle to the reparse point
+    itself, letting us inspect ``dwFileAttributes`` and refuse —
+    atomically — before any write happens. The truncation that
+    ``CREATE_ALWAYS`` would have done implicitly is performed
+    explicitly via ``SetEndOfFile`` after the reparse check passes.
     """
     k32 = _kernel32()
     k32.CreateFileW.argtypes = [
@@ -129,14 +134,16 @@ def _open_no_reparse(path: Path) -> int:
         GENERIC_WRITE,
         FILE_SHARE_READ,
         None,
-        CREATE_ALWAYS,
+        OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
         None,
     )
     if handle == INVALID_HANDLE_VALUE or handle is None:
         _raise_winerror(path)
 
-    # Now confirm we didn't just create-or-open a reparse point.
+    # Inspect the file's attributes via the handle we just opened.
+    # If it's a reparse point, refuse — close the handle without
+    # writing or truncating.
     k32.GetFileInformationByHandle.argtypes = [
         wintypes.HANDLE,
         ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION),
@@ -155,6 +162,15 @@ def _open_no_reparse(path: Path) -> int:
             "Refusing to follow reparse point at final component",
             str(path),
         )
+
+    # Regular file (or freshly created empty file) — truncate to zero
+    # so we get the same "replace" semantics CREATE_ALWAYS provides,
+    # without ever having opened a reparse point with write access.
+    k32.SetEndOfFile.argtypes = [wintypes.HANDLE]
+    k32.SetEndOfFile.restype = wintypes.BOOL
+    if not k32.SetEndOfFile(handle):
+        k32.CloseHandle(handle)
+        _raise_winerror(path)
 
     return handle
 
