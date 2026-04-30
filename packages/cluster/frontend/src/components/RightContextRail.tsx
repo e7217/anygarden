@@ -83,7 +83,7 @@ export default function RightContextRail({
         // mobile drawer and md desktop, w-80 (320px) on lg, full
         // w-96 (384px) only at xl+.
         className={`
-          fixed inset-y-0 right-0 z-40 flex h-full w-72 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
+          fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-72 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
           transform transition-all duration-200 ease-out
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
@@ -105,7 +105,7 @@ export default function RightContextRail({
           </button>
         </div>
 
-        <ScrollArea className="flex-1">
+        <ScrollArea className="min-w-0 flex-1">
           <GoalsSection
             roomId={roomId}
             agentParticipants={agentParticipants}

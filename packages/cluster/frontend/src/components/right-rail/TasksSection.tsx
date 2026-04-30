@@ -208,7 +208,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       <div
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
-        className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+        className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
       >
         <button
           onClick={() => cycleStatus(task)}
@@ -230,7 +230,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           />
         </button>
         <span
-          className={`flex-1 truncate text-[13px] ${
+          className={`min-w-0 flex-1 truncate text-[13px] ${
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
               : task.status === 'failed'
@@ -249,10 +249,10 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             its ``pr-5`` carves a clean column for the absolute-anchored
             delete button below to land in without overlapping live
             text. ``""`` value = Unassigned (Tasks tolerate NULL). */}
-        <div className="relative shrink-0 w-[8rem]">
+        <div className="relative min-w-[5rem] max-w-[8rem] flex-[0_1_8rem]">
           <span
             aria-hidden="true"
-            className="block truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
+            className="block min-w-0 max-w-full truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
             title={assignee?.display_name ?? 'Unassigned'}
           >
             {assignee?.display_name ?? '—'}
@@ -261,7 +261,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             value={task.assignee_participant_id ?? ''}
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
-            className="absolute inset-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity appearance-none bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
+            className="absolute inset-0 min-w-0 max-w-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity appearance-none bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
             aria-label={`Reassign ${task.title}`}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >
@@ -290,7 +290,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }
 
   return (
-    <section className="flex flex-col">
+    <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
           Tasks
@@ -325,14 +325,14 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       </header>
       {routeMessage && (
         <p
-          className="px-3 pb-1 text-[11px] text-[var(--color-foreground-muted)]"
+          className="break-words px-3 pb-1 text-[11px] text-[var(--color-foreground-muted)]"
           role="status"
           data-testid="right-rail-route-toast"
         >
           {routeMessage}
         </p>
       )}
-      <div className="px-1">
+      <div className="min-w-0 px-1">
         {tasks.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
             No tasks yet
@@ -342,7 +342,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           const items = grouped[status] ?? []
           if (items.length === 0) return null
           return (
-            <div key={status} className="mb-1">
+            <div key={status} className="mb-1 min-w-0">
               <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
                 {STATUS_LABEL[status]}
               </div>
@@ -356,20 +356,20 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           that case so the chip is informative read-only ("auto-
           assigned to <name>") rather than feeling like an empty
           dropdown the user has to deal with. */}
-      <div className="border-t border-[var(--color-border)] px-3 py-2 space-y-2">
+      <div className="min-w-0 space-y-2 border-t border-[var(--color-border)] px-3 py-2">
         <input
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submitNew()}
           placeholder="Add a task…"
-          className="w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--color-foreground-subtle)]"
+          className="min-w-0 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--color-foreground-subtle)]"
         />
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <select
             value={newAssignee}
             onChange={(e) => setNewAssignee(e.target.value)}
             disabled={singleAgentRoom || agentParticipants.length === 0}
-            className="flex-1 bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border border-[var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 truncate disabled:opacity-70"
+            className="min-w-0 flex-1 bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border border-[var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 truncate disabled:opacity-70"
             aria-label="Pick assignee"
             data-testid="right-rail-task-create-assignee"
           >
@@ -386,6 +386,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             onClick={submitNew}
             disabled={adding || !newTitle.trim()}
             aria-label="Create task"
+            className="shrink-0"
           >
             <Plus className="h-4 w-4" />
           </Button>
