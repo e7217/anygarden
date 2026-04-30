@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye } from 'lucide-react'
+import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -75,6 +75,16 @@ interface RoomHeaderProps {
    *  renders read-only. */
   ephemeral?: boolean
   onToggleEphemeral?: (next: boolean) => void
+  /** #329 Phase 3 — search trigger. Was a separate row above the
+   *  chat area; absorbed here so the chat surface stops paying for
+   *  a row that ⌘K already covers. ``undefined`` hides the button
+   *  (guest pages, routes without the search dialog). */
+  onSearch?: () => void
+  /** #329 Phase 3 — artifacts trigger. Forwarded to the overflow
+   *  menu so every room member (not just admins) can browse the
+   *  agent-produced artifacts without the header growing another
+   *  inline icon. */
+  onShowArtifacts?: () => void
   /** #302 — slot for the right context rail toggle button. ChatPage
    *  passes <RightRailToggle/>; the header just gives it a place to
    *  live next to the settings menu. ``undefined`` hides it (e.g.
@@ -123,6 +133,8 @@ export default function RoomHeader({
   onToggleParticipants,
   ephemeral,
   onToggleEphemeral,
+  onSearch,
+  onShowArtifacts,
   rightRailSlot,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
@@ -262,11 +274,24 @@ export default function RoomHeader({
             agents {Math.min(agentsOnline, agentsTotal)}/{agentsTotal}
           </span>
         )}
+        {onSearch && (
+          <button
+            type="button"
+            onClick={onSearch}
+            title="Search messages (⌘K)"
+            aria-label="Search messages"
+            data-testid="room-header-search"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+          >
+            <Search className="h-4 w-4" />
+          </button>
+        )}
         <RoomSettingsMenu
           onCreateSubRoom={onCreateSubRoom}
           onEditRoom={onEditRoom}
           onManageInvites={onManageInvites}
           onManageAgents={onManageAgents}
+          onShowArtifacts={onShowArtifacts}
           onStopAllAgents={onStopAllAgents}
           onDeleteRoom={onDeleteRoom}
         />

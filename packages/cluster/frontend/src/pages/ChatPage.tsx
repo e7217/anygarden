@@ -6,7 +6,6 @@ import RoomHeader from '@/components/RoomHeader'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import RoomArtifactsDialog from '@/components/RoomArtifactsDialog'
-import RoomSharedFilesDialog from '@/components/RoomSharedFilesDialog'
 import TypingIndicator from '@/components/TypingIndicator'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
@@ -22,7 +21,7 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu, Search, Image as ImageIcon } from 'lucide-react'
+import { MessageSquare, Menu } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 
 export interface Participant {
@@ -68,7 +67,6 @@ export default function ChatPage() {
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
-  const [sharedFilesOpen, setSharedFilesOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
@@ -518,6 +516,8 @@ export default function ChatPage() {
                       }
                     : undefined
                 }
+                onSearch={() => setSearchOpen(true)}
+                onShowArtifacts={() => setArtifactsOpen(true)}
                 rightRailSlot={
                   <RightRailToggle
                     roomId={selectedRoom}
@@ -540,20 +540,6 @@ export default function ChatPage() {
                 />
               )}
             </div>
-            {/* #302 — Search lives on its own slim row now that the
-                Chat/Tasks tab toggle has been replaced by the right
-                context rail. The search button stays at the top so
-                ⌘K stays discoverable. */}
-            <div className="flex items-center justify-end border-b border-[var(--color-border)] px-4">
-              <button
-                onClick={() => setSearchOpen(true)}
-                className="flex items-center gap-1.5 rounded-[var(--radius-sm)] px-2 py-1 text-xs text-[var(--color-foreground-muted)] hover:bg-black/5"
-              >
-                <Search className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">Search</span>
-                <kbd className="hidden rounded border border-[var(--color-border)] px-1 py-0.5 text-[10px] sm:inline">⌘K</kbd>
-              </button>
-            </div>
             <ChatArea
               messages={messages}
               participants={participants}
@@ -565,21 +551,6 @@ export default function ChatPage() {
               participants={participants}
               myParticipantId={myParticipantId}
             />
-            <div className="flex justify-end gap-3 px-4 pt-1">
-              <button
-                type="button"
-                onClick={() => setArtifactsOpen(true)}
-                className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] transition-colors"
-                title="에이전트가 만든 산출물 보기"
-              >
-                <ImageIcon className="h-3 w-3" />
-                산출물
-              </button>
-              {/* #302 — the "공유 파일" entry point moved to the
-                  right-rail FilesSection. The legacy dialog is kept
-                  around for older deep links but is no longer linked
-                  from the chat surface. */}
-            </div>
             <MessageInput
               onSend={send}
               onTyping={sendTyping}
@@ -597,11 +568,6 @@ export default function ChatPage() {
                 onChange={refreshParticipants}
               />
             )}
-            <RoomSharedFilesDialog
-              roomId={selectedRoom}
-              open={sharedFilesOpen}
-              onOpenChange={setSharedFilesOpen}
-            />
             <RoomArtifactsDialog
               roomId={selectedRoom}
               open={artifactsOpen}
