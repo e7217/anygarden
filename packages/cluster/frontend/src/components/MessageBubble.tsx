@@ -68,7 +68,7 @@ function MessageReferences({
       {refs.map(r => (
         <span
           key={r.id}
-          className="inline-flex max-w-[240px] items-center gap-1.5 rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-xs text-[var(--color-foreground-muted)]"
+          className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-xs text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
           title={r.name}
         >
           <Paperclip className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" />
@@ -422,7 +422,13 @@ export default memo(function MessageBubble({
         </span>
         {bookmarkBtn}
       </div>
-      <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'w-full' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
+      {/* #329 Phase 2 — agent replies were ``w-full`` so on narrow
+          viewports their markdown/code blocks ran edge-to-edge with
+          no breathing room. Stage them like the user bubble but a
+          step wider (info-container role): full width below sm,
+          progressively tighter at sm/md/lg. Non-agent (orphan/guest)
+          uses the tighter user-side ladder. */}
+      <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
         <MarkdownContent content={renderedContent} resolveUser={resolveUser} resolveRoom={resolveRoom} />
         <MessageReferences metadata={message.metadata} />
       </div>
