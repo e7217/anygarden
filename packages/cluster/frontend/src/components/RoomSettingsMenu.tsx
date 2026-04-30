@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { FolderPlus, Link2, MoreHorizontal, OctagonX, Settings, Trash2, UserPlus } from 'lucide-react'
+import { FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Settings, Trash2, UserPlus } from 'lucide-react'
 
 /**
  * Overflow menu that groups the room's admin-scoped actions into a
@@ -26,6 +26,10 @@ export interface RoomSettingsMenuProps {
   onEditRoom?: () => void
   onManageInvites?: () => void
   onManageAgents?: () => void
+  /** #329 Phase 3 — agent-produced artifacts viewer. Available to
+   *  every room member (no admin gate); kept here in the overflow
+   *  menu so the header strip doesn't grow another inline icon. */
+  onShowArtifacts?: () => void
   onStopAllAgents?: () => void
   onDeleteRoom?: () => void
 }
@@ -35,6 +39,7 @@ export default function RoomSettingsMenu({
   onEditRoom,
   onManageInvites,
   onManageAgents,
+  onShowArtifacts,
   onStopAllAgents,
   onDeleteRoom,
 }: RoomSettingsMenuProps) {
@@ -65,6 +70,12 @@ export default function RoomSettingsMenu({
       icon: <UserPlus className="h-4 w-4" />,
       onClick: onManageAgents,
       testId: 'room-menu-agents',
+    },
+    onShowArtifacts && {
+      label: 'Artifacts',
+      icon: <ImageIcon className="h-4 w-4" />,
+      onClick: onShowArtifacts,
+      testId: 'room-menu-artifacts',
     },
   ].filter(Boolean) as {
     label: string
