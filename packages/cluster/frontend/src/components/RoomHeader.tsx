@@ -275,13 +275,17 @@ export default function RoomHeader({
           </span>
         )}
         {onSearch && (
+          /* #329 Phase 4 — direct search icon hidden below sm so the
+             header strip stays uncluttered on phones. The same
+             ``onSearch`` is forwarded to RoomSettingsMenu below as a
+             menu fallback for mobile users (who can't type ⌘K). */
           <button
             type="button"
             onClick={onSearch}
             title="Search messages (⌘K)"
             aria-label="Search messages"
             data-testid="room-header-search"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden sm:inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
           >
             <Search className="h-4 w-4" />
           </button>
@@ -291,6 +295,7 @@ export default function RoomHeader({
           onEditRoom={onEditRoom}
           onManageInvites={onManageInvites}
           onManageAgents={onManageAgents}
+          onSearch={onSearch}
           onShowArtifacts={onShowArtifacts}
           onStopAllAgents={onStopAllAgents}
           onDeleteRoom={onDeleteRoom}

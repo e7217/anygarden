@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Settings, Trash2, UserPlus } from 'lucide-react'
+import { FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
 
 /**
  * Overflow menu that groups the room's admin-scoped actions into a
@@ -26,6 +26,11 @@ export interface RoomSettingsMenuProps {
   onEditRoom?: () => void
   onManageInvites?: () => void
   onManageAgents?: () => void
+  /** #329 Phase 4 — search trigger. Mirrors the header's direct
+   *  search button for narrow viewports where the icon is hidden
+   *  (sub-sm). Mobile users can't type ⌘K, so they need a menu
+   *  fallback. */
+  onSearch?: () => void
   /** #329 Phase 3 — agent-produced artifacts viewer. Available to
    *  every room member (no admin gate); kept here in the overflow
    *  menu so the header strip doesn't grow another inline icon. */
@@ -39,6 +44,7 @@ export default function RoomSettingsMenu({
   onEditRoom,
   onManageInvites,
   onManageAgents,
+  onSearch,
   onShowArtifacts,
   onStopAllAgents,
   onDeleteRoom,
@@ -47,6 +53,12 @@ export default function RoomSettingsMenu({
   const rootRef = useRef<HTMLDivElement>(null)
 
   const safeActions = [
+    onSearch && {
+      label: 'Search messages',
+      icon: <Search className="h-4 w-4" />,
+      onClick: onSearch,
+      testId: 'room-menu-search',
+    },
     onCreateSubRoom && {
       label: 'Create sub-room',
       icon: <FolderPlus className="h-4 w-4" />,
