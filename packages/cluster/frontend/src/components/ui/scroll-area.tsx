@@ -11,7 +11,21 @@ const ScrollArea = React.forwardRef<
     className={cn("relative overflow-hidden", className)}
     {...props}
   >
-    <ScrollAreaPrimitive.Viewport className="h-full w-full rounded-[inherit]">
+    {/*
+      #336 — Radix injects ``display: table; min-width: 100%`` as inline
+      style on the viewport's first child. ``display: table`` sizes that
+      wrapper to descendants' min-content width, which for ``truncate``
+      (white-space: nowrap) is the full unbroken text width — defeating
+      ``min-w-0`` / ``flex-1`` / ``truncate`` further down the tree and
+      letting any long row push the rail's column past its rail width.
+      Forcing the wrapper to ``display: block`` while preserving its
+      ``min-width: 100%`` keeps the layout substrate honest so every
+      ScrollArea consumer (right rail, sidebar, chat area) gets correct
+      truncation for free.
+    */}
+    <ScrollAreaPrimitive.Viewport
+      className="h-full w-full rounded-[inherit] [&>div]:!block [&>div]:!min-w-full"
+    >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar />
