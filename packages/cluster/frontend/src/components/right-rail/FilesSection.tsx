@@ -42,7 +42,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
   }
 
   return (
-    <section className="flex flex-col border-t border-[var(--color-border)]">
+    <section className="flex min-w-0 flex-col border-t border-[var(--color-border)]">
       <header className="flex items-baseline justify-between px-3 py-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
           Shared Files
@@ -61,7 +61,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
         </p>
       )}
 
-      <div className="px-1">
+      <div className="min-w-0 px-1">
         {files.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
             No files yet
@@ -71,7 +71,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           <div
             key={f.id}
             data-testid={`right-rail-file-row-${f.id}`}
-            className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
           >
             <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
             <div className="min-w-0 flex-1">

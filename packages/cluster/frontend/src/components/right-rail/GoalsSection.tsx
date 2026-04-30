@@ -83,7 +83,7 @@ export default function GoalsSection({
   }, [formAgents])
 
   return (
-    <section className="flex flex-col">
+    <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
           Responsibilities
@@ -121,7 +121,7 @@ export default function GoalsSection({
         </div>
       )}
 
-      <div className="px-1">
+      <div className="min-w-0 px-1">
         {goals.length === 0 && !showForm && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
             No goals yet
@@ -131,7 +131,7 @@ export default function GoalsSection({
           <div
             key={g.id}
             data-testid={`right-rail-goal-row-${g.id}`}
-            className="group relative flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
           >
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
