@@ -9,11 +9,14 @@ import {
   type ReactNode,
 } from 'react'
 
-// Right context rail collapse state (#302). Mirrors useSidebarLayout
-// (#117) byte-for-byte except for the storage key and the inverted
-// default — the right rail is *closed* by default to keep the chat
-// canvas wide; users opt in to the rail by toggling it open.
+// Right context rail collapse state (#302, #329). Mirrors
+// useSidebarLayout (#117) for the storage/persist contract; the
+// no-localStorage default is viewport-driven so the rail expands by
+// default on lg+ screens (where there is room for both sidebar and
+// rail) and collapses by default below 1024px (where the conversation
+// otherwise gets squeezed). Persisted user choice always wins.
 const STORAGE_KEY = 'doorae_right_sidebar_collapsed'
+const LG_BREAKPOINT_QUERY = '(min-width: 1024px)'
 
 export interface RightSidebarLayoutValue {
   /** Desktop-only collapsed flag. Mobile (< md) handles overlay drawer
@@ -32,12 +35,15 @@ const RightSidebarLayoutContext =
 
 function readInitial(): boolean {
   try {
-    // Default *collapsed* — the inverted polarity vs. the left sidebar
-    // is intentional. The chat canvas should win the available width
-    // until the user explicitly opens the context rail.
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw === null) return true
-    return raw === 'true'
+    if (raw !== null) return raw === 'true'
+    // No persisted preference — fall back to viewport policy. ≥1024px
+    // (lg) starts expanded; below that the rail is collapsed so the
+    // conversation isn't squeezed (#329).
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      return !window.matchMedia(LG_BREAKPOINT_QUERY).matches
+    }
+    return true
   } catch {
     return true
   }

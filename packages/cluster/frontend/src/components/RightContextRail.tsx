@@ -78,13 +78,17 @@ export default function RightContextRail({
         data-testid="right-rail-root"
         aria-hidden={collapsed && !open ? true : undefined}
         aria-label="Room context rail"
+        // #329 — width is staged across breakpoints so the rail no
+        // longer eats a fixed 384px below xl: w-72 (288px) on the
+        // mobile drawer and md desktop, w-80 (320px) on lg, full
+        // w-96 (384px) only at xl+.
         className={`
-          fixed inset-y-0 right-0 z-40 flex h-full w-96 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
+          fixed inset-y-0 right-0 z-40 flex h-full w-72 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
           transform transition-all duration-200 ease-out
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
             ? 'md:translate-x-full md:w-0 md:overflow-hidden md:border-l-0'
-            : 'md:static md:z-auto md:translate-x-0 md:w-96'}
+            : 'md:static md:z-auto md:translate-x-0 md:w-72 lg:w-80 xl:w-96'}
         `}
       >
         <div className="flex h-12 items-center justify-between border-b border-[var(--color-border)] px-3">
