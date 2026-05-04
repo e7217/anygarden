@@ -19,6 +19,7 @@ dependencies = [
     "pydantic>=2.6,<3.0",
     "pydantic-settings>=2.2",
     "python-jose[cryptography]>=3.3",
+    "python-multipart>=0.0.9",
     "argon2-cffi>=23.1",
     "structlog>=24.1",
     "prometheus-client>=0.20",

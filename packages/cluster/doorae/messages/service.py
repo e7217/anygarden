@@ -103,10 +103,10 @@ async def inject_task_assignment_message(
     if sender_participant_id is None:
         metadata["system_origin"] = "task_assignment"
 
-    # Multi-line content (#275). First line stays the canonical
+    # Multi-line content (#275, #338). First line stays the canonical
     # ``<@user:pid> [TASK] {title}`` form so ``decide_policy`` mention
     # matching, frontend title extraction, and message-log readers keep
-    # working unchanged. The italic trailing block is a self-instruction
+    # working unchanged. The following action block is a self-instruction
     # the assignee LLM reads on this very turn: it tells the agent to
     # report progress through the existing ``mark_task_status`` MCP tool
     # so status updates flow without admins toggling them by hand.
@@ -118,10 +118,16 @@ async def inject_task_assignment_message(
     content = (
         f"<@user:{assignee_pid}> [TASK] {task.title}\n"
         "\n"
-        "_(이 task는 당신에게 배정되었습니다. "
-        f'시작 시 `mark_task_status(task_id="{task.id}", status="in_progress")` 를 호출하고, '
-        '완료되면 `status="done"` 으로 다시 호출하세요. '
-        '차단되면 `status="blocked"`.)_'
+        "**REQUIRED ACTIONS** - 이 task는 당신에게 배정되었습니다. "
+        "다음 두 단계를 반드시 수행하세요:\n"
+        "\n"
+        "1. **시작 직후**: "
+        f'`mark_task_status(task_id="{task.id}", status="in_progress")` '
+        "를 호출하여 작업 착수를 기록.\n"
+        "2. **응답 완료 시**: 같은 도구로 `status=\"done\"` 을 호출. "
+        "차단되면 `status=\"blocked\"` + 이유 설명.\n"
+        "\n"
+        "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다."
     )
 
     msg = await _repo_append(
