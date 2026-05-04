@@ -156,6 +156,30 @@ async def test_content_includes_mark_task_status_self_instruction(db):
     assert "done" in msg.content
 
 
+@pytest.mark.asyncio
+async def test_content_highlights_required_task_status_actions(db):
+    """#338 — The task-assignment self-instruction must be structured as
+    an action block. A trailing decorative aside was too easy for some
+    engines to skip, leaving tasks in ``todo`` until pickup timeout."""
+    room, creator, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="review stale task handling",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    msg = await inject_task_assignment_message(
+        db, room=room, task=task, sender_participant_id=creator.id
+    )
+
+    assert "REQUIRED ACTIONS" in msg.content
+    assert "시작 직후" in msg.content
+    assert "응답 완료 시" in msg.content
+
+
 class _FakeManager:
     """Captures broadcast invocations for unit-testing without WS."""
 
