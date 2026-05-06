@@ -4,14 +4,14 @@ The Gemini CLI (``gemini`` binary from https://github.com/google-gemini/gemini-c
 uses its own ``findProjectRoot`` that walks upward looking for a
 ``.git`` directory. In our per-agent layout there is no ``.git`` in
 ``agent_root/``, so gemini treats whichever cwd the adapter launches it
-from as the project root and looks for ``.gemini/settings.json`` there.
-The materializer drops ``.gemini/settings.json`` at
-``agent_root/.gemini/settings.json`` and ``AGENTS.md`` at
-``agent_root/AGENTS.md``; the machine spawner now launches the agent
-process from that same ``agent_root``. With that cwd:
+from as the project root. The materializer drops canonical settings at
+``agent_root/.gemini/settings.json`` and the machine spawner mirrors
+that file into an isolated ``HOME`` at
+``agent_root/.gemini-home/.gemini/settings.json`` before launching the
+agent process. With that environment:
 
-- ``.gemini/settings.json`` is in cwd → settings (including
-  ``context.fileName = "AGENTS.md"``) are actually loaded
+- user-scope ``.gemini/settings.json`` resolves to the per-agent copy,
+  so MCP servers are loaded without mutating the host user's settings
 - ``AGENTS.md`` is in cwd → hierarchical memory auto-loads it, so
   skill rules apply even without the user prompt referencing them
 - runtime files can be written relative to the agent directory while
@@ -25,12 +25,12 @@ The adapter's job is kept narrow:
 - keep per-room conversation context so two rooms on the same agent
   don't cross-contaminate
 
-MCP servers live in ``.gemini/settings.json`` materialized by
-``Spawner._materialize_agent_dir``. API keys flow into the agent
-subprocess environment via ``Spawner.spawn`` (see #184) — they are
-no longer rendered to a ``.gemini/.env`` file, because that file
-was readable from the agent's tool sandbox and the LLM's ``Read``
-tool could exfiltrate the plaintext key.
+MCP servers live in the per-agent user-scope settings file prepared by
+``Spawner._prepare_gemini_user_home``. API keys flow through the
+private ``doorae_agent.secrets`` channel (see #184) — they are no
+longer rendered to a ``.gemini/.env`` file, because that file was
+readable from the agent's tool sandbox and the LLM's ``Read`` tool
+could exfiltrate the plaintext key.
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ from typing import Any
 import psutil
 import structlog
 
+from doorae_agent import secrets as agent_secrets
 from doorae_agent.client import ChatClient
 from doorae_agent.coordination.pending_context import (
     append_context_line,
@@ -326,8 +327,10 @@ class GeminiCliAdapter(EngineAdapter):
         upward from cwd looking for
         ``.git``; in our layout there is none, so whatever we pass as
         cwd becomes its project root. We want that project root to be
-        ``agent_root`` so gemini finds ``.gemini/settings.json`` and
-        the ``AGENTS.md`` context file materialized there.
+        ``agent_root`` so gemini finds the ``AGENTS.md`` context file.
+        MCP settings are loaded from the redirected user-scope
+        ``$HOME/.gemini/settings.json`` prepared by the machine
+        spawner.
         """
         agent_root = Path.cwd()
         # Issue #309 — derive the approval/trust flags from the
@@ -370,6 +373,7 @@ class GeminiCliAdapter(EngineAdapter):
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=str(agent_root),
+            env=agent_secrets.env_with_secrets(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **_subprocess_group_kwargs(),  # own process group for clean kill

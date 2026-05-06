@@ -547,6 +547,135 @@ class TestSpawn:
         assert result.success is True
         assert "CODEX_HOME" not in captured_env
 
+    async def test_spawn_sets_gemini_home_when_settings_present(
+        self, spawner: Spawner
+    ) -> None:
+        """gemini-cli only reads user-scope MCP settings reliably in
+        headless mode, so a per-agent ``HOME`` must point at a copied
+        user settings file instead of the host user's ``~/.gemini``.
+        """
+        settings = (
+            '{"mcpServers":{"doorae":{"type":"http",'
+            '"url":"https://cluster.example/mcp/rpc",'
+            '"headers":{"Authorization":"Bearer tok"}}}}\n'
+        )
+        msg = SpawnManifest(
+            agent_id="agent-gemini",
+            engine="gemini-cli",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={".gemini/settings.json": settings},
+        )
+
+        captured_env: dict[str, str] = {}
+
+        async def mock_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return _mock_proc()
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=mock_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        expected_home = spawner._agent_dirs_root / "agent-gemini" / ".gemini-home"
+        assert captured_env["HOME"] == str(expected_home)
+        user_settings = expected_home / ".gemini" / "settings.json"
+        assert user_settings.read_text() == settings
+        assert user_settings.stat().st_mode & 0o777 == 0o600
+
+    async def test_spawn_does_not_set_gemini_home_without_settings(
+        self, spawner: Spawner
+    ) -> None:
+        """No materialized gemini settings means no user-home redirect;
+        host-auth-only gemini agents keep their existing discovery path.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-gemini-host",
+            engine="gemini-cli",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={},
+        )
+
+        captured_env: dict[str, str] = {}
+
+        async def mock_exec(*args, **kwargs):
+            captured_env.update(kwargs.get("env", {}))
+            return _mock_proc()
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch(
+                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                side_effect=mock_exec,
+            ), patch(
+                "doorae_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/doorae-agent",
+            ):
+                result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert "HOME" not in captured_env
+
+    async def test_spawn_gemini_home_links_host_oauth_files(
+        self,
+        spawner: Spawner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Redirecting HOME must not strand hosts authenticated via
+        ``gemini auth``. Copying settings is per-agent; auth files stay
+        as host-owned symlinks so token rotation remains visible.
+        """
+        host_home = tmp_path / "host-home"
+        host_gemini = host_home / ".gemini"
+        host_gemini.mkdir(parents=True)
+        oauth = host_gemini / "oauth_creds.json"
+        accounts = host_gemini / "google_accounts.json"
+        oauth.write_text('{"token":"oauth"}')
+        accounts.write_text('{"accounts":[]}')
+        monkeypatch.setenv("HOME", str(host_home))
+
+        msg = SpawnManifest(
+            agent_id="agent-gemini-oauth",
+            engine="gemini-cli",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={".gemini/settings.json": '{"mcpServers":{}}\n'},
+        )
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=_mock_proc(),
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        redirected = (
+            spawner._agent_dirs_root
+            / "agent-gemini-oauth"
+            / ".gemini-home"
+            / ".gemini"
+        )
+        assert (redirected / "oauth_creds.json").is_symlink()
+        assert Path(os.readlink(redirected / "oauth_creds.json")) == oauth
+        assert (redirected / "google_accounts.json").is_symlink()
+        assert Path(os.readlink(redirected / "google_accounts.json")) == accounts
+
     async def test_spawn_typescript_runtime_uses_doorae_agent_ts_when_on_path(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:

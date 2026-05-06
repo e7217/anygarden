@@ -171,6 +171,7 @@ class Spawner:
         ".claude",
         ".codex",
         ".gemini",
+        ".gemini-home",
         ".mcp.json",
         "AGENTS.md",
         "CLAUDE.md",
@@ -185,6 +186,8 @@ class Spawner:
         "skills",
     })
     _CODEX_WORKSPACE_MARKER = ".doorae-codex-workspace"
+    _GEMINI_USER_HOME_DIR = ".gemini-home"
+    _GEMINI_HOST_AUTH_FILES = ("oauth_creds.json", "google_accounts.json")
 
     # Default ``.claude/settings.json`` body for claude-code agents
     # whose admin manifest doesn't supply one. claude-agent-sdk loads
@@ -792,6 +795,43 @@ class Spawner:
 
         return agent_root
 
+    @classmethod
+    def _prepare_gemini_user_home(cls, agent_root: Path) -> Path | None:
+        """Project gemini settings into an isolated user-scope HOME.
+
+        Gemini CLI 0.39.x reliably loads MCP servers from
+        ``$HOME/.gemini/settings.json`` in headless mode. The cluster
+        still materializes the canonical per-agent settings at
+        ``agent_root/.gemini/settings.json``; this helper copies that
+        file into a materializer-owned ``.gemini-home`` and links the
+        host OAuth files needed by installations that authenticate via
+        ``gemini auth`` rather than API-key env vars.
+        """
+        project_settings = agent_root / ".gemini" / "settings.json"
+        if not project_settings.is_file():
+            return None
+
+        user_home = agent_root / cls._GEMINI_USER_HOME_DIR
+        gemini_dir = user_home / ".gemini"
+        cls._ensure_real_directory(user_home)
+        cls._ensure_real_directory(gemini_dir)
+        safe_write_text(
+            gemini_dir / "settings.json",
+            project_settings.read_text(encoding="utf-8"),
+            mode=0o600,
+        )
+
+        host_gemini = Path.home() / ".gemini"
+        for filename in cls._GEMINI_HOST_AUTH_FILES:
+            source = host_gemini / filename
+            target = gemini_dir / filename
+            if target.exists() or target.is_symlink():
+                cls._remove_tree_entry(target)
+            if source.is_file():
+                target.symlink_to(source)
+
+        return user_home
+
     async def spawn(self, msg: SpawnManifest) -> SpawnResult:
         """Spawn an agent subprocess.
 
@@ -909,6 +949,11 @@ class Spawner:
             and has_codex_overlay
         ):
             env["CODEX_HOME"] = str(agent_root / ".codex")
+
+        if msg.engine == "gemini-cli" and agent_root is not None:
+            gemini_home = self._prepare_gemini_user_home(agent_root)
+            if gemini_home is not None:
+                env["HOME"] = str(gemini_home)
 
         # The daemon's own server URL is authoritative — it's the address the
         # daemon is connected to right now, so it's guaranteed reachable from
