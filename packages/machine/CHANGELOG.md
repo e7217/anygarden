@@ -3,6 +3,17 @@
 
 ## Unreleased
 
+### Changed — agent runtime cwd (#345)
+
+- Spawn `doorae-agent` from the canonical agent directory instead of
+  `workspace/`, remove claude/gemini workspace bridge files, preserve
+  agent-created root output across materialize, and migrate legacy
+  `workspace/` runtime files upward when safe.
+- Add claude-code deny rules for materializer-managed files now
+  visible under cwd. Codex keeps a codex-only `workspace/` SDK sandbox
+  fallback because codex-cli 0.128.0 exposes `writable_roots` but no
+  read-only path exceptions for managed files.
+
 ## v0.6.0 (2026-05-06)
 
 ### Features — per-agent permission level (#309)

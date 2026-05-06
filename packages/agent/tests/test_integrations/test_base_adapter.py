@@ -16,6 +16,7 @@ adapter-by-adapter. The contract for both helpers is pinned here.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -171,6 +172,23 @@ class TestComposeSessionContextSuffix:
         assert "Personal memory" in out
         # Roster suppressed by the gate
         client.compose_roster_suffix.assert_not_called()
+
+    def test_shared_context_reads_from_agent_root_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent_root = tmp_path / "agent-root"
+        shared = agent_root / "memory" / "shared"
+        shared.mkdir(parents=True)
+        (shared / "note.md").write_text("room file content")
+        monkeypatch.chdir(agent_root)
+
+        client = _stub_client()
+        out = compose_session_context_suffix(
+            client, "r1", include_roster=False, with_collaborative_hint=False
+        )
+
+        assert "note.md" in out
+        assert "room file content" in out
 
     def test_roster_with_collaborative_hint(self) -> None:
         """Collaborative agent path: roster appears, hint flag is

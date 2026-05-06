@@ -144,14 +144,10 @@ def compose_memory_suffix(
     room_ephemeral_map = getattr(client, "_room_ephemeral", {}) or {}
     ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
 
-    # #246 — room shared files live under ``<agent_root>/memory/shared``.
-    # The agent subprocess's cwd is ``<agent_root>/workspace`` (the
-    # spawner pins cwd there so engines discover AGENTS.md/CLAUDE.md
-    # via their upward file-discovery walk), so ``memory/shared`` sits
-    # one directory up from cwd — not inside it. ``Path.cwd() / "memory"
-    # / "shared"`` was the original shape and silently evaluated to a
-    # non-existent path, which made ``compose_shared_context_block``
-    # return an empty block and the agent never saw room-shared files.
+    # #246 / #345 — room shared files live under
+    # ``<agent_root>/memory/shared`` and the agent subprocess cwd is now
+    # ``<agent_root>``. Codex may use a narrower SDK thread cwd later,
+    # but this Python-side prompt assembly reads from the process cwd.
     from pathlib import Path
 
     from doorae_agent.memory import (
@@ -159,9 +155,7 @@ def compose_memory_suffix(
         compose_shared_context_block,
     )
 
-    shared_block = compose_shared_context_block(
-        Path.cwd().parent / "memory" / "shared"
-    )
+    shared_block = compose_shared_context_block(Path.cwd() / "memory" / "shared")
 
     # Skip the suffix entirely when nothing would be rendered — keeping
     # pre-#237 / pre-#246 prompts byte-for-byte identical in that case.

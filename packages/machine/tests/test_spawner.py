@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner, SpawnResult
+from doorae_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner
 
 
 @pytest.fixture
@@ -249,6 +249,35 @@ class TestSpawn:
         assert result.success is True
         assert result.pid == 42
         assert result.agent_id == "agent-test-001"
+
+    async def test_spawn_uses_agent_root_as_cwd(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """The agent process cwd is the materialized agent root, not
+        the legacy ``workspace/`` child.
+        """
+        captured: dict[str, object] = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["cwd"] = kwargs.get("cwd")
+            return _mock_proc()
+
+        with patch(
+            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "doorae_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/doorae-agent",
+        ):
+            result = await spawner.spawn(spawn_msg)
+
+        assert result.success is True
+        assert captured["cwd"] == str(
+            spawner._agent_dirs_root / spawn_msg.agent_id
+        )
+        assert not (
+            spawner._agent_dirs_root / spawn_msg.agent_id / "workspace"
+        ).exists()
 
     async def test_spawn_falls_back_to_uvx(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """When doorae-agent is not in PATH, spawner should use uvx."""

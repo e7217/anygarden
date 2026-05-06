@@ -57,14 +57,30 @@ def _msg(
 
 
 class TestMaterializeFresh:
-    def test_creates_root_and_workspace(
+    def test_creates_root_without_workspace(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg())
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
 
         assert agent_root == agent_dirs_root / "agent-x"
         assert agent_root.is_dir()
-        assert (agent_root / "workspace").is_dir()
+        assert not (agent_root / "workspace").exists()
+
+    def test_codex_gets_sandbox_workspace(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        workspace = agent_root / "workspace"
+        assert workspace.is_dir()
+        assert (workspace / ".doorae-codex-workspace").is_file()
+        assert (workspace / "AGENTS.md").is_symlink()
+        assert os.readlink(workspace / "AGENTS.md") == "../AGENTS.md"
+        assert (workspace / "memory" / "notes.md").is_symlink()
+        assert (workspace / "memory" / "notes.md").resolve() == (
+            agent_root / "memory" / "notes.md"
+        ).resolve()
 
     def test_writes_agents_md(self, spawner: Spawner) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md="# A\nbody"))
@@ -191,141 +207,87 @@ class TestMaterializeFresh:
         # relative target pointing one level up
         assert os.readlink(link) == "../skills"
 
-    def test_creates_workspace_agents_md_symlink_for_codex(
+    def test_agents_md_lives_in_agent_root_for_codex(
         self, spawner: Spawner
     ) -> None:
-        """Default engine (codex) gets ``workspace/AGENTS.md`` as a
-        symlink to ``../AGENTS.md``. This is the isolation contract
-        the Codex review signed off on: reads resolve through the
-        symlink to the canonical file, but writes via the agent's
-        shell tool resolve to a path OUTSIDE the workspace-write
-        sandbox and get rejected at the sandbox boundary. Without
-        that, an agent could overwrite its own instructions
-        mid-session (in-session prompt injection) and subsequent
-        turns would see the tampered content.
-        """
         agent_root = spawner._materialize_agent_dir(
             _msg(agents_md="# instructions", engine="codex")
         )
-        path = agent_root / "workspace" / "AGENTS.md"
-        assert path.is_symlink()
-        assert os.readlink(path) == "../AGENTS.md"
-        # The symlink target is the canonical managed file.
+        path = agent_root / "AGENTS.md"
+        assert path.is_file()
+        assert not path.is_symlink()
         assert path.read_text().startswith("# instructions")
 
-    def test_creates_workspace_claude_md_symlink_for_codex(
+    def test_claude_md_symlink_lives_in_agent_root_for_codex(
         self, spawner: Spawner
     ) -> None:
-        """Same isolation contract for the CLAUDE.md bridge used by
-        Claude Code (which also tolerates symlinks). Writes through
-        the symlink land on ``agent_root/CLAUDE.md`` which is
-        outside the workspace sandbox — rejected.
-        """
         agent_root = spawner._materialize_agent_dir(
             _msg(agents_md="# instructions", engine="codex")
         )
-        path = agent_root / "workspace" / "CLAUDE.md"
+        path = agent_root / "CLAUDE.md"
         assert path.is_symlink()
-        assert os.readlink(path) == "../CLAUDE.md"
+        assert os.readlink(path) == "AGENTS.md"
         assert path.read_text().startswith("# instructions")
 
-    def test_creates_workspace_agents_md_real_copy_for_gemini(
+    def test_agents_md_lives_in_agent_root_for_gemini(
         self, spawner: Spawner
     ) -> None:
-        """Gemini CLI's file-reader tool resolves symlinks before
-        the "allowed workspace directories" check and rejects any
-        symlink whose target escapes the sandbox. The codex-style
-        ``workspace/AGENTS.md -> ../AGENTS.md`` symlink fails for
-        gemini with "Path not in workspace: resolves outside the
-        allowed workspace directories".
-
-        So for ``engine == "gemini-cli"`` the materializer writes a
-        real-file copy of the composed bytes. To keep the isolation
-        loss bounded, the copy is mode 0o400 (read-only for the
-        owner) so a trivial ``open(..., O_WRONLY)`` write fails with
-        EACCES. The agent can still ``chmod u+w`` before writing
-        (chmod is not sandbox-blocked), but the detour is loud and
-        the next spawn's materializer overwrites the bytes either
-        way — tamper is scoped to a single session.
-        """
         agent_root = spawner._materialize_agent_dir(
             _msg(agents_md="# instructions", engine="gemini-cli")
         )
-        path = agent_root / "workspace" / "AGENTS.md"
+        path = agent_root / "AGENTS.md"
         assert path.is_file()
         assert not path.is_symlink()
         assert path.read_text().startswith("# instructions")
-        # 0o400 — owner read-only. 0o600 would have let the agent
-        # overwrite its own instructions without even having to
-        # chmod first (no speedbump at all).
-        assert path.stat().st_mode & 0o777 == 0o400
+        assert path.stat().st_mode & 0o777 == 0o600
 
-    def test_creates_workspace_claude_md_real_copy_for_gemini(
+    def test_claude_md_symlink_lives_in_agent_root_for_gemini(
         self, spawner: Spawner
     ) -> None:
-        """Same pattern for the CLAUDE.md slot when the engine is
-        gemini-cli — real file, 0o400. (Gemini doesn't actually read
-        CLAUDE.md but the materializer writes both slots uniformly
-        so a later engine switch doesn't leave one slot in the wrong
-        shape.)
-        """
         agent_root = spawner._materialize_agent_dir(
             _msg(agents_md="# instructions", engine="gemini-cli")
         )
-        path = agent_root / "workspace" / "CLAUDE.md"
-        assert path.is_file()
-        assert not path.is_symlink()
+        path = agent_root / "CLAUDE.md"
+        assert path.is_symlink()
+        assert os.readlink(path) == "AGENTS.md"
         assert path.read_text().startswith("# instructions")
-        assert path.stat().st_mode & 0o777 == 0o400
 
-    def test_workspace_agents_md_absent_when_no_agents_md(
+    def test_agents_md_absent_when_no_agents_md(
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md=None))
-        link = agent_root / "workspace" / "AGENTS.md"
+        link = agent_root / "AGENTS.md"
         assert not link.exists()
         assert not link.is_symlink()
 
-    def test_workspace_claude_md_absent_when_no_agents_md(
+    def test_claude_md_absent_when_no_agents_md(
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md=None))
-        link = agent_root / "workspace" / "CLAUDE.md"
+        link = agent_root / "CLAUDE.md"
         assert not link.exists()
         assert not link.is_symlink()
 
-    def test_workspace_claude_md_removed_when_agents_md_cleared(
+    def test_claude_md_removed_when_agents_md_cleared(
         self, spawner: Spawner
     ) -> None:
-        """Same contract as AGENTS.md but for the CLAUDE.md bridge
-        used by Claude Code. A stale CLAUDE.md copy left behind
-        would expose the previous session's instructions to the
-        next turn even though the canonical manifest dropped them.
-        """
         spawner._materialize_agent_dir(_msg(agents_md="# first"))
         agent_root = spawner._agent_dirs_root / "agent-x"
-        path = agent_root / "workspace" / "CLAUDE.md"
-        assert path.is_file()
+        path = agent_root / "CLAUDE.md"
+        assert path.is_symlink()
 
         spawner._materialize_agent_dir(_msg(agents_md=None))
 
         assert not path.exists()
         assert not path.is_symlink()
 
-    def test_workspace_agents_md_removed_when_agents_md_cleared(
+    def test_agents_md_removed_when_agents_md_cleared(
         self, spawner: Spawner
     ) -> None:
-        """If an earlier spawn materialized ``workspace/AGENTS.md``
-        and a later spawn clears ``agents_md``, the old copy must
-        be removed. prune wipes ``agent_root/AGENTS.md`` from the
-        managed tree but preserves ``workspace/`` wholesale, so
-        without an explicit reconcile the previous session's
-        instructions would leak into the next spawn.
-        """
         # First spawn sets agents_md → copy created.
         spawner._materialize_agent_dir(_msg(agents_md="# first"))
         agent_root = spawner._agent_dirs_root / "agent-x"
-        path = agent_root / "workspace" / "AGENTS.md"
+        path = agent_root / "AGENTS.md"
         assert path.is_file()
         assert path.read_text().startswith("# first")
 
@@ -340,10 +302,9 @@ class TestMaterializeFresh:
     def test_engine_secrets_not_persisted_to_disk(self, spawner: Spawner) -> None:
         """#184: secrets flow into the subprocess environment, never the
         disk. The materializer must NOT drop a ``.env`` file under any
-        engine-specific config directory, because that file is readable
-        from the agent sandbox (``workspace/`` can reach ``../.claude/``
-        etc.) and the LLM's ``Read`` tool would happily exfiltrate the
-        plaintext key.
+        engine-specific config directory, because those directories are
+        under the agent cwd and the LLM's ``Read`` tool would happily
+        exfiltrate the plaintext key.
         """
         agent_root = spawner._materialize_agent_dir(
             _msg(
@@ -399,15 +360,11 @@ class TestMaterializePrune:
         assert not (agent_root / "skills" / "reviewer" / "SKILL.md").exists()
         assert not (agent_root / "skills" / "reviewer").exists()
 
-    def test_prune_preserves_workspace_contents(
+    def test_prune_preserves_agent_root_runtime_contents(
         self, spawner: Spawner
     ) -> None:
-        spawner._materialize_agent_dir(_msg())
-
-        # Agent dropped a file in workspace/ during the last spawn
-        agent_root = spawner._agent_dirs_root / "agent-x"
-        (agent_root / "workspace").mkdir(parents=True, exist_ok=True)
-        runtime_file = agent_root / "workspace" / "scratch.txt"
+        agent_root = spawner._materialize_agent_dir(_msg())
+        runtime_file = agent_root / "scratch.txt"
         runtime_file.write_text("runtime state")
 
         # New spawn with a completely different manifest
@@ -421,26 +378,16 @@ class TestMaterializePrune:
         assert runtime_file.read_text() == "runtime state"
         assert runtime_file.exists()
 
-    def test_workspace_agents_md_refreshed_even_if_tampered_gemini(
+    def test_agents_md_refreshed_even_if_tampered_gemini(
         self, spawner: Spawner
     ) -> None:
-        """The gemini-cli real-file copy is materializer-owned. If
-        a previous session bypassed the 0o400 speedbump (``chmod
-        u+w`` then overwrite), the next spawn must restore the
-        canonical bytes. This is the "tamper is scoped to one
-        session" guarantee — without it a single successful
-        tamper would persist across spawns.
-        """
         spawner._materialize_agent_dir(
             _msg(agents_md="# real", engine="gemini-cli")
         )
         agent_root = spawner._agent_dirs_root / "agent-x"
-        path = agent_root / "workspace" / "AGENTS.md"
+        path = agent_root / "AGENTS.md"
         assert path.read_text().startswith("# real")
 
-        # Simulate the agent chmod'ing and rewriting the copy with
-        # malicious text.
-        os.chmod(path, 0o600)
         path.write_text("# tampered instructions")
 
         spawner._materialize_agent_dir(
@@ -450,34 +397,18 @@ class TestMaterializePrune:
         assert path.is_file()
         assert not path.is_symlink()
         assert path.read_text().startswith("# real")
-        # The mode is restored to the speedbump too.
-        assert path.stat().st_mode & 0o777 == 0o400
+        assert path.stat().st_mode & 0o777 == 0o600
 
-    def test_workspace_agents_md_symlink_restored_after_tamper_codex(
+    def test_agents_md_restored_after_tamper_codex(
         self, spawner: Spawner
     ) -> None:
-        """For codex/claude-code the symlink IS the isolation
-        contract: reads resolve, writes resolve to a sandbox-external
-        path and fail. In a unit test there's no sandbox, so we
-        instead verify that the materializer restores a fresh
-        symlink on every spawn regardless of what the previous
-        session left behind — if a previous session somehow
-        replaced the symlink with a regular file, the next spawn
-        must put the symlink back so the isolation contract
-        re-engages.
-        """
         spawner._materialize_agent_dir(
             _msg(agents_md="# real", engine="codex")
         )
         agent_root = spawner._agent_dirs_root / "agent-x"
-        path = agent_root / "workspace" / "AGENTS.md"
-        assert path.is_symlink()
+        path = agent_root / "AGENTS.md"
+        assert path.is_file()
 
-        # Simulate the agent replacing the symlink with a regular
-        # file (unlink + create) — this is one of the tamper paths
-        # that costs a little more than the real-file copy case
-        # because the symlink has to be removed first.
-        path.unlink()
         path.write_text("# tampered instructions")
         assert path.is_file()
         assert not path.is_symlink()
@@ -486,10 +417,46 @@ class TestMaterializePrune:
             _msg(agents_md="# real", engine="codex")
         )
 
-        # The symlink is back — the isolation contract is restored.
-        assert path.is_symlink()
-        assert os.readlink(path) == "../AGENTS.md"
+        assert path.is_file()
+        assert not path.is_symlink()
         assert path.read_text().startswith("# real")
+
+    def test_migrates_legacy_workspace_runtime_file(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._agent_dirs_root / "agent-x"
+        workspace = agent_root / "workspace"
+        workspace.mkdir(parents=True)
+        (workspace / "scratch.txt").write_text("runtime state")
+        (workspace / "AGENTS.md").write_text("stale bridge")
+
+        spawner._materialize_agent_dir(_msg(engine="claude-code"))
+
+        assert (agent_root / "scratch.txt").read_text() == "runtime state"
+        assert not workspace.exists()
+
+    def test_codex_workspace_runtime_survives_codex_respawn(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        scratch = agent_root / "workspace" / "in-progress.md"
+        scratch.write_text("session state")
+
+        spawner._materialize_agent_dir(_msg(engine="codex"))
+
+        assert scratch.read_text() == "session state"
+
+    def test_codex_workspace_runtime_migrates_on_engine_switch(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        scratch = agent_root / "workspace" / "in-progress.md"
+        scratch.write_text("session state")
+
+        spawner._materialize_agent_dir(_msg(engine="claude-code"))
+
+        assert (agent_root / "in-progress.md").read_text() == "session state"
+        assert not (agent_root / "workspace").exists()
 
     def test_prune_wipes_engine_config_when_removed(
         self, spawner: Spawner
@@ -662,35 +629,24 @@ class TestClaudeCodeDefaultSettings:
         assert path.is_file()
         assert path.stat().st_mode & 0o777 == 0o600
 
-    def test_workspace_claude_symlink_for_claude_code(
+    def test_claude_settings_live_directly_under_agent_root(
         self, spawner: Spawner
     ) -> None:
-        """claude CLI는 ``cwd + '/.claude/settings.json'`` 만 보고
-        walk-up 하지 않는다 (확인된 동작 — debug log:
-        ``Broken symlink or missing file encountered for
-        settings.json at path: <workspace>/.claude/settings.json``).
-        어댑터는 cwd를 ``workspace/`` 로 고정하므로 spawner 가
-        ``workspace/.claude → ../.claude`` 심볼릭 링크를 만들어
-        둬야 settings.json 이 발견된다. AGENTS.md/CLAUDE.md 의
-        sandbox-into-workspace 브리지 패턴과 동일.
+        """claude-code is spawned from ``agent_root`` directly, so the
+        SDK sees the materialized project settings without a workspace
+        bridge.
         """
         agent_root = spawner._materialize_agent_dir(
             _msg(engine="claude-code")
         )
-        link = agent_root / "workspace" / ".claude"
-        assert link.is_symlink()
-        assert os.readlink(link) == "../.claude"
-        # 링크를 따라가면 실제 settings.json 이 보여야 한다.
-        assert (link / "settings.json").is_file()
+        settings = agent_root / ".claude" / "settings.json"
+        assert settings.is_file()
+        assert not (agent_root / "workspace").exists()
 
-    @pytest.mark.parametrize("engine", ["codex", "gemini-cli"])
-    def test_no_workspace_claude_symlink_for_other_engines(
+    @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
+    def test_no_workspace_claude_bridge_for_any_engine(
         self, spawner: Spawner, engine: str
     ) -> None:
-        """심볼릭 링크는 claude-code 전용이다. 다른 엔진의
-        workspace에 ``.claude`` 가 생기면 prune 일관성과 디스크
-        노이즈 측면에서 손해.
-        """
         agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
         link = agent_root / "workspace" / ".claude"
         assert not link.exists()
@@ -875,7 +831,7 @@ class TestCodexHostAuthSymlink:
 class TestMaterializeRefusesSymlinkFollow:
     """Previously ``Path.write_text`` followed symlinks at the final
     component. A malicious previous-session agent could leave a
-    symlink at ``workspace/MEMORY.md`` or a similar slot pointing to
+    symlink at ``MEMORY.md`` or a similar slot pointing to
     an arbitrary path, and the next materialize would write through
     it. All materialize-time writes now go through ``safe_write_text``
     which uses ``O_NOFOLLOW``.
@@ -896,8 +852,8 @@ class TestMaterializeRefusesSymlinkFollow:
         victim = tmp_path / "outside.txt"
         victim.write_text("sacred")
         agent_root = agent_dirs_root / "agent-x"
-        (agent_root / "workspace").mkdir(parents=True, exist_ok=True)
-        memory_md = agent_root / "workspace" / "MEMORY.md"
+        agent_root.mkdir(parents=True, exist_ok=True)
+        memory_md = agent_root / "MEMORY.md"
         memory_md.symlink_to(victim)
 
         # Materialize — must NOT write through the symlink.
@@ -906,34 +862,25 @@ class TestMaterializeRefusesSymlinkFollow:
         # Victim file untouched.
         assert victim.read_text() == "sacred"
 
-    def test_gemini_workspace_bridge_refuses_symlink(
+    def test_agents_md_symlink_is_replaced_without_following(
         self,
         spawner: Spawner,
         agent_dirs_root: Path,
         tmp_path: Path,
     ) -> None:
-        """Gemini 분기의 ``workspace/AGENTS.md`` real-copy write 경로가
-        이전 세션에서 심어둔 symlink를 unlink로 제거하고 새 파일을 만든다.
-        O_NOFOLLOW는 unlink와 open 사이 race가 발생해도 ELOOP로 방어한다.
-        """
         victim = tmp_path / "outside.txt"
         victim.write_text("sacred")
         agent_root = agent_dirs_root / "agent-x"
-        (agent_root / "workspace").mkdir(parents=True, exist_ok=True)
+        agent_root.mkdir(parents=True, exist_ok=True)
 
-        # Run once to establish the agent_root in a sane state.
-        spawner._materialize_agent_dir(
-            _msg(agent_id="agent-x", engine="gemini-cli")
-        )
-
-        # Replace the real copy with a symlink pointing outside.
-        bridge = agent_root / "workspace" / "AGENTS.md"
+        # Plant a symlink at a materializer-managed slot.
+        bridge = agent_root / "AGENTS.md"
         if bridge.exists() or bridge.is_symlink():
             bridge.unlink()
         bridge.symlink_to(victim)
 
-        # Re-materialize. The unlink-then-write path handles the
-        # symlink cleanly and writes a real file inside workspace.
+        # Re-materialize. The prune-then-write path removes the symlink
+        # without following it, then writes a real managed file.
         spawner._materialize_agent_dir(
             _msg(agent_id="agent-x", engine="gemini-cli")
         )
@@ -1015,109 +962,116 @@ class TestMemoryMaterialize:
         assert list(shared.iterdir()) == []
 
 
-class TestWorkspaceSharedBridge:
-    """#257 — bridge ``<agent_root>/memory/shared/`` into
-    ``<agent_root>/workspace/memory/shared/`` so tool-based engines
-    (codex / claude-code / gemini-cli) can resolve their Read tool's
-    ``memory/shared/<file>`` path inside the workspace sandbox.
-    Canonical bytes still live one level up; the bridge is purely
-    a cwd-anchored alias.
+class TestMemorySharedDirectory:
+    """#257 — ``memory/shared/`` now sits directly under the agent cwd.
 
-    All currently-supported engines (codex, claude-code, gemini-cli)
-    have a Read tool and get the bridge. The defensive engine check
-    in ``Spawner._materialize_agent_dir`` remains so adding a future
-    engine without a Read tool stays a one-line conditional rather
-    than a missing-feature surprise.
+    claude-code and gemini-cli resolve ``memory/shared/<file>`` against
+    ``agent_root`` directly. Codex uses a narrower SDK workspace for its
+    sandbox root, so it gets a bridge back to the same direct directory.
     """
 
-    @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
-    def test_bridge_is_directory_symlink_to_canonical(
-        self, spawner: Spawner, agent_dirs_root: Path, engine: str
-    ) -> None:
-        """For each tool-based engine, ``workspace/memory/shared`` must
-        be a symlink whose target is the canonical directory above.
-
-        Resolved path equality is the contract — relative vs absolute
-        target form is incidental and tests should not pin it."""
-        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
-        bridge = agent_root / "workspace" / "memory" / "shared"
-        canonical = agent_root / "memory" / "shared"
-        assert bridge.is_symlink(), f"{engine} bridge must be a symlink"
-        assert bridge.resolve() == canonical.resolve()
-
-    def test_bridge_resolves_files_written_by_daemon_after_spawn(
-        self, spawner: Spawner, agent_dirs_root: Path
-    ) -> None:
-        """The whole point of choosing a directory symlink over file-by-
-        file copies: files the daemon writes into the canonical dir
-        AFTER spawn must be visible through the workspace bridge with
-        no further materialize call."""
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
-        canonical_file = agent_root / "memory" / "shared" / "note.md"
-        canonical_file.write_text("post-spawn content")
-
-        via_bridge = agent_root / "workspace" / "memory" / "shared" / "note.md"
-        assert via_bridge.is_file()
-        assert via_bridge.read_text() == "post-spawn content"
-
-    def test_respawn_recreates_fresh_bridge(
-        self, spawner: Spawner, agent_dirs_root: Path
-    ) -> None:
-        """The materialize prune wipes ``workspace/memory/`` (it lives
-        under workspace which IS preserved, but the prune walks
-        siblings of the bridge). Whatever the prune does, the second
-        materialize must end with a usable bridge — otherwise respawn
-        leaves the agent without Read access to its shared files."""
-        msg = _msg(engine="claude-code")
-        spawner._materialize_agent_dir(msg)
-        agent_root = spawner._materialize_agent_dir(msg)
-
-        bridge = agent_root / "workspace" / "memory" / "shared"
-        canonical = agent_root / "memory" / "shared"
-        assert bridge.is_symlink()
-        assert bridge.resolve() == canonical.resolve()
-
-
-class TestWorkspaceOutboxBridge:
-    """#290 — symmetric bridge for the outbound flow. Tool-based engines
-    write to ``workspace/memory/outbox/<file>`` (cwd-anchored), so the
-    canonical ``<agent_root>/memory/outbox/`` that the daemon polls
-    must be reachable through the workspace bridge.
-    """
-
-    @pytest.mark.parametrize("engine", ["codex", "claude-code", "gemini-cli"])
-    def test_bridge_is_symlink_to_canonical(
+    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli"])
+    def test_shared_is_direct_directory_without_workspace_bridge(
         self, spawner: Spawner, agent_dirs_root: Path, engine: str
     ) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
-        bridge = agent_root / "workspace" / "memory" / "outbox"
-        canonical = agent_root / "memory" / "outbox"
-        assert bridge.is_symlink(), f"{engine} outbox bridge must be a symlink"
-        assert bridge.resolve() == canonical.resolve()
+        shared = agent_root / "memory" / "shared"
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        assert shared.is_dir(), f"{engine} shared dir must exist"
+        assert not shared.is_symlink()
+        assert not bridge.exists()
+        assert not bridge.is_symlink()
 
-    def test_files_written_via_bridge_land_in_canonical_dir(
+    def test_codex_shared_bridge_points_to_direct_directory(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
-        """Files dropped through the workspace alias must show up under
-        the canonical path the daemon polls — that's the whole point of
-        the bridge for the agent → user direction."""
         agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
-        via_bridge = agent_root / "workspace" / "memory" / "outbox" / "snap.png"
-        via_bridge.write_bytes(b"\x89PNG\r\n\x1a\n payload")
+        shared = agent_root / "memory" / "shared"
+        bridge = agent_root / "workspace" / "memory" / "shared"
+        assert shared.is_dir()
+        assert bridge.is_symlink()
+        assert bridge.resolve() == shared.resolve()
 
-        canonical = agent_root / "memory" / "outbox" / "snap.png"
-        assert canonical.is_file()
-        assert canonical.read_bytes().startswith(b"\x89PNG")
+    def test_daemon_written_file_is_readable_from_agent_cwd(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        direct = agent_root / "memory" / "shared" / "note.md"
+        direct.write_text("post-spawn content")
 
-    def test_respawn_recreates_fresh_outbox_bridge(
+        assert direct.is_file()
+        assert direct.read_text() == "post-spawn content"
+
+    def test_respawn_preserves_shared_files(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
         msg = _msg(engine="claude-code")
-        spawner._materialize_agent_dir(msg)
+        agent_root = spawner._materialize_agent_dir(msg)
+        shared_file = agent_root / "memory" / "shared" / "note.md"
+        shared_file.write_text("post-spawn content")
+
         agent_root = spawner._materialize_agent_dir(msg)
 
-        bridge = agent_root / "workspace" / "memory" / "outbox"
-        canonical = agent_root / "memory" / "outbox"
-        assert bridge.is_symlink()
-        assert bridge.resolve() == canonical.resolve()
+        shared = agent_root / "memory" / "shared"
+        assert shared.is_dir()
+        assert (shared / "note.md").read_text() == "post-spawn content"
+        assert not (agent_root / "workspace").exists()
 
+
+class TestMemoryOutboxDirectory:
+    """#290 — agents now write outbound artifacts directly to
+    ``memory/outbox/`` because that path is cwd-relative to
+    ``agent_root``. Codex gets a bridge from its narrower SDK sandbox
+    workspace to the same canonical outbox.
+    """
+
+    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli"])
+    def test_outbox_is_direct_directory_without_workspace_bridge(
+        self, spawner: Spawner, agent_dirs_root: Path, engine: str
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine=engine))
+        outbox = agent_root / "memory" / "outbox"
+        bridge = agent_root / "workspace" / "memory" / "outbox"
+        assert outbox.is_dir(), f"{engine} outbox dir must exist"
+        assert not outbox.is_symlink()
+        assert not bridge.exists()
+        assert not bridge.is_symlink()
+
+    def test_codex_outbox_bridge_points_to_direct_directory(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        outbox = agent_root / "memory" / "outbox"
+        bridge = agent_root / "workspace" / "memory" / "outbox"
+        assert outbox.is_dir()
+        assert bridge.is_symlink()
+        assert bridge.resolve() == outbox.resolve()
+
+    def test_files_written_under_outbox_are_in_daemon_polled_dir(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code")
+        )
+        artifact = agent_root / "memory" / "outbox" / "snap.png"
+        artifact.write_bytes(b"\x89PNG\r\n\x1a\n payload")
+
+        assert artifact.is_file()
+        assert artifact.read_bytes().startswith(b"\x89PNG")
+
+    def test_respawn_preserves_outbox_files(
+        self, spawner: Spawner, agent_dirs_root: Path
+    ) -> None:
+        msg = _msg(engine="claude-code")
+        agent_root = spawner._materialize_agent_dir(msg)
+        artifact = agent_root / "memory" / "outbox" / "snap.png"
+        artifact.write_bytes(b"\x89PNG\r\n\x1a\n payload")
+
+        agent_root = spawner._materialize_agent_dir(msg)
+
+        outbox = agent_root / "memory" / "outbox"
+        assert outbox.is_dir()
+        assert (outbox / "snap.png").read_bytes().startswith(b"\x89PNG")
+        assert not (agent_root / "workspace").exists()

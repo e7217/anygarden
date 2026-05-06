@@ -10,7 +10,7 @@ spinning up actual subprocesses:
 4. Assert the tree matches
 5. Delete one skill from the DB, re-spawn, assert the deleted skill
    is pruned from disk — the reason the prune step exists
-6. Drop a file in workspace/ between spawns, assert it survives
+6. Drop a runtime file under the agent root between spawns, assert it survives
 
 The full subprocess E2E lives in scripts/e2e_multiprocess.py; this
 test deliberately stays at the Python library level so the
@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession
 from unittest.mock import AsyncMock
 
 from doorae.db.engine import build_engine, build_session_factory
@@ -267,7 +266,7 @@ async def test_deleted_skill_is_pruned_on_respawn(pipeline) -> None:
 
 
 @pytest.mark.asyncio
-async def test_workspace_survives_respawn(pipeline) -> None:
+async def test_runtime_file_survives_respawn(pipeline) -> None:
     agent_id = await pipeline["make_agent"](
         name="e2e-c",
         agents_md="# agent",
@@ -278,8 +277,8 @@ async def test_workspace_survives_respawn(pipeline) -> None:
     frame = pipeline["fake_ws"].last_spawn_frame()
     agent_root = pipeline["spawner"]._materialize_agent_dir(frame)
 
-    # Agent writes a file into workspace/ during its first run.
-    scratch = agent_root / "workspace" / "in-progress.md"
+    # Agent writes a runtime file during its first run.
+    scratch = agent_root / "in-progress.md"
     scratch.write_text("session state")
 
     # Reset state and re-spawn.
@@ -297,5 +296,5 @@ async def test_workspace_survives_respawn(pipeline) -> None:
     pipeline["spawner"]._materialize_agent_dir(frame2)
 
     # Prune wiped the managed tree and re-materialized it, but
-    # workspace/ was left alone so the scratch file still exists.
+    # agent-created runtime output was left alone.
     assert scratch.read_text() == "session state"

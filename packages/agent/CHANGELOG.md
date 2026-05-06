@@ -3,6 +3,13 @@
 
 ## Unreleased
 
+### Changed — agent cwd assumptions (#345)
+
+- codex, gemini-cli, and claude-code adapters now assume the Python
+  agent process starts in the canonical agent directory. Codex pins
+  its SDK thread cwd to the materialized codex-only `workspace/`
+  fallback when present so `workspace-write` remains narrow.
+
 ## v0.6.0 (2026-05-06)
 
 ### Features — per-agent permission level (#309)

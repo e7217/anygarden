@@ -6,6 +6,7 @@ import asyncio
 import sys
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -122,6 +123,52 @@ class TestCodexAdapter:
             # kwargs to attributes, so reading them back is trivial.
             assert getattr(options_obj, "approval_policy", None) == "never"
             assert getattr(options_obj, "sandbox", None) == "workspace-write"
+
+    @pytest.mark.asyncio
+    async def test_start_thread_uses_codex_workspace_when_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex gets a narrower SDK cwd when the materializer created
+        the codex-only workspace-write sandbox root.
+        """
+        agent_root = tmp_path / "agent-root"
+        workspace = agent_root / "workspace"
+        workspace.mkdir(parents=True)
+        monkeypatch.chdir(agent_root)
+
+        fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({
+                "content": "Hello",
+                "room_id": "room-1",
+            })
+
+        call = mock_codex.start_thread.call_args
+        options_obj = call.kwargs["options"]
+        assert getattr(options_obj, "cwd", None) == str(workspace)
+
+    @pytest.mark.asyncio
+    async def test_start_thread_falls_back_to_agent_root_without_workspace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent_root = tmp_path / "agent-root"
+        agent_root.mkdir()
+        monkeypatch.chdir(agent_root)
+
+        fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({
+                "content": "Hello",
+                "room_id": "room-1",
+            })
+
+        call = mock_codex.start_thread.call_args
+        options_obj = call.kwargs["options"]
+        assert getattr(options_obj, "cwd", None) == str(agent_root)
 
     @pytest.mark.asyncio
     async def test_on_message_reuses_thread(self) -> None:
@@ -565,8 +612,6 @@ class TestCodexSharedContextReinjection:
         fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
         # Per-room threads need distinct run_text instances so each
         # room's prompts are isolated in call_args_list.
-        room_threads: dict[str, MagicMock] = {}
-
         def make_thread(**_kw):
             t = MagicMock()
             t.run_text = MagicMock(return_value="ok")

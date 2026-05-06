@@ -192,7 +192,7 @@ class TestDispatcher:
 class TestSettingsPath:
     def test_maps_engines_to_paths(self):
         # Issue #142 — Claude Code 2.x reads project-local MCP config
-        # from .mcp.json at the workspace root, not from the
+        # from .mcp.json at the agent/project root, not from the
         # .claude/settings.json "mcpServers" section (which is
         # silently ignored). Pin the file name.
         assert settings_path_for_engine("claude-code") == ".mcp.json"

@@ -51,10 +51,20 @@ systemctl --user start doorae-machine
 ├── AGENTS.md           # 에이전트 지시사항
 ├── CLAUDE.md           # → AGENTS.md (symlink)
 ├── skills/             # 스킬 파일
-├── .codex/.env         # 엔진별 시크릿
-└── workspace/          # 에이전트 작업 디렉토리 (persist)
-    └── MEMORY.md       # 세션 간 메모리
+├── .claude/            # claude-code project settings
+├── .codex/             # codex config overlay when present
+├── .gemini/            # gemini-cli settings
+├── memory/
+│   ├── notes.md        # 세션 간 메모리
+│   ├── shared/         # 룸 공유 파일
+│   └── outbox/         # 에이전트 → 룸 산출물
+├── MEMORY.md           # 첫 세션 seed / legacy compatibility
+└── workspace/          # codex sandbox fallback only
 ```
+
+일반 엔진의 subprocess cwd는 `<agent_id>/` 자체다. `workspace/`는
+현재 codex 표준 샌드박스가 managed 파일 read-only 예외를 지원하지
+않는 버전에서만 생성되는 내부 fallback이며, manifest 업로드 대상이 아니다.
 
 ## 개발 환경
 
@@ -76,7 +86,7 @@ uv run doorae-machine run --server ws://localhost:8001
 
 ### 에이전트가 반복 crash
 - crash budget 초과 시 자동으로 spawn 중단
-- `~/.doorae/agents/<id>/workspace/` 에서 에이전트 로그 확인
+- `~/.doorae/agents/<id>/` 에서 에이전트 런타임 파일 확인
 - 서버 UI에서 에이전트 상태 확인
 
 ### WebSocket 연결 끊김

@@ -72,6 +72,22 @@ def _resolve_codex_flags(
 _CODEX_TURN_TIMEOUT = 600
 
 
+def _codex_thread_cwd() -> Path:
+    """Return the cwd that codex should use for its sandbox root.
+
+    doorae-agent itself is spawned from ``agent_root``. Standard codex
+    still needs a narrower workspace-write root because codex 0.128
+    exposes writable roots but not read-only path exceptions for
+    managed files under that same root. The machine materializer creates
+    ``workspace/`` only for codex agents; older or test layouts fall
+    back to ``agent_root``.
+    """
+    workspace = Path.cwd() / "workspace"
+    if workspace.is_dir():
+        return workspace
+    return Path.cwd()
+
+
 # Guards ``_install_parse_notification_shim`` against double-wrapping
 # when ``start()`` runs more than once in the same process (tests,
 # reconnects, etc). A boolean flag is sufficient — once the patched
@@ -280,9 +296,11 @@ class CodexAdapter(EngineAdapter):
 
         logger.info("codex.client_started")
 
-        # Log AGENTS.md presence for debugging
+        # Log AGENTS.md presence for debugging. The machine spawner now
+        # launches the agent process from the canonical agent root; codex
+        # may still use a narrower SDK thread cwd for workspace-write.
         try:
-            agents_md = Path.cwd().parent / "AGENTS.md"
+            agents_md = _codex_thread_cwd() / "AGENTS.md"
             if agents_md.is_file():
                 logger.info("codex.agents_md_found", path=str(agents_md))
         except Exception:
@@ -309,9 +327,10 @@ class CodexAdapter(EngineAdapter):
                 # the trust model applied to gemini-cli
                 # (``--approval-mode yolo``) and claude-code
                 # (``permission_mode="bypassPermissions"``).
-                # ``sandbox=workspace-write`` stays so the agent
-                # can write to its own workspace but can't escape
-                # to the host filesystem.
+                # ``sandbox=workspace-write`` stays so the agent can
+                # write within its codex sandbox root but can't escape
+                # to the host filesystem or rewrite materialized files
+                # in the parent agent_root.
                 #
                 # When ``_thread_options_cls`` is None (real SDK not
                 # installed, or tests that bypass start() setup) the
@@ -322,6 +341,7 @@ class CodexAdapter(EngineAdapter):
                         options=self._thread_options_cls(
                             approval_policy=self._approval_policy,
                             sandbox=self._sandbox,
+                            cwd=str(_codex_thread_cwd()),
                             model=self._model or None,
                         ),
                     )
