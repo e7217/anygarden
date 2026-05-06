@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import tomllib
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -86,6 +87,42 @@ def _codex_thread_cwd() -> Path:
     if workspace.is_dir():
         return workspace
     return Path.cwd()
+
+
+def _codex_config_path() -> Path:
+    """Return the codex config path for this agent process."""
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        return Path(codex_home) / "config.toml"
+    return Path.cwd() / ".codex" / "config.toml"
+
+
+def _load_codex_mcp_servers() -> dict[str, dict[str, Any]]:
+    """Load per-agent codex MCP servers from ``config.toml``.
+
+    ``codex mcp list`` reads ``$CODEX_HOME/config.toml`` correctly, but
+    SDK-started app-server threads may not project that file into the
+    thread's tool set. Passing just the ``mcp_servers`` table through
+    ``ThreadStartOptions.config`` makes the thread spawn explicit while
+    preserving the token indirection form written by the cluster.
+    """
+    path = _codex_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        parsed = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        logger.warning("codex.mcp_config_load_failed", path=str(path), error=str(exc))
+        return {}
+
+    servers = parsed.get("mcp_servers")
+    if not isinstance(servers, dict):
+        return {}
+    return {
+        str(name): dict(config)
+        for name, config in servers.items()
+        if isinstance(name, str) and isinstance(config, dict)
+    }
 
 
 # Guards ``_install_parse_notification_shim`` against double-wrapping
@@ -254,6 +291,7 @@ class CodexAdapter(EngineAdapter):
         # succeeds.
         self._thread_options_cls: Any = None
         self._turn_options_cls: Any = None
+        self._codex_config_cls: Any = None
         # #237 — owning client reference for the memory / ephemeral
         # suffix. Wired in ``integrate_with_codex``; tests that bypass
         # the integration factory leave it None and the suffix helper
@@ -283,10 +321,16 @@ class CodexAdapter(EngineAdapter):
                 hint="Install: pip install codex-python",
             )
             return
+        try:
+            from codex._config_types import CodexConfig
+        except Exception as exc:
+            CodexConfig = None
+            logger.warning("codex.config_type_import_failed", error=str(exc))
 
         self._codex = Codex()
         self._thread_options_cls = ThreadStartOptions
         self._turn_options_cls = TurnOptions
+        self._codex_config_cls = CodexConfig
 
         # Issue #190 — install the parse_notification shim *after* the
         # SDK has been imported (so the target module definitely
@@ -321,6 +365,7 @@ class CodexAdapter(EngineAdapter):
             # Get or create thread for this room
             thread = self._threads.get(room_id)
             if thread is None:
+                mcp_servers: dict[str, dict[str, Any]] = {}
                 # Issue #134 — bypass approval gates for tool calls.
                 # Codex otherwise prompts per tool invocation, which
                 # a headless agent can never answer. This mirrors
@@ -337,13 +382,26 @@ class CodexAdapter(EngineAdapter):
                 # call degrades to the legacy signature so nothing
                 # breaks hard.
                 if self._thread_options_cls is not None:
+                    options_kwargs: dict[str, Any] = {
+                        "approval_policy": self._approval_policy,
+                        "sandbox": self._sandbox,
+                        "cwd": str(_codex_thread_cwd()),
+                        "model": self._model or None,
+                    }
+                    mcp_servers = _load_codex_mcp_servers()
+                    if mcp_servers and self._codex_config_cls is not None:
+                        try:
+                            options_kwargs["config"] = self._codex_config_cls(
+                                mcp_servers=mcp_servers,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "codex.mcp_thread_config_failed",
+                                error=str(exc),
+                                server_names=sorted(mcp_servers),
+                            )
                     thread = self._codex.start_thread(
-                        options=self._thread_options_cls(
-                            approval_policy=self._approval_policy,
-                            sandbox=self._sandbox,
-                            cwd=str(_codex_thread_cwd()),
-                            model=self._model or None,
-                        ),
+                        options=self._thread_options_cls(**options_kwargs),
                     )
                 else:
                     thread = self._codex.start_thread()
@@ -353,6 +411,7 @@ class CodexAdapter(EngineAdapter):
                     room_id=room_id,
                     approval_policy=self._approval_policy,
                     sandbox=self._sandbox,
+                    mcp_server_names=sorted(mcp_servers),
                 )
 
             # Issue #286 — drain + ``<room_conversation>`` wrap +

@@ -171,6 +171,56 @@ class TestCodexAdapter:
         assert getattr(options_obj, "cwd", None) == str(agent_root)
 
     @pytest.mark.asyncio
+    async def test_start_thread_passes_codex_home_mcp_servers_as_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex's app-server thread must receive the per-agent MCP
+        overlay directly, not only via ``CODEX_HOME``. ``codex mcp
+        list`` can see the file while SDK-started threads still miss
+        the tools unless the config is present on the start options.
+        """
+        agent_root = tmp_path / "agent-root"
+        codex_home = agent_root / ".codex"
+        codex_home.mkdir(parents=True)
+        (codex_home / "config.toml").write_text(
+            "[mcp_servers.doorae]\n"
+            'url = "https://cluster.example/mcp/rpc"\n'
+            'bearer_token_env_var = "DOORAE_AGENT_TOKEN"\n'
+        )
+        monkeypatch.chdir(agent_root)
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+        fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
+
+        class FakeCodexConfig:
+            def __init__(self, **kwargs):
+                for k, v in kwargs.items():
+                    setattr(self, k, v)
+
+        config_mod = MagicMock()
+        config_mod.CodexConfig = FakeCodexConfig
+
+        with _patch_codex(fake_mod, options_mod), patch.dict(
+            sys.modules, {"codex._config_types": config_mod}
+        ):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({
+                "content": "Hello",
+                "room_id": "room-1",
+            })
+
+        options_obj = mock_codex.start_thread.call_args.kwargs["options"]
+        config = getattr(options_obj, "config", None)
+        assert isinstance(config, FakeCodexConfig)
+        assert config.mcp_servers == {
+            "doorae": {
+                "url": "https://cluster.example/mcp/rpc",
+                "bearer_token_env_var": "DOORAE_AGENT_TOKEN",
+            }
+        }
+
+    @pytest.mark.asyncio
     async def test_on_message_reuses_thread(self) -> None:
         """Subsequent messages to same room reuse the thread."""
         fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
