@@ -2,10 +2,9 @@
 
 Scope: the materialization step only. Actual subprocess spawn is
 covered by test_spawner.py — here we verify that the on-disk tree
-matches the manifest in ``SpawnManifest.agents_md`` + ``files`` and
-that re-running the materializer with a different manifest deletes
-the files that dropped out (the reason the spawn frame needs a prune
-step at all — see
+keeps materializer-managed control-plane files in sync with
+``SpawnManifest.agents_md`` + ``files`` while preserving runtime-owned
+areas such as ``skills/`` and ``memory/`` across respawns — see
 ``docs/decisions/002-per-agent-directory-with-server-manifest.md``).
 """
 
@@ -78,9 +77,27 @@ class TestMaterializeFresh:
         assert (workspace / "AGENTS.md").is_symlink()
         assert os.readlink(workspace / "AGENTS.md") == "../AGENTS.md"
         assert (workspace / "memory" / "notes.md").is_symlink()
+        assert (workspace / "skills").is_symlink()
+        assert os.readlink(workspace / "skills") == "../skills"
         assert (workspace / "memory" / "notes.md").resolve() == (
             agent_root / "memory" / "notes.md"
         ).resolve()
+
+    def test_creates_writable_skills_directory_without_manifest_skills(
+        self, spawner: Spawner
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(
+            _msg(engine="claude-code", files={})
+        )
+
+        skills = agent_root / "skills"
+        assert skills.is_dir()
+        assert not skills.is_symlink()
+        assert skills.stat().st_mode & 0o777 == 0o700
+        assert (agent_root / ".agents" / "skills").is_symlink()
+        assert os.readlink(agent_root / ".agents" / "skills") == "../skills"
+        assert (agent_root / ".claude" / "skills").is_symlink()
+        assert os.readlink(agent_root / ".claude" / "skills") == "../skills"
 
     def test_writes_agents_md(self, spawner: Spawner) -> None:
         agent_root = spawner._materialize_agent_dir(_msg(agents_md="# A\nbody"))
@@ -338,7 +355,7 @@ class TestMaterializePrune:
     the disk tree to exactly the new manifest — deletions included.
     """
 
-    def test_prune_removes_file_not_in_new_manifest(
+    def test_skills_are_preserved_when_removed_from_manifest(
         self, spawner: Spawner
     ) -> None:
         # First spawn: two skills
@@ -356,9 +373,39 @@ class TestMaterializePrune:
             _msg(files={"skills/coder/SKILL.md": "c2"})
         )
 
-        assert (agent_root / "skills" / "coder" / "SKILL.md").read_text() == "c2"
-        assert not (agent_root / "skills" / "reviewer" / "SKILL.md").exists()
-        assert not (agent_root / "skills" / "reviewer").exists()
+        assert (agent_root / "skills" / "coder" / "SKILL.md").read_text() == "c1"
+        assert (agent_root / "skills" / "reviewer" / "SKILL.md").read_text() == "r1"
+        assert (agent_root / "skills" / "reviewer").is_dir()
+
+    def test_manifest_skill_seed_does_not_clobber_agent_edits(
+        self, spawner: Spawner
+    ) -> None:
+        msg = _msg(files={"skills/coder/SKILL.md": "manifest v1"})
+        agent_root = spawner._materialize_agent_dir(msg)
+        skill = agent_root / "skills" / "coder" / "SKILL.md"
+        skill.write_text("agent edit")
+
+        spawner._materialize_agent_dir(
+            _msg(files={"skills/coder/SKILL.md": "manifest v2"})
+        )
+
+        assert skill.read_text() == "agent edit"
+
+    def test_manifest_skill_seed_skips_symlink_parent(
+        self, spawner: Spawner, tmp_path: Path
+    ) -> None:
+        agent_root = spawner._materialize_agent_dir(_msg(files={}))
+        external = tmp_path / "external-skills"
+        external.mkdir()
+        coder = agent_root / "skills" / "coder"
+        coder.symlink_to(external)
+
+        spawner._materialize_agent_dir(
+            _msg(files={"skills/coder/SKILL.md": "manifest body"})
+        )
+
+        assert coder.is_symlink()
+        assert not (external / "SKILL.md").exists()
 
     def test_prune_preserves_agent_root_runtime_contents(
         self, spawner: Spawner

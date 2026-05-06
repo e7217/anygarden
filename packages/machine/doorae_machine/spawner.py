@@ -151,8 +151,6 @@ class Spawner:
         "Write(CLAUDE.md)",
         "Edit(.claude/settings.json)",
         "Write(.claude/settings.json)",
-        "Edit(skills/**)",
-        "Write(skills/**)",
         "Bash(rm:.mcp.json)",
         "Bash(rm:AGENTS.md)",
         "Bash(rm:CLAUDE.md)",
@@ -162,6 +160,9 @@ class Spawner:
     # recreated on every spawn so stale manifest/config files cannot leak
     # into the next session. Everything else at agent_root is agent/user
     # runtime output and is preserved now that agent_root itself is cwd.
+    # ``skills`` is also absent here: agents are allowed to improve or
+    # add skills at runtime, so manifest skills are seeded without
+    # clobbering existing files.
     # ``workspace`` is intentionally absent here: it is legacy runtime
     # output during migration, and a codex-only sandbox root after
     # materialize when codex lacks fine-grained read-only path support.
@@ -173,7 +174,6 @@ class Spawner:
         ".mcp.json",
         "AGENTS.md",
         "CLAUDE.md",
-        "skills",
     })
 
     _WORKSPACE_MANAGED_TOP_LEVEL = frozenset({
@@ -182,6 +182,7 @@ class Spawner:
         "AGENTS.md",
         "CLAUDE.md",
         "memory",
+        "skills",
     })
     _CODEX_WORKSPACE_MARKER = ".doorae-codex-workspace"
 
@@ -231,8 +232,6 @@ class Spawner:
         '      "Write(CLAUDE.md)",\n'
         '      "Edit(.claude/settings.json)",\n'
         '      "Write(.claude/settings.json)",\n'
-        '      "Edit(skills/**)",\n'
-        '      "Write(skills/**)",\n'
         '      "Bash(rm:.mcp.json)",\n'
         '      "Bash(rm:AGENTS.md)",\n'
         '      "Bash(rm:CLAUDE.md)"\n'
@@ -260,8 +259,6 @@ class Spawner:
         '      "Write(CLAUDE.md)",\n'
         '      "Edit(.claude/settings.json)",\n'
         '      "Write(.claude/settings.json)",\n'
-        '      "Edit(skills/**)",\n'
-        '      "Write(skills/**)",\n'
         '      "Bash(rm:.mcp.json)",\n'
         '      "Bash(rm:AGENTS.md)",\n'
         '      "Bash(rm:CLAUDE.md)"\n'
@@ -484,6 +481,62 @@ class Spawner:
                     f"Failed to prune {entry} during materialize: {exc}"
                 ) from exc
 
+    @classmethod
+    def _ensure_real_directory(cls, path: Path, *, mode: int = 0o700) -> None:
+        """Ensure ``path`` is a real directory owned by this materializer.
+
+        Agent-owned content can live *inside* the directory, but the
+        directory itself must not be a symlink. Otherwise a manifest seed
+        could write outside the agent root through a parent symlink.
+        """
+        if path.is_symlink() or path.is_file():
+            cls._remove_tree_entry(path)
+        elif path.exists() and not path.is_dir():
+            cls._remove_tree_entry(path)
+        path.mkdir(parents=True, exist_ok=True)
+        secure_chmod(path, mode)
+
+    @staticmethod
+    def _has_symlink_parent(root: Path, target: Path) -> bool:
+        """Return true if any parent between ``root`` and ``target`` is a symlink."""
+        try:
+            relative = target.relative_to(root)
+        except ValueError:
+            return True
+
+        current = root
+        for part in relative.parts[:-1]:
+            current = current / part
+            if current.is_symlink():
+                return True
+        return False
+
+    @classmethod
+    def _seed_manifest_skill_files(
+        cls,
+        agent_root: Path,
+        files: dict[str, str],
+    ) -> None:
+        """Seed missing manifest skills without clobbering agent edits."""
+        skills_root = agent_root / "skills"
+        for rel_path, content in files.items():
+            if not rel_path.startswith("skills/"):
+                continue
+
+            target = agent_root / rel_path
+            if target.exists() or target.is_symlink():
+                continue
+            if cls._has_symlink_parent(skills_root, target):
+                log.warning(
+                    "skill_seed_skipped_symlink_parent",
+                    path=str(target),
+                )
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            secure_chmod(target.parent, 0o700)
+            safe_write_text(target, content, mode=0o600)
+
     def _materialize_agent_dir(self, msg: SpawnManifest) -> Path:
         """Reconcile the on-disk agent directory with the spawn manifest.
 
@@ -574,12 +627,24 @@ class Spawner:
         outbox_dir.mkdir(parents=True, exist_ok=True)
         secure_chmod(outbox_dir, 0o700)
 
+        # --- Writable skills directory --------------------------------
+        #
+        # Skills are agent-owned runtime content. The manifest can seed
+        # missing skills, but a respawn must not clobber edits or
+        # agent-authored skills. Keep the root as a real directory so
+        # materializer writes cannot escape via a symlink parent.
+        skills_dir = agent_root / "skills"
+        self._ensure_real_directory(skills_dir)
+
         # --- Write each file in the manifest ---------------------------
         for rel_path, content in msg.files.items():
+            if rel_path.startswith("skills/"):
+                continue
             target = agent_root / rel_path
             target.parent.mkdir(parents=True, exist_ok=True)
             secure_chmod(target.parent, 0o700)
             safe_write_text(target, content, mode=0o600)
+        self._seed_manifest_skill_files(agent_root, msg.files)
 
         # --- Synthetic symlinks (engine convention aliases) -----------
         # CLAUDE.md → AGENTS.md (Claude Code auto-discovers CLAUDE.md)
@@ -592,24 +657,21 @@ class Spawner:
             claude_md.symlink_to("AGENTS.md")
 
         # .agents/skills and .claude/skills → ../skills (so Gemini CLI
-        # and Claude Code both find the canonical skill directory).
-        # Only create these if the manifest actually declared any
-        # skills — otherwise the engines would follow dead links.
-        if any(p.startswith("skills/") for p in msg.files):
-            for alias_dir, target_rel in (
-                (agent_root / ".agents" / "skills", "../skills"),
-                (agent_root / ".claude" / "skills", "../skills"),
-            ):
-                alias_dir.parent.mkdir(parents=True, exist_ok=True)
-                secure_chmod(alias_dir.parent, 0o700)
-                if alias_dir.exists() or alias_dir.is_symlink():
-                    # iterdir pruning above may not have removed these
-                    # if they already existed as dirs; unlink now.
-                    if alias_dir.is_symlink():
-                        alias_dir.unlink()
-                    else:
-                        shutil.rmtree(alias_dir)
-                alias_dir.symlink_to(target_rel)
+        # and Claude Code both find the canonical skill directory). The
+        # canonical directory is always present because agents may add
+        # skills at runtime even when the manifest seeds none.
+        for alias_dir, target_rel in (
+            (agent_root / ".agents" / "skills", "../skills"),
+            (agent_root / ".claude" / "skills", "../skills"),
+        ):
+            alias_dir.parent.mkdir(parents=True, exist_ok=True)
+            secure_chmod(alias_dir.parent, 0o700)
+            if alias_dir.exists() or alias_dir.is_symlink():
+                if alias_dir.is_symlink():
+                    alias_dir.unlink()
+                else:
+                    shutil.rmtree(alias_dir)
+            alias_dir.symlink_to(target_rel)
 
         # --- Default .claude/settings.json for claude-code ------------
         # Issue #111. The admin-supplied file (if any) was already
@@ -722,6 +784,11 @@ class Spawner:
                 if slot.is_symlink() or slot.exists():
                     self._remove_tree_entry(slot)
                 slot.symlink_to(f"../../memory/{name}")
+
+            ws_skills = workspace / "skills"
+            if ws_skills.is_symlink() or ws_skills.exists():
+                self._remove_tree_entry(ws_skills)
+            ws_skills.symlink_to("../skills")
 
         return agent_root
 

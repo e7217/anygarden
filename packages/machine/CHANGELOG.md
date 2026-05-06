@@ -3,6 +3,17 @@
 
 ## Unreleased
 
+### Changed — writable agent skills (#350)
+
+- Treat `skills/` as agent-owned runtime content after initial seeding:
+  respawn preserves agent edits and agent-authored skills, while
+  control-plane files such as `AGENTS.md`, `CLAUDE.md`, `.mcp.json`,
+  and engine config remain materializer-managed.
+- Expose canonical `skills/` inside Codex's `workspace-write`
+  fallback via `workspace/skills -> ../skills`, and allow claude-code
+  standard/trusted agents to edit skills while keeping deny rules for
+  materializer-managed files.
+
 ### Changed — agent runtime cwd (#345)
 
 - Spawn `doorae-agent` from the canonical agent directory instead of

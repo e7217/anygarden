@@ -50,7 +50,7 @@ systemctl --user start doorae-machine
 ~/.doorae/agents/<agent_id>/
 ├── AGENTS.md           # 에이전트 지시사항
 ├── CLAUDE.md           # → AGENTS.md (symlink)
-├── skills/             # 스킬 파일
+├── skills/             # agent-owned 스킬 파일 (respawn 시 보존)
 ├── .claude/            # claude-code project settings
 ├── .codex/             # codex config overlay when present
 ├── .gemini/            # gemini-cli settings
@@ -65,6 +65,12 @@ systemctl --user start doorae-machine
 일반 엔진의 subprocess cwd는 `<agent_id>/` 자체다. `workspace/`는
 현재 codex 표준 샌드박스가 managed 파일 read-only 예외를 지원하지
 않는 버전에서만 생성되는 내부 fallback이며, manifest 업로드 대상이 아니다.
+Codex fallback 안에는 `skills -> ../skills` bridge가 있어 표준 권한
+Codex도 canonical skill 파일을 직접 개선할 수 있다.
+
+`AGENTS.md`, `CLAUDE.md`, MCP/engine config는 materializer가 매 spawn
+복구하는 control-plane 파일이다. 반대로 `skills/`와 `memory/`는 agent
+runtime 영역으로 보고 normal respawn에서 agent 수정분을 보존한다.
 
 ## 개발 환경
 
