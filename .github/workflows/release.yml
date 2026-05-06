@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'doorae-agent-v*'
+      - 'doorae-cluster-v*'
+      - 'doorae-machine-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse tag
+        id: parse
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PKG="${TAG#doorae-}"
+          PKG="${PKG%-v*}"
+          VERSION="${TAG##*-v}"
+          echo "package=${PKG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Tag: ${TAG} -> package=${PKG}, version=${VERSION}"
+
+      - name: Verify pyproject version matches tag
+        working-directory: packages/${{ steps.parse.outputs.package }}
+        run: |
+          PYPROJECT_VERSION=$(grep -E '^version = ' pyproject.toml | head -n1 | sed -E 's/version = "([^"]+)".*/\1/')
+          if [ "$PYPROJECT_VERSION" != "${{ steps.parse.outputs.version }}" ]; then
+            echo "::error::Tag version ${{ steps.parse.outputs.version }} does not match pyproject.toml version ${PYPROJECT_VERSION}"
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+
+      - name: Build sdist + wheel
+        working-directory: packages/${{ steps.parse.outputs.package }}
+        run: |
+          rm -rf dist/
+          uv build
+
+      - name: Resolve previous tag for same package
+        id: prev
+        run: |
+          PKG="${{ steps.parse.outputs.package }}"
+          CURRENT="${GITHUB_REF_NAME}"
+          PREV=$(git tag --list "doorae-${PKG}-v*" --sort=-version:refname \
+            | grep -vx "${CURRENT}" \
+            | head -n1 || true)
+          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
+          if [ -n "${PREV}" ]; then
+            echo "Previous ${PKG} tag: ${PREV}"
+          else
+            echo "No previous ${PKG} tag found - this is the first release for the package."
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PKG="${{ steps.parse.outputs.package }}"
+          VERSION="${{ steps.parse.outputs.version }}"
+          PREV_TAG="${{ steps.prev.outputs.tag }}"
+          ARGS=(
+            "${GITHUB_REF_NAME}"
+            --title "doorae-${PKG} v${VERSION}"
+            --generate-notes
+          )
+          if [ -n "${PREV_TAG}" ]; then
+            ARGS+=(--notes-start-tag "${PREV_TAG}")
+          fi
+          gh release create "${ARGS[@]}" packages/${PKG}/dist/*
