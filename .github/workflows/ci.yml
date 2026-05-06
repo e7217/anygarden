@@ -81,6 +81,38 @@ jobs:
         working-directory: packages/cluster/frontend
         run: npm ci
 
+      - name: Test frontend (Vitest)
+        working-directory: packages/cluster/frontend
+        run: npm test
+
       - name: Build (typecheck + bundle)
         working-directory: packages/cluster/frontend
         run: npm run build
+
+  test-agent-ts:
+    name: Test agent-ts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint:ts
+
+      - name: Typecheck
+        run: npm -w @doorae/agent-ts run typecheck
+
+      - name: Test
+        run: npm run test:ts
+
+      - name: Build
+        run: npm run build:ts
