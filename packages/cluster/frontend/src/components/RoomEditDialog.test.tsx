@@ -160,9 +160,12 @@ describe('RoomEditDialog – admin context-window toggle (#225)', () => {
       />,
     )
 
-    // Wait for the initial GET to settle by finding a field that
-    // always renders (the name input).
-    await screen.findByLabelText(/name/i)
+    // Wait for the initial GET to settle. The input exists before
+    // data loads, but Save stays disabled until ``name`` is populated.
+    const nameInput = await screen.findByLabelText(/name/i)
+    await waitFor(() => {
+      expect(nameInput).toHaveValue('general')
+    })
 
     // Toggle must not be rendered for non-admins.
     expect(
