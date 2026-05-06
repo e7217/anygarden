@@ -10,10 +10,15 @@ import Sidebar from './Sidebar'
 // ``<aside>`` class & header button, so stub the data hooks out
 // with minimal shapes. Each mock mirrors the live shape just
 // enough for the component to render without throwing.
+const authMockState = vi.hoisted(() => ({
+  isAdmin: false,
+  logout: vi.fn(),
+}))
+
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({
-    user: { id: 'u1', email: 'u@example.com', is_admin: false },
-    logout: vi.fn(),
+    user: { id: 'u1', email: 'u@example.com', is_admin: authMockState.isAdmin },
+    logout: authMockState.logout,
   }),
 }))
 vi.mock('@/hooks/useAgents', () => ({
@@ -55,6 +60,8 @@ vi.mock('@/components/EntityAvatar', () => ({
 }))
 
 beforeEach(() => {
+  authMockState.isAdmin = false
+  authMockState.logout.mockReset()
   toggleCollapsedSpy.mockReset()
   mockSidebarLayout.mockReset()
   mockSidebarLayout.mockReturnValue({
@@ -73,6 +80,22 @@ function renderSidebar() {
     </MemoryRouter>,
   )
 }
+
+describe('Sidebar — experimental admin nav badges (#346)', () => {
+  it('marks LLM Gateway and Topology as experimental beta entries', () => {
+    authMockState.isAdmin = true
+
+    renderSidebar()
+
+    expect(screen.getByRole('button', {
+      name: 'LLM Gateway, experimental feature',
+    })).toBeInTheDocument()
+    expect(screen.getByRole('button', {
+      name: 'Topology, experimental feature',
+    })).toBeInTheDocument()
+    expect(screen.getAllByText('Beta')).toHaveLength(2)
+  })
+})
 
 describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
   it('renders the expanded desktop layout when not collapsed', () => {
