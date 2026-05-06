@@ -8,8 +8,8 @@ spinning up actual subprocesses:
 3. Machine Spawner._materialize_agent_dir reconciles the on-disk
    tree against that frame
 4. Assert the tree matches
-5. Delete one skill from the DB, re-spawn, assert the deleted skill
-   is pruned from disk — the reason the prune step exists
+5. Delete one skill from the DB, re-spawn, assert the disk skill is
+   preserved because skills are runtime-owned after initial seed
 6. Drop a runtime file under the agent root between spawns, assert it survives
 
 The full subprocess E2E lives in scripts/e2e_multiprocess.py; this
@@ -222,7 +222,7 @@ async def test_server_frame_materializes_to_disk(pipeline) -> None:
 
 
 @pytest.mark.asyncio
-async def test_deleted_skill_is_pruned_on_respawn(pipeline) -> None:
+async def test_deleted_manifest_skill_is_preserved_on_respawn(pipeline) -> None:
     agent_id = await pipeline["make_agent"](
         name="e2e-b",
         agents_md="# agent",
@@ -258,11 +258,13 @@ async def test_deleted_skill_is_pruned_on_respawn(pipeline) -> None:
 
     pipeline["spawner"]._materialize_agent_dir(frame2)
 
-    # Disk state converged: coder still there, reviewer gone, whole
-    # reviewer directory pruned (materializer's housekeeping).
+    # Skills are runtime-owned after seeding. A normal respawn no
+    # longer deletes a disk skill just because the DB manifest stopped
+    # advertising it; forced reset/sync is a separate control-plane
+    # operation.
     assert (agent_root / "skills" / "coder" / "SKILL.md").exists()
-    assert not (agent_root / "skills" / "reviewer" / "SKILL.md").exists()
-    assert not (agent_root / "skills" / "reviewer").exists()
+    assert (agent_root / "skills" / "reviewer" / "SKILL.md").exists()
+    assert (agent_root / "skills" / "reviewer").is_dir()
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,8 @@ class TestClaudeCodeDefaultSettings:
         body = Spawner._claude_code_default_settings(tier)
         deny = self._deny_list(body)
         assert deny == list(Spawner._PROTECTED_CLAUDE_DENY)
+        assert "Edit(skills/**)" not in deny
+        assert "Write(skills/**)" not in deny
 
     def test_restricted_strips_mutators(self) -> None:
         body = Spawner._claude_code_default_settings("restricted")

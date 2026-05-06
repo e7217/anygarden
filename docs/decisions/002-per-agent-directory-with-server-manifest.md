@@ -12,6 +12,12 @@ date: 2026-04-11
 > Materialize refreshes only managed top-level entries and preserves
 > agent-created root output. `workspace/` remains only as a codex SDK
 > sandbox fallback while codex lacks read-only path exceptions.
+>
+> Amendment 2026-05-07 (#350): `skills/` is now a runtime-owned
+> directory after initial seeding. Normal materialize preserves agent
+> edits and agent-authored skills, while control-plane files remain
+> materializer-managed. Codex fallback workspaces bridge
+> `workspace/skills -> ../skills`.
 
 ## Context
 
@@ -31,10 +37,10 @@ date: 2026-04-11
 
 에이전트마다 **머신 로컬 파일시스템에 고정된 디렉토리** `~/.doorae/agents/<agent_id>/` 를 배치한다. 이 디렉토리의 구조는 다음 원칙을 따른다:
 
-1. **`AGENTS.md` + `skills/<name>/SKILL.md` 가 단일 source of truth**. [agents.md](https://agents.md) 와 [agentskills.io](https://agentskills.io) 표준을 채택.
+1. **`AGENTS.md` + `skills/<name>/SKILL.md` 가 에이전트가 읽는 표준 투영점**. [agents.md](https://agents.md) 와 [agentskills.io](https://agentskills.io) 표준을 채택. `skills/`는 초기 manifest seed 뒤에는 agent-owned runtime 영역으로 보존한다.
 2. 엔진별 관례 파일명/경로 (`CLAUDE.md`, `GEMINI.md`, `.agents/skills/`, `.claude/skills/`) 는 모두 심볼릭 링크 또는 자동 렌더링 결과물.
 3. 엔진별 설정 파일 (`.codex/config.toml`, `.gemini/settings.json`, `.claude/settings.json`) 은 spawner 가 에이전트 프로필로부터 자동 생성.
-4. subprocess 는 항상 `cwd=<agent_dir>/workspace/` 로 기동 — 부모 탐색으로 엔진이 AGENTS.md 와 네이티브 config 를 발견.
+4. subprocess 는 항상 `cwd=<agent_dir>/` 로 기동한다. Codex만 표준 `workspace-write` 샌드박스 보호를 위해 SDK thread cwd로 `<agent_dir>/workspace/` fallback을 쓸 수 있다.
 5. in-process 엔진 (Deep Agents) 은 `FilesystemBackend(root_dir=<agent_dir>, virtual_mode=True)` 로 동일한 레이아웃을 소비.
 
 **파일의 내용물은 서버 DB 가 source of truth**. 서버에는 다음 두 가지 저장소가 추가된다:
@@ -50,14 +56,14 @@ Admin 은 REST API 로 파일을 CRUD 하고, 이는 DB 에만 반영된다. 실
 `spawn_agent` WebSocket 프레임이 확장되어 `agents_md` 와 `files: dict[str, str]` 필드를 싣는다. 머신의 `Spawner._materialize_agent_dir(msg)` 는 **declarative reconcile** 을 수행한다:
 
 1. 에이전트 루트 생성 (없으면)
-2. **Prune**: `workspace/` 하위를 제외한 모든 managed 파일/디렉토리/심볼릭 링크 삭제. Manifest 에 없는 파일이 디스크에 남지 않도록 보장 — 이것이 없으면 "DB 에서 스킬을 지워도 실제로 삭제되지 않는" 유령 상태 버그가 생긴다
+2. **Prune**: control-plane managed 파일/디렉토리/심볼릭 링크(`AGENTS.md`, `CLAUDE.md`, `.mcp.json`, 엔진 config 등)를 삭제 후 재생성한다. `skills/`와 `memory/`는 agent runtime 영역이라 normal spawn에서는 보존한다
 3. AGENTS.md 기록 (chmod 600)
-4. `files` 맵 순회 → 경로 validation → 파일 쓰기 (chmod 600)
+4. `files` 맵 순회 → 경로 validation → control-plane 파일 쓰기 (chmod 600). `skills/**`는 target이 없을 때만 seed하고 기존 파일은 보존한다
 5. 엔진 관례 심볼릭 링크 재생성 (CLAUDE.md → AGENTS.md, .agents/skills → ../skills 등)
-6. `workspace/` 보장 (없으면 mkdir, 있으면 그대로 — 에이전트가 남긴 스크래치 상태 보존)
-7. subprocess 를 `cwd=workspace/` 로 기동
+6. Codex 엔진이면 `workspace/` fallback과 `workspace/skills -> ../skills`, `workspace/memory/*` bridge를 보장한다
+7. subprocess 를 `cwd=<agent_dir>/` 로 기동
 
-**managed 트리 vs workspace**: materializer 는 `workspace/` 를 제외한 모든 하위를 서버 manifest 의 완전한 복제본으로 만든다. `workspace/` 는 에이전트 런타임 전용 스크래치로 spawn 간 persistence 를 위해 보존한다. 이 분리는 "선언적 manifest + 명시적 스크래치" 라는 단순한 정신 모델을 유지한다.
+**control-plane vs runtime 영역**: materializer 는 `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, 엔진 config를 서버 manifest의 안정적인 투영으로 복구한다. `skills/`와 `memory/`는 에이전트가 개선하거나 생성한 내용을 잃지 않도록 보존한다. 강제 재동기화/삭제는 별도 reset/sync 작업으로 다룬다.
 
 ## Alternatives considered
 
