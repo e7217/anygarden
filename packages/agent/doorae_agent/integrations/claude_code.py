@@ -6,13 +6,10 @@ and stream back the response.
 
 Per-agent configuration is carried in by Phase 0's materialized
 directory layout. The doorae-agent subprocess is spawned with cwd
-set to ``~/.doorae/agents/<id>/workspace/`` so this adapter can
-lean on ``Path.cwd()`` as the working directory. The materializer
-drops:
+set to ``~/.doorae/agents/<id>/`` so this adapter can lean on
+``Path.cwd()`` as the working directory. The materializer drops:
 
-- ``workspace/AGENTS.md`` → ``../AGENTS.md`` symlink
-- ``workspace/CLAUDE.md`` → ``../CLAUDE.md`` symlink (which itself
-  points at ``AGENTS.md``)
+- ``AGENTS.md`` and ``CLAUDE.md`` (symlinked to ``AGENTS.md``)
 - ``.claude/settings.json`` with MCP server config and plugin
   enablement
 - ``.claude/skills/<name>`` → ``../skills`` symlinks
@@ -144,8 +141,8 @@ class ClaudeCodeAdapter(EngineAdapter):
         )
 
         # Informational breadcrumb: does the materializer's
-        # ``workspace/CLAUDE.md`` symlink exist one level above us?
-        # This is the signal that per-agent instructions are wired.
+        # ``CLAUDE.md`` exist in the agent cwd? This is the signal that
+        # per-agent instructions are wired.
         try:
             link = Path.cwd() / "CLAUDE.md"
             if link.is_symlink() or link.is_file():
@@ -231,7 +228,7 @@ class ClaudeCodeAdapter(EngineAdapter):
         Key flags:
 
         - ``cwd`` pinned at ``Path.cwd()`` so the Claude Agent SDK
-          discovers the per-agent directory via its parent.
+          discovers the per-agent project directory directly.
         - ``setting_sources=["project"]`` so CLAUDE.md, project
           skills, and ``.claude/settings.json`` actually load. The
           default of ``None`` silently skips them — that's the

@@ -7,7 +7,7 @@ testable in isolation.
 
 Engine formats:
 
-- **claude-code**: ``.mcp.json`` at the workspace root, shape
+- **claude-code**: ``.mcp.json`` at the agent/project root, shape
   ``{"mcpServers": {<name>: {command, args, env}}}``. Claude Code
   2.x picks this up automatically as a project-local MCP config;
   the legacy ``.claude/settings.json`` "mcpServers" section is
@@ -36,7 +36,7 @@ import tomli_w
 
 # ── Engine → file path ────────────────────────────────────────────
 
-# Issue #142 — workspace-root ``.mcp.json`` is the path Claude Code
+# Issue #142 — project-root ``.mcp.json`` is the path Claude Code
 # 2.x recognizes as a project-local MCP registry. Earlier versions
 # of doorae wrote into ``.claude/settings.json`` which is only read
 # for non-MCP settings (permissions, sandbox, etc.) in 2.x, so

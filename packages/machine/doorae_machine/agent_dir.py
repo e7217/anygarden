@@ -15,10 +15,9 @@ Goals:
   filename-like regex makes this impossible at the source.
 - **No path escape**: absolute paths, ``..`` traversal, symlink-expressed
   paths, and control characters are rejected.
-- **No workspace clobber**: ``workspace/`` is the agent's runtime
-  scratch and must not be writable from the manifest, otherwise the
-  server could overwrite state the agent was relying on between
-  spawns.
+- **No runtime clobber**: the agent root is the runtime cwd, so the
+  manifest may only write known engine config/skill paths. Loose
+  root-level files are reserved for agent/user output between spawns.
 - **No synthetic file collisions**: ``AGENTS.md`` is written by the
   materializer from ``spawn_agent.agents_md``, and ``CLAUDE.md`` is a
   synthetic symlink the materializer creates — neither can come
@@ -40,7 +39,7 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
     ".gemini/",
 )
 
-# Issue #142 — workspace-root exact-match whitelist. Kept in
+# Issue #142 — project-root exact-match whitelist. Kept in
 # lockstep with ``doorae/agent_files.py``. Only add entries with
 # a concrete engine requirement tying them to a fixed path.
 _ALLOWED_EXACT_PATHS: frozenset[str] = frozenset({
@@ -159,9 +158,8 @@ def validate_agent_file_path(path: str) -> None:
             f"or be an exact match of {sorted(_ALLOWED_EXACT_PATHS)}"
         )
 
-    # workspace/ is the runtime scratch for the agent and must never
-    # be clobbered by a manifest write. The prefix list above already
-    # excludes it, but we assert explicitly to keep this rule obvious
-    # when someone adds a future prefix.
+    # Legacy workspace/ is no longer the process cwd, but it may still
+    # exist on disk during migration. It remains runtime-only and must
+    # never be clobbered by a manifest write.
     if parts[0] == "workspace":
         raise AgentFilePathError("workspace/ is runtime-only, not manifest")

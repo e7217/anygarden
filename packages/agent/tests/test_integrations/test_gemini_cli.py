@@ -143,16 +143,12 @@ class TestCallGemini:
 
     Three things that the adapter MUST get right on every call:
 
-    1. ``cwd=agent_root`` (one level above the agent's python cwd),
-       because gemini's ``findProjectRoot`` walks upward from cwd
-       looking for ``.git``. In the per-agent layout no ``.git``
-       exists, so whichever directory the subprocess is launched
-       from becomes the "project root" and thereby the sole place
-       gemini looks for ``.gemini/settings.json`` +
-       hierarchical-memory context files like ``AGENTS.md``. If the
-       cwd stays at ``workspace/`` (the python cwd) gemini finds
-       nothing and behaves like a stock session — no skills, no
-       role, no rules.
+    1. ``cwd=agent_root`` because gemini's ``findProjectRoot`` walks
+       upward from cwd looking for ``.git``. In the per-agent layout no
+       ``.git`` exists, so whichever directory the subprocess is
+       launched from becomes the "project root" and thereby the sole
+       place gemini looks for ``.gemini/settings.json`` +
+       hierarchical-memory context files like ``AGENTS.md``.
 
     2. ``--approval-mode yolo`` so gemini does not block on
        human-in-the-loop tool approval. Non-interactive gemini
@@ -174,14 +170,11 @@ class TestCallGemini:
     async def test_cwd_is_agent_root_and_approval_mode_yolo(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Pretend the agent process was launched from
-        # ``<tmp>/agent_root/workspace/`` — the cwd the machine
-        # spawner pins agents to. The adapter derives agent_root
-        # as ``Path.cwd().parent``.
+        # Pretend the agent process was launched from ``agent_root`` —
+        # the cwd the machine spawner pins agents to.
         agent_root = tmp_path / "agent_root"
-        workspace = agent_root / "workspace"
-        workspace.mkdir(parents=True)
-        monkeypatch.chdir(workspace)
+        agent_root.mkdir(parents=True)
+        monkeypatch.chdir(agent_root)
 
         adapter = GeminiCliAdapter()
         adapter._gemini_path = "/usr/bin/gemini"
@@ -206,7 +199,7 @@ class TestCallGemini:
         result = await adapter._call_gemini("hello")
         assert result == "ok"
 
-        # cwd pinned at agent_root, NOT workspace
+        # cwd pinned at agent_root
         assert captured["cwd"] == str(agent_root)
 
         # --approval-mode yolo is present in the argv
@@ -226,9 +219,8 @@ class TestCallGemini:
         # 0.39.x silently downgrades yolo to default and exits 55 in
         # non-interactive mode, leaving the user with no response.
         agent_root = tmp_path / "agent_root"
-        workspace = agent_root / "workspace"
-        workspace.mkdir(parents=True)
-        monkeypatch.chdir(workspace)
+        agent_root.mkdir(parents=True)
+        monkeypatch.chdir(agent_root)
 
         adapter = GeminiCliAdapter()
         adapter._gemini_path = "/usr/bin/gemini"

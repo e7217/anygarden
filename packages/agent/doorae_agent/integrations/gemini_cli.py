@@ -3,21 +3,19 @@
 The Gemini CLI (``gemini`` binary from https://github.com/google-gemini/gemini-cli)
 uses its own ``findProjectRoot`` that walks upward looking for a
 ``.git`` directory. In our per-agent layout there is no ``.git`` in
-``agent_root/workspace/`` (nor in ``agent_root/``), so gemini would
-treat whichever cwd the adapter launches it from as the project root
-and look for ``.gemini/settings.json`` there. The materializer drops
-``.gemini/settings.json`` at ``agent_root/.gemini/settings.json`` and
-``AGENTS.md`` at ``agent_root/AGENTS.md`` — so to make gemini actually
-pick those up as hierarchical memory (auto-loaded system context, not
-just a file the LLM happens to read) the adapter pins the subprocess
-cwd to ``agent_root`` (i.e. ``Path.cwd().parent``). With that cwd:
+``agent_root/``, so gemini treats whichever cwd the adapter launches it
+from as the project root and looks for ``.gemini/settings.json`` there.
+The materializer drops ``.gemini/settings.json`` at
+``agent_root/.gemini/settings.json`` and ``AGENTS.md`` at
+``agent_root/AGENTS.md``; the machine spawner now launches the agent
+process from that same ``agent_root``. With that cwd:
 
 - ``.gemini/settings.json`` is in cwd → settings (including
   ``context.fileName = "AGENTS.md"``) are actually loaded
 - ``AGENTS.md`` is in cwd → hierarchical memory auto-loads it, so
   skill rules apply even without the user prompt referencing them
-- ``workspace/`` is a subdirectory → the LLM can still write scratch
-  files there via relative paths
+- runtime files can be written relative to the agent directory while
+  managed config/instruction files are refreshed on each spawn
 
 The adapter's job is kept narrow:
 
@@ -63,10 +61,10 @@ logger = structlog.get_logger(__name__)
 # Issue #309 — semantic permission tier → gemini-cli native flag
 # mapping. Gemini's surface differs from codex: it has no OS-level
 # sandbox, only ``--approval-mode`` (yolo / default) and the
-# ``--skip-trust`` workspace trust opt-in. ``standard`` matches the
+# ``--skip-trust`` cwd trust opt-in. ``standard`` matches the
 # pre-#309 behaviour (yolo + skip-trust); ``restricted`` drops both
 # so gemini refuses tool calls instead of auto-approving and the
-# workspace is not granted folder trust. ``trusted`` keeps the
+# agent cwd is not granted folder trust. ``trusted`` keeps the
 # pre-#309 flags — gemini can already invoke shell tools freely
 # under yolo, so there is no extra dial to relax.
 def _resolve_gemini_flags(
@@ -159,7 +157,7 @@ class GeminiCliAdapter(EngineAdapter):
         # via ``_resolve_gemini_flags``. ``restricted`` swaps to
         # default approval mode (gemini will refuse tool calls
         # rather than auto-approve) and drops ``--skip-trust`` so
-        # the workspace is not granted folder trust.
+        # the agent cwd is not granted folder trust.
         self._permission_level = permission_level
         self._gemini_path: str | None = None
         # Per-room conversation history to prevent cross-room leaks.
@@ -184,12 +182,11 @@ class GeminiCliAdapter(EngineAdapter):
         if self._gemini_path:
             logger.info("gemini.found", path=self._gemini_path)
             # Debug breadcrumb: did the materializer drop AGENTS.md
-            # and .gemini/settings.json at agent_root (one level
-            # above the agent subprocess cwd)? We launch gemini with
-            # cwd=agent_root so this is exactly where gemini will
-            # look for hierarchical memory.
+            # and .gemini/settings.json at the agent cwd? We launch
+            # gemini from the same directory so this is exactly where
+            # it will look for hierarchical memory.
             try:
-                agent_root = Path.cwd().parent
+                agent_root = Path.cwd()
                 agents_md = agent_root / "AGENTS.md"
                 settings = agent_root / ".gemini" / "settings.json"
                 if agents_md.is_file():
@@ -324,17 +321,15 @@ class GeminiCliAdapter(EngineAdapter):
     async def _call_gemini(self, prompt: str) -> str | None:
         """Invoke ``gemini -p <prompt> --output-format json``.
 
-        The subprocess cwd is pinned to ``agent_root`` (i.e. one level
-        up from the agent Python process cwd, which is ``workspace/``).
-        Gemini's ``findProjectRoot`` walks upward from cwd looking for
+        The subprocess cwd is pinned to ``agent_root``, which is also
+        the agent Python process cwd. Gemini's ``findProjectRoot`` walks
+        upward from cwd looking for
         ``.git``; in our layout there is none, so whatever we pass as
         cwd becomes its project root. We want that project root to be
         ``agent_root`` so gemini finds ``.gemini/settings.json`` and
-        the ``AGENTS.md`` context file materialized there. If we left
-        cwd at ``workspace/`` gemini would never see our settings or
-        hierarchical memory — it would behave like a stock session.
+        the ``AGENTS.md`` context file materialized there.
         """
-        agent_root = Path.cwd().parent
+        agent_root = Path.cwd()
         # Issue #309 — derive the approval/trust flags from the
         # permission tier. ``restricted`` agents skip yolo (gemini
         # refuses tool calls non-interactively) and skip the trust
@@ -359,8 +354,8 @@ class GeminiCliAdapter(EngineAdapter):
             # "default" when cwd is not in trustedFolders.json,
             # then exits 55 in non-interactive mode. agent_root is
             # a fresh UUID dir per spawn so it can't be pre-trusted;
-            # this flag trusts the workspace for this session only.
-            # ``restricted`` deliberately drops it so the workspace
+            # this flag trusts the agent cwd for this session only.
+            # ``restricted`` deliberately drops it so the cwd
             # stays untrusted and gemini's stricter posture kicks in.
             cmd.append("--skip-trust")
         if self._model:

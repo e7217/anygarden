@@ -33,7 +33,7 @@ class TestAllowedPaths:
             "skills/coder/scripts/runner.js",
             "skills/coder/scripts/tool.ts",
             "skills/coder/scripts/module.mjs",
-            # Issue #142 — workspace-root ``.mcp.json`` is the path
+            # Issue #142 — project-root ``.mcp.json`` is the path
             # Claude Code 2.x reads for project-local MCP config.
             # Gets materialized by merge_for_engine(engine="claude-code")
             # and occasionally uploaded by admins to override overlays.

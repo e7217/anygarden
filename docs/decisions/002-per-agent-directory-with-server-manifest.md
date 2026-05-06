@@ -1,11 +1,17 @@
 ---
 id: 2
 title: Per-agent directory on machine, sourced from server manifest
-status: accepted
+status: amended
 date: 2026-04-11
 ---
 
 # 2. Per-agent directory on machine, sourced from server manifest
+
+> Amendment 2026-05-06 (#345): `doorae-agent` subprocesses now start
+> with `cwd=<agent_dir>` rather than `cwd=<agent_dir>/workspace/`.
+> Materialize refreshes only managed top-level entries and preserves
+> agent-created root output. `workspace/` remains only as a codex SDK
+> sandbox fallback while codex lacks read-only path exceptions.
 
 ## Context
 

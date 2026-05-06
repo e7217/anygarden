@@ -106,7 +106,7 @@ class ManifestStore:
     def delete(self, agent_id: str) -> None:
         """Remove ``<agents_root>/<agent_id>/manifest.json``.
 
-        Does **not** remove ``workspace/`` or the agent directory itself.
+        Does **not** remove the agent directory or runtime files under it.
         A no-op if the manifest does not exist.
         """
         manifest_path = self.agents_root / agent_id / "manifest.json"

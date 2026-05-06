@@ -109,7 +109,7 @@ class TestLifecycleOverlay:
 
         frame = await _build_frame(env["factory"], env["service"], aid)
         # Issue #142 — Claude Code 2.x reads project-local MCP config
-        # from ``.mcp.json`` at the workspace root, not from
+        # from ``.mcp.json`` at the agent/project root, not from
         # ``.claude/settings.json``'s mcpServers section (which 2.x
         # silently ignores).
         assert ".mcp.json" in frame["files"]

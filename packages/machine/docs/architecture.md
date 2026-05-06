@@ -34,8 +34,9 @@ spawner.py ──→ agent directory 구성 (materialize)
     │            ├── AGENTS.md
     │            ├── CLAUDE.md → AGENTS.md (symlink)
     │            ├── skills/
-    │            ├── .env (엔진별)
-    │            └── workspace/
+    │            ├── .claude/ .codex/ .gemini/
+    │            ├── memory/
+    │            └── workspace/ (codex sandbox fallback only)
     │
     ▼
 subprocess ──→ doorae-agent 실행
@@ -51,8 +52,9 @@ supervisor.py ──→ 프로세스 감시, crash 보고
 에이전트 서브프로세스 관리의 핵심:
 1. **materialize**: 서버 manifest를 디스크에 구현 (ADR-002)
    - 에이전트별 디렉토리 `~/.doorae/agents/<agent_id>/`
-   - AGENTS.md, 스킬 파일, 엔진별 .env 작성
-   - 엔진별 symlink 전략 (codex/claude-code: symlink, gemini: real copy)
+   - AGENTS.md, 스킬 파일, 엔진별 설정, memory 디렉토리 작성
+   - `doorae-agent` subprocess cwd는 agent root
+   - codex는 `read_only_paths` 미지원 버전 보호를 위해 SDK thread cwd만 `workspace/` fallback 사용
 2. **spawn**: `doorae-agent` 또는 `uvx doorae-agent`로 subprocess 시작
 3. **kill**: SIGTERM → 10초 대기 → SIGKILL 순서로 종료
 

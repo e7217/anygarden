@@ -234,7 +234,7 @@ class TestManifestStoreLoadAllRunning:
 
 
 class TestManifestStoreDelete:
-    """delete() removes manifest.json but leaves workspace/ intact."""
+    """delete() removes manifest.json but leaves runtime output intact."""
 
     def test_delete_removes_manifest(self, tmp_path: Path) -> None:
         store = ManifestStore(agents_root=tmp_path)
@@ -253,19 +253,17 @@ class TestManifestStoreDelete:
         # Must not raise
         store.delete("no-such-agent")
 
-    def test_delete_leaves_workspace_directory(self, tmp_path: Path) -> None:
-        """workspace/ is runtime-only and must survive a manifest delete."""
+    def test_delete_leaves_runtime_file(self, tmp_path: Path) -> None:
+        """Agent-created runtime files must survive a manifest delete."""
         store = ManifestStore(agents_root=tmp_path)
         store.save(make_frame())
 
-        workspace = tmp_path / "agent-001" / "workspace"
-        workspace.mkdir()
-        (workspace / "state.json").write_text("{}", encoding="utf-8")
+        runtime_file = tmp_path / "agent-001" / "state.json"
+        runtime_file.write_text("{}", encoding="utf-8")
 
         store.delete("agent-001")
 
-        assert workspace.exists()
-        assert (workspace / "state.json").exists()
+        assert runtime_file.exists()
 
 
 class TestManifestStoreUpdateDesiredState:

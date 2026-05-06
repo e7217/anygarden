@@ -24,9 +24,9 @@ _ALLOWED_PREFIXES: tuple[str, ...] = (
     ".openhands/",
 )
 
-# Issue #142 — workspace-root files that are admitted by exact
+# Issue #142 — project-root files that are admitted by exact
 # match (not prefix). Kept small on purpose: each entry is a path
-# engine CLIs look for at a specific location in the workspace
+# engine CLIs look for at a specific location in the agent/project
 # root. New entries should come with a concrete reason tied to an
 # engine requirement.
 _ALLOWED_EXACT_PATHS: frozenset[str] = frozenset({

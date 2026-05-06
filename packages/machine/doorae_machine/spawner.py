@@ -15,6 +15,7 @@ from typing import Any, Callable, Coroutine
 import structlog
 
 from doorae_machine.agent_dir import (
+    AgentFilePathError,
     validate_agent_file_path,
     validate_agent_id,
 )
@@ -141,20 +142,61 @@ class Spawner:
 
     # ── Per-agent directory materialization ──────────────────────────────
 
+    _PROTECTED_CLAUDE_DENY = (
+        "Edit(.mcp.json)",
+        "Write(.mcp.json)",
+        "Edit(AGENTS.md)",
+        "Write(AGENTS.md)",
+        "Edit(CLAUDE.md)",
+        "Write(CLAUDE.md)",
+        "Edit(.claude/settings.json)",
+        "Write(.claude/settings.json)",
+        "Edit(skills/**)",
+        "Write(skills/**)",
+        "Bash(rm:.mcp.json)",
+        "Bash(rm:AGENTS.md)",
+        "Bash(rm:CLAUDE.md)",
+    )
+
+    # Top-level entries owned by the materializer. These are wiped and
+    # recreated on every spawn so stale manifest/config files cannot leak
+    # into the next session. Everything else at agent_root is agent/user
+    # runtime output and is preserved now that agent_root itself is cwd.
+    # ``workspace`` is intentionally absent here: it is legacy runtime
+    # output during migration, and a codex-only sandbox root after
+    # materialize when codex lacks fine-grained read-only path support.
+    _MATERIALIZER_MANAGED_TOP_LEVEL = frozenset({
+        ".agents",
+        ".claude",
+        ".codex",
+        ".gemini",
+        ".mcp.json",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "skills",
+    })
+
+    _WORKSPACE_MANAGED_TOP_LEVEL = frozenset({
+        ".doorae-codex-workspace",
+        ".claude",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "memory",
+    })
+    _CODEX_WORKSPACE_MARKER = ".doorae-codex-workspace"
+
     # Default ``.claude/settings.json`` body for claude-code agents
     # whose admin manifest doesn't supply one. claude-agent-sdk loads
     # only project-scoped settings (``setting_sources=["project"]``),
     # so without this file every tool call gets denied by the SDK's
     # default ask-mode and there is no human in the loop to approve.
     # The trust model matches gemini-cli's ``--approval-mode yolo``
-    # and codex's ``workspace-write`` sandbox: tool calls are
-    # permitted, but the cwd-pinned ``workspace/`` plus the
-    # symlink-into-sandbox bridge for AGENTS.md/CLAUDE.md
-    # (see ``_materialize_agent_dir`` below) keeps the blast radius
-    # the same as the other CLI engines. Admins who want a tighter
-    # policy ship their own ``.claude/settings.json`` via the spawn
-    # manifest — that file is written first and the "is the slot
-    # empty?" check below skips the default.
+    # and codex's ``workspace-write`` mapping: tool calls are
+    # permitted, while ``permissions.deny`` protects the materialized
+    # instructions/config that live directly in the agent cwd. Admins
+    # who want a tighter policy ship their own ``.claude/settings.json``
+    # via the spawn manifest — that file is written first and the "is
+    # the slot empty?" check below skips the default.
     #
     # Issue #309 — the allow-list now varies by ``permission_level``:
     # ``restricted`` agents lose Bash/Write/Edit/Task so the LLM can
@@ -179,6 +221,21 @@ class Spawner:
         '      "Grep",\n'
         '      "Task",\n'
         '      "TodoWrite"\n'
+        '    ],\n'
+        '    "deny": [\n'
+        '      "Edit(.mcp.json)",\n'
+        '      "Write(.mcp.json)",\n'
+        '      "Edit(AGENTS.md)",\n'
+        '      "Write(AGENTS.md)",\n'
+        '      "Edit(CLAUDE.md)",\n'
+        '      "Write(CLAUDE.md)",\n'
+        '      "Edit(.claude/settings.json)",\n'
+        '      "Write(.claude/settings.json)",\n'
+        '      "Edit(skills/**)",\n'
+        '      "Write(skills/**)",\n'
+        '      "Bash(rm:.mcp.json)",\n'
+        '      "Bash(rm:AGENTS.md)",\n'
+        '      "Bash(rm:CLAUDE.md)"\n'
         '    ]\n'
         '  }\n'
         '}\n'
@@ -193,6 +250,21 @@ class Spawner:
         '      "Read",\n'
         '      "Glob",\n'
         '      "Grep"\n'
+        '    ],\n'
+        '    "deny": [\n'
+        '      "Edit(.mcp.json)",\n'
+        '      "Write(.mcp.json)",\n'
+        '      "Edit(AGENTS.md)",\n'
+        '      "Write(AGENTS.md)",\n'
+        '      "Edit(CLAUDE.md)",\n'
+        '      "Write(CLAUDE.md)",\n'
+        '      "Edit(.claude/settings.json)",\n'
+        '      "Write(.claude/settings.json)",\n'
+        '      "Edit(skills/**)",\n'
+        '      "Write(skills/**)",\n'
+        '      "Bash(rm:.mcp.json)",\n'
+        '      "Bash(rm:AGENTS.md)",\n'
+        '      "Bash(rm:CLAUDE.md)"\n'
         '    ]\n'
         '  }\n'
         '}\n'
@@ -300,8 +372,8 @@ class Spawner:
         sections.append("")
         sections.append(
             "You have a long-term memory file at `memory/notes.md` "
-            "(relative to your agent directory, one level up from this "
-            "AGENTS.md's workspace). The cluster also injects the "
+            "(relative to your current working directory). The cluster "
+            "also injects the "
             "current contents into your `system_prompt` at session "
             "start, so treat it as a shared notebook between sessions.\n\n"
             "Guidelines:\n"
@@ -349,6 +421,69 @@ class Spawner:
             sections.append("")
         return "\n".join(sections)
 
+    @staticmethod
+    def _remove_tree_entry(path: Path) -> None:
+        """Remove a path owned by the materializer without following symlinks."""
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    @classmethod
+    def _migrate_legacy_workspace(cls, agent_root: Path, engine: str) -> None:
+        """Move old workspace output into agent_root where safe.
+
+        The old layout used ``workspace/`` as the process cwd and also
+        placed bridge files there. On upgrade, discard bridge/config slots
+        and move user/runtime output up to the new cwd only when no target
+        already exists. Conflicts are left under workspace rather than
+        overwritten.
+        """
+        workspace = agent_root / "workspace"
+        if not workspace.is_dir() or workspace.is_symlink():
+            return
+        marker = workspace / cls._CODEX_WORKSPACE_MARKER
+        if marker.is_file() and engine == "codex":
+            return
+
+        for entry in list(workspace.iterdir()):
+            if entry.name in cls._WORKSPACE_MANAGED_TOP_LEVEL:
+                try:
+                    cls._remove_tree_entry(entry)
+                except OSError:
+                    log.warning("workspace_bridge_cleanup_failed", path=str(entry))
+                continue
+
+            target_name = "MEMORY.md" if entry.name == "MEMORY.md" else entry.name
+            target = agent_root / target_name
+            if target.exists() or target.is_symlink():
+                log.warning(
+                    "workspace_migration_conflict",
+                    source=str(entry),
+                    target=str(target),
+                )
+                continue
+            shutil.move(str(entry), str(target))
+
+        try:
+            workspace.rmdir()
+        except OSError:
+            log.warning("workspace_migration_leftover", path=str(workspace))
+
+    @classmethod
+    def _prune_materializer_managed_entries(cls, agent_root: Path) -> None:
+        """Drop stale managed entries while preserving agent-created output."""
+        for name in cls._MATERIALIZER_MANAGED_TOP_LEVEL:
+            entry = agent_root / name
+            if not entry.exists() and not entry.is_symlink():
+                continue
+            try:
+                cls._remove_tree_entry(entry)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Failed to prune {entry} during materialize: {exc}"
+                ) from exc
+
     def _materialize_agent_dir(self, msg: SpawnManifest) -> Path:
         """Reconcile the on-disk agent directory with the spawn manifest.
 
@@ -360,12 +495,9 @@ class Spawner:
         - engine-convention symlinks (``CLAUDE.md`` → ``AGENTS.md``,
           ``.agents/skills``/``.claude/skills`` → ``../skills``) are
           fresh
-        - ``msg.engine_secrets`` is rendered to the engine-specific
-          ``.env`` file if a mapping exists for ``msg.engine``
-        - ``workspace/`` is preserved (the agent's runtime scratch)
-        - **anything else** under the agent root is deleted, so files
-          that dropped out of the manifest disappear from disk and
-          the engine's cwd traversal no longer sees them
+        - materializer-owned config/instruction paths are refreshed
+        - agent-created output directly under the agent root is preserved
+          because the agent root is now the process cwd
 
         Raises ``AgentFilePathError`` (from ``agent_dir.py``) if any
         manifest path fails validation — the spawn should then bail
@@ -401,27 +533,8 @@ class Spawner:
         agent_root.mkdir(parents=True, exist_ok=True)
         secure_chmod(agent_root, 0o700)
 
-        # --- Prune: wipe everything except workspace/ ------------------
-        #
-        # Walk the top-level entries of agent_root. For each entry:
-        #   - skip ``workspace`` (runtime scratch lives here and must
-        #     survive re-spawn)
-        #   - symlinks: unlink (don't follow — otherwise we'd recurse
-        #     into whatever the link points at)
-        #   - files: unlink
-        #   - directories: rmtree
-        for entry in agent_root.iterdir():
-            if entry.name == "workspace":
-                continue
-            try:
-                if entry.is_symlink() or entry.is_file():
-                    entry.unlink()
-                elif entry.is_dir():
-                    shutil.rmtree(entry)
-            except OSError as exc:
-                raise RuntimeError(
-                    f"Failed to prune {entry} during materialize: {exc}"
-                ) from exc
+        self._migrate_legacy_workspace(agent_root, msg.engine)
+        self._prune_materializer_managed_entries(agent_root)
 
         # --- Write AGENTS.md from manifest -----------------------------
         #
@@ -436,15 +549,10 @@ class Spawner:
 
         # --- Write memory/notes.md (#237) ------------------------------
         #
-        # Direction: DB snapshot → file, but only when the file doesn't
-        # yet exist. The file is the runtime source of truth (agent
-        # appends to it), and the prune step above spared ``workspace``
-        # but does wipe ``memory/`` — so we recreate the directory and
-        # seed it with the DB snapshot here. On a resume where the
-        # machine already had the file, the prune would have removed it
-        # and the seed here puts the last-known DB content back in its
-        # place. The next heartbeat flushes agent-side writes so the
-        # round-trip converges.
+        # Direction: DB snapshot → file. ``memory/`` now sits directly
+        # under the agent cwd, so shared/outbox contents survive the
+        # managed-prune pass while notes.md is refreshed from the
+        # cluster's last-known snapshot.
         memory_dir = agent_root / "memory"
         memory_dir.mkdir(parents=True, exist_ok=True)
         secure_chmod(memory_dir, 0o700)
@@ -567,18 +675,8 @@ class Spawner:
         # the agent's Read tool since the agent sandbox can reach the
         # engine config dir via cwd traversal.
 
-        # --- Ensure workspace/ exists ---------------------------------
-        workspace = agent_root / "workspace"
-        workspace.mkdir(parents=True, exist_ok=True)
-        # Only chmod if we just created it; don't clobber permissions
-        # the agent may have set on its own runtime files.
-        try:
-            secure_chmod(workspace, 0o700)
-        except PermissionError:
-            pass
-
-        # --- Seed workspace/MEMORY.md if absent -------------------------
-        memory_md = workspace / "MEMORY.md"
+        # --- Seed root MEMORY.md if absent ------------------------------
+        memory_md = agent_root / "MEMORY.md"
         if not memory_md.exists() and not memory_md.is_symlink():
             safe_write_text(
                 memory_md,
@@ -586,168 +684,44 @@ class Spawner:
                 mode=0o600,
             )
 
-        # --- Narrow exception: bridge files inside workspace/ --------
+        # --- Codex workspace-write fallback -----------------------------
         #
-        # workspace/ is the agent's runtime scratch and is normally
-        # excluded from the prune walk. We make a targeted exception
-        # for a small set of MATERIALIZER-OWNED bridges that let the
-        # engine discover canonical instructions without widening its
-        # sandbox to agent_root:
-        #
-        #     workspace/AGENTS.md
-        #     workspace/CLAUDE.md
-        #
-        # Codex CLI anchors AGENTS.md discovery at its ``-C <root>``
-        # working root and does NOT walk upward. Claude Agent SDK
-        # does the same for CLAUDE.md under its ``cwd`` option.
-        # Gemini CLI walks upward to find ``.git`` and treats the
-        # first ancestor (or cwd) as project root — same effect.
-        # Without a copy or symlink inside cwd, adapters would have
-        # to widen their "working root" flag to agent_root, which
-        # widens the workspace-write sandbox enough to let the agent
-        # rewrite its own instructions/config mid-session. Codex
-        # stop-hook caught that failure mode once already.
-        #
-        # The shape of the bridge is **engine-specific** because the
-        # engines disagree about symlinks:
-        #
-        # - Codex + Claude Code tolerate ``workspace/AGENTS.md ->
-        #   ../AGENTS.md`` symlinks. Their sandboxes resolve the
-        #   symlink on *read* so the engine sees the canonical
-        #   content, and resolve it again on *write* — and because
-        #   the resolved path (``agent_root/AGENTS.md``) is outside
-        #   the ``workspace-write`` sandbox, write attempts via the
-        #   agent's shell tool are rejected at the sandbox boundary.
-        #   This is the isolation contract the Codex review signed
-        #   off on: the canonical AGENTS.md is write-unreachable
-        #   from inside the agent's sandbox.
-        #
-        # - Gemini CLI's file-reader tool rejects symlinks whose
-        #   resolved path falls outside the allowed workspace
-        #   directories. ``workspace/AGENTS.md -> ../AGENTS.md``
-        #   resolves to ``agent_root/AGENTS.md`` which is outside
-        #   workspace, so gemini refuses to even read it.
-        #   ``Path not in workspace: Attempted path resolves outside
-        #   the allowed workspace directories``.
-        #
-        # Resolution: default to the symlink form (keeps codex /
-        # claude-code tight), and only write a real-file copy when
-        # the engine is ``gemini-cli``. Real-file copies are marked
-        # read-only (mode 0o400) as a speedbump against trivial
-        # in-session tamper: a write via ``open(..., O_WRONLY)``
-        # fails with EACCES because the owner has no write bit. The
-        # agent can still chmod the file before writing (chmod is
-        # not blocked by the sandbox), but the detour is loud enough
-        # to show up in shell logs and the next spawn's materializer
-        # overwrites the bytes regardless — tamper is still scoped
-        # to a single session.
-        #
-        # Reconcile BOTH directions on every spawn:
-        #
-        # - ``agents_md`` set   → write fresh workspace/AGENTS.md +
-        #   workspace/CLAUDE.md in whichever shape this engine
-        #   prefers.
-        # - ``agents_md`` None  → ensure both slots are absent;
-        #   leaving a stale copy/symlink would expose the previous
-        #   session's instructions to the next spawn even though
-        #   the canonical tree was pruned.
-        composed = self._compose_agents_md(msg) if msg.agents_md is not None else None
-        use_real_copy = msg.engine == "gemini-cli"
+        # Issue #345 originally planned to express codex self-protection
+        # with ``read_only_paths`` while running from agent_root. The
+        # installed codex-cli 0.128.0 / codex-python protocol exposes
+        # ``writable_roots`` but no read-only path exceptions, so making
+        # agent_root the codex workspace would let a standard codex agent
+        # rewrite AGENTS.md, .mcp.json, or skills during the current
+        # session. Keep the machine-level doorae-agent cwd collapsed to
+        # agent_root, but give the codex SDK thread a narrow workspace
+        # child with read bridges back to managed context. The codex
+        # adapter pins ThreadStartOptions.cwd at this directory.
+        if msg.engine == "codex":
+            workspace = agent_root / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            secure_chmod(workspace, 0o700)
+            safe_write_text(
+                workspace / self._CODEX_WORKSPACE_MARKER,
+                "codex workspace-write sandbox root\n",
+                mode=0o600,
+            )
 
-        for slot_name in ("AGENTS.md", "CLAUDE.md"):
-            slot = workspace / slot_name
-            if slot.is_symlink() or slot.exists():
-                slot.unlink()
-            if composed is None:
-                continue
-            if use_real_copy:
-                # Real file, read-only for the owner. The materializer
-                # owns the bytes; the agent's session gets a snapshot,
-                # not a mutable handle. O_NOFOLLOW refuses to follow
-                # any symlink the agent might have planted between our
-                # unlink above and this open (#186).
-                safe_write_text(slot, composed, mode=0o400)
-            else:
-                # Symlink one level up. Reads resolve to the canonical
-                # file; writes resolve to a path outside the sandbox
-                # and the engine rejects them. This is the classic
-                # "read-only view via symlink-plus-sandbox" pattern.
-                slot.symlink_to(f"../{slot_name}")
+            composed = self._compose_agents_md(msg) if msg.agents_md is not None else None
+            for slot_name in ("AGENTS.md", "CLAUDE.md"):
+                slot = workspace / slot_name
+                if slot.is_symlink() or slot.exists():
+                    self._remove_tree_entry(slot)
+                if composed is not None:
+                    slot.symlink_to(f"../{slot_name}")
 
-        # --- workspace/.claude bridge for claude-code -----------------
-        # Issue #111. The claude CLI looks for ``settings.json`` at
-        # exactly ``cwd + '/.claude/settings.json'`` and does NOT walk
-        # upward (verified via debug-file output:
-        # ``Broken symlink or missing file encountered for
-        # settings.json at path: <workspace>/.claude/settings.json``).
-        # The adapter pins cwd to ``workspace/``, so without this
-        # bridge the canonical ``.claude/settings.json`` one level up
-        # is invisible to the SDK and the agent reverts to ask-mode
-        # tool denials. Symlinking the whole ``.claude`` directory is
-        # cleaner than a per-file symlink: skill discovery
-        # (``.claude/skills``) and any future ``.claude/`` artifact
-        # come along for free, and the existing
-        # ``agent_root/.claude/skills → ../skills`` link the
-        # materializer creates above keeps working through the
-        # additional indirection.
-        if msg.engine == "claude-code":
-            ws_link = workspace / ".claude"
-            if ws_link.is_symlink() or ws_link.exists():
-                if ws_link.is_symlink() or ws_link.is_file():
-                    ws_link.unlink()
-                else:
-                    shutil.rmtree(ws_link)
-            ws_link.symlink_to("../.claude")
-
-        # --- workspace/memory/shared bridge for tool-based engines ---
-        # Issue #257. ``memory/shared/`` is the drop zone the daemon
-        # writes room-shared files into (#246). Tool-based engines
-        # (codex, claude-code, gemini-cli) pin cwd to ``workspace/``
-        # and resolve Read-tool paths against it, so a user prompt
-        # like "show memory/shared/note.md" sends the engine looking
-        # at ``<workspace>/memory/shared/note.md`` — outside its
-        # sandbox view of the canonical location one level up.
-        # Bridging the directory (not file-by-file) keeps the link
-        # current as the daemon's ``agent_memory_shared_file_write``
-        # handler adds files post-spawn; the OS resolves through the
-        # symlink each time. See plan-257 §3.2 decision 1 for why
-        # file-by-file copy / dual-write paths were rejected.
-        #
-        # The conditional is defensive — every currently supported
-        # engine (codex/claude-code/gemini-cli) has a Read tool and
-        # benefits from the bridge. A future engine without a Read
-        # tool would be a dead alias here, so the membership check
-        # stays.
-        ws_shared = workspace / "memory" / "shared"
-        ws_outbox = workspace / "memory" / "outbox"
-        # Always reconcile from a clean slate so a previous engine's
-        # bridge can't survive an engine swap (raw → codex etc).
-        for ws_link in (ws_shared, ws_outbox):
-            if ws_link.is_symlink() or ws_link.exists():
-                if ws_link.is_symlink() or ws_link.is_file():
-                    ws_link.unlink()
-                else:
-                    shutil.rmtree(ws_link)
-        if msg.engine in ("codex", "claude-code", "gemini-cli"):
             ws_memory = workspace / "memory"
             ws_memory.mkdir(parents=True, exist_ok=True)
-            try:
-                secure_chmod(ws_memory, 0o700)
-            except PermissionError:
-                pass
-            # Two ``..`` hops: one up out of ``workspace``, one because
-            # the link itself sits inside ``workspace/memory/``.
-            ws_shared.symlink_to("../../memory/shared")
-            # #290 — symmetric bridge for the outbound flow. cwd-pinned
-            # engines write to ``workspace/memory/outbox/`` because that
-            # is how the AGENTS.md guidance reads when resolved against
-            # their cwd; the daemon's poller watches the canonical
-            # ``<agent_root>/memory/outbox/`` one level up. Without the
-            # link, files land in the wrong place and never reach the
-            # room. (Discovered via E2E: codex wrote two artifacts to
-            # ``workspace/memory/outbox/`` on the test VM and they were
-            # invisible to the watcher.)
-            ws_outbox.symlink_to("../../memory/outbox")
+            secure_chmod(ws_memory, 0o700)
+            for name in ("notes.md", "shared", "outbox"):
+                slot = ws_memory / name
+                if slot.is_symlink() or slot.exists():
+                    self._remove_tree_entry(slot)
+                slot.symlink_to(f"../../memory/{name}")
 
         return agent_root
 
@@ -961,12 +935,11 @@ class Spawner:
         if msg.model:
             cmd.extend(["--model", msg.model])
 
-        # Spawn the subprocess with its cwd set to the agent's
-        # workspace/. Engines that do upward file discovery (Codex
-        # AGENTS.md scan, Claude Code CLAUDE.md scan, Gemini CLI
-        # context scan) will then find the materialized files one level
-        # up without any per-engine flag.
-        workspace_cwd = str(agent_root / "workspace") if agent_root else None
+        # Spawn the subprocess with cwd set to the canonical agent root.
+        # Instructions, engine config, memory/shared, and memory/outbox
+        # now live directly under this directory, so engines no longer
+        # need workspace/ bridge files to discover project context.
+        agent_cwd = str(agent_root) if agent_root else None
 
         # Pipe ``msg.engine_secrets`` to the agent via stdin. The agent
         # reads the JSON payload once at startup (``doorae_agent.secrets
@@ -979,7 +952,7 @@ class Spawner:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 env=env,
-                cwd=workspace_cwd,
+                cwd=agent_cwd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,

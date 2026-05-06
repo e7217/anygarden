@@ -172,14 +172,14 @@ class AgentLifecycle:
         Each dict in *agents_data* must contain at minimum ``agent_id``
         and ``actual_state``.  Optional keys: ``pid``, ``last_crash_reason``.
         """
-        # #255 — Agents that just transitioned into ``running`` need
-        # their room-shared files re-pushed: the spawner prunes
-        # ``<agent_root>/memory/`` on every respawn, so the materialised
-        # copies of any file uploaded earlier are already gone by the
-        # time the new process reports in. Collected here and flushed
-        # after the DB commit below; a heartbeat that merely confirms
-        # an already-running agent stays no-op because ``old_state``
-        # is read before we overwrite it.
+        # #255 / #345 — Agents that just transitioned into ``running``
+        # need their room-shared files re-pushed. Materialize now
+        # preserves ``<agent_root>/memory/shared/`` when present, but a
+        # fresh host or a cleaned agent directory still needs the
+        # authoritative room files fanned out after spawn. Collected
+        # here and flushed after the DB commit below; a heartbeat that
+        # merely confirms an already-running agent stays no-op because
+        # ``old_state`` is read before we overwrite it.
         backfill_targets: list[str] = []
         async with self._db_factory() as db:
             for entry in agents_data:
@@ -573,7 +573,6 @@ class AgentLifecycle:
         # explicitly attaches an external server named ``doorae``
         # still wins (escape hatch — see plan §3.2 for #277).
         from doorae.mcp_templates.merge import (
-            DOORAE_BUILTIN_NAME,
             doorae_default_entry,
             merge_for_engine,
             render_instance,
