@@ -3,6 +3,45 @@
 
 ## Unreleased
 
+## v0.5.1 (2026-04-28)
+
+### Workspace bump
+
+- Workspace-consistent version bump alongside `doorae-machine` 0.5.1
+  (Windows `secure_chmod` `DELETE` rights fix). No functional changes
+  in cluster.
+
+## v0.5.0 (2026-04-28)
+
+### Features — Windows native support (#300)
+
+- Consolidate POSIX-only `os.chmod` / `Path.chmod` call sites
+  (jwt_secret, mcp_secrets_key, litellm config) onto
+  `safefs.secure_chmod` so cluster runs natively on Windows 10/11
+  ([#301](https://github.com/e7217/doorae/pull/301)). On Windows the
+  helper writes a DACL granting only the current process owner the
+  modeled rights, instead of `os.chmod`'s POSIX no-op.
+
+## v0.4.1 (2026-04-28)
+
+### Features — agent → room artifact pipeline (#290 Phase B)
+
+- Agents emit artifacts that propagate into the originating room
+  ([#296](https://github.com/e7217/doorae/pull/296)).
+- Render ANSI escapes inside fenced code blocks
+  ([#291](https://github.com/e7217/doorae/pull/291)).
+
+### Features — tasks
+
+- Agent auto-execution + dual room/agent views
+  ([#268](https://github.com/e7217/doorae/pull/268)).
+- Orchestrator `create_task` MCP tool
+  ([#272](https://github.com/e7217/doorae/pull/272)).
+- `/task` slash command in chat input
+  ([#273](https://github.com/e7217/doorae/pull/273)).
+- Embed `mark_task_status` self-instruction in synthetic mention
+  ([#276](https://github.com/e7217/doorae/pull/276)).
+
 ### Features — per-agent collaboration mode (#279)
 
 - Add `agents.collaboration_mode` enum (`solo` | `collaborative`,
@@ -18,7 +57,30 @@
   resets on each human/guest send and trips on `MAX_PEER_DEPTH`
   (1 layer) or `MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN` (8 events).
   Mentions over the cap are stripped from the broadcast content
-  while the prose answer flows through.
+  while the prose answer flows through
+  ([#280](https://github.com/e7217/doorae/pull/280)).
+
+### Features — MCP & engines
+
+- Auto-register doorae self-MCP via Streamable HTTP
+  ([#278](https://github.com/e7217/doorae/pull/278)).
+- Expose agent description for cross-agent recognition
+  ([#274](https://github.com/e7217/doorae/pull/274)).
+- Add GPT-5.5 to codex/openai catalog and bump default
+  ([#267](https://github.com/e7217/doorae/pull/267)).
+
+### Fixes
+
+- Rebase `room_artifacts` migration onto 035 to remove cross-branch
+  conflict ([#297](https://github.com/e7217/doorae/pull/297)).
+- Derive `AgentSettingsDialog` agent prop from live agents list to
+  prevent stale snapshot after in-dialog edits
+  ([#282](https://github.com/e7217/doorae/pull/282)).
+
+### Chores
+
+- Remove dead engine adapters (openai, anthropic, openhands,
+  deep-agents) ([#294](https://github.com/e7217/doorae/pull/294)).
 
 ## v0.4.0 (2026-04-25)
 

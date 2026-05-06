@@ -1,6 +1,59 @@
 # CHANGELOG
 
 
+## Unreleased
+
+## v0.5.1 (2026-04-28)
+
+### Fixes — Windows secure_chmod DELETE rights (#304)
+
+- Grant `DELETE` and `FILE_DELETE_CHILD` rights on Windows
+  `secure_chmod`. The previous mapping of POSIX mode bits to
+  `GENERIC_READ | GENERIC_WRITE` did not include delete rights, so
+  the second spawn of any agent failed when pruning the previous
+  agent dir's `manifest.json`. Combined with
+  `PROTECTED_DACL_SECURITY_INFORMATION` stripping inherited admin
+  rights, the file became un-deletable even by the owner that
+  created it ([#305](https://github.com/e7217/doorae/pull/305)).
+
+## v0.5.0 (2026-04-28)
+
+### Features — Windows native support (#300)
+
+- safefs Windows backend: `safe_write_text` / `safe_write_bytes` use
+  `CreateFileW` + `FILE_FLAG_OPEN_REPARSE_POINT` via ctypes (no
+  `pywin32` dep) for symlink-attack-safe atomic writes; the kernel
+  returns a handle to the reparse point and
+  `GetFileInformationByHandle` rejects it before writing.
+- `secure_chmod` on Windows uses `SetNamedSecurityInfoW` with
+  `PROTECTED_DACL_SECURITY_INFORMATION` to strip inherited ACEs and
+  grant the current process owner SID only.
+- `proc_kill.terminate_tree` (psutil) for cross-platform process
+  tree termination, replacing POSIX-only `os.killpg`.
+- `subprocess_group_kwargs()` returns `start_new_session=True`
+  (POSIX) or `creationflags=CREATE_NEW_PROCESS_GROUP` (Windows),
+  applied to spawner agent spawn
+  ([#301](https://github.com/e7217/doorae/pull/301)).
+
+## v0.4.1 (2026-04-28)
+
+### Features — agent → room artifact pipeline (#290 Phase B)
+
+- Machine-side support for the artifact pipeline so emitted
+  artifacts surface in the originating room
+  ([#296](https://github.com/e7217/doorae/pull/296)).
+
+### Fixes — workspace/memory/outbox
+
+- Bridge `workspace/memory/outbox` to the canonical outbox path so
+  artifacts flow into the agent → room pipeline correctly
+  ([#298](https://github.com/e7217/doorae/pull/298)).
+
+### Chores
+
+- Remove dead engine adapters (machine side)
+  ([#294](https://github.com/e7217/doorae/pull/294)).
+
 ## v0.4.0 (2026-04-25)
 
 ### Features — shared file memory & multi-session DM
