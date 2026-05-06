@@ -3,6 +3,70 @@
 
 ## Unreleased
 
+## v0.6.0 (2026-05-06)
+
+### Features — autonomous responsibility & Goals UI (#302)
+
+- Right context rail — Tasks/Files sidebar 통합 (Phase 1)
+  ([#306](https://github.com/e7217/doorae/pull/306)).
+- Autonomous responsibility MVP — Goal scheduler + executor
+  (Phase 2) ([#307](https://github.com/e7217/doorae/pull/307)).
+- Goals UI — right rail Responsibilities +
+  AgentSettingsDialog (Phase 3)
+  ([#308](https://github.com/e7217/doorae/pull/308)).
+
+### Features — per-agent permission level (#309)
+
+- 3-tier permission model + codex sandbox dial (PR-A,
+  [#310](https://github.com/e7217/doorae/pull/310)).
+- gemini + claude-code permission mappings + topology ⚠ + activity
+  surface (PR-B, [#311](https://github.com/e7217/doorae/pull/311)).
+
+### Features — task auto-routing
+
+- Auto-rep invariant + assignee picker in right rail
+  ([#315](https://github.com/e7217/doorae/pull/315)).
+- Batch auto-route unassigned tasks via room representative
+  ([#316](https://github.com/e7217/doorae/pull/316)).
+
+### Features — right rail polish (#329)
+
+- Density polish — wider rail + unified assignee slot + split goals
+  meta ([#324](https://github.com/e7217/doorae/pull/324)).
+- Viewport-driven default + width staging (Phase 1 of #329,
+  [#330](https://github.com/e7217/doorae/pull/330)).
+- Stage agent message + file-chip widths (Phase 2 of #329,
+  [#331](https://github.com/e7217/doorae/pull/331)).
+- Absorb search + artifacts entries into RoomHeader (Phase 3 of
+  #329, [#332](https://github.com/e7217/doorae/pull/332)).
+- Hide header search below `sm` + add menu fallback (Phase 4 of
+  #329, [#333](https://github.com/e7217/doorae/pull/333)).
+
+### Features — tasks UI
+
+- `TasksPanel` 섹션 접기 + terminal 정리 + status 표시 누락 수정
+  ([#322](https://github.com/e7217/doorae/pull/322)).
+
+### Fixes
+
+- Expose cluster MCP tools to all engines + status enum/UI parity
+  ([#321](https://github.com/e7217/doorae/pull/321)).
+- Renumber `038_task_assigned_at` → `039` to unbreak main
+  ([#318](https://github.com/e7217/doorae/pull/318)).
+- Broadcast scheduler-injected task assignments + add stuck task
+  sweeper ([#317](https://github.com/e7217/doorae/pull/317)).
+- Align right rail row right-edge with section headers
+  ([#326](https://github.com/e7217/doorae/pull/326)).
+- Right rail hover text truncation — `appearance-none` + wider slot
+  + opaque action backdrop
+  ([#328](https://github.com/e7217/doorae/pull/328)).
+- Contain right rail task row overflow
+  ([#335](https://github.com/e7217/doorae/pull/335)).
+- Contain right rail viewport overflow at the substrate
+  ([#337](https://github.com/e7217/doorae/pull/337)).
+- Bump task pickup timeout and harden status directive
+  ([#339](https://github.com/e7217/doorae/pull/339)).
+
 ## v0.5.1 (2026-04-28)
 
 ### Workspace bump

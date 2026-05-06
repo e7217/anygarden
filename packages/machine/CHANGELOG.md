@@ -3,6 +3,15 @@
 
 ## Unreleased
 
+## v0.6.0 (2026-05-06)
+
+### Features — per-agent permission level (#309)
+
+- Wire 3-tier permission model into spawner / engine launch (PR-A,
+  [#310](https://github.com/e7217/doorae/pull/310)).
+- gemini + claude-code permission mappings + codex sandbox dial
+  (PR-B, [#311](https://github.com/e7217/doorae/pull/311)).
+
 ## v0.5.1 (2026-04-28)
 
 ### Fixes — Windows secure_chmod DELETE rights (#304)
