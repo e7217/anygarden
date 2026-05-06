@@ -3,6 +3,26 @@
 
 ## Unreleased
 
+## v0.5.1 (2026-04-28)
+
+### Workspace bump
+
+- Workspace-consistent version bump alongside `doorae-machine` 0.5.1
+  (Windows `secure_chmod` `DELETE` rights fix). No functional changes
+  in agent.
+
+## v0.5.0 (2026-04-28)
+
+### Features — Windows native support (#300)
+
+- gemini_cli engine adapter switches from POSIX-only `killpg` /
+  `SIGKILL` to `proc_kill.terminate_tree` (psutil) for cross-platform
+  process tree termination
+  ([#301](https://github.com/e7217/doorae/pull/301)).
+- Add `psutil` dependency.
+
+## v0.4.1 (2026-04-28)
+
 ### Features — collaboration mode wiring (#279)
 
 - Lift `_build_roster_suffix` from the claude_code adapter to
@@ -33,6 +53,12 @@
   adapters identically; future augmentations now land in one place.
   Conversion result is byte-identical — no behavioural change.
 
+### Refactor — centralize memory/roster injection (#293)
+
+- Lift memory/roster injection from per-engine adapters to the
+  `EngineAdapter` base
+  ([#295](https://github.com/e7217/doorae/pull/295)).
+
 ### Fix — separate mention-as-routing from mention-as-reference (#288)
 
 - Stop emitting raw `<@user:UUID>` routing tokens in the roster
@@ -47,6 +73,20 @@
   prose that merely mentions or lists peers" line. orchestrator
   `handoff_to` MCP calls and user-side mention parsing are
   unaffected.
+
+### Fix — collaborative synthesis opt-in (#283)
+
+- Make collaborative synthesis opt-in rather than mandatory.
+
+### Engines
+
+- Add GPT-5.5 to codex/openai catalog and bump default
+  ([#267](https://github.com/e7217/doorae/pull/267)).
+
+### Chores
+
+- Remove dead engine adapters (openai, anthropic, openhands,
+  deep-agents) ([#294](https://github.com/e7217/doorae/pull/294)).
 
 ## v0.4.0 (2026-04-25)
 
