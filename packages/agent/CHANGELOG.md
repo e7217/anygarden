@@ -3,6 +3,18 @@
 
 ## Unreleased
 
+## v0.6.0 (2026-05-06)
+
+### Features — per-agent permission level (#309)
+
+- 3-tier permission model wired through the agent runtime
+  ([#310](https://github.com/e7217/doorae/pull/310)).
+
+### Fixes
+
+- Expose cluster MCP tools to all engines + status enum / UI parity
+  ([#321](https://github.com/e7217/doorae/pull/321)).
+
 ## v0.5.1 (2026-04-28)
 
 ### Workspace bump
