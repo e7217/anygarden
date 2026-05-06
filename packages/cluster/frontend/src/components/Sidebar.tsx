@@ -139,6 +139,18 @@ interface SidebarProps {
   onClose?: () => void
 }
 
+function ExperimentalNavBadge() {
+  return (
+    <span
+      aria-hidden="true"
+      title="Experimental feature"
+      className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-[10px] font-semibold leading-4 text-[var(--color-brand-tint-text)]"
+    >
+      Beta
+    </span>
+  )
+}
+
 export default function Sidebar({
   selectedRoom,
   open = false,
@@ -726,6 +738,7 @@ export default function Sidebar({
               MCP Servers
             </button>
             <button
+              aria-label="LLM Gateway, experimental feature"
               onClick={() => go('/admin/llm-gateway')}
               className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
                 location.pathname.startsWith('/admin/llm-gateway')
@@ -734,9 +747,11 @@ export default function Sidebar({
               }`}
             >
               <Waypoints className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              LLM Gateway
+              <span className="min-w-0 truncate">LLM Gateway</span>
+              <ExperimentalNavBadge />
             </button>
             <button
+              aria-label="Topology, experimental feature"
               onClick={() => go('/topology')}
               className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
                 location.pathname === '/topology'
@@ -745,7 +760,8 @@ export default function Sidebar({
               }`}
             >
               <Share2 className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              Topology
+              <span className="min-w-0 truncate">Topology</span>
+              <ExperimentalNavBadge />
             </button>
           </div>
         </div>
