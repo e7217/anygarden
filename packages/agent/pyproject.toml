@@ -21,7 +21,7 @@ dependencies = [
     "psutil>=5.9",
     # Engine dependencies — included by default so all engines work
     # out of the box without extra install flags.
-    "codex-python>=1.122",
+    "codex-python>=1.114",
     "claude-agent-sdk>=0.1.0",
 ]
 

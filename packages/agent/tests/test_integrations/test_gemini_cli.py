@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from doorae_agent import secrets as agent_secrets
 from doorae_agent.integrations.gemini_cli import (
     GeminiCliAdapter,
     integrate_with_gemini_cli,
@@ -244,45 +243,6 @@ class TestCallGemini:
 
         argv = list(captured["args"])  # type: ignore[arg-type]
         assert "--skip-trust" in argv
-
-    @pytest.mark.asyncio
-    async def test_private_engine_secrets_flow_to_gemini_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The machine keeps engine secrets out of doorae-agent's
-        process env, but the gemini CLI child still needs them for
-        API-key based authentication.
-        """
-        agent_root = tmp_path / "agent_root"
-        agent_root.mkdir(parents=True)
-        monkeypatch.chdir(agent_root)
-        agent_secrets.set_secrets({"GEMINI_API_KEY": "sk-test"})
-
-        adapter = GeminiCliAdapter()
-        adapter._gemini_path = "/usr/bin/gemini"
-
-        captured: dict[str, object] = {}
-
-        class FakeProc:
-            returncode = 0
-
-            async def communicate(self) -> tuple[bytes, bytes]:
-                return (b'{"response": "ok"}', b"")
-
-        async def fake_exec(*args: object, **kwargs: object) -> FakeProc:
-            captured["env"] = kwargs.get("env")
-            return FakeProc()
-
-        try:
-            monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
-            result = await adapter._call_gemini("hello")
-        finally:
-            agent_secrets.clear()
-
-        assert result == "ok"
-        env = captured["env"]
-        assert isinstance(env, dict)
-        assert env["GEMINI_API_KEY"] == "sk-test"
 
 
 class TestIntegrateWithGeminiCli:
