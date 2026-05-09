@@ -70,11 +70,44 @@ class AgentLifecycle:
         # behaviour they expected (``engine_secrets={}`` always) is
         # exactly what an off-flag still produces.
         self._llm_gateway_enabled = llm_gateway_enabled
+        # Issue #369 — per-agent ``doorae_token`` cache. Without this,
+        # every ``_build_sync_frame`` invocation (which fires on
+        # ``request_start``, ``handle_report_actual_state``,
+        # broadcast snapshots, sync_batch ticks) mints a *new* token
+        # and stages a new ``agent_tokens`` row. Whether the row
+        # commits depends on the caller — read-only contexts
+        # (broadcast / sync rebuild) leave the staged row uncommitted
+        # while the manifest_store cache *does* update with the new
+        # token regardless. The agent process reads its
+        # ``OPENAI_API_KEY`` from stdin once at spawn; if it lands on
+        # a token whose row never committed, every subsequent
+        # gateway request 401s with 'Invalid agent token'.
+        #
+        # Cache contract:
+        # - Key: agent_id; value: plaintext doorae_token string.
+        # - First mint per agent goes through ``request_start`` (the
+        #   only path that's guaranteed to commit) and lands in the
+        #   cache.
+        # - Subsequent ``_build_sync_frame`` calls reuse the cached
+        #   value — same token reaches the disk-baked .mcp.json,
+        #   the engine_secrets stdin payload, and the
+        #   manifest_store cache, so the three stay coherent.
+        # - ``request_stop`` and ``delete_agent`` evict so the next
+        #   start cycle issues a fresh token (rotation on respawn).
+        self._token_cache: dict[str, str] = {}
 
     # ── Public API ──────────────────────────────────────────────
 
     async def request_start(self, agent_id: str) -> None:
         """Select a machine, bump generation, send ``sync_desired_state``."""
+        # Issue #369 — invalidate any cached doorae_token on each
+        # explicit start. The new spawn frame mints a fresh token and
+        # re-populates the cache; subsequent rebuilds reuse it. Without
+        # this evict, a stop → start cycle would reuse the previous
+        # spawn's plaintext, which is undesirable both for security
+        # rotation and for race scenarios where the prior process
+        # outlives the stop window.
+        self._token_cache.pop(agent_id, None)
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
@@ -135,6 +168,50 @@ class AgentLifecycle:
                     machine_id=machine.id,
                 )
 
+    def _acquire_doorae_token(
+        self, db: AsyncSession, agent_id: str
+    ) -> str:
+        """Return the per-agent ``doorae_token``, minting one on cache miss.
+
+        Issue #369 — single mint point for the doorae self-MCP /
+        gateway-auth bearer. Cache hit returns the previously-minted
+        plaintext (already committed via ``request_start``); miss
+        mints a fresh token, stages an ``agent_tokens`` row via
+        ``db.add``, and stores the plaintext in the cache.
+
+        The mint side-effect (``db.add``) only takes effect when the
+        caller commits its transaction. ``request_start`` always
+        commits; ``_build_sync_frame`` invocations from broadcast /
+        rebuild paths do not, but those paths hit the cache instead
+        so they don't trigger a mint at all. Net result: one row per
+        agent per active spawn, with the plaintext stable until
+        ``request_stop`` evicts.
+        """
+        cached = self._token_cache.get(agent_id)
+        if cached is not None:
+            return cached
+        token = generate_token()
+        token_hash, lookup_hint = hash_agent_token(token)
+        db.add(
+            AgentToken(
+                agent_id=agent_id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            )
+        )
+        self._token_cache[agent_id] = token
+        return token
+
+    def evict_token(self, agent_id: str) -> None:
+        """Drop the cached ``doorae_token`` for ``agent_id`` (#369).
+
+        Public hook so non-lifecycle paths (admin DELETE on
+        ``/api/v1/agents/{id}``) can clear the cache without reaching
+        into ``_token_cache`` directly. No-op when the agent has no
+        cached token, so callers don't need a guard.
+        """
+        self._token_cache.pop(agent_id, None)
+
     async def request_stop(self, agent_id: str) -> None:
         """Set desired_state='stopped' and push ``sync_desired_state``.
 
@@ -145,6 +222,9 @@ class AgentLifecycle:
         short-circuit to ``stopped`` here to avoid a permanent
         stuck-stopping row.
         """
+        # Issue #369 — evict the cached doorae_token so the next
+        # ``request_start`` mints a fresh one (rotation on respawn).
+        self._token_cache.pop(agent_id, None)
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
@@ -636,19 +716,16 @@ class AgentLifecycle:
                     agent_token="<placeholder>",
                 )
                 if default is not None:
-                    # A new token is minted per spawn-frame because
-                    # the plaintext is unrecoverable from DB hashes
-                    # — so each fresh frame writes a fresh secret
-                    # into disk (claude-code/gemini) or env (codex).
-                    doorae_token = generate_token()
-                    token_hash, lookup_hint = hash_agent_token(doorae_token)
-                    db.add(AgentToken(
-                        agent_id=agent.id,
-                        token_hash=token_hash,
-                        lookup_hint=lookup_hint,
-                    ))
-                    # Re-render with the real token. The earlier
-                    # call is just for engine-support detection.
+                    # Issue #369 — token now comes from the per-agent
+                    # cache (mint on first hit per spawn cycle, reuse
+                    # thereafter). Pre-#369 this minted a fresh token
+                    # *per frame build*, which made every read-only
+                    # rebuild path (broadcast snapshot, sync_batch
+                    # tick) stage an uncommitted ``agent_tokens`` row
+                    # while still updating the manifest_store cache —
+                    # leaving agent processes with stdin-piped tokens
+                    # that the DB never persisted.
+                    doorae_token = self._acquire_doorae_token(db, agent.id)
                     real_default = doorae_default_entry(
                         engine=mcp_engine,
                         cluster_url=self._cluster_external_url,
@@ -682,13 +759,10 @@ class AgentLifecycle:
             and self._cluster_external_url
             and agent.engine == "openhands"
         ):
-            doorae_token = generate_token()
-            token_hash, lookup_hint = hash_agent_token(doorae_token)
-            db.add(AgentToken(
-                agent_id=agent.id,
-                token_hash=token_hash,
-                lookup_hint=lookup_hint,
-            ))
+            # Issue #369 — same cached path as the MCP block above so
+            # gateway-only agents (no MCP attachments) still get a
+            # stable, committed token.
+            doorae_token = self._acquire_doorae_token(db, agent.id)
 
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []

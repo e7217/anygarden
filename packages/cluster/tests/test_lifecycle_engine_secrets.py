@@ -173,3 +173,117 @@ class TestGatewayDisabledLeavesFrameEmpty:
             cluster_external_url=None,
         )
         assert frame["engine_secrets"] == {}
+
+
+# ── Issue #369 — token cache stops orphan rows on rebuild ──────────
+
+
+class TestTokenCachedAcrossRebuilds:
+    """Locks the regression where every ``_build_sync_frame`` call
+    minted a fresh token. The agent process reads its
+    ``OPENAI_API_KEY`` once at spawn; pre-#369 a rebuild path that
+    rolled back its transaction (broadcast snapshot, sync_batch
+    tick) updated the manifest_store cache with a token whose
+    agent_tokens row never committed → permanent 401."""
+
+    @pytest.mark.asyncio
+    async def test_repeated_build_returns_same_token(self, env) -> None:
+        bus = MachineBus()
+        lifecycle = AgentLifecycle(
+            db_factory=env["factory"],
+            machine_bus=bus,
+            cluster_external_url="http://localhost:8001",
+            llm_gateway_enabled=True,
+        )
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="openhands",
+                name="oh-cache-test",
+                desired_state="idle",
+                actual_state="idle",
+            )
+            db.add(agent)
+            await db.commit()
+            await db.refresh(agent)
+            agent_id = agent.id
+
+            # Three back-to-back rebuilds — broadcast / sync_batch
+            # ticks land here. All three must hand the same token to
+            # the spawn frame.
+            f1 = await lifecycle._build_sync_frame(db, agent, rooms=[])
+            f2 = await lifecycle._build_sync_frame(db, agent, rooms=[])
+            f3 = await lifecycle._build_sync_frame(db, agent, rooms=[])
+            await db.commit()
+
+        t1 = f1["engine_secrets"].get("OPENAI_API_KEY")
+        t2 = f2["engine_secrets"].get("OPENAI_API_KEY")
+        t3 = f3["engine_secrets"].get("OPENAI_API_KEY")
+        assert t1 and t2 and t3
+        assert t1 == t2 == t3, (
+            "_build_sync_frame must reuse the cached doorae_token; "
+            "minting per-call leaves orphaned rows that 401 the agent."
+        )
+
+        # And the AgentToken DB row count must be 1 — not 3.
+        from sqlalchemy import func, select as _sel
+
+        async with env["factory"]() as db2:
+            count = (
+                await db2.execute(
+                    _sel(func.count()).select_from(AgentToken).where(
+                        AgentToken.agent_id == agent_id
+                    )
+                )
+            ).scalar_one()
+        assert count == 1, (
+            f"expected exactly 1 AgentToken row for the agent across "
+            f"3 frame rebuilds, got {count}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_request_stop_evicts_cache(self, env) -> None:
+        """Stop must clear the cached token so the next start mints
+        fresh. Bypasses ``request_start`` (which needs Machine /
+        Participant / room placement scaffolding) and directly tests
+        the eviction contract by pre-populating the cache."""
+        bus = MachineBus()
+        lifecycle = AgentLifecycle(
+            db_factory=env["factory"],
+            machine_bus=bus,
+            cluster_external_url="http://localhost:8001",
+            llm_gateway_enabled=True,
+        )
+
+        async with env["factory"]() as db:
+            agent = Agent(
+                engine="openhands",
+                name="oh-stop-evict",
+                desired_state="running",
+                actual_state="running",
+            )
+            db.add(agent)
+            await db.commit()
+            await db.refresh(agent)
+            agent_id = agent.id
+
+        # Pre-populate the cache as if a prior _build_sync_frame /
+        # request_start had landed a token.
+        lifecycle._token_cache[agent_id] = "agt_fake_prior_token"
+        assert agent_id in lifecycle._token_cache
+
+        await lifecycle.request_stop(agent_id)
+        assert agent_id not in lifecycle._token_cache, (
+            "request_stop must evict the cached token so the next "
+            "start mints fresh."
+        )
+
+    def test_evict_token_helper_is_no_op_for_unknown_agent(
+        self, env  # noqa: ARG002 — fixture activates AgentLifecycle module
+    ) -> None:
+        bus = MachineBus()
+        lifecycle = AgentLifecycle(
+            db_factory=env["factory"],
+            machine_bus=bus,
+        )
+        # Should not raise on unknown agent_id.
+        lifecycle.evict_token("does-not-exist")
