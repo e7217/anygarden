@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { getAuthToken, setGuestToken } from '@/lib/authStorage'
 
 /**
  * ``/invite/:token``
@@ -22,7 +23,7 @@ export default function GuestInvitePage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const hadPriorSession = Boolean(localStorage.getItem('doorae_token'))
+  const hadPriorSession = Boolean(getAuthToken())
   // Tokens emitted by PR F are ``encodeURIComponent`` wrapped.
   // ``decodeURIComponent`` is idempotent for the urlsafe alphabet.
   const token = rawToken ? decodeURIComponent(rawToken) : ''
@@ -50,19 +51,14 @@ export default function GuestInvitePage() {
       }
       const data = await resp.json()
       // Single-tab architecture: the guest JWT overwrites the
-      // ``doorae_token`` slot. To avoid silently destroying a prior
-      // registered-user session, stash it under
-      // ``doorae_token_prelogin`` so the guest-logout path can
-      // restore it. If the guest never logs out (closes tab) the
-      // stash just sits there harmlessly — next real login overwrites.
-      const prior = localStorage.getItem('doorae_token')
-      if (prior && localStorage.getItem('doorae_is_guest') !== '1') {
-        localStorage.setItem('doorae_token_prelogin', prior)
-      }
-      localStorage.setItem('doorae_token', data.token)
-      localStorage.setItem('doorae_is_guest', '1')
-      localStorage.setItem('doorae_guest_room_id', data.room_id)
-      localStorage.setItem('doorae_guest_display_name', data.display_name ?? trimmed)
+      // ``doorae_token`` slot. The storage helper keeps the legacy
+      // prelogin stash for compatibility, but normal login and guest
+      // expiry paths clear it so an old token cannot be restored.
+      setGuestToken({
+        token: data.token,
+        roomId: data.room_id,
+        displayName: data.display_name ?? trimmed,
+      })
       navigate(`/g/${data.room_id}`, { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

@@ -1,5 +1,7 @@
+import { getAuthToken } from './authStorage'
+
 export async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
-  const token = localStorage.getItem('doorae_token')
+  const token = getAuthToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers as Record<string, string>),

@@ -6,6 +6,7 @@ import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import { apiFetch } from '@/lib/api'
+import { clearAuthSession, getAuthToken, isGuestSession } from '@/lib/authStorage'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
@@ -35,14 +36,14 @@ export default function GuestRoomPage() {
   const [initError, setInitError] = useState<string | null>(null)
   const [participantsOpen, setParticipantsOpen] = useState(false)
 
-  const isGuest = localStorage.getItem('doorae_is_guest') === '1'
+  const isGuest = isGuestSession()
   const boundRoomId = localStorage.getItem('doorae_guest_room_id')
   const displayName = localStorage.getItem('doorae_guest_display_name') ?? ''
 
   // Defend against stale URLs — a guest with a valid JWT but typing a
   // different room UUID into the address bar must be bounced.
   useEffect(() => {
-    if (!localStorage.getItem('doorae_token') || !isGuest) {
+    if (!getAuthToken() || !isGuest) {
       navigate('/login', { replace: true })
       return
     }
@@ -63,21 +64,10 @@ export default function GuestRoomPage() {
         if (cancelled) return
         if (resp.status === 401 || resp.status === 403) {
           // Token expired, revoked, or the bound room was deleted.
-          // Clear local guest state and bounce to the login page
-          // *without* looping back to /g/:roomId. The prior-user
-          // session (if any) is preserved in the prelogin stash so
-          // handleLogout can still restore it — but we reuse that
-          // helper here by inlining its effect.
-          localStorage.removeItem('doorae_is_guest')
-          localStorage.removeItem('doorae_guest_room_id')
-          localStorage.removeItem('doorae_guest_display_name')
-          const prior = localStorage.getItem('doorae_token_prelogin')
-          if (prior) {
-            localStorage.setItem('doorae_token', prior)
-            localStorage.removeItem('doorae_token_prelogin')
-          } else {
-            localStorage.removeItem('doorae_token')
-          }
+          // Clear the whole local auth slot instead of restoring the
+          // prelogin stash: that token may be expired and would cause
+          // the registered-user WebSocket to reconnect with stale auth.
+          clearAuthSession()
           navigate('/login', { replace: true })
           return
         }
@@ -144,21 +134,7 @@ export default function GuestRoomPage() {
   )
 
   const handleLogout = useCallback(() => {
-    localStorage.removeItem('doorae_is_guest')
-    localStorage.removeItem('doorae_guest_room_id')
-    localStorage.removeItem('doorae_guest_display_name')
-    // Restore the registered-user session the guest flow might have
-    // displaced in ``GuestInvitePage``. Sending the user back to
-    // their real session on leave is less jarring than bouncing to
-    // the login form.
-    const prior = localStorage.getItem('doorae_token_prelogin')
-    if (prior) {
-      localStorage.setItem('doorae_token', prior)
-      localStorage.removeItem('doorae_token_prelogin')
-      navigate('/', { replace: true })
-      return
-    }
-    localStorage.removeItem('doorae_token')
+    clearAuthSession()
     navigate('/login', { replace: true })
   }, [navigate])
 

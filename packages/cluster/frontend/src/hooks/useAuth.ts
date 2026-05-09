@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '@/lib/api';
+import {
+  clearAuthSession,
+  getAuthToken,
+  setRegisteredToken,
+} from '@/lib/authStorage';
 
 interface User { id: string; email: string; is_admin: boolean; }
 
@@ -8,7 +13,7 @@ export function useAuth() {
   const [loading, setLoading] = useState(true);
 
   const fetchMe = useCallback(async () => {
-    let token = localStorage.getItem('doorae_token');
+    const token = getAuthToken();
 
     // No token — try dev-token auto-login (only works when DOORAE_DEV=1)
     if (!token) {
@@ -16,7 +21,7 @@ export function useAuth() {
         const devResp = await fetch('/api/v1/auth/dev-token');
         if (devResp.ok) {
           const data = await devResp.json();
-          localStorage.setItem('doorae_token', data.token);
+          setRegisteredToken(data.token);
           setUser(data.user);
           setLoading(false);
           return;
@@ -29,7 +34,7 @@ export function useAuth() {
     try {
       const resp = await apiFetch('/api/v1/auth/me');
       if (resp.ok) setUser(await resp.json());
-      else { localStorage.removeItem('doorae_token'); setUser(null); }
+      else { clearAuthSession(); setUser(null); }
     } catch { setUser(null); }
     setLoading(false);
   }, []);
@@ -42,7 +47,7 @@ export function useAuth() {
     });
     if (!resp.ok) throw new Error((await resp.json()).detail || 'Login failed');
     const data = await resp.json();
-    localStorage.setItem('doorae_token', data.token);
+    setRegisteredToken(data.token);
     setUser(data.user);
     return data;
   };
@@ -53,13 +58,13 @@ export function useAuth() {
     });
     if (!resp.ok) throw new Error((await resp.json()).detail || 'Registration failed');
     const data = await resp.json();
-    localStorage.setItem('doorae_token', data.token);
+    setRegisteredToken(data.token);
     await fetchMe();
     return data;
   };
 
   const logout = () => {
-    localStorage.removeItem('doorae_token');
+    clearAuthSession();
     setUser(null);
     window.location.href = '/login';
   };

@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { clearAuthSession, getAuthToken } from '@/lib/authStorage';
 
 export interface ChatMessage {
   type: string; id: string; room_id: string;
@@ -15,14 +16,21 @@ export function useWebSocket(roomId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const seqRef = useRef(0);
   const reconnectRef = useRef(1);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const suppressReconnectRef = useRef(false);
   // Debounced typing expire timers — one per participant.
   // Each new typing=true RESETS the timer instead of stacking.
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const connect = useCallback(() => {
     if (!roomId) return;
-    const token = localStorage.getItem('doorae_token');
+    const token = getAuthToken();
     if (!token) return;
+
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
 
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
@@ -33,11 +41,33 @@ export function useWebSocket(roomId: string | null) {
     wsRef.current = ws;
 
     ws.onopen = () => { setConnected(true); reconnectRef.current = 1; };
-    ws.onclose = () => {
+    ws.onclose = (evt) => {
       setConnected(false);
+      if (wsRef.current === ws) wsRef.current = null;
+
+      const authRejected = evt.code === 4001 || evt.code === 4003;
+      if (authRejected) {
+        window.dispatchEvent(
+          new CustomEvent('doorae:auth:invalid', {
+            detail: { code: evt.code, reason: evt.reason },
+          }),
+        );
+      }
+
+      const currentToken = getAuthToken();
+      if (
+        authRejected
+        || suppressReconnectRef.current
+        || !currentToken
+        || currentToken !== token
+      ) return;
+
       const delay = Math.min(reconnectRef.current, 30);
       reconnectRef.current = Math.min(delay * 2, 30);
-      setTimeout(connect, delay * 1000);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connect();
+      }, delay * 1000);
     };
     ws.onmessage = (evt) => {
       const data = JSON.parse(evt.data);
@@ -143,9 +173,20 @@ export function useWebSocket(roomId: string | null) {
   useEffect(() => {
     setMessages([]);
     seqRef.current = 0;
+    suppressReconnectRef.current = false;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     connect();
-    return () => { if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); } };
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+    };
   }, [roomId, connect]);
 
   const send = useCallback((content: string, metadata?: Record<string, unknown>) => {
@@ -161,11 +202,31 @@ export function useWebSocket(roomId: string | null) {
   // Load history via REST on mount
   useEffect(() => {
     if (!roomId) return;
-    const token = localStorage.getItem('doorae_token');
+    const token = getAuthToken();
     if (!token) return;
     fetch(`/api/v1/rooms/${roomId}/messages?since_seq=0&limit=100`, {
       headers: { 'Authorization': `Bearer ${token}` },
-    }).then(r => r.ok ? r.json() : []).then(msgs => {
+    }).then(r => {
+      if (r.status === 401 || r.status === 403) {
+        if (getAuthToken() === token) {
+          suppressReconnectRef.current = true;
+          if (reconnectTimerRef.current) {
+            clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
+          }
+          if (r.status === 401) {
+            clearAuthSession();
+          }
+          window.dispatchEvent(
+            new CustomEvent('doorae:auth:invalid', {
+              detail: { status: r.status },
+            }),
+          );
+        }
+        return [];
+      }
+      return r.ok ? r.json() : [];
+    }).then(msgs => {
       if (msgs.length) {
         setMessages(msgs);
         seqRef.current = Math.max(...msgs.map((m: ChatMessage) => m.seq));
