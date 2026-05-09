@@ -82,6 +82,19 @@ _OPENHANDS_SDK_ENV_KEYS = (
 # unchanged via ``Agent(mcp_config=...)``.
 _MCP_MANIFEST_PATH = ".mcp.json"
 
+# Issue #355 Phase 2 — skills directory the materializer populates per
+# the agent_dir whitelist (``_ALLOWED_PREFIXES`` includes ``skills/``).
+# Each entry is ``skills/<slug>/SKILL.md`` with a YAML frontmatter
+# containing ``name`` and ``description``. Phase 2 ships *skill
+# awareness* — the adapter enumerates available skills into the
+# system prompt so the LLM knows they exist and can describe them
+# when asked. Wrapping each skill as a full OpenHands ``Tool``
+# (Action / Observation / Executor classes per the SDK custom-tools
+# guide) is deferred to a follow-up because it needs runtime
+# validation against the live SDK to catch the schema-shape changes
+# this PR can't otherwise exercise.
+_SKILLS_DIR_NAME = "skills"
+
 
 __all__ = [
     "OpenHandsAdapter",
@@ -283,6 +296,23 @@ class OpenHandsAdapter(EngineAdapter):
         """Back-compat wrapper around the shared helper."""
         return drain_context(self._pending_context, room_id)
 
+    def _compose_system_prompt(self) -> str | None:
+        """Build the effective system prompt for a new Conversation.
+
+        Combines the per-agent skills awareness block (Phase 2) with
+        the caller-provided ``system_prompt``. Skills come first so
+        the LLM has the capability inventory before any task-specific
+        instructions narrow its focus. Either component may be empty;
+        we return ``None`` only when both are absent so the
+        construct-fallback can skip the kwarg entirely.
+        """
+        skills_block = _load_skills_summary(Path.cwd() / _SKILLS_DIR_NAME)
+        if skills_block and self._system_prompt:
+            return f"{skills_block}\n\n{self._system_prompt}"
+        if skills_block:
+            return skills_block
+        return self._system_prompt
+
     def _build_llm(self) -> Any:
         """Construct the SDK ``LLM`` from adapter config.
 
@@ -387,12 +417,23 @@ class OpenHandsAdapter(EngineAdapter):
         # FastMCP-compatible shape claude-code already uses requires
         # no transformation.
         mcp_config = _load_mcp_manifest(Path.cwd() / _MCP_MANIFEST_PATH)
-        # Tools list intentionally empty for Phase 0/1 — no skills, no
-        # DelegateTool. Phase 2/3 add those surfaces. MCP tools are
-        # discovered automatically by the SDK from ``mcp_config``.
+        # Tools list intentionally empty for Phase 0/1/2 — Phase 3 will
+        # add DelegateTool. MCP tools are discovered automatically by
+        # the SDK from ``mcp_config``. Skills (Phase 2) are surfaced as
+        # an awareness block in the system prompt rather than wrapped
+        # as Tools, so the same empty list still applies here.
         agent_kwargs: dict[str, Any] = {"llm": llm, "tools": []}
         if mcp_config is not None:
             agent_kwargs["mcp_config"] = mcp_config
+
+        # Issue #355 Phase 2 — augment the system prompt with a
+        # skills awareness block. The materializer drops SKILL.md
+        # files under ``<agent_root>/skills/<slug>/`` (whitelisted by
+        # ``machine.agent_dir``), so we read those at conversation
+        # creation time. Skills + caller-provided system prompt
+        # combine in that order: skills first (capability inventory),
+        # then any task-specific system prompt the operator passed.
+        effective_system_prompt = self._compose_system_prompt()
         # Construct the Agent with progressive fallbacks so a minor
         # SDK signature shift doesn't ground the adapter:
         #   1. Try with mcp_config (Phase 1 path).
@@ -403,15 +444,15 @@ class OpenHandsAdapter(EngineAdapter):
         # for ClaudeAgentOptions).
         def _try_construct(extra: dict[str, Any]) -> Any:
             kwargs = {**agent_kwargs, **extra}
-            if self._system_prompt:
+            if effective_system_prompt:
                 try:
                     return self._agent_cls(
-                        system_prompt=self._system_prompt, **kwargs
+                        system_prompt=effective_system_prompt, **kwargs
                     )
                 except TypeError:
                     try:
                         return self._agent_cls(
-                            system_message=self._system_prompt, **kwargs
+                            system_message=effective_system_prompt, **kwargs
                         )
                     except TypeError:
                         return self._agent_cls(**kwargs)
@@ -467,6 +508,126 @@ class OpenHandsAdapter(EngineAdapter):
 
         self._conversations[room_id] = (conversation, captured)
         return conversation, captured
+
+
+def _load_skills_summary(skills_dir: Path) -> str | None:
+    """Enumerate per-agent skills as a system-prompt awareness block.
+
+    Walks ``skills_dir`` (default: ``<cwd>/skills``), reads every
+    ``<slug>/SKILL.md``, parses the YAML-ish frontmatter for ``name``
+    and ``description``, and returns a single markdown block that the
+    adapter prepends to the agent's system prompt:
+
+        ## Available skills
+
+        - **<name>** — <description>
+        - **<other>** — ...
+
+    Returns ``None`` when the directory is missing, empty, or every
+    SKILL.md fails to parse — the agent then boots without the block,
+    same as a fresh agent without skills.
+
+    Why frontmatter-only and not the full body: the SKILL body is
+    typically thousands of tokens (procedural guides). Loading every
+    body into every system prompt would blow the context budget and
+    duplicate content the LLM only needs when actually invoking the
+    skill. Phase 2 surfaces *that the skill exists*; full skill
+    body / argument routing is a follow-up that wraps each skill in
+    an OpenHands ``ToolDefinition`` (Action / Observation / Executor)
+    so the SDK can fetch the body on tool-call rather than at agent
+    start.
+
+    Frontmatter parser is intentionally tiny — we read everything
+    between two ``---`` lines and extract ``key: value`` pairs by
+    splitting on the first colon. Avoids a hard dependency on PyYAML
+    (which doorae_agent doesn't otherwise require) and matches what
+    the existing skills in this repo actually use (one-line scalar
+    fields, no nested structures).
+    """
+    try:
+        if not skills_dir.is_dir():
+            return None
+    except OSError:
+        return None
+    entries: list[tuple[str, str]] = []
+    try:
+        children = sorted(skills_dir.iterdir())
+    except OSError as exc:
+        logger.warning("openhands.skills_iter_failed", error=str(exc))
+        return None
+    for child in children:
+        if not child.is_dir():
+            continue
+        skill_md = child / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        try:
+            raw = skill_md.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "openhands.skill_read_failed",
+                path=str(skill_md),
+                error=str(exc),
+            )
+            continue
+        meta = _parse_skill_frontmatter(raw)
+        name = meta.get("name") or child.name
+        description = meta.get("description")
+        if not description:
+            # Skip skills without a description — listing a name with
+            # nothing alongside it just wastes prompt tokens. The
+            # frontmatter convention in this repo always includes one.
+            logger.debug(
+                "openhands.skill_missing_description",
+                path=str(skill_md),
+            )
+            continue
+        entries.append((str(name), str(description)))
+    if not entries:
+        return None
+    lines = ["## Available skills", ""]
+    for name, description in entries:
+        # Single-line description so the block stays readable in a
+        # system prompt; if a SKILL.md ever ships a multi-line
+        # description, collapse to first line for the awareness block.
+        first_line = description.strip().splitlines()[0].strip()
+        lines.append(f"- **{name}** — {first_line}")
+    return "\n".join(lines)
+
+
+def _parse_skill_frontmatter(raw: str) -> dict[str, str]:
+    """Extract ``key: value`` pairs from a SKILL.md YAML frontmatter.
+
+    Tolerant minimal parser: returns an empty dict when the file has
+    no frontmatter, the frontmatter is malformed, or no recognisable
+    pairs are present. Matches the field shape the existing skills
+    use (``name``, ``description`` as one-line scalars).
+    """
+    if not raw.startswith("---"):
+        return {}
+    # Split off the leading delimiter then find the closing one.
+    body = raw[3:]
+    end = body.find("\n---")
+    if end < 0:
+        return {}
+    block = body[:end]
+    pairs: dict[str, str] = {}
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        sep = stripped.find(":")
+        if sep <= 0:
+            continue
+        key = stripped[:sep].strip()
+        value = stripped[sep + 1 :].strip()
+        # Trim wrapping quotes — frontmatter writers often wrap
+        # description strings to embed colons.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key:
+            pairs[key] = value
+    return pairs
 
 
 def _load_mcp_manifest(path: Path) -> dict[str, Any] | None:

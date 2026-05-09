@@ -33,6 +33,8 @@ from doorae_agent.integrations.openhands_engine import (
     OpenHandsAdapter,
     _OPENHANDS_SDK_ENV_KEYS,
     _load_mcp_manifest,
+    _load_skills_summary,
+    _parse_skill_frontmatter,
     integrate_with_openhands,
 )
 
@@ -590,3 +592,182 @@ class TestMcpConfigForwarded:
         # The successful kwargs (post-fallback) should NOT carry mcp_config.
         agent_kw = fake_sdk["agent_kwargs"][-1]
         assert "mcp_config" not in agent_kw
+
+
+# --------------------------------------------- Phase 2: skills awareness
+
+
+class TestParseSkillFrontmatter:
+    def test_no_frontmatter_returns_empty(self) -> None:
+        assert _parse_skill_frontmatter("# Just a heading") == {}
+
+    def test_unterminated_frontmatter_returns_empty(self) -> None:
+        # Opening --- but no closing fence — malformed.
+        assert _parse_skill_frontmatter("---\nname: x\n") == {}
+
+    def test_basic_pairs(self) -> None:
+        raw = "---\nname: tdd\ndescription: Run tests first\n---\nbody"
+        meta = _parse_skill_frontmatter(raw)
+        assert meta == {"name": "tdd", "description": "Run tests first"}
+
+    def test_quoted_value_unwrapped(self) -> None:
+        # Description with embedded colon needs quote wrapping; the
+        # parser must strip the wrapping quotes so the rendered block
+        # doesn't show them.
+        raw = '---\ndescription: "Use this: do that"\n---\nbody'
+        assert _parse_skill_frontmatter(raw) == {
+            "description": "Use this: do that"
+        }
+
+    def test_comment_lines_skipped(self) -> None:
+        raw = "---\n# this is a comment\nname: x\n---\nbody"
+        assert _parse_skill_frontmatter(raw) == {"name": "x"}
+
+
+class TestLoadSkillsSummary:
+    def _make_skill(
+        self, root: Path, slug: str, name: str, description: str
+    ) -> None:
+        skill_dir = root / slug
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {description}\n---\n# Body",
+            encoding="utf-8",
+        )
+
+    def test_missing_dir_returns_none(self, tmp_path: Path) -> None:
+        assert _load_skills_summary(tmp_path / "absent") is None
+
+    def test_empty_dir_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "skills").mkdir()
+        assert _load_skills_summary(tmp_path / "skills") is None
+
+    def test_skill_without_skill_md_skipped(self, tmp_path: Path) -> None:
+        skills = tmp_path / "skills"
+        (skills / "loose-dir").mkdir(parents=True)
+        # Only the slug dir, no SKILL.md inside → should be skipped.
+        assert _load_skills_summary(skills) is None
+
+    def test_skill_without_description_skipped(self, tmp_path: Path) -> None:
+        """Listing a name with nothing alongside it just wastes prompt
+        tokens — the parser drops those entries silently."""
+        skills = tmp_path / "skills"
+        skills.mkdir()
+        (skills / "anon").mkdir()
+        (skills / "anon" / "SKILL.md").write_text(
+            "---\nname: anon\n---\nbody", encoding="utf-8"
+        )
+        assert _load_skills_summary(skills) is None
+
+    def test_renders_block_for_one_skill(self, tmp_path: Path) -> None:
+        skills = tmp_path / "skills"
+        self._make_skill(skills, "tdd", "tdd", "Run tests first")
+        block = _load_skills_summary(skills)
+        assert block is not None
+        assert "## Available skills" in block
+        assert "**tdd** — Run tests first" in block
+
+    def test_multiple_skills_listed_alphabetically(
+        self, tmp_path: Path
+    ) -> None:
+        skills = tmp_path / "skills"
+        # Insertion order zigzags; iterdir returns dir-entry order so
+        # we sort. Verify alphabetical sort by slug at the listing
+        # level — keeps prompt content stable across machines.
+        self._make_skill(skills, "zzz-late", "zzz-late", "last alphabetically")
+        self._make_skill(skills, "aaa-early", "aaa-early", "first alphabetically")
+        block = _load_skills_summary(skills)
+        assert block is not None
+        a_idx = block.index("aaa-early")
+        z_idx = block.index("zzz-late")
+        assert a_idx < z_idx, "skills should appear in alphabetical order"
+
+
+class TestSkillsInjectedIntoSystemPrompt:
+    @pytest.mark.asyncio
+    async def test_skills_block_prepended_to_system_prompt(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """skills block + caller system_prompt → both reach Agent.
+
+        The block must come first so the LLM has the capability
+        inventory before any task-specific narrowing takes effect.
+        """
+        skills = tmp_path / "skills" / "code-review"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text(
+            "---\nname: code-review\ndescription: Review code carefully\n---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        adapter = OpenHandsAdapter(
+            model="anthropic/claude-opus-4-7",
+            system_prompt="You are a helpful assistant.",
+        )
+        await adapter.start()
+        await adapter.on_message({"content": "ping", "room_id": "r1"})
+
+        agent_kw = fake_sdk["agent_kwargs"][0]
+        sp = agent_kw.get("system_prompt") or agent_kw.get("system_message")
+        assert sp is not None, "system prompt must reach Agent"
+        # Skills first, then user prompt.
+        assert sp.index("Available skills") < sp.index(
+            "You are a helpful assistant."
+        )
+        assert "code-review" in sp
+
+    @pytest.mark.asyncio
+    async def test_no_skills_no_block(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty skills dir → only the caller's system_prompt.
+
+        The block costs prompt tokens; we must not emit a stub
+        header when there's nothing to list.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        adapter = OpenHandsAdapter(
+            model="anthropic/claude-opus-4-7",
+            system_prompt="caller prompt",
+        )
+        await adapter.start()
+        await adapter.on_message({"content": "ping", "room_id": "r1"})
+
+        agent_kw = fake_sdk["agent_kwargs"][0]
+        sp = agent_kw.get("system_prompt") or agent_kw.get("system_message")
+        assert sp == "caller prompt"
+        assert "Available skills" not in sp
+
+    @pytest.mark.asyncio
+    async def test_skills_only_no_caller_prompt(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No caller system_prompt but skills present → block alone reaches Agent."""
+        skills = tmp_path / "skills" / "tdd"
+        skills.mkdir(parents=True)
+        (skills / "SKILL.md").write_text(
+            "---\nname: tdd\ndescription: Test-first\n---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "ping", "room_id": "r1"})
+
+        agent_kw = fake_sdk["agent_kwargs"][0]
+        sp = agent_kw.get("system_prompt") or agent_kw.get("system_message")
+        assert sp is not None
+        assert "Available skills" in sp
+        assert "**tdd** — Test-first" in sp
