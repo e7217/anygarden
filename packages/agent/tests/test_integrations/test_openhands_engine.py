@@ -395,6 +395,63 @@ class TestSecretsBridging:
             agent_secrets.clear()
 
 
+# -------------------------------------------- Issue #366 — explicit api_key
+
+
+class TestExplicitApiKey:
+    """LLM credentials reach the constructor as kwargs (not via env).
+
+    User-visible regression #366: LLM constructor cached
+    ``api_key=None`` because Conversation/LLM was built outside the
+    ``secrets_in_env`` window. litellm trusted that explicit None
+    over env fallback → every gateway call landed at the reverse
+    proxy with no Bearer token → 401. The fix reads agent_secrets
+    directly inside ``_build_llm`` and passes the values through.
+    """
+
+    @pytest.mark.asyncio
+    async def test_api_key_and_base_url_passed_to_llm_constructor(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        agent_secrets.set_secrets(
+            {
+                "OPENAI_API_KEY": "agt_real_token_for_gateway",
+                "OPENAI_BASE_URL": "http://localhost:8001/api/v1/llm/v1",
+            }
+        )
+        try:
+            adapter = OpenHandsAdapter(model="openai/qwen3.6:27b")
+            await adapter.start()
+            await adapter.on_message({"content": "ping", "room_id": "r1"})
+
+            llm_kwargs = fake_sdk["llm_kwargs"][0]
+            assert llm_kwargs.get("api_key") == "agt_real_token_for_gateway"
+            assert llm_kwargs.get("base_url") == (
+                "http://localhost:8001/api/v1/llm/v1"
+            )
+        finally:
+            agent_secrets.clear()
+
+    @pytest.mark.asyncio
+    async def test_no_api_key_kwarg_when_secret_absent(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """When agent_secrets has nothing, the constructor receives no
+        ``api_key`` kwarg — preserves pre-#366 behaviour for direct-API
+        deployments where the operator wires credentials through the
+        environment some other way (e.g. AWS Bedrock IAM, Vertex
+        ADC). Passing ``api_key=""`` would shadow those mechanisms;
+        omitting the kwarg lets the SDK's discovery run."""
+        agent_secrets.clear()
+        adapter = OpenHandsAdapter(model="openai/qwen3.6:27b")
+        await adapter.start()
+        await adapter.on_message({"content": "ping", "room_id": "r1"})
+
+        llm_kwargs = fake_sdk["llm_kwargs"][0]
+        assert "api_key" not in llm_kwargs
+        assert "base_url" not in llm_kwargs
+
+
 # ----------------------------------------------------------------- stop
 
 

@@ -349,6 +349,30 @@ class OpenHandsAdapter(EngineAdapter):
         (``anthropic/claude-opus-4-7``, ``openai/gpt-5.4``,
         ``gemini/gemini-3-pro-preview``). The catalog is the source of
         truth; this adapter simply forwards what it receives.
+
+        Issue #366 — credentials are passed *explicitly* rather than
+        relying on env-var discovery.
+
+        Why: ``openhands.sdk.llm.LLM`` is a Pydantic model whose
+        ``api_key`` / ``base_url`` fields are frozen at construction
+        time. The original adapter constructed the LLM with no
+        credentials and counted on the ``secrets_in_env`` context
+        manager around ``Conversation.run`` to populate
+        ``OPENAI_API_KEY`` for litellm's env-discovery path. But the
+        LLM is built *before* we enter that context (inside
+        ``_get_or_create_conversation``), so the constructor sees an
+        empty env, caches ``api_key=None``, and litellm trusts that
+        explicit ``None`` over env fallback. Result: every gateway
+        request landed at ``/api/v1/llm/v1/chat/completions`` with no
+        Bearer token → 401. (See #366 issue body for the trace.)
+
+        Reading from ``agent_secrets`` directly side-steps the env-
+        timing window entirely. The values are the same ones
+        ``secrets_in_env`` would have bridged; we just pass them as
+        constructor args. ``secrets_in_env`` is still kept around the
+        ``run()`` call as belt-and-suspenders for any litellm path
+        that *does* read env at request time (Anthropic / Gemini
+        provider routes, model-specific overrides, etc.).
         """
         if self._llm_cls is None:
             raise RuntimeError("OpenHands SDK not initialized; call start() first.")
@@ -357,11 +381,24 @@ class OpenHandsAdapter(EngineAdapter):
                 "OpenHandsAdapter requires an explicit model string with "
                 "provider prefix (e.g. 'anthropic/claude-opus-4-7')."
             )
-        # ``LLM(api_key=...)`` accepts a SecretStr; we let the SDK
-        # discover the key from os.environ instead so the same
-        # secrets_in_env pattern covers all three providers without
-        # hard-coding which env var maps to which.
         kwargs: dict[str, Any] = {"model": self._model}
+
+        # Phase 0/1/4 wire the gateway through ``OPENAI_*`` env keys —
+        # the doorae proxy is OpenAI-compat regardless of upstream
+        # provider, so the model id always starts with ``openai/``
+        # when the route goes through the gateway. Reading those keys
+        # from agent_secrets directly is sufficient for that path; if
+        # an operator later wires Anthropic/Gemini direct routes,
+        # ``ANTHROPIC_API_KEY`` / ``GEMINI_API_KEY`` would be read
+        # here too. Until then, the stored values cover every model
+        # the catalog currently advertises.
+        api_key = agent_secrets.get("OPENAI_API_KEY")
+        if api_key:
+            kwargs["api_key"] = api_key
+        base_url = agent_secrets.get("OPENAI_BASE_URL")
+        if base_url:
+            kwargs["base_url"] = base_url
+
         # Reasoning effort is a Phase 4 concern — different providers
         # name the knob differently. Forward when the SDK accepts it;
         # silently drop otherwise so Phase 0 doesn't crash on
