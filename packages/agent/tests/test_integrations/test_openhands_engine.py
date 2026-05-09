@@ -20,8 +20,10 @@ Phase 0 contracts validated here:
 
 from __future__ import annotations
 
+import json
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -30,6 +32,7 @@ from doorae_agent import secrets as agent_secrets
 from doorae_agent.integrations.openhands_engine import (
     OpenHandsAdapter,
     _OPENHANDS_SDK_ENV_KEYS,
+    _load_mcp_manifest,
     integrate_with_openhands,
 )
 
@@ -434,3 +437,156 @@ class TestIntegrate:
         assert isinstance(adapter, OpenHandsAdapter)
         assert adapter._sdk is True
         assert client._handler is not None, "on_message handler must be wired"
+
+
+# ---------------------------------------------------- Phase 1: MCP loader
+
+
+class TestLoadMcpManifest:
+    """Cover the .mcp.json reader paranoia surface (#352 → #354 trap).
+
+    A bad manifest must never crash the adapter — it has to degrade
+    to "no MCP" so the agent still boots and the operator can see
+    the failure in logs.
+    """
+
+    def test_missing_file_returns_none(self, tmp_path: Path) -> None:
+        assert _load_mcp_manifest(tmp_path / "absent.json") is None
+
+    def test_empty_file_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty.json"
+        path.write_text("", encoding="utf-8")
+        assert _load_mcp_manifest(path) is None
+
+    def test_invalid_json_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert _load_mcp_manifest(path) is None
+
+    def test_non_object_root_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "list.json"
+        path.write_text('["unexpected"]', encoding="utf-8")
+        assert _load_mcp_manifest(path) is None
+
+    def test_empty_servers_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "empty_servers.json"
+        path.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+        assert _load_mcp_manifest(path) is None
+
+    def test_valid_manifest_returns_dict(self, tmp_path: Path) -> None:
+        path = tmp_path / "ok.json"
+        manifest = {
+            "mcpServers": {
+                "doorae": {
+                    "type": "http",
+                    "url": "http://localhost/mcp/rpc",
+                    "headers": {"Authorization": "Bearer xyz"},
+                }
+            }
+        }
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        loaded = _load_mcp_manifest(path)
+        assert loaded == manifest
+
+
+# ---------------------------------------------- Phase 1: Agent mcp_config
+
+
+class TestMcpConfigForwarded:
+    @pytest.mark.asyncio
+    async def test_mcp_config_passed_to_agent_when_manifest_exists(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If ``.mcp.json`` exists at cwd, the dict reaches Agent(...)."""
+        manifest = {
+            "mcpServers": {
+                "doorae": {
+                    "type": "http",
+                    "url": "http://localhost:8000/mcp/rpc",
+                    "headers": {"Authorization": "Bearer test"},
+                }
+            }
+        }
+        (tmp_path / ".mcp.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+
+        assert fake_sdk["agent_kwargs"], "Agent should have been constructed"
+        agent_kw = fake_sdk["agent_kwargs"][0]
+        assert "mcp_config" in agent_kw, (
+            "mcp_config kwarg must be forwarded when manifest exists"
+        )
+        assert agent_kw["mcp_config"] == manifest
+
+    @pytest.mark.asyncio
+    async def test_no_mcp_config_kwarg_when_manifest_missing(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No manifest → Agent constructed without ``mcp_config`` kwarg.
+
+        Passing ``mcp_config=None`` or ``{}`` could trip stricter SDK
+        validation; absent kwarg is the cleanest "no MCP" signal.
+        """
+        monkeypatch.chdir(tmp_path)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+
+        assert fake_sdk["agent_kwargs"]
+        agent_kw = fake_sdk["agent_kwargs"][0]
+        assert "mcp_config" not in agent_kw
+
+    @pytest.mark.asyncio
+    async def test_agent_falls_back_when_sdk_rejects_mcp_config(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An older SDK without mcp_config kwarg → adapter still boots.
+
+        The first construction raises TypeError; the adapter retries
+        without mcp_config and the agent comes up with no MCP. The
+        regression we're guarding: "new feature crashes adapter on
+        legacy SDK, room goes dark" — the same flavour of silent
+        breakage #292 cited.
+        """
+        manifest = {"mcpServers": {"doorae": {"url": "http://x/mcp"}}}
+        (tmp_path / ".mcp.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_agent = sdk_mod.Agent  # type: ignore[attr-defined]
+
+        class StrictAgent(original_agent):  # type: ignore[misc, valid-type]
+            def __init__(self, **kwargs: Any) -> None:
+                if "mcp_config" in kwargs:
+                    raise TypeError(
+                        "Agent.__init__() got an unexpected keyword "
+                        "argument 'mcp_config'"
+                    )
+                super().__init__(**kwargs)
+
+        monkeypatch.setattr(sdk_mod, "Agent", StrictAgent)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message({"content": "hi", "room_id": "r1"})
+        # Reply still produced — Agent boots, Conversation runs.
+        assert reply is not None
+        # The successful kwargs (post-fallback) should NOT carry mcp_config.
+        agent_kw = fake_sdk["agent_kwargs"][-1]
+        assert "mcp_config" not in agent_kw

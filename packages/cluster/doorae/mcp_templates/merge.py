@@ -16,6 +16,14 @@ Engine formats:
   ``[mcp_servers.<name>] command = ... args = [...] [mcp_servers.<name>.env] ...``.
 - **gemini-cli**: ``.gemini/settings.json``, same JSON shape as
   claude-code.
+- **openhands** (#355 Phase 1): same ``.mcp.json`` and same
+  ``{"mcpServers": ...}`` shape as claude-code — OpenHands V1 SDK
+  consumes the FastMCP config format, which Claude Desktop /
+  claude-code's manifest is already compatible with. The
+  ``OpenHandsAdapter`` reads the file at agent root and passes the
+  decoded dict straight to ``Agent(mcp_config=...)`` instead of
+  letting the SDK parse a path. Sharing the file path keeps the
+  materializer code unchanged for either engine choice.
 
 Precedence when an admin-authored manifest file already exists:
 the admin's mcpServers entries win on key collision so an admin can
@@ -57,6 +65,11 @@ def settings_path_for_engine(engine: str) -> str | None:
         "claude-code": CLAUDE_SETTINGS_PATH,
         "codex": CODEX_CONFIG_PATH,
         "gemini-cli": GEMINI_SETTINGS_PATH,
+        # Issue #355 Phase 1 — openhands consumes the same FastMCP /
+        # ``mcpServers`` JSON shape as claude-code, so it shares the
+        # path. The adapter reads the file at runtime and passes the
+        # decoded dict to ``Agent(mcp_config=...)``.
+        "openhands": CLAUDE_SETTINGS_PATH,
     }.get(engine)
 
 
@@ -256,7 +269,7 @@ def doorae_default_entry(
     return ``None`` so callers can skip without a guard at every
     callsite.
     """
-    if engine in ("claude-code", "gemini-cli"):
+    if engine in ("claude-code", "gemini-cli", "openhands"):
         return RenderedInstance(
             name=DOORAE_BUILTIN_NAME,
             config={
@@ -292,7 +305,7 @@ def merge_for_engine(
     because feeding an empty string through would silently drop the
     overlays.
     """
-    if engine in ("claude-code", "gemini-cli"):
+    if engine in ("claude-code", "gemini-cli", "openhands"):
         return merge_json_settings(admin_content, overlays)
     if engine == "codex":
         return merge_codex_config(admin_content, overlays)

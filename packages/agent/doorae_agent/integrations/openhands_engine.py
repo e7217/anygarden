@@ -25,6 +25,7 @@ Phase 0 scope (see ``.tmp/plan-355-openhands-engine-migration.md``):
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,14 @@ _OPENHANDS_SDK_ENV_KEYS = (
     "LITELLM_API_KEY",
     "LITELLM_BASE_URL",
 )
+
+
+# Issue #355 Phase 1 — same path the materializer writes for claude-code
+# (``packages/cluster/doorae/mcp_templates/merge.py:CLAUDE_SETTINGS_PATH``).
+# Sharing the path lets a single materializer pass cover both engines;
+# the file shape is FastMCP-compatible so OpenHands consumes it
+# unchanged via ``Agent(mcp_config=...)``.
+_MCP_MANIFEST_PATH = ".mcp.json"
 
 
 __all__ = [
@@ -370,26 +379,56 @@ class OpenHandsAdapter(EngineAdapter):
                 )
 
         llm = self._build_llm()
-        # Tools list is intentionally empty for Phase 0 — no MCP, no
-        # skills, no DelegateTool. Phase 1/2/3 add each surface.
+        # Issue #355 Phase 1 — load the materialized ``.mcp.json`` from
+        # agent root so both admin-attached and builtin MCP servers
+        # reach the LLM. Empty / missing file → no MCP, same as a
+        # fresh agent without any servers attached. We pass the dict
+        # straight through to ``Agent(mcp_config=...)``; the
+        # FastMCP-compatible shape claude-code already uses requires
+        # no transformation.
+        mcp_config = _load_mcp_manifest(Path.cwd() / _MCP_MANIFEST_PATH)
+        # Tools list intentionally empty for Phase 0/1 — no skills, no
+        # DelegateTool. Phase 2/3 add those surfaces. MCP tools are
+        # discovered automatically by the SDK from ``mcp_config``.
         agent_kwargs: dict[str, Any] = {"llm": llm, "tools": []}
-        if self._system_prompt:
-            # The SDK's Agent constructor accepts a system prompt
-            # field name that has shifted across pre-1.x revisions.
-            # Try the documented name first and fall back to known
-            # aliases — same pattern claude_code uses for option
-            # construction.
-            try:
-                agent = self._agent_cls(system_prompt=self._system_prompt, **agent_kwargs)
-            except TypeError:
+        if mcp_config is not None:
+            agent_kwargs["mcp_config"] = mcp_config
+        # Construct the Agent with progressive fallbacks so a minor
+        # SDK signature shift doesn't ground the adapter:
+        #   1. Try with mcp_config (Phase 1 path).
+        #   2. On TypeError, retry without — the adapter still boots
+        #      with no MCP and we log the degradation explicitly.
+        # System-prompt naming is then layered on top of whichever
+        # kwargs path succeeded (claude_code uses the same pattern
+        # for ClaudeAgentOptions).
+        def _try_construct(extra: dict[str, Any]) -> Any:
+            kwargs = {**agent_kwargs, **extra}
+            if self._system_prompt:
                 try:
-                    agent = self._agent_cls(
-                        system_message=self._system_prompt, **agent_kwargs
+                    return self._agent_cls(
+                        system_prompt=self._system_prompt, **kwargs
                     )
                 except TypeError:
-                    agent = self._agent_cls(**agent_kwargs)
-        else:
-            agent = self._agent_cls(**agent_kwargs)
+                    try:
+                        return self._agent_cls(
+                            system_message=self._system_prompt, **kwargs
+                        )
+                    except TypeError:
+                        return self._agent_cls(**kwargs)
+            return self._agent_cls(**kwargs)
+
+        try:
+            agent = _try_construct({})
+        except TypeError as exc:
+            if "mcp_config" in agent_kwargs:
+                logger.warning(
+                    "openhands.mcp_config_rejected_by_sdk",
+                    error=str(exc),
+                )
+                agent_kwargs.pop("mcp_config", None)
+                agent = _try_construct({})
+            else:
+                raise
 
         # Workspace pinned to the agent's materialized cwd
         # (~/.doorae/agents/<id>/), matching #345 / #349 runtime cwd
@@ -428,6 +467,60 @@ class OpenHandsAdapter(EngineAdapter):
 
         self._conversations[room_id] = (conversation, captured)
         return conversation, captured
+
+
+def _load_mcp_manifest(path: Path) -> dict[str, Any] | None:
+    """Read the materialized ``.mcp.json`` and return the FastMCP dict.
+
+    Returns ``None`` when the file is missing, empty, or unparsable —
+    the OpenHands ``Agent`` then boots with no MCP, which is exactly
+    the same state a fresh agent without attached MCP servers ends up
+    in. Returning ``None`` lets ``_get_or_create_conversation`` skip
+    the ``mcp_config=`` kwarg entirely instead of passing an empty
+    dict that some SDK versions might reject.
+
+    The file shape is what the cluster's
+    ``mcp_templates/merge.py`` writes for claude-code: an outer
+    ``{"mcpServers": {<name>: {...}}}`` envelope. We hand that
+    envelope through unchanged because OpenHands' FastMCP integration
+    consumes the same shape per the SDK's MCP guide.
+
+    Decoding errors are logged at warning so an admin debugging a
+    stuck agent can correlate "no tools showing up" with "your
+    manifest didn't parse" instead of seeing silence.
+    """
+    try:
+        if not path.exists():
+            return None
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning("openhands.mcp_manifest_read_failed", error=str(exc))
+        return None
+    if not raw.strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "openhands.mcp_manifest_parse_failed",
+            error=str(exc),
+            path=str(path),
+        )
+        return None
+    if not isinstance(data, dict):
+        logger.warning(
+            "openhands.mcp_manifest_unexpected_shape",
+            path=str(path),
+            type=type(data).__name__,
+        )
+        return None
+    # Only forward when there's at least one server. An empty
+    # ``mcpServers`` map is functionally equivalent to "no MCP" but
+    # passing it through risks a SDK warning, so collapse to None.
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict) or not servers:
+        return None
+    return data
 
 
 async def integrate_with_openhands(
