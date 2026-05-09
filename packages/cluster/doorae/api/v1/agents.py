@@ -748,9 +748,14 @@ async def delete_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     # Stop if running
+    lifecycle = request.app.state.agent_lifecycle
     if agent.actual_state in ("running", "starting", "pending"):
-        lifecycle = request.app.state.agent_lifecycle
         await lifecycle.request_stop(agent.id)
+    # Issue #369 — evict the per-agent token cache even when the
+    # agent wasn't running. ``request_stop`` only fires on the
+    # active-state branch, so a delete on an already-stopped agent
+    # would leave a stale cache entry behind otherwise.
+    lifecycle.evict_token(agent.id)
 
     # Locate the agent's DM rooms BEFORE wiping its Participant rows —
     # once the agent/user Participant link is gone we can't tell which
