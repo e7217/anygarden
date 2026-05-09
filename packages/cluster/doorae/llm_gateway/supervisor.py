@@ -70,7 +70,12 @@ class GatewayState(str, Enum):
 _BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 5.0, 30.0)
 
 # How long we poll LiteLLM liveness before declaring the spawn a bust.
-_HEALTH_TIMEOUT_SEC = 10.0
+# #362 — Bumped from 10s after observing litellm 1.83.x cold start
+# routinely landing at ~12s on a warm dev box (and higher on cold
+# disk). Operators can override via
+# ``DooraeSettings.llm_gateway_health_timeout_sec`` /
+# ``DOORAE_LLM_GATEWAY_HEALTH_TIMEOUT_SEC``.
+_HEALTH_TIMEOUT_SEC = 30.0
 
 # SIGTERM grace period before SIGKILL during graceful shutdown.
 _GRACEFUL_SHUTDOWN_SEC = 30.0
