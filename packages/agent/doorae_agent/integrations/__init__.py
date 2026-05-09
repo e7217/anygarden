@@ -1,4 +1,11 @@
-"""Engine integrations -- adapters for Claude Code, Codex, and Gemini CLI."""
+"""Engine integrations -- adapters for Claude Code, Codex, Gemini CLI, and OpenHands.
+
+Issue #355 — OpenHands V1 SDK is the in-process Python alternative to
+the three CLI-subprocess adapters; see
+``.tmp/plan-355-openhands-engine-migration.md`` for the phased
+migration that ends with deprecation marking (CLI removal is tracked
+separately).
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ ENGINES: dict[str, str] = {
     "claude-code": "doorae_agent.integrations.claude_code",
     "codex": "doorae_agent.integrations.codex",
     "gemini-cli": "doorae_agent.integrations.gemini_cli",
+    "openhands": "doorae_agent.integrations.openhands_engine",
 }
 
 # Engine name -> adapter class name
@@ -25,6 +33,7 @@ _ADAPTER_CLASSES: dict[str, str] = {
     "claude-code": "ClaudeCodeAdapter",
     "codex": "CodexAdapter",
     "gemini-cli": "GeminiCliAdapter",
+    "openhands": "OpenHandsAdapter",
 }
 
 

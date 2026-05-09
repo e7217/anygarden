@@ -176,6 +176,50 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
         ),
         reasoning_levels=("low", "medium", "high"),
     ),
+    # Issue #355 — OpenHands V1 SDK runs in-process and routes to any
+    # provider via litellm-style ``provider/model`` strings. Unlike
+    # the three CLI engines above, model IDs MUST carry a provider
+    # prefix; the adapter forwards them straight to ``openhands.sdk.LLM``.
+    # Phase 0 ships one model per provider as a smoke-test surface;
+    # Phase 4 (per the migration plan) expands to the full provider
+    # matrix once multi-provider validation is signed off.
+    #
+    # ``reasoning_levels`` here is the union of provider-supported
+    # levels — the per-model ``reasoning_levels`` narrowing reflects
+    # each provider's actual acceptance set so the admin UI can show
+    # only the knobs that won't be rejected:
+    #   - Anthropic models: same five steps as claude-code.
+    #   - OpenAI models: same five steps as codex.
+    #   - Google models: same three steps as gemini-cli's translation.
+    "openhands": EngineCatalogEntry(
+        engine="openhands",
+        default_model="anthropic/claude-opus-4-7",
+        models=(
+            EngineModel(
+                id="anthropic/claude-opus-4-7",
+                label="Claude Opus 4.7 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.4",
+                label="GPT-5.4 (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="gemini/gemini-3-pro-preview",
+                label="Gemini 3 Pro Preview (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+        ),
+        reasoning_levels=(
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
+    ),
 }
 
 

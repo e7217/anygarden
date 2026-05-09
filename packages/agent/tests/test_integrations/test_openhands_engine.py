@@ -1,0 +1,436 @@
+"""Tests for the OpenHands V1 SDK adapter (#355 Phase 0).
+
+The real ``openhands-sdk`` package is heavy and pulls in litellm, so
+tests use a fake module installed into ``sys.modules``. This mirrors
+the ``test_claude_code`` / ``test_codex`` / ``test_gemini_cli`` pattern
+so the suite stays fast and provider-agnostic.
+
+Phase 0 contracts validated here:
+
+- Lifecycle: ``start`` survives a missing SDK and degrades to no-op.
+- Context plumbing: ``assemble_user_content`` (``<room_conversation>``
+  wrap) AND ``compose_session_context_suffix`` (memory + roster) both
+  fire — this is the #292 trap (silent degradation when plumbing is
+  absent) we explicitly want to lock down.
+- Per-room ``Conversation`` reuse for multi-turn state.
+- ``MessageEvent`` capture → assistant text returned.
+- ``ingest_context`` buffer → next active turn drain.
+- Secrets bridged via ``secrets_in_env`` during the SDK call.
+"""
+
+from __future__ import annotations
+
+import sys
+import types
+from typing import Any
+
+import pytest
+
+from doorae_agent import secrets as agent_secrets
+from doorae_agent.integrations.openhands_engine import (
+    OpenHandsAdapter,
+    _OPENHANDS_SDK_ENV_KEYS,
+    integrate_with_openhands,
+)
+
+
+@pytest.fixture
+def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Install a fake ``openhands.sdk`` module with recording stubs.
+
+    Returns a dict carrying:
+      - ``conversations``: list of created Conversation instances so
+        tests can inspect callbacks / send_message calls.
+      - ``llm_kwargs``: list of LLM(...) kwargs.
+      - ``agent_kwargs``: list of Agent(...) kwargs.
+    """
+    state: dict[str, Any] = {
+        "conversations": [],
+        "llm_kwargs": [],
+        "agent_kwargs": [],
+    }
+
+    class FakeLLM:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            state["llm_kwargs"].append(kwargs)
+
+    class FakeAgent:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            state["agent_kwargs"].append(kwargs)
+
+    # NOTE: class name MUST be ``MessageEvent`` — the adapter's
+    # capture closure dispatches on ``type(event).__name__`` (defensive
+    # since the real SDK's event class lives in
+    # ``openhands.sdk.event`` and we don't want a hard import just for
+    # ``isinstance``). Renaming this class will make the capture skip
+    # the event silently.
+    class MessageEvent:
+        """Mimics openhands.sdk.event.MessageEvent shape just enough."""
+
+        def __init__(self, role: str, content: str) -> None:
+            self.role = role
+            self.content = content
+
+    class FakeConversation:
+        def __init__(
+            self,
+            agent: Any,
+            workspace: Any,
+            callbacks: list | None = None,
+            **kwargs: Any,
+        ) -> None:
+            self.agent = agent
+            self.workspace = workspace
+            self.callbacks = list(callbacks or [])
+            self.kwargs = kwargs
+            self.sent_messages: list[str] = []
+            self.run_count = 0
+            self.closed = False
+            state["conversations"].append(self)
+
+        def send_message(self, content: str) -> None:
+            self.sent_messages.append(content)
+
+        def run(self) -> None:
+            self.run_count += 1
+            # Synthesize a single assistant MessageEvent so the
+            # capture closure has something to emit. Tests can patch
+            # this if they need other event sequences.
+            event = MessageEvent(
+                role="assistant",
+                content=f"echo: {self.sent_messages[-1]}"
+                if self.sent_messages
+                else "echo: <empty>",
+            )
+            for cb in self.callbacks:
+                cb(event)
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_sdk_mod = types.ModuleType("openhands.sdk")
+    fake_sdk_mod.LLM = FakeLLM  # type: ignore[attr-defined]
+    fake_sdk_mod.Agent = FakeAgent  # type: ignore[attr-defined]
+    fake_sdk_mod.Conversation = FakeConversation  # type: ignore[attr-defined]
+    fake_sdk_mod.Tool = object  # type: ignore[attr-defined]
+
+    fake_pkg = types.ModuleType("openhands")
+    fake_pkg.sdk = fake_sdk_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "openhands", fake_pkg)
+    monkeypatch.setitem(sys.modules, "openhands.sdk", fake_sdk_mod)
+
+    state["MessageEvent"] = MessageEvent
+    state["Conversation"] = FakeConversation
+    return state
+
+
+# --------------------------------------------------------------------- start
+
+
+class TestStart:
+    @pytest.mark.asyncio
+    async def test_start_without_sdk_installed_degrades(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing SDK → adapter logs and stays in no-op mode.
+
+        This is the same defensive contract claude_code follows. A
+        deployment without ``openhands-sdk`` installed must not crash
+        on agent boot.
+        """
+        # Force ImportError by removing any cached stub.
+        monkeypatch.setitem(sys.modules, "openhands.sdk", None)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._sdk is None
+
+    @pytest.mark.asyncio
+    async def test_start_caches_sdk_handles(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._sdk is True
+        assert adapter._llm_cls is not None
+        assert adapter._agent_cls is not None
+        assert adapter._conversation_cls is not None
+
+
+# --------------------------------------------------------------- on_message
+
+
+class TestOnMessage:
+    @pytest.mark.asyncio
+    async def test_returns_none_when_sdk_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "openhands.sdk", None)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        result = await adapter.on_message(
+            {"content": "hi", "room_id": "r1"}
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_content(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert await adapter.on_message({"content": "", "room_id": "r1"}) is None
+
+    @pytest.mark.asyncio
+    async def test_send_message_and_run_invoked(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "hello world", "room_id": "r1"}
+        )
+        assert fake_sdk["conversations"], "Conversation should have been created"
+        conv = fake_sdk["conversations"][0]
+        assert conv.sent_messages == ["hello world"]
+        assert conv.run_count == 1
+        assert reply == "echo: hello world"
+
+    @pytest.mark.asyncio
+    async def test_per_room_conversation_reuse(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """Second message in same room must reuse the Conversation.
+
+        Multi-turn context lives inside the SDK's event-sourced state,
+        so a per-turn fresh Conversation would silently lose history
+        — exactly the failure mode #292 cited for the dead adapters.
+        """
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "first", "room_id": "r1"})
+        await adapter.on_message({"content": "second", "room_id": "r1"})
+        assert len(fake_sdk["conversations"]) == 1
+        assert fake_sdk["conversations"][0].sent_messages == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_separate_rooms_get_separate_conversations(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "a", "room_id": "r1"})
+        await adapter.on_message({"content": "b", "room_id": "r2"})
+        assert len(fake_sdk["conversations"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_assemble_user_content_pipeline_runs(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """Pending context must wrap as ``<room_conversation>`` (#286).
+
+        We seed the buffer manually, fire on_message, and assert the
+        prompt that hits send_message has the wrap envelope. If this
+        breaks, the new engine ate ambient room chatter that the
+        three CLI adapters preserve — a #292-style silent regression.
+        """
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.ingest_context(
+            {
+                "content": "@alice helped earlier",
+                "room_id": "r1",
+                "participant_id": "p-bob",
+                "metadata": {},
+            }
+        )
+        await adapter.on_message({"content": "now answer this", "room_id": "r1"})
+        sent = fake_sdk["conversations"][0].sent_messages[0]
+        assert "<room_conversation>" in sent
+        assert "now answer this" in sent
+
+    @pytest.mark.asyncio
+    async def test_session_context_suffix_prepended_when_present(
+        self, fake_sdk: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """memory + roster suffix must be prepended (#293).
+
+        We patch ``compose_session_context_suffix`` to return a
+        marker; the adapter must hand the marker text to send_message.
+        """
+        marker = "##MEMORY-AND-ROSTER##"
+        monkeypatch.setattr(
+            "doorae_agent.integrations.openhands_engine.compose_session_context_suffix",
+            lambda *a, **kw: marker,
+        )
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "ping", "room_id": "r1"})
+        sent = fake_sdk["conversations"][0].sent_messages[0]
+        assert sent.startswith(marker)
+        assert "ping" in sent
+
+
+# ---------------------------------------------------------- ingest_context
+
+
+class TestIngestContext:
+    @pytest.mark.asyncio
+    async def test_appends_formatted_line(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.ingest_context(
+            {
+                "content": "ambient note",
+                "room_id": "r1",
+                "participant_id": "p-bob",
+                "metadata": {},
+            }
+        )
+        assert "r1" in adapter._pending_context
+        assert adapter._pending_context["r1"], "buffer should have one entry"
+
+    @pytest.mark.asyncio
+    async def test_drops_unrenderable_message(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.ingest_context({"content": "", "room_id": "r1"})
+        assert "r1" not in adapter._pending_context
+
+
+# --------------------------------------------------------------- secrets
+
+
+class TestSecretsBridging:
+    @pytest.mark.asyncio
+    async def test_secrets_present_in_env_during_run(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """During send_message+run, ANTHROPIC_API_KEY (and friends)
+        must be visible in os.environ; outside, they must not be.
+
+        Belt-and-suspenders for #184: keys live in private
+        ``agent_secrets`` storage so a tool call can't read them off
+        ``/proc/self/environ`` between turns. The adapter must use
+        the ``secrets_in_env`` context manager to bridge them only
+        for the SDK call duration.
+        """
+        import os
+
+        captured_env: dict[str, str | None] = {}
+
+        # Replace Conversation.run so it inspects os.environ during call.
+        original_conv = fake_sdk["Conversation"]
+
+        class CapturingConversation(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                for key in _OPENHANDS_SDK_ENV_KEYS:
+                    captured_env[key] = os.environ.get(key)
+                super().run()
+
+        sdk_mod = sys.modules["openhands.sdk"]
+        monkeypatch.setattr(sdk_mod, "Conversation", CapturingConversation)
+
+        agent_secrets.set_secrets({"ANTHROPIC_API_KEY": "secret-xyz"})
+        try:
+            adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+            await adapter.start()
+            assert "ANTHROPIC_API_KEY" not in os.environ, (
+                "secret must not leak into env outside the SDK call window"
+            )
+            await adapter.on_message({"content": "x", "room_id": "r1"})
+            assert captured_env.get("ANTHROPIC_API_KEY") == "secret-xyz"
+            assert "ANTHROPIC_API_KEY" not in os.environ, (
+                "secret must be removed from env after the SDK call"
+            )
+        finally:
+            agent_secrets.clear()
+
+
+# ----------------------------------------------------------------- stop
+
+
+class TestStop:
+    @pytest.mark.asyncio
+    async def test_stop_closes_each_conversation(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        await adapter.on_message({"content": "x", "room_id": "r1"})
+        await adapter.on_message({"content": "y", "room_id": "r2"})
+        await adapter.stop()
+        assert all(c.closed for c in fake_sdk["conversations"])
+        assert adapter._conversations == {}
+        assert adapter._sdk is None
+
+
+# ----------------------------------------------------------- integration
+
+
+class _FakeChatClient:
+    """Minimal ChatClient stub for integrate_with_openhands tests."""
+
+    def __init__(self) -> None:
+        self._handler = None
+        self._typing_calls: list[tuple[str, bool]] = []
+        self.lifecycle_events: list[dict[str, Any]] = []
+
+    def on_message(self, fn):  # noqa: ANN001 — match real decorator signature
+        self._handler = fn
+        return fn
+
+    async def sendTyping(self, room_id: str, on: bool) -> None:
+        self._typing_calls.append((room_id, on))
+
+    async def sendLifecycle(self, room_id, request_id, *, event, outcome=None,
+                            error=None, **kwargs) -> None:  # noqa: ANN001
+        self.lifecycle_events.append(
+            {
+                "room_id": room_id,
+                "request_id": request_id,
+                "event": event,
+                "outcome": outcome,
+                "error": error,
+                **kwargs,
+            }
+        )
+
+    # decide_policy reads a few attributes; minimal stubs to match.
+    @property
+    def _my_participant_ids(self) -> set[str]:
+        return set()
+
+    @property
+    def _agent_name(self) -> str:
+        return "OpenHands"
+
+    @property
+    def _recent_msgs(self) -> dict[str, tuple]:
+        return {}
+
+
+class TestIntegrate:
+    @pytest.mark.asyncio
+    async def test_integrate_returns_started_adapter(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        client = _FakeChatClient()
+        adapter = await integrate_with_openhands(
+            client,  # type: ignore[arg-type]
+            agent_config={
+                "name": "TestAgent",
+                "model": "anthropic/claude-opus-4-7",
+            },
+        )
+        assert isinstance(adapter, OpenHandsAdapter)
+        assert adapter._sdk is True
+        assert client._handler is not None, "on_message handler must be wired"

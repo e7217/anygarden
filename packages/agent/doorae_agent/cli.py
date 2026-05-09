@@ -159,6 +159,24 @@ async def _setup_engine(
             system_prompt=system_prompt or "You are a helpful coding assistant.",
             reasoning_effort=reasoning_effort,
         )
+    elif engine == "openhands":
+        # Issue #355 — in-process OpenHands SDK adapter. Unlike the
+        # three CLI engines above, ``model`` here MUST carry a litellm
+        # provider prefix (``anthropic/...``, ``openai/...``,
+        # ``gemini/...``); the catalog enforces that shape.
+        from doorae_agent.integrations.openhands_engine import (
+            integrate_with_openhands,
+        )
+
+        await integrate_with_openhands(
+            client,
+            agent_config={
+                "name": name,
+                "system_prompt": system_prompt,
+                "model": model,
+                "reasoning_effort": reasoning_effort,
+            },
+        )
     else:
         click.echo(f"Engine '{engine}' is not yet implemented.", err=True)
         sys.exit(1)
