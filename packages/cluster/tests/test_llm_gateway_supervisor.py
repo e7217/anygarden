@@ -108,6 +108,37 @@ class TestStart:
             _rebind_terminate_to_exit(proc)
             await sup.stop()
 
+    async def test_binary_passed_to_spawn_fn(self) -> None:
+        """#364 — supervisor must forward its ``binary`` to ``spawn_fn``.
+
+        Locks the contract that ``LLMGatewaySupervisor(binary=...)`` is
+        actually honoured. Pre-#364 the value lived on the supervisor
+        but it was supplied as a literal ``"litellm"`` from bootstrap
+        (no override path). After #364 the bootstrap pulls
+        ``config.llm_gateway_binary`` through; this test guards
+        against a future refactor that drops the kwarg pass-through.
+        """
+        proc = FakeProc(pid=4242)
+        spawn_fn = AsyncMock(return_value=proc)
+        health_probe = AsyncMock(return_value=True)
+
+        sup = LLMGatewaySupervisor(
+            spawn_params_factory=_make_params,
+            spawn_fn=spawn_fn,
+            health_probe=health_probe,
+            binary="/home/op/.local/bin/litellm",
+        )
+
+        await sup.start()
+        try:
+            spawn_fn.assert_awaited_once()
+            # spawn_fn signature: (params, binary)
+            args, _ = spawn_fn.call_args
+            assert args[1] == "/home/op/.local/bin/litellm"
+        finally:
+            _rebind_terminate_to_exit(proc)
+            await sup.stop()
+
     async def test_health_failure_transitions_to_failed(self) -> None:
         proc = FakeProc()
         spawn_fn = AsyncMock(return_value=proc)

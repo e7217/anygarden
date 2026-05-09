@@ -34,7 +34,9 @@ doorae-server 가 LiteLLM Proxy 를 **서브프로세스로 lifespan 에 묶어 
 
 구체적으로:
 
-1. **기동**: FastAPI `lifespan` 에 `LLMGatewaySupervisor` 를 물려, 서버 부팅 시 자동으로 LiteLLM 서브프로세스를 띄운다. `uv tool install 'litellm[proxy]'` 로 PATH 에 올려둔 `litellm` 바이너리를 `subprocess.Popen(["litellm", "--config", "...", "--port", "4001", "--host", "127.0.0.1"])` 형태로 spawn.
+1. **기동**: FastAPI `lifespan` 에 `LLMGatewaySupervisor` 를 물려, 서버 부팅 시 자동으로 LiteLLM 서브프로세스를 띄운다. `uv tool install 'litellm[proxy]'` 로 PATH 에 올려둔 `litellm` 바이너리를 `subprocess.Popen([<binary>, "--config", "...", "--port", "4001", "--host", "127.0.0.1"])` 형태로 spawn. `<binary>` 는 `DooraeSettings.llm_gateway_binary` (기본 `"litellm"` — PATH lookup) 가 결정하며, 운영자는 `DOORAE_LLM_GATEWAY_BINARY=$HOME/.local/bin/litellm` 같은 절대 경로로 override 가능.
+
+   > **#364 회귀 가드**: #355 에서 `openhands-sdk` 가 transitive 로 *bare* `litellm` (proxy extras 없음) 을 monorepo venv 에 가져오면서 `.venv/bin/litellm` 이 PATH 우선순위로 이김 → spawn 시 `import backoff` 실패로 즉사 → supervisor health timeout. cluster venv 에 `litellm[proxy]` 를 직접 추가하는 길은 막혀 있다 (litellm 의 `[proxy]` extras 가 `fastapi==0.124.4` 를 핀하지만 cluster 는 `fastapi<0.120`). 그래서 `llm_gateway_binary` 설정으로 운영자가 별도 user-tool 설치를 가리키게 하는 것이 현실적 해법.
 2. **listen**: `127.0.0.1:4001` 고정. 외부에는 노출하지 않는다. 유일한 접근 경로는 doorae-server 의 역프록시.
 3. **역프록시**: `/api/v1/llm/*` path 로 들어오는 모든 요청은 기존 doorae 인증 미들웨어(user/agent/machine 토큰) 를 통과한 뒤, Authorization 헤더를 LiteLLM master key 로 치환해 127.0.0.1:4001 로 릴레이. SSE 스트리밍은 `httpx` + `StreamingResponse` 로 청크 단위 통과.
 4. **설정**: 모델 등록 / API 키 관리는 doorae DB 의 신규 테이블 (`llm_gateway_models`, `llm_gateway_secrets`) 에 저장. config.yaml 은 이 DB 상태에서 렌더링되며, **시크릿 값은 yaml 에 절대 들어가지 않고** `os.environ/DOORAE_LITELLM_<KEY>` 참조만 쓴다. 실제 값은 서브프로세스 spawn 시 Fernet 복호화 후 `env=` 로 주입. Fernet 키는 기존 `DOORAE_MCP_SECRETS_KEY` 를 재사용.
