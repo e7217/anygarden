@@ -19,6 +19,7 @@ from doorae.engines import (
     is_valid_model,
     is_valid_reasoning_effort,
 )
+from doorae.engines.catalog import is_deprecated
 
 
 # ── Catalog unit tests ───────────────────────────────────────────────
@@ -64,6 +65,63 @@ class TestCatalog:
 
 
 # ── API endpoint tests ───────────────────────────────────────────────
+
+
+# ── Phase 6 deprecation infrastructure ───────────────────────────────
+
+
+class TestDeprecationFields:
+    """Issue #355 Phase 6 — catalog can flag legacy engines.
+
+    The flag itself stays ``False`` for every engine until Phase 5
+    validation (``docs/decisions/005-openhands-validation-plan.md``)
+    clears the four decision criteria. This test class verifies the
+    *infrastructure* (field presence, helper behaviour) so a future
+    PR can flip the flag without re-justifying the schema change.
+    """
+
+    def test_default_deprecated_false_for_all_engines(self) -> None:
+        # Pre-validation invariant: nothing is yet flagged. If this
+        # fails after validation runs, that's a feature — update the
+        # test to assert the new expected state.
+        for name, entry in ENGINE_CATALOG.items():
+            assert entry.deprecated is False, (
+                f"engine {name!r} marked deprecated before Phase 5 "
+                "validation lands; verify "
+                "docs/decisions/005-openhands-validation-plan.md "
+                "decision criteria before flipping"
+            )
+
+    def test_default_deprecation_note_none(self) -> None:
+        for entry in ENGINE_CATALOG.values():
+            assert entry.deprecation_note is None
+
+    def test_is_deprecated_helper(self) -> None:
+        # Unknown engine — caller-friendly False.
+        assert is_deprecated("no-such-engine") is False
+        # Every catalog entry is currently False.
+        for name in ENGINE_CATALOG:
+            assert is_deprecated(name) is False
+
+    def test_entry_can_carry_deprecation_metadata(self) -> None:
+        """Frozen dataclass accepts the new fields when constructed.
+
+        Belt-and-suspenders: if a future EngineCatalogEntry change
+        accidentally drops the deprecation fields, this test fails
+        loudly rather than silently no-op'ing.
+        """
+        from doorae.engines.catalog import EngineCatalogEntry
+
+        entry = EngineCatalogEntry(
+            engine="probe",
+            default_model="m",
+            models=(),
+            reasoning_levels=(),
+            deprecated=True,
+            deprecation_note="probe note",
+        )
+        assert entry.deprecated is True
+        assert entry.deprecation_note == "probe note"
 
 
 @pytest_asyncio.fixture()

@@ -67,6 +67,32 @@ class EngineCatalogEntry:
     """Engine-level default reasoning levels. Individual models may
     narrow this via their own ``reasoning_levels``."""
 
+    deprecated: bool = False
+    """Issue #355 Phase 6 — flag the engine as legacy.
+
+    ``True`` means the admin UI should sort the engine after
+    non-deprecated alternatives, badge it as 'legacy', and the API
+    should expose the flag so frontends can render guidance toward
+    the recommended replacement (typically ``openhands``). The flag
+    does **not** disable the engine — agents already pinned to it
+    keep running. Actual removal lives in a separate issue tracked
+    after Phase 5 validation in ``docs/decisions/005-openhands-
+    validation-plan.md`` clears the four decision criteria.
+
+    All existing CLI engines default to ``False`` until those
+    criteria pass — flipping prematurely would force a UX
+    transition before the empirical case for migration is on
+    record.
+    """
+
+    deprecation_note: Optional[str] = None
+    """Human-readable rationale shown alongside the legacy badge.
+
+    Pre-#355 entries leave this ``None``. When ``deprecated=True``
+    is set later, a one-line note here explains the recommended
+    replacement and links to the validation results so the admin
+    UI can render context, not just a flag."""
+
 
 ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # Codex CLI: reasoning levels verified by triggering its config
@@ -324,3 +350,18 @@ def is_valid_reasoning_effort(engine: str, effort: str, model: Optional[str] = N
         if model_entry is not None and model_entry.reasoning_levels:
             return effort in model_entry.reasoning_levels
     return effort in entry.reasoning_levels
+
+
+def is_deprecated(engine: str) -> bool:
+    """Is ``engine`` flagged as legacy in the catalog (#355 Phase 6)?
+
+    Returns ``False`` when the engine is unknown — preserves the
+    pre-#355 behaviour for callers that previously checked
+    ``get_engine_entry(...) is not None`` to gate "engine exists"
+    decisions. Use this helper when the surface needs a yes/no
+    answer (e.g. UI sort key, API response field). For richer
+    detail (the ``deprecation_note``), read the entry directly via
+    ``get_engine_entry``.
+    """
+    entry = get_engine_entry(engine)
+    return entry is not None and entry.deprecated
