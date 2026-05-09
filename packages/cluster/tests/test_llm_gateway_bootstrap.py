@@ -17,6 +17,7 @@ import secrets as _stdlib_secrets
 from pathlib import Path
 from typing import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from cryptography.fernet import Fernet
 
@@ -99,6 +100,65 @@ async def test_health_probe_uses_litellm_liveliness_endpoint() -> None:
     assert client.calls == [
         ("http://127.0.0.1:4001/health/liveliness", 1.0),
     ]
+
+
+async def test_health_probe_loops_until_success() -> None:
+    """#362 — probe must keep retrying past the old 9s deadline.
+
+    Pre-#362 the inner loop returned False after 9 seconds, which
+    capped the supervisor's effective health timeout regardless of
+    its own ``health_timeout`` setting. After #362 the inner loop
+    has no deadline; the supervisor's ``asyncio.wait_for`` is the
+    sole timeout authority. This test simulates 50 connect-error
+    retries (well past 9s of polling) followed by a 200, and
+    expects ``True``.
+    """
+    import httpx
+
+    class FlakyClient:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def get(self, url: str, timeout: float):
+            self.attempts += 1
+            if self.attempts < 50:
+                # Simulate the connect-failure path that fires while
+                # litellm is still binding its socket.
+                raise httpx.ConnectError("not yet bound")
+
+            class Response:
+                status_code = 200
+
+            return Response()
+
+    client = FlakyClient()
+    probe = _build_health_probe(client)  # type: ignore[arg-type]
+
+    assert await probe(4001) is True
+    assert client.attempts == 50
+
+
+async def test_supervisor_timeout_is_the_authority() -> None:
+    """If the supervisor wraps the probe in ``wait_for(timeout=...)``
+    and the probe never succeeds, the timeout fires from the outer
+    layer, not from any internal probe deadline.
+
+    Locks the contract documented in the probe docstring: termination
+    lives on the supervisor side. A future regression that re-adds an
+    inner deadline shorter than ``wait_for`` would cause the outer
+    timeout to never fire — that's exactly what #362 set out to fix.
+    """
+    import asyncio
+    import httpx
+
+    class StuckClient:
+        async def get(self, url: str, timeout: float):
+            raise httpx.ConnectError("never ready")
+
+    probe = _build_health_probe(StuckClient())  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(probe(4001), timeout=0.5)
 
 
 async def test_secret_rows_merge_with_placeholder_in_child_env(env) -> None:

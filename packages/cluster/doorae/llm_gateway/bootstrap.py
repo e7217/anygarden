@@ -74,16 +74,27 @@ async def _real_spawn(params: _SpawnParams, binary: str) -> Any:
 def _build_health_probe(client: httpx.AsyncClient) -> Callable[[int], Any]:
     """Return a probe callable bound to a shared httpx client.
 
-    Polls ``GET /health/liveliness`` up to the supervisor's ``health_timeout``;
-    returns True on 2xx, False otherwise. Connection errors during
-    startup (when litellm is still binding) are expected, so they
-    just retry instead of failing the whole probe.
+    Polls ``GET /health/liveliness`` until the litellm subprocess
+    reports 2xx. Returns True on success.
+
+    Termination contract: this coroutine **does not enforce its own
+    timeout** — the caller (``LLMGatewaySupervisor._spawn_once``)
+    wraps it in ``asyncio.wait_for(..., timeout=health_timeout)`` and
+    a single source of truth on the deadline lives there. #362 —
+    pre-fix this had a hardcoded 9s deadline that fired before
+    supervisor's ``wait_for`` could grant the configured timeout, so
+    raising the supervisor knob alone didn't help. Removing the
+    inner deadline lets the supervisor's value (default 30s, config
+    overridable) actually take effect.
+
+    Connection errors during startup (when litellm is still binding)
+    are expected, so they just retry instead of failing the whole
+    probe.
     """
 
     async def probe(port: int) -> bool:
-        deadline = asyncio.get_event_loop().time() + 9.0  # supervisor grants 10s total
         url = f"http://127.0.0.1:{port}/health/liveliness"
-        while asyncio.get_event_loop().time() < deadline:
+        while True:
             try:
                 resp = await client.get(url, timeout=1.0)
                 if 200 <= resp.status_code < 300:
@@ -91,7 +102,6 @@ def _build_health_probe(client: httpx.AsyncClient) -> Callable[[int], Any]:
             except httpx.HTTPError:
                 pass
             await asyncio.sleep(0.25)
-        return False
 
     return probe
 
@@ -210,6 +220,10 @@ async def bootstrap_gateway(
         ),
         spawn_fn=_real_spawn,
         health_probe=_build_health_probe(client),
+        # #362 — let the operator widen the boot grace period via
+        # config when 30s isn't enough (cold disk, large model_list,
+        # litellm minor-version startup regressions).
+        health_timeout=config.llm_gateway_health_timeout_sec,
     )
     app.state.llm_gateway_supervisor = supervisor
 
