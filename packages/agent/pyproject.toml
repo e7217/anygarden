@@ -23,6 +23,9 @@ dependencies = [
     # out of the box without extra install flags.
     "codex-python>=1.114",
     "claude-agent-sdk>=0.1.0",
+    # Issue #355 Phase 0 — OpenHands V1 SDK as the in-process Python
+    # adapter alternative to the three CLI engines.
+    "openhands-sdk>=1.21",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +33,7 @@ dependencies = [
 claude-code = []
 gemini-cli = []
 codex = []
+openhands = []
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -39,6 +43,8 @@ dev = [
     # end-to-end against the real SDK; tests use a fake module via
     # sys.modules so they don't depend on it being present.
     "claude-agent-sdk>=0.1.0",
+    # Issue #355 — same pattern for openhands-sdk in dev.
+    "openhands-sdk>=1.21",
 ]
 
 [project.scripts]

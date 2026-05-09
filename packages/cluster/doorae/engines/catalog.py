@@ -67,6 +67,32 @@ class EngineCatalogEntry:
     """Engine-level default reasoning levels. Individual models may
     narrow this via their own ``reasoning_levels``."""
 
+    deprecated: bool = False
+    """Issue #355 Phase 6 — flag the engine as legacy.
+
+    ``True`` means the admin UI should sort the engine after
+    non-deprecated alternatives, badge it as 'legacy', and the API
+    should expose the flag so frontends can render guidance toward
+    the recommended replacement (typically ``openhands``). The flag
+    does **not** disable the engine — agents already pinned to it
+    keep running. Actual removal lives in a separate issue tracked
+    after Phase 5 validation in ``docs/decisions/005-openhands-
+    validation-plan.md`` clears the four decision criteria.
+
+    All existing CLI engines default to ``False`` until those
+    criteria pass — flipping prematurely would force a UX
+    transition before the empirical case for migration is on
+    record.
+    """
+
+    deprecation_note: Optional[str] = None
+    """Human-readable rationale shown alongside the legacy badge.
+
+    Pre-#355 entries leave this ``None``. When ``deprecated=True``
+    is set later, a one-line note here explains the recommended
+    replacement and links to the validation results so the admin
+    UI can render context, not just a flag."""
+
 
 ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # Codex CLI: reasoning levels verified by triggering its config
@@ -176,6 +202,123 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
         ),
         reasoning_levels=("low", "medium", "high"),
     ),
+    # Issue #355 — OpenHands V1 SDK runs in-process and routes to any
+    # provider via litellm-style ``provider/model`` strings. Unlike
+    # the three CLI engines above, model IDs MUST carry a provider
+    # prefix; the adapter forwards them straight to ``openhands.sdk.LLM``.
+    # Phase 0 ships one model per provider as a smoke-test surface;
+    # Phase 4 (per the migration plan) expands to the full provider
+    # matrix once multi-provider validation is signed off.
+    #
+    # ``reasoning_levels`` here is the union of provider-supported
+    # levels — the per-model ``reasoning_levels`` narrowing reflects
+    # each provider's actual acceptance set so the admin UI can show
+    # only the knobs that won't be rejected:
+    #   - Anthropic models: same five steps as claude-code.
+    #   - OpenAI models: same five steps as codex.
+    #   - Google models: same three steps as gemini-cli's translation.
+    # Phase 4 (#355) — full provider matrix. Each model entry mirrors
+    # what the dedicated CLI engines already advertise (claude-code,
+    # codex, gemini-cli) so the operator faces the same model menu
+    # regardless of which engine is selected. The litellm-style
+    # ``provider/model`` prefix is what ``openhands.sdk.LLM`` routes
+    # on, so we encode it directly in the model id rather than
+    # introducing a separate provider field.
+    #
+    # Per-model ``reasoning_levels`` narrows to each provider's actual
+    # acceptance set (matching the CLI engines' catalog entries),
+    # so the admin UI doesn't surface knobs that the underlying
+    # provider would reject at runtime.
+    "openhands": EngineCatalogEntry(
+        engine="openhands",
+        default_model="anthropic/claude-opus-4-7",
+        models=(
+            # ── Anthropic (mirrors claude-code's model list) ────
+            EngineModel(
+                id="anthropic/claude-opus-4-7",
+                label="Claude Opus 4.7 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-opus-4-6",
+                label="Claude Opus 4.6 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-sonnet-4-6",
+                label="Claude Sonnet 4.6 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-sonnet-4-5",
+                label="Claude Sonnet 4.5 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-haiku-4-5",
+                label="Claude Haiku 4.5 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            # ── OpenAI (mirrors codex's model list) ─────────────
+            # gpt-5.5 carries the same backend-side caveat the codex
+            # entry documents: announcement-only on 2026-04-25, no
+            # round-trip verification yet.
+            EngineModel(
+                id="openai/gpt-5.5",
+                label="GPT-5.5 (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.4",
+                label="GPT-5.4 (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.4-mini",
+                label="GPT-5.4 Mini (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.3-codex",
+                label="GPT-5.3 Codex (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.2",
+                label="GPT-5.2 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            # ── Google (mirrors gemini-cli's model list) ────────
+            EngineModel(
+                id="gemini/gemini-3-pro-preview",
+                label="Gemini 3 Pro Preview (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-3-flash-preview",
+                label="Gemini 3 Flash Preview (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-2.5-pro",
+                label="Gemini 2.5 Pro (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-2.5-flash",
+                label="Gemini 2.5 Flash (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+        ),
+        reasoning_levels=(
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
+    ),
 }
 
 
@@ -207,3 +350,18 @@ def is_valid_reasoning_effort(engine: str, effort: str, model: Optional[str] = N
         if model_entry is not None and model_entry.reasoning_levels:
             return effort in model_entry.reasoning_levels
     return effort in entry.reasoning_levels
+
+
+def is_deprecated(engine: str) -> bool:
+    """Is ``engine`` flagged as legacy in the catalog (#355 Phase 6)?
+
+    Returns ``False`` when the engine is unknown — preserves the
+    pre-#355 behaviour for callers that previously checked
+    ``get_engine_entry(...) is not None`` to gate "engine exists"
+    decisions. Use this helper when the surface needs a yes/no
+    answer (e.g. UI sort key, API response field). For richer
+    detail (the ``deprecation_note``), read the entry directly via
+    ``get_engine_entry``.
+    """
+    entry = get_engine_entry(engine)
+    return entry is not None and entry.deprecated
