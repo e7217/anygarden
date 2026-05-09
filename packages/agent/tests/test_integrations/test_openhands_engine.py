@@ -35,6 +35,7 @@ from doorae_agent.integrations.openhands_engine import (
     _load_mcp_manifest,
     _load_skills_summary,
     _parse_skill_frontmatter,
+    _try_register_delegate_tool,
     integrate_with_openhands,
 )
 
@@ -115,17 +116,51 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         def close(self) -> None:
             self.closed = True
 
+    # Phase 3 — minimal Tool stub the adapter references via name only.
+    class FakeTool:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    # Phase 3 — register_tool registry: dict so tests can inspect.
+    tool_registry: dict[str, Any] = {}
+
+    def fake_register_tool(name: str, cls: Any) -> None:
+        tool_registry[name] = cls
+
+    class FakeDelegateTool:
+        """Stub for openhands.tools.delegate.DelegateTool."""
+
+        pass
+
     fake_sdk_mod = types.ModuleType("openhands.sdk")
     fake_sdk_mod.LLM = FakeLLM  # type: ignore[attr-defined]
     fake_sdk_mod.Agent = FakeAgent  # type: ignore[attr-defined]
     fake_sdk_mod.Conversation = FakeConversation  # type: ignore[attr-defined]
-    fake_sdk_mod.Tool = object  # type: ignore[attr-defined]
+    fake_sdk_mod.Tool = FakeTool  # type: ignore[attr-defined]
+
+    fake_sdk_tool_mod = types.ModuleType("openhands.sdk.tool")
+    fake_sdk_tool_mod.register_tool = fake_register_tool  # type: ignore[attr-defined]
+
+    fake_tools_mod = types.ModuleType("openhands.tools")
+    fake_tools_delegate_mod = types.ModuleType("openhands.tools.delegate")
+    fake_tools_delegate_mod.DelegateTool = FakeDelegateTool  # type: ignore[attr-defined]
 
     fake_pkg = types.ModuleType("openhands")
     fake_pkg.sdk = fake_sdk_mod  # type: ignore[attr-defined]
+    fake_pkg.tools = fake_tools_mod  # type: ignore[attr-defined]
+    fake_tools_mod.delegate = fake_tools_delegate_mod  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "openhands", fake_pkg)
     monkeypatch.setitem(sys.modules, "openhands.sdk", fake_sdk_mod)
+    monkeypatch.setitem(sys.modules, "openhands.sdk.tool", fake_sdk_tool_mod)
+    monkeypatch.setitem(sys.modules, "openhands.tools", fake_tools_mod)
+    monkeypatch.setitem(
+        sys.modules, "openhands.tools.delegate", fake_tools_delegate_mod
+    )
+
+    state["tool_registry"] = tool_registry
+    state["FakeTool"] = FakeTool
+    state["FakeDelegateTool"] = FakeDelegateTool
 
     state["MessageEvent"] = MessageEvent
     state["Conversation"] = FakeConversation
@@ -771,3 +806,82 @@ class TestSkillsInjectedIntoSystemPrompt:
         assert sp is not None
         assert "Available skills" in sp
         assert "**tdd** — Test-first" in sp
+
+
+# ----------------------------------------- Phase 3: DelegateTool wiring
+
+
+class TestRegisterDelegateTool:
+    def test_registers_when_modules_present(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """fake_sdk fixture installs both stubs → registration succeeds."""
+        # The fixture has already installed openhands.tools.delegate
+        # and openhands.sdk.tool.register_tool stubs.
+        ok = _try_register_delegate_tool()
+        assert ok is True
+        registry = fake_sdk["tool_registry"]
+        assert "DelegateTool" in registry
+        assert registry["DelegateTool"] is fake_sdk["FakeDelegateTool"]
+
+    def test_returns_false_when_delegate_module_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Older SDK without DelegateTool → degrade gracefully."""
+        # Force ImportError on either of the two modules required.
+        monkeypatch.setitem(sys.modules, "openhands.tools.delegate", None)
+        assert _try_register_delegate_tool() is False
+
+    def test_returns_false_when_register_tool_raises(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """register_tool raising any exception → False, no crash."""
+        sdk_tool_mod = sys.modules["openhands.sdk.tool"]
+
+        def boom(name: str, cls: Any) -> None:
+            raise RuntimeError("registry locked")
+
+        monkeypatch.setattr(sdk_tool_mod, "register_tool", boom)
+        assert _try_register_delegate_tool() is False
+
+
+class TestDelegateToolAttachedToAgent:
+    @pytest.mark.asyncio
+    async def test_delegate_tool_appears_in_agent_tools(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._delegate_tool_registered is True
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+
+        tools = fake_sdk["agent_kwargs"][0]["tools"]
+        assert len(tools) == 1
+        # Tool stub has ``name`` attribute set in __init__.
+        assert tools[0].name == "DelegateTool"
+
+    @pytest.mark.asyncio
+    async def test_no_delegate_tool_when_registration_fails(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Registration failure path → tools list stays empty.
+
+        Mirrors the older-SDK degradation: agent boots, runs, just
+        without the sub-agent capability. Mirrors the same
+        defensive contract Phase 0/1 enforce: no silent crash.
+        """
+        # Knock out the import so registration returns False before
+        # the adapter constructs any Conversation.
+        monkeypatch.setitem(sys.modules, "openhands.tools.delegate", None)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._delegate_tool_registered is False
+
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+        tools = fake_sdk["agent_kwargs"][0]["tools"]
+        assert tools == []

@@ -134,6 +134,12 @@ class OpenHandsAdapter(EngineAdapter):
         self._llm_cls: Any = None
         self._agent_cls: Any = None
         self._conversation_cls: Any = None
+        self._tool_cls: Any = None
+        # Phase 3 — flips True on first ``start`` once DelegateTool is
+        # registered with the SDK. ``_get_or_create_conversation`` reads
+        # this to decide whether to add ``Tool(name="DelegateTool")`` to
+        # the agent's tools list.
+        self._delegate_tool_registered: bool = False
         # Per-room ``Conversation`` instances. OpenHands keeps its own
         # event-sourced history, so handing the same instance back per
         # room is enough for multi-turn context.
@@ -148,12 +154,19 @@ class OpenHandsAdapter(EngineAdapter):
         and the adapter degrades to a no-op (``on_message`` returns
         ``None``). Tests inject a fake module via ``sys.modules`` so
         they don't depend on the real package.
+
+        Issue #355 Phase 3 — also imports ``Tool`` and registers
+        ``DelegateTool`` so the LLM can spawn / delegate to sub-agents
+        within its conversation thread. The registration is global to
+        the SDK process (``register_tool`` populates a module-level
+        registry) so we only do it once on first ``start``.
         """
         try:
             from openhands.sdk import (  # type: ignore[import-not-found]
                 LLM,
                 Agent,
                 Conversation,
+                Tool,
             )
         except ImportError:
             logger.warning(
@@ -167,7 +180,23 @@ class OpenHandsAdapter(EngineAdapter):
         self._llm_cls = LLM
         self._agent_cls = Agent
         self._conversation_cls = Conversation
-        logger.info("openhands.initialized", model=self._model)
+        self._tool_cls = Tool
+
+        # Phase 3 — best-effort registration of the OpenHands
+        # ``DelegateTool``. The package layout (``openhands.tools.
+        # delegate.DelegateTool``) and ``register_tool(name, cls)``
+        # API are described in the SDK's agent-delegation guide. If
+        # either import fails (older SDK, optional install), the
+        # adapter still boots — sub-agent delegation just isn't
+        # available, mirroring how the three CLI engines handle
+        # missing plugins.
+        self._delegate_tool_registered = _try_register_delegate_tool()
+
+        logger.info(
+            "openhands.initialized",
+            model=self._model,
+            delegate_tool=self._delegate_tool_registered,
+        )
 
     async def stop(self) -> None:
         """Close every per-room conversation and drop SDK handles."""
@@ -417,12 +446,22 @@ class OpenHandsAdapter(EngineAdapter):
         # FastMCP-compatible shape claude-code already uses requires
         # no transformation.
         mcp_config = _load_mcp_manifest(Path.cwd() / _MCP_MANIFEST_PATH)
-        # Tools list intentionally empty for Phase 0/1/2 — Phase 3 will
-        # add DelegateTool. MCP tools are discovered automatically by
-        # the SDK from ``mcp_config``. Skills (Phase 2) are surfaced as
-        # an awareness block in the system prompt rather than wrapped
-        # as Tools, so the same empty list still applies here.
-        agent_kwargs: dict[str, Any] = {"llm": llm, "tools": []}
+        # Issue #355 Phase 3 — attach DelegateTool to the agent so the
+        # LLM can spawn / delegate to sub-agents inside its conversation
+        # thread. The tool was registered globally on first ``start``;
+        # here we just reference it by name. MCP tools are discovered
+        # automatically from ``mcp_config``; Phase 2 skills surface as
+        # system-prompt awareness rather than Tools.
+        tools: list[Any] = []
+        if self._delegate_tool_registered and self._tool_cls is not None:
+            try:
+                tools.append(self._tool_cls(name="DelegateTool"))
+            except Exception as exc:  # noqa: BLE001 — never crash on tool init
+                logger.warning(
+                    "openhands.delegate_tool_attach_failed",
+                    error=str(exc),
+                )
+        agent_kwargs: dict[str, Any] = {"llm": llm, "tools": tools}
         if mcp_config is not None:
             agent_kwargs["mcp_config"] = mcp_config
 
@@ -508,6 +547,52 @@ class OpenHandsAdapter(EngineAdapter):
 
         self._conversations[room_id] = (conversation, captured)
         return conversation, captured
+
+
+def _try_register_delegate_tool() -> bool:
+    """Register OpenHands' built-in ``DelegateTool`` with the SDK.
+
+    Per the SDK's agent-delegation guide:
+
+        from openhands.tools.delegate import DelegateTool
+        from openhands.sdk.tool import register_tool
+        register_tool("DelegateTool", DelegateTool)
+
+    Returns ``True`` when both imports + the ``register_tool`` call
+    succeed and the LLM-facing tool name is ready to be used in
+    ``Tool(name="DelegateTool")``. Returns ``False`` (and logs a
+    structured warning) on any failure — older SDK builds may not
+    ship the tool, or the registry API may have moved. The adapter
+    then boots without sub-agent delegation, which is the same
+    degraded path Phase 0 already supports for missing-SDK scenarios.
+
+    Idempotent: ``register_tool`` is documented as upserting on the
+    name key, so calling it twice (e.g. when two adapter instances
+    coexist in tests) is safe.
+    """
+    try:
+        from openhands.tools.delegate import (  # type: ignore[import-not-found]
+            DelegateTool,
+        )
+        from openhands.sdk.tool import (  # type: ignore[import-not-found]
+            register_tool,
+        )
+    except ImportError as exc:
+        logger.warning(
+            "openhands.delegate_tool_unavailable",
+            hint="pip install openhands-sdk[tools] (or upgrade SDK)",
+            error=str(exc),
+        )
+        return False
+    try:
+        register_tool("DelegateTool", DelegateTool)
+    except Exception as exc:  # noqa: BLE001 — registry may raise typed
+        logger.warning(
+            "openhands.delegate_tool_register_failed",
+            error=str(exc),
+        )
+        return False
+    return True
 
 
 def _load_skills_summary(skills_dir: Path) -> str | None:
