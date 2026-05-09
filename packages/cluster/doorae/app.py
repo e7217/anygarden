@@ -349,6 +349,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             # gemini-cli) call back into for the doorae self-MCP
             # entry that ``_build_sync_frame`` bakes into spawn frames.
             cluster_external_url=config.cluster_external_url_or_default(),
+            # #359 — gateway feature flag. When on, ``_build_sync_frame``
+            # populates ``engine_secrets`` with OPENAI_BASE_URL +
+            # OPENAI_API_KEY for openhands agents so they route through
+            # the doorae LLM gateway.
+            llm_gateway_enabled=config.llm_gateway_enabled,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state

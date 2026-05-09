@@ -17,6 +17,7 @@ from doorae.db.models import (
     Agent,
     AgentFile,
     AgentToken,
+    LLMGatewayModel,
     Machine,
     MachineEngine,
     Participant,
@@ -26,6 +27,7 @@ from doorae.db.models import (
 from doorae.dependencies import get_admin_identity, get_db
 from doorae.engines import get_engine_entry
 from doorae.rooms.membership import ensure_agent_in_room
+from doorae.scheduler.gateway_secrets import openhands_model_id_for_gateway
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -641,6 +643,15 @@ async def get_engine_models(
     The ``reasoning_levels`` on each model narrow the engine-level
     levels. When a model's ``reasoning_levels`` is empty, the
     engine-level list applies. Clients should union them as needed.
+
+    Issue #359 — for the openhands engine, also surfaces models the
+    operator has registered in ``llm_gateway_models``. They land in
+    the response with ``source="gateway"`` so the UI can badge them
+    distinctly from the static catalog. Other engines keep their
+    pre-#359 behaviour (catalog only) because the gateway path
+    currently only flows engine_secrets to openhands; surfacing
+    gateway models elsewhere would advertise a route the agent can't
+    actually use.
     """
     entry = get_engine_entry(engine)
     if entry is None:
@@ -655,6 +666,41 @@ async def get_engine_models(
         )
         for m in entry.models
     ]
+
+    if engine == "openhands":
+        # Append rows from the gateway table. ``enabled=False`` rows
+        # exist (admin can pause a model without deleting) so we
+        # filter explicitly. ``reasoning_levels`` is left empty —
+        # gateway-registered models have no doorae-curated effort
+        # taxonomy; clients fall back to the engine-level list per
+        # the existing contract documented in the docstring above.
+        gw_rows = (
+            await db.execute(
+                select(LLMGatewayModel)
+                .where(LLMGatewayModel.enabled.is_(True))
+                .order_by(LLMGatewayModel.model_name)
+            )
+        ).scalars().all()
+        existing_ids = {m.id for m in models}
+        for row in gw_rows:
+            model_id = openhands_model_id_for_gateway(
+                row.provider, row.model_name
+            )
+            if model_id is None:
+                continue
+            if model_id in existing_ids:
+                # A static catalog entry with the same id wins —
+                # operator-registered duplicates would only confuse
+                # the picker. Skip silently.
+                continue
+            models.append(
+                EngineModelOut(
+                    id=model_id,
+                    label=f"{row.model_name} (via gateway)",
+                    reasoning_levels=[],
+                    source="gateway",
+                )
+            )
 
     return EngineCatalogOut(
         engine=entry.engine,

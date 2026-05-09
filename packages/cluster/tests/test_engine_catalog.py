@@ -214,3 +214,124 @@ class TestEngineModelsEndpoint:
         assert "xhigh" in gpt54["reasoning_levels"]
         gpt52 = next(m for m in data["models"] if m["id"] == "gpt-5.2")
         assert "xhigh" not in gpt52["reasoning_levels"]
+
+
+# ── Issue #359 — gateway model merge ────────────────────────────────
+
+
+class TestOpenHandsGatewayMerge:
+    """``get_engine_models("openhands")`` surfaces ``llm_gateway_models``
+    rows alongside the static catalog.
+
+    User-visible regression: pre-#359 the operator could register
+    ``qwen3.6:27b`` in the gateway DB but the agent-creation
+    dropdown still only showed the 14 static catalog entries
+    (Anthropic / OpenAI / Google API-key models). Without an API
+    key the user couldn't actually use any of those, so the
+    dropdown was effectively empty for ollama-only deployments.
+    """
+
+    async def _seed_gateway_model(
+        self, factory, *, provider: str, model_name: str, enabled: bool = True
+    ) -> None:
+        from doorae.db.models import LLMGatewayModel
+        async with factory() as db:
+            db.add(
+                LLMGatewayModel(
+                    model_name=model_name,
+                    provider=provider,
+                    upstream_model=f"{provider}/{model_name}",
+                    api_key_ref="DUMMY_KEY_REF",
+                    enabled=enabled,
+                )
+            )
+            await db.commit()
+
+    @pytest.mark.asyncio
+    async def test_ollama_model_appears_with_gateway_source(
+        self, catalog_env
+    ) -> None:
+        await self._seed_gateway_model(
+            catalog_env["client"]._transport.app.state.session_factory,
+            provider="ollama",
+            model_name="qwen3.6:27b",
+        )
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/openhands/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        gw = [m for m in data["models"] if m["source"] == "gateway"]
+        assert len(gw) == 1
+        assert gw[0]["id"] == "openai/qwen3.6:27b"
+        assert "qwen3.6:27b" in gw[0]["label"]
+
+    @pytest.mark.asyncio
+    async def test_static_catalog_still_present(self, catalog_env) -> None:
+        """Gateway merge must not replace the static entries."""
+        await self._seed_gateway_model(
+            catalog_env["client"]._transport.app.state.session_factory,
+            provider="ollama",
+            model_name="qwen3.6:27b",
+        )
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/openhands/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        data = resp.json()
+        builtin_ids = [m["id"] for m in data["models"] if m["source"] == "builtin"]
+        # Phase 4 catalog ships 14 static models; just check >0 to
+        # avoid coupling to the exact count.
+        assert len(builtin_ids) > 0
+        assert "anthropic/claude-opus-4-7" in builtin_ids
+
+    @pytest.mark.asyncio
+    async def test_disabled_gateway_rows_skipped(self, catalog_env) -> None:
+        await self._seed_gateway_model(
+            catalog_env["client"]._transport.app.state.session_factory,
+            provider="ollama",
+            model_name="paused-model",
+            enabled=False,
+        )
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/openhands/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        data = resp.json()
+        assert not any(m["id"] == "openai/paused-model" for m in data["models"])
+
+    @pytest.mark.parametrize(
+        "engine_name", ["claude-code", "codex", "gemini-cli"]
+    )
+    @pytest.mark.asyncio
+    async def test_other_engines_do_not_get_gateway_merge(
+        self, catalog_env, engine_name: str
+    ) -> None:
+        """Phase 0/1's narrow scope: gateway models surface only on
+        the openhands endpoint. Surfacing them on claude-code etc.
+        would advertise a route the agent can't currently use
+        (engine_secrets stays empty for those engines)."""
+        await self._seed_gateway_model(
+            catalog_env["client"]._transport.app.state.session_factory,
+            provider="ollama",
+            model_name="qwen3.6:27b",
+        )
+        resp = await catalog_env["client"].get(
+            f"/api/v1/agents/engines/{engine_name}/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        data = resp.json()
+        assert not any(m["source"] == "gateway" for m in data["models"])
+
+    @pytest.mark.asyncio
+    async def test_no_gateway_rows_returns_only_builtin(
+        self, catalog_env
+    ) -> None:
+        """Empty gateway DB → response is identical to pre-#359."""
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/openhands/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        data = resp.json()
+        assert all(m["source"] == "builtin" for m in data["models"])

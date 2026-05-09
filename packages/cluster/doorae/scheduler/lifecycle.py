@@ -21,6 +21,7 @@ from doorae.db.models import (
     ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Participant, Room,
     SkillLibraryEntry,
 )
+from doorae.scheduler.gateway_secrets import build_engine_secrets
 from doorae.scheduler.machine_bus import MachineBus
 from doorae.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -39,6 +40,7 @@ class AgentLifecycle:
         mcp_template_service=None,
         room_files_dir: Path | None = None,
         cluster_external_url: str | None = None,
+        llm_gateway_enabled: bool = False,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -61,6 +63,13 @@ class AgentLifecycle:
         # on every call. ``None`` skips self-MCP injection (used by
         # tests that don't exercise spawn-time MCP wiring).
         self._cluster_external_url = cluster_external_url
+        # Issue #359 — gateway feature flag piped through so
+        # ``_build_sync_frame`` can decide whether to populate
+        # ``engine_secrets`` for openhands agents. Default ``False``
+        # keeps pre-#359 tests + wiring source-compatible: the
+        # behaviour they expected (``engine_secrets={}`` always) is
+        # exactly what an off-flag still produces.
+        self._llm_gateway_enabled = llm_gateway_enabled
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -656,6 +665,31 @@ class AgentLifecycle:
                     overlays=overlays,
                 )
 
+        # Issue #359 — for openhands agents, ensure we mint a token
+        # even when the agent has no MCP overlays attached. The MCP
+        # block above only mints when ``default is not None`` (engine
+        # has a doorae_default_entry mapping AND the agent has files
+        # to write to). openhands consumes ``.mcp.json`` so usually
+        # gets a token there, but the gateway path needs to work even
+        # if MCP rendering happens to skip (e.g. cluster_external_url
+        # set but the engine's settings_path is None for some future
+        # variant). The reverse proxy's ``get_current_identity``
+        # validates this same ``agent_tokens`` row, so reusing the
+        # MCP-minted token is safe — both endpoints accept it.
+        if (
+            doorae_token is None
+            and self._llm_gateway_enabled
+            and self._cluster_external_url
+            and agent.engine == "openhands"
+        ):
+            doorae_token = generate_token()
+            token_hash, lookup_hint = hash_agent_token(doorae_token)
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
         if rooms:
@@ -683,7 +717,19 @@ class AgentLifecycle:
             # ``agent_memory_update`` frames.
             "memory_md": agent.memory_md,
             "files": files_map,
-            "engine_secrets": {},
+            # Issue #359 — gateway env vars for openhands only. The
+            # helper guards on engine name + flag + URL + token, so
+            # passing all the conditions through cleanly returns
+            # ``{}`` for any case that doesn't satisfy them. This
+            # preserves pre-#359 behaviour (``engine_secrets={}``) for
+            # the three CLI engines and for openhands agents on
+            # deployments that haven't enabled the gateway yet.
+            "engine_secrets": build_engine_secrets(
+                engine=agent.engine,
+                gateway_enabled=self._llm_gateway_enabled,
+                cluster_external_url=self._cluster_external_url,
+                agent_token=doorae_token,
+            ),
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
             # #309 — semantic permission tier; the machine forwards it
