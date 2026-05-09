@@ -59,6 +59,27 @@ class DooraeSettings(BaseSettings):
     # constrained hardware can override via
     # ``DOORAE_LLM_GATEWAY_HEALTH_TIMEOUT_SEC``.
     llm_gateway_health_timeout_sec: float = 30.0
+    # #364 — Path of the ``litellm`` binary the supervisor spawns.
+    # Defaults to bare ``"litellm"`` (PATH lookup) which works when
+    # the operator's ``uv tool install 'litellm[proxy]'`` is the
+    # only litellm reachable via PATH.
+    #
+    # Why this knob exists: #355 added ``openhands-sdk`` to the
+    # agent package, which transitively pulls a *bare* ``litellm``
+    # (no ``[proxy]`` extras) into the monorepo venv. ``.venv/bin``
+    # precedes ``~/.local/bin`` in PATH for ``uv run`` processes, so
+    # ``which litellm`` resolves to the bare install — which dies
+    # on ``import backoff`` because backoff is a ``[proxy]``-only
+    # dep. The cluster venv can't carry ``litellm[proxy]`` itself
+    # because the proxy extras pin ``fastapi==0.124.4`` while
+    # cluster pins ``fastapi<0.120`` (incompatible).
+    #
+    # The clean fix is to let operators point the supervisor at a
+    # *separate* litellm install with proxy extras (typically
+    # ``$HOME/.local/bin/litellm`` from
+    # ``uv tool install 'litellm[proxy]'``). Override via
+    # ``DOORAE_LLM_GATEWAY_BINARY=/abs/path/to/litellm``.
+    llm_gateway_binary: str = "litellm"
     # #246 — Disk-backed storage for room shared files. The DB only
     # keeps metadata + sha256; the original bytes live under
     # ``<room_files_dir>/<room_id>/<file_id>``. Kept outside the

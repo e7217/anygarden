@@ -224,6 +224,12 @@ async def bootstrap_gateway(
         # config when 30s isn't enough (cold disk, large model_list,
         # litellm minor-version startup regressions).
         health_timeout=config.llm_gateway_health_timeout_sec,
+        # #364 — explicit binary path so PATH-shadowing by a bare
+        # transitive ``litellm`` in the monorepo venv (pulled in by
+        # openhands-sdk per #355) doesn't hijack the spawn. Default
+        # ``"litellm"`` keeps PATH lookup behaviour for environments
+        # that don't need the override.
+        binary=config.llm_gateway_binary,
     )
     app.state.llm_gateway_supervisor = supervisor
 
