@@ -82,7 +82,7 @@ function renderSidebar() {
 }
 
 describe('Sidebar — experimental admin nav badges (#346)', () => {
-  it('marks LLM Gateway and Topology as experimental beta entries', () => {
+  it('marks LLM Gateway and Topology as experimental entries', () => {
     authMockState.isAdmin = true
 
     renderSidebar()
@@ -93,7 +93,7 @@ describe('Sidebar — experimental admin nav badges (#346)', () => {
     expect(screen.getByRole('button', {
       name: 'Topology, experimental feature',
     })).toBeInTheDocument()
-    expect(screen.getAllByText('Beta')).toHaveLength(2)
+    expect(screen.getAllByText('Experimental')).toHaveLength(2)
   })
 })
 

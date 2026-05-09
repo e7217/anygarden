@@ -146,7 +146,7 @@ function ExperimentalNavBadge() {
       title="Experimental feature"
       className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-[10px] font-semibold leading-4 text-[var(--color-brand-tint-text)]"
     >
-      Beta
+      Experimental
     </span>
   )
 }
