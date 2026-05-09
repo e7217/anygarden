@@ -54,13 +54,25 @@ OpenHands V1 SDK를 `doorae_agent` 프로세스 내부에서 import해서 직접
 - Google: `GOOGLE_API_KEY`, `GEMINI_API_KEY`
 - 기타: `LITELLM_API_KEY`, `LITELLM_BASE_URL` (proxy 모드 escape hatch)
 
-Phase 0 모델 카탈로그(provider 별 1개씩, smoke-test 표면):
+Phase 4 모델 카탈로그(provider 매트릭스 전체, 14개):
 
-- `anthropic/claude-opus-4-7`
-- `openai/gpt-5.4`
-- `gemini/gemini-3-pro-preview`
+- **Anthropic**: `anthropic/claude-opus-4-7` (default), `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-haiku-4-5`
+- **OpenAI**: `openai/gpt-5.5`, `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `openai/gpt-5.3-codex`, `openai/gpt-5.2`
+- **Google**: `gemini/gemini-3-pro-preview`, `gemini/gemini-3-flash-preview`, `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash`
 
-Phase 4 에서 provider 매트릭스 전체로 확장 예정.
+각 모델은 `EngineModel.reasoning_levels` 가 provider 가 실제로 받는 effort 집합으로 좁혀져 있습니다 (Anthropic 은 `minimal` 미지원, Gemini 는 `xhigh`/`max` 미지원 등). admin UI 가 이 좁힌 집합으로 옵션을 제공하므로 런타임에서 provider 가 effort 를 거부하는 사례를 방지합니다.
+
+### LLM Gateway (#197) 통합
+
+OpenHands 어댑터는 doorae 의 LLM gateway 와 별도 통합 코드 없이 동작합니다. gateway 가 동작하는 메커니즘:
+
+1. admin 이 cluster 의 LLM gateway 를 활성화하면 cluster 가 agent 별 토큰을 발급
+2. spawn manifest 의 `engine_secrets` 가 provider 별 BASE_URL/AUTH_TOKEN 으로 채워져 machine 으로 전송됨 (claude-code 기존 패턴: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`)
+3. machine 은 stdin 으로 doorae-agent 에 secrets payload 를 전달; `doorae_agent.secrets` 모듈이 in-memory 에 보관
+4. OpenHands 어댑터가 `Conversation.run` 호출 시 `secrets_in_env(_OPENHANDS_SDK_ENV_KEYS)` 컨텍스트 매니저로 키를 일시적으로 `os.environ` 에 노출
+5. litellm 이 환경변수에서 자격증명을 자동 인식해 라우팅
+
+cluster 측에서 openhands 엔진 전용으로 추가해야 할 조각은 없습니다 — `engine_secrets` 페이로드는 엔진 무관(어떤 키가 들어있든 어댑터가 받음). 신규 provider 를 gateway 로 라우팅하려면 cluster 가 그 provider 의 `*_BASE_URL` / `*_AUTH_TOKEN` 을 `engine_secrets` 에 채워주기만 하면 됩니다.
 
 ## 엔진 추가 방법
 

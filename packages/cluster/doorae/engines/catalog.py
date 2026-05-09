@@ -191,14 +191,56 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     #   - Anthropic models: same five steps as claude-code.
     #   - OpenAI models: same five steps as codex.
     #   - Google models: same three steps as gemini-cli's translation.
+    # Phase 4 (#355) — full provider matrix. Each model entry mirrors
+    # what the dedicated CLI engines already advertise (claude-code,
+    # codex, gemini-cli) so the operator faces the same model menu
+    # regardless of which engine is selected. The litellm-style
+    # ``provider/model`` prefix is what ``openhands.sdk.LLM`` routes
+    # on, so we encode it directly in the model id rather than
+    # introducing a separate provider field.
+    #
+    # Per-model ``reasoning_levels`` narrows to each provider's actual
+    # acceptance set (matching the CLI engines' catalog entries),
+    # so the admin UI doesn't surface knobs that the underlying
+    # provider would reject at runtime.
     "openhands": EngineCatalogEntry(
         engine="openhands",
         default_model="anthropic/claude-opus-4-7",
         models=(
+            # ── Anthropic (mirrors claude-code's model list) ────
             EngineModel(
                 id="anthropic/claude-opus-4-7",
                 label="Claude Opus 4.7 (via OpenHands)",
                 reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-opus-4-6",
+                label="Claude Opus 4.6 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-sonnet-4-6",
+                label="Claude Sonnet 4.6 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-sonnet-4-5",
+                label="Claude Sonnet 4.5 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="anthropic/claude-haiku-4-5",
+                label="Claude Haiku 4.5 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            # ── OpenAI (mirrors codex's model list) ─────────────
+            # gpt-5.5 carries the same backend-side caveat the codex
+            # entry documents: announcement-only on 2026-04-25, no
+            # round-trip verification yet.
+            EngineModel(
+                id="openai/gpt-5.5",
+                label="GPT-5.5 (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
             ),
             EngineModel(
                 id="openai/gpt-5.4",
@@ -206,8 +248,39 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
                 reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
             ),
             EngineModel(
+                id="openai/gpt-5.4-mini",
+                label="GPT-5.4 Mini (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.3-codex",
+                label="GPT-5.3 Codex (via OpenHands)",
+                reasoning_levels=("low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.2",
+                label="GPT-5.2 (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            # ── Google (mirrors gemini-cli's model list) ────────
+            EngineModel(
                 id="gemini/gemini-3-pro-preview",
                 label="Gemini 3 Pro Preview (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-3-flash-preview",
+                label="Gemini 3 Flash Preview (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-2.5-pro",
+                label="Gemini 2.5 Pro (via OpenHands)",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gemini/gemini-2.5-flash",
+                label="Gemini 2.5 Flash (via OpenHands)",
                 reasoning_levels=("low", "medium", "high"),
             ),
         ),
