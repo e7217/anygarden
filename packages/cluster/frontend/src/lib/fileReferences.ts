@@ -6,9 +6,22 @@ export interface SharedFileReference {
   type: 'shared_file'
   id: string
   name: string
-  storage_name: string
+  storage_name?: string
   sha256?: string
   origin?: SharedFileReferenceOrigin
+}
+
+export interface FileReferenceCandidate {
+  id: string
+  name: string
+  storage_name?: string
+  origin?: SharedFileReferenceOrigin
+}
+
+export interface ResolvedFileReferenceToken {
+  token: string
+  suffix: string
+  candidate: FileReferenceCandidate
 }
 
 export function buildSharedFileReference(
@@ -38,6 +51,10 @@ function isLikelyShellOrPrice(token: string): boolean {
   return /^\d/.test(token) || SHELL_VAR_RE.test(token)
 }
 
+function validOrigin(value: unknown): SharedFileReferenceOrigin | undefined {
+  return value === 'inline' || value === 'attachment' ? value : undefined
+}
+
 function uniqueMatchingFile(
   token: string,
   files: readonly RoomSharedFile[],
@@ -46,6 +63,88 @@ function uniqueMatchingFile(
     f => f.filename === token || f.storage_name === token,
   )
   return matches.length === 1 ? matches[0] : null
+}
+
+function uniqueMatchingCandidate(
+  token: string,
+  candidates: readonly FileReferenceCandidate[],
+): FileReferenceCandidate | null {
+  const matches = candidates.filter(
+    c => c.name === token || c.storage_name === token,
+  )
+  const ids = new Set(matches.map(c => c.id))
+  if (ids.size !== 1) return null
+  return matches[0] ?? null
+}
+
+export function extractSharedFileReferencesFromMetadata(
+  metadata?: Record<string, unknown> | null,
+): SharedFileReference[] {
+  const raw = metadata?.references
+  if (!Array.isArray(raw)) return []
+
+  const refs: SharedFileReference[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const ref = item as Record<string, unknown>
+    if (ref.type !== 'shared_file') continue
+    if (typeof ref.id !== 'string' || typeof ref.name !== 'string') continue
+    if (seen.has(ref.id)) continue
+    seen.add(ref.id)
+    const out: SharedFileReference = {
+      type: 'shared_file',
+      id: ref.id,
+      name: ref.name,
+    }
+    if (typeof ref.storage_name === 'string') out.storage_name = ref.storage_name
+    if (typeof ref.sha256 === 'string') out.sha256 = ref.sha256
+    const origin = validOrigin(ref.origin)
+    if (origin) out.origin = origin
+    refs.push(out)
+  }
+  return refs
+}
+
+export function buildFileReferenceCandidates(
+  metadata?: Record<string, unknown> | null,
+  files: readonly RoomSharedFile[] = [],
+): FileReferenceCandidate[] {
+  const byId = new Map<string, FileReferenceCandidate>()
+  const order: string[] = []
+
+  for (const ref of extractSharedFileReferencesFromMetadata(metadata)) {
+    byId.set(ref.id, {
+      id: ref.id,
+      name: ref.name,
+      storage_name: ref.storage_name,
+      origin: ref.origin,
+    })
+    order.push(ref.id)
+  }
+
+  for (const file of files) {
+    if (byId.has(file.id)) continue
+    byId.set(file.id, {
+      id: file.id,
+      name: file.filename,
+      storage_name: file.storage_name,
+    })
+    order.push(file.id)
+  }
+
+  return order.map(id => byId.get(id)!).filter(Boolean)
+}
+
+export function resolveFileReferenceToken(
+  rawToken: string,
+  candidates: readonly FileReferenceCandidate[],
+): ResolvedFileReferenceToken | null {
+  const token = cleanToken(rawToken)
+  const suffix = rawToken.slice(token.length)
+  if (!token || isLikelyShellOrPrice(token)) return null
+  const candidate = uniqueMatchingCandidate(token, candidates)
+  return candidate ? { token, suffix, candidate } : null
 }
 
 export function resolveFileReferencesInText(

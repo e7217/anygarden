@@ -1,8 +1,12 @@
-import { memo, type CSSProperties, type ReactElement } from 'react'
+import { Children, memo, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
 import Anser from 'anser'
+import {
+  resolveFileReferenceToken,
+  type FileReferenceCandidate,
+} from '@/lib/fileReferences'
 
 const plugins: PluggableList = [remarkGfm]
 
@@ -85,15 +89,18 @@ interface MarkdownContentProps {
   content: string
   resolveUser?: (id: string) => string | undefined
   resolveRoom?: (id: string) => { name: string; id: string } | undefined
+  fileReferenceCandidates?: FileReferenceCandidate[]
 }
 
-function renderMentions(
+function renderInlineTokens(
   content: string,
   resolveUser?: (id: string) => string | undefined,
   resolveRoom?: (id: string) => { name: string; id: string } | undefined,
+  fileReferenceCandidates: readonly FileReferenceCandidate[] = [],
+  keyPrefix = 'inline',
 ): (string | ReactElement)[] {
   const parts: (string | ReactElement)[] = []
-  const re = /<@user:([^>]+)>|<#room:([^>]+)>/g
+  const re = /<@user:([^>]+)>|<#room:([^>]+)>|(^|\s)\$([^\s$()]+)/g
   let lastIndex = 0
   let match: RegExpExecArray | null
 
@@ -105,7 +112,7 @@ function renderMentions(
       const name = resolveUser?.(match[1]) ?? '알 수 없는 사용자'
       parts.push(
         <span
-          key={`u-${match.index}`}
+          key={`${keyPrefix}-u-${match.index}`}
           className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium"
         >
           @{name}
@@ -116,7 +123,7 @@ function renderMentions(
       const roomName = room?.name ?? '알 수 없는 방'
       parts.push(
         <a
-          key={`r-${match.index}`}
+          key={`${keyPrefix}-r-${match.index}`}
           href={room ? `/rooms/${room.id}` : '#'}
           className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium hover:underline"
           onClick={(e) => {
@@ -126,6 +133,27 @@ function renderMentions(
           #{roomName}
         </a>
       )
+    } else if (match[4]) {
+      const prefix = match[3] ?? ''
+      const rawToken = match[4]
+      const resolved = resolveFileReferenceToken(rawToken, fileReferenceCandidates)
+      if (!resolved) {
+        parts.push(match[0])
+      } else {
+        if (prefix) parts.push(prefix)
+        const storageName = resolved.candidate.storage_name
+        parts.push(
+          <span
+            key={`${keyPrefix}-f-${match.index}`}
+            data-file-reference={resolved.candidate.id}
+            className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium"
+            title={storageName ? `memory/shared/${storageName}` : resolved.candidate.name}
+          >
+            ${resolved.token}
+          </span>,
+        )
+        if (resolved.suffix) parts.push(resolved.suffix)
+      }
     }
     lastIndex = re.lastIndex
   }
@@ -135,36 +163,72 @@ function renderMentions(
   return parts
 }
 
+function renderInlineChildren(
+  children: ReactNode,
+  resolveUser?: (id: string) => string | undefined,
+  resolveRoom?: (id: string) => { name: string; id: string } | undefined,
+  fileReferenceCandidates: readonly FileReferenceCandidate[] = [],
+  keyPrefix = 'inline',
+): ReactNode[] {
+  return Children.toArray(children).flatMap((child, index) => {
+    if (typeof child === 'string') {
+      return renderInlineTokens(
+        child,
+        resolveUser,
+        resolveRoom,
+        fileReferenceCandidates,
+        `${keyPrefix}-${index}`,
+      )
+    }
+    return child
+  })
+}
+
+function createComponents(
+  resolveUser?: (id: string) => string | undefined,
+  resolveRoom?: (id: string) => { name: string; id: string } | undefined,
+  fileReferenceCandidates: readonly FileReferenceCandidate[] = [],
+): Components {
+  const inline = (children: ReactNode, keyPrefix: string) =>
+    renderInlineChildren(
+      children,
+      resolveUser,
+      resolveRoom,
+      fileReferenceCandidates,
+      keyPrefix,
+    )
+
+  return {
+    ...defaultComponents,
+    p: ({ children, ...props }) => <p {...props}>{inline(children, 'p')}</p>,
+    li: ({ children, ...props }) => <li {...props}>{inline(children, 'li')}</li>,
+    h1: ({ children, ...props }) => <h1 {...props}>{inline(children, 'h1')}</h1>,
+    h2: ({ children, ...props }) => <h2 {...props}>{inline(children, 'h2')}</h2>,
+    h3: ({ children, ...props }) => <h3 {...props}>{inline(children, 'h3')}</h3>,
+    h4: ({ children, ...props }) => <h4 {...props}>{inline(children, 'h4')}</h4>,
+    h5: ({ children, ...props }) => <h5 {...props}>{inline(children, 'h5')}</h5>,
+    h6: ({ children, ...props }) => <h6 {...props}>{inline(children, 'h6')}</h6>,
+    strong: ({ children, ...props }) => <strong {...props}>{inline(children, 'strong')}</strong>,
+    em: ({ children, ...props }) => <em {...props}>{inline(children, 'em')}</em>,
+    td: ({ children, ...props }) => <td {...props}>{inline(children, 'td')}</td>,
+    th: ({ children, ...props }) => <th {...props}>{inline(children, 'th')}</th>,
+  }
+}
+
 export default memo(function MarkdownContent({
   content,
   resolveUser,
   resolveRoom,
+  fileReferenceCandidates = [],
 }: MarkdownContentProps) {
-  const hasMentions = content.includes('<@user:') || content.includes('<#room:')
-
-  if (!hasMentions) {
-    return (
-      <div className="markdown-prose">
-        <ReactMarkdown remarkPlugins={plugins} components={defaultComponents}>
-          {content}
-        </ReactMarkdown>
-      </div>
-    )
-  }
-
-  const parts = renderMentions(content, resolveUser, resolveRoom)
-
   return (
     <div className="markdown-prose">
-      {parts.map((part, i) =>
-        typeof part === 'string' ? (
-          <ReactMarkdown key={i} remarkPlugins={plugins} components={defaultComponents}>
-            {part}
-          </ReactMarkdown>
-        ) : (
-          part
-        ),
-      )}
+      <ReactMarkdown
+        remarkPlugins={plugins}
+        components={createComponents(resolveUser, resolveRoom, fileReferenceCandidates)}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   )
 })
