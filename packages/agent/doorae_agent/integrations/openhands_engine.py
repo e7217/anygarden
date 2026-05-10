@@ -448,6 +448,30 @@ class OpenHandsAdapter(EngineAdapter):
             """
             try:
                 event_type = type(event).__name__
+                # OpenHands V1 SDK terminates a turn either by emitting a
+                # ``MessageEvent`` (model returned plain text content) OR
+                # by calling the built-in ``finish`` tool, which surfaces
+                # as ``ActionEvent`` carrying ``FinishAction(message=...)``
+                # — that ``message`` field is the canonical user-facing
+                # reply (``openhands.sdk.tool.builtins.finish`` says:
+                # "Final message to send to the user."). Smaller models
+                # (qwen, some Llamas) overwhelmingly take the finish-tool
+                # path, so listening only for MessageEvent silently
+                # drops every reply. Capture both shapes here.
+                if event_type == "ActionEvent":
+                    source = getattr(event, "source", None)
+                    source_value = getattr(source, "value", source)
+                    if source_value != "agent":
+                        return
+                    action_obj = getattr(event, "action", None)
+                    if action_obj is None:
+                        return
+                    if type(action_obj).__name__ != "FinishAction":
+                        return
+                    msg = getattr(action_obj, "message", None)
+                    if isinstance(msg, str) and msg.strip():
+                        captured.append(msg)
+                    return
                 if event_type != "MessageEvent":
                     return
                 # First gate: is this an agent-emitted event? OpenHands
