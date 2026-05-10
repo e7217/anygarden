@@ -28,6 +28,51 @@ from doorae.db.models import LLMGatewayModel
 _ENV_PREFIX = "DOORAE_LITELLM_"
 
 
+def _rewrite_ollama_provider(upstream: str) -> str:
+    """Rewrite ``ollama/<rest>`` → ``ollama_chat/<rest>`` transparently.
+
+    Why: LiteLLM ships two Ollama providers and they behave very
+    differently when an OpenAI-style ``tools=[...]`` array reaches
+    the proxy:
+
+    - ``ollama/`` is the legacy ``/api/generate`` provider. It tags
+      the model as "functions_unsupported_model" and forces
+      ``format: 'json'`` on the upstream request. The model then
+      MUST respond with a single JSON object — it cannot emit free
+      prose. Tool-using agents (OpenHands, Claude Code over a local
+      LLM gateway, …) hit a turn where the model has already
+      consumed the tool result and just needs to summarise it; with
+      ``format: json`` clamped on, the model picks the closest
+      JSON-shaped pattern from its training data and wraps the
+      summary in something like
+      ``{"tool_code": "default", "tool_name": "default",
+      "tool_output": "<actual answer>"}``. The user sees a JSON
+      blob instead of the answer.
+
+    - ``ollama_chat/`` uses ``/api/chat`` with native ``tool_calls``
+      passthrough — no JSON-format clamp, no prompt rewriting. This
+      is the right provider for any modern Ollama install (0.4+
+      ships native tool support). It has been the recommended
+      choice in LiteLLM docs for tool-calling workloads since
+      2024-11.
+
+    Operationally: there is no scenario in doorae where ``ollama/``
+    is preferable. The admin UI / DB stores whatever the operator
+    types, and historically that has been ``ollama/<id>`` because
+    the LiteLLM model catalog lists that name first. Rewriting at
+    render time fixes existing rows and is invisible to the admin
+    UI (the DB ``upstream_model`` is unchanged — only the rendered
+    yaml is corrected).
+
+    Idempotent: ``ollama_chat/<rest>`` passes through unchanged, so
+    a future admin who explicitly types the canonical form is not
+    double-rewritten.
+    """
+    if upstream.startswith("ollama/"):
+        return "ollama_chat/" + upstream[len("ollama/") :]
+    return upstream
+
+
 def render_config(
     models: Iterable[LLMGatewayModel],
     *,
@@ -53,7 +98,11 @@ def render_config(
         if not m.enabled:
             continue
         params: dict[str, Any] = {
-            "model": m.upstream_model,
+            # Rewrite legacy ``ollama/`` → ``ollama_chat/`` so tool-using
+            # agents don't get clamped to ``format: json`` on the upstream
+            # call. See ``_rewrite_ollama_provider`` for the full
+            # rationale. Non-ollama models pass through unchanged.
+            "model": _rewrite_ollama_provider(m.upstream_model),
             "api_key": f"os.environ/{_ENV_PREFIX}{m.api_key_ref}",
         }
         # Extras (temperature, max_tokens, custom headers, …) merge

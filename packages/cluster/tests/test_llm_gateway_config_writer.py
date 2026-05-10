@@ -112,9 +112,83 @@ class TestRenderConfig:
         )
         params = yaml.safe_load(text)["model_list"][0]["litellm_params"]
 
-        assert params["model"] == "ollama/qwen3-coder:30b"
+        # ``ollama/`` is rewritten to ``ollama_chat/`` so tool-using
+        # agents don't get clamped to ``format: json`` upstream — see
+        # ``_rewrite_ollama_provider`` for the JSON-envelope bug this
+        # prevents. The DB ``upstream_model`` stays as-typed by the
+        # admin; only the rendered yaml is corrected.
+        assert params["model"] == "ollama_chat/qwen3-coder:30b"
         assert params["api_base"] == "http://10.0.0.5:11434"
         assert params["api_key"] == "os.environ/DOORAE_LITELLM_OLLAMA_DUMMY"
+
+    def test_ollama_provider_rewritten_to_ollama_chat(self) -> None:
+        """Legacy ``ollama/`` is rewritten to ``ollama_chat/`` at render.
+
+        The legacy LiteLLM provider clamps tool-using calls to
+        ``format: json``, which forces the model to emit a JSON object
+        even on the final summary turn. Tool-capable models (qwen3,
+        Llama 3.1+, etc.) then wrap their answer in a fake
+        ``{"tool_code": ..., "tool_output": ...}`` envelope. Switching
+        to ``ollama_chat/`` (native ``/api/chat``) preserves free-form
+        prose responses.
+        """
+        text = render_config(
+            [
+                _model(
+                    name="qwen-local",
+                    provider="ollama",
+                    upstream="ollama/qwen3.6:27b",
+                    key_ref="OLLAMA_DUMMY",
+                )
+            ]
+        )
+        params = yaml.safe_load(text)["model_list"][0]["litellm_params"]
+        assert params["model"] == "ollama_chat/qwen3.6:27b"
+
+    def test_ollama_chat_already_canonical_passes_through(self) -> None:
+        """Idempotent: ``ollama_chat/<rest>`` unchanged on render.
+
+        An admin who explicitly types the canonical form (or rerun on
+        an already-rewritten row) must not be double-prefixed.
+        """
+        text = render_config(
+            [
+                _model(
+                    name="qwen-local",
+                    provider="ollama",
+                    upstream="ollama_chat/qwen3.6:27b",
+                    key_ref="OLLAMA_DUMMY",
+                )
+            ]
+        )
+        params = yaml.safe_load(text)["model_list"][0]["litellm_params"]
+        assert params["model"] == "ollama_chat/qwen3.6:27b"
+
+    def test_non_ollama_provider_unaffected(self) -> None:
+        """Rewrite is targeted: anthropic / openai / gemini untouched.
+
+        Substring matches like ``"openai/some-ollama-tuned"`` must not
+        be hijacked. Only the literal ``ollama/`` prefix triggers.
+        """
+        text = render_config(
+            [
+                _model(
+                    name="claude-x",
+                    provider="anthropic",
+                    upstream="anthropic/claude-sonnet-4-6",
+                ),
+                _model(
+                    name="gpt-x",
+                    provider="openai",
+                    upstream="openai/gpt-5.4",
+                    key_ref="OPENAI_API_KEY",
+                ),
+            ]
+        )
+        upstreams = [
+            m["litellm_params"]["model"] for m in yaml.safe_load(text)["model_list"]
+        ]
+        assert upstreams == ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
 
     def test_empty_model_list_is_valid(self) -> None:
         # LiteLLM boots fine with ``model_list: []`` and answers

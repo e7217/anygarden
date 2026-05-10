@@ -213,6 +213,9 @@ async def test_rendered_yaml_written_to_config_path(env) -> None:
     await factory()
 
     text = env["config_path"].read_text()
-    assert "ollama/qwen3-coder:30b" in text
+    # Provider rewritten by config_writer (`ollama/` → `ollama_chat/`)
+    # so tool-using agents avoid the legacy ``format: json`` clamp.
+    # See ``_rewrite_ollama_provider`` in config_writer.py.
+    assert "ollama_chat/qwen3-coder:30b" in text
     assert "http://10.0.0.5:11434" in text
     assert "os.environ/DOORAE_LITELLM_OLLAMA_DUMMY" in text
