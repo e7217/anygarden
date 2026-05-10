@@ -183,6 +183,10 @@ class TestDetectEnginesIncludesPythonModules:
         with (
             patch.dict(sys.modules, {}, clear=False),
             patch("doorae_machine.detector.shutil.which", return_value=None),
+            patch(
+                "doorae_machine.detector.importlib.import_module",
+                side_effect=ImportError("simulated missing SDK"),
+            ),
         ):
             sys.modules.pop("openhands", None)
             sys.modules.pop("openhands.sdk", None)
