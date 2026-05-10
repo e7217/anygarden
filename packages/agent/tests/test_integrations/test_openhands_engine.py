@@ -36,6 +36,7 @@ from doorae_agent.integrations.openhands_engine import (
     _load_skills_summary,
     _parse_skill_frontmatter,
     _try_register_delegate_tool,
+    _try_register_runtime_tools,
     integrate_with_openhands,
 )
 
@@ -168,6 +169,21 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
         pass
 
+    class FakeTerminalTool:
+        """Stub for openhands.tools.terminal.TerminalTool."""
+
+        pass
+
+    class FakeFileEditorTool:
+        """Stub for openhands.tools.file_editor.FileEditorTool."""
+
+        pass
+
+    class FakeTaskTrackerTool:
+        """Stub for openhands.tools.task_tracker.TaskTrackerTool."""
+
+        pass
+
     fake_sdk_mod = types.ModuleType("openhands.sdk")
     fake_sdk_mod.LLM = FakeLLM  # type: ignore[attr-defined]
     fake_sdk_mod.Agent = FakeAgent  # type: ignore[attr-defined]
@@ -181,10 +197,20 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     fake_tools_delegate_mod = types.ModuleType("openhands.tools.delegate")
     fake_tools_delegate_mod.DelegateTool = FakeDelegateTool  # type: ignore[attr-defined]
 
+    fake_tools_terminal_mod = types.ModuleType("openhands.tools.terminal")
+    fake_tools_terminal_mod.TerminalTool = FakeTerminalTool  # type: ignore[attr-defined]
+    fake_tools_file_editor_mod = types.ModuleType("openhands.tools.file_editor")
+    fake_tools_file_editor_mod.FileEditorTool = FakeFileEditorTool  # type: ignore[attr-defined]
+    fake_tools_task_tracker_mod = types.ModuleType("openhands.tools.task_tracker")
+    fake_tools_task_tracker_mod.TaskTrackerTool = FakeTaskTrackerTool  # type: ignore[attr-defined]
+
     fake_pkg = types.ModuleType("openhands")
     fake_pkg.sdk = fake_sdk_mod  # type: ignore[attr-defined]
     fake_pkg.tools = fake_tools_mod  # type: ignore[attr-defined]
     fake_tools_mod.delegate = fake_tools_delegate_mod  # type: ignore[attr-defined]
+    fake_tools_mod.terminal = fake_tools_terminal_mod  # type: ignore[attr-defined]
+    fake_tools_mod.file_editor = fake_tools_file_editor_mod  # type: ignore[attr-defined]
+    fake_tools_mod.task_tracker = fake_tools_task_tracker_mod  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "openhands", fake_pkg)
     monkeypatch.setitem(sys.modules, "openhands.sdk", fake_sdk_mod)
@@ -193,10 +219,22 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     monkeypatch.setitem(
         sys.modules, "openhands.tools.delegate", fake_tools_delegate_mod
     )
+    monkeypatch.setitem(
+        sys.modules, "openhands.tools.terminal", fake_tools_terminal_mod
+    )
+    monkeypatch.setitem(
+        sys.modules, "openhands.tools.file_editor", fake_tools_file_editor_mod
+    )
+    monkeypatch.setitem(
+        sys.modules, "openhands.tools.task_tracker", fake_tools_task_tracker_mod
+    )
 
     state["tool_registry"] = tool_registry
     state["FakeTool"] = FakeTool
     state["FakeDelegateTool"] = FakeDelegateTool
+    state["FakeTerminalTool"] = FakeTerminalTool
+    state["FakeFileEditorTool"] = FakeFileEditorTool
+    state["FakeTaskTrackerTool"] = FakeTaskTrackerTool
 
     state["MessageEvent"] = MessageEvent
     state["TextContent"] = TextContent
@@ -1256,9 +1294,9 @@ class TestDelegateToolAttachedToAgent:
         await adapter.on_message({"content": "hi", "room_id": "r1"})
 
         tools = fake_sdk["agent_kwargs"][0]["tools"]
-        assert len(tools) == 1
         # Tool stub has ``name`` attribute set in __init__.
-        assert tools[0].name == "DelegateTool"
+        names = [t.name for t in tools]
+        assert "DelegateTool" in names
 
     @pytest.mark.asyncio
     async def test_no_delegate_tool_when_registration_fails(
@@ -1266,11 +1304,12 @@ class TestDelegateToolAttachedToAgent:
         fake_sdk: dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Registration failure path → tools list stays empty.
+        """Registration failure path → DelegateTool absent, runtime tools intact.
 
         Mirrors the older-SDK degradation: agent boots, runs, just
         without the sub-agent capability. Mirrors the same
-        defensive contract Phase 0/1 enforce: no silent crash.
+        defensive contract Phase 0/1 enforce: no silent crash. The
+        runtime tool bundle is independent so it still attaches.
         """
         # Knock out the import so registration returns False before
         # the adapter constructs any Conversation.
@@ -1282,4 +1321,155 @@ class TestDelegateToolAttachedToAgent:
 
         await adapter.on_message({"content": "hi", "room_id": "r1"})
         tools = fake_sdk["agent_kwargs"][0]["tools"]
-        assert tools == []
+        names = [t.name for t in tools]
+        assert "DelegateTool" not in names
+        # Runtime tools are independent — still present.
+        assert "TerminalTool" in names
+
+
+# ----------------------------------- Runtime tool bundle (Terminal/Editor/Tracker)
+
+
+class TestRegisterRuntimeTools:
+    """``_try_register_runtime_tools`` granular registration contract.
+
+    Without these tools the agent only has FinishTool + ThinkTool, so
+    any prompt that needs shell or file work terminates after a single
+    text turn (the SDK's ``_handle_content_response`` marks the
+    conversation FINISHED whenever the LLM returns plain text with no
+    tool call). The helper exists so a partially-installed
+    ``openhands-tools`` distribution still contributes whichever tools
+    imported successfully — all-or-nothing degradation would defeat
+    the point.
+    """
+
+    def test_registers_all_when_modules_present(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        names = _try_register_runtime_tools()
+        assert names == [
+            "TerminalTool",
+            "FileEditorTool",
+            "TaskTrackerTool",
+        ]
+        registry = fake_sdk["tool_registry"]
+        assert registry["TerminalTool"] is fake_sdk["FakeTerminalTool"]
+        assert registry["FileEditorTool"] is fake_sdk["FakeFileEditorTool"]
+        assert registry["TaskTrackerTool"] is fake_sdk["FakeTaskTrackerTool"]
+
+    def test_skips_individually_when_module_missing(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Missing one module → register the other two, skip the absent one.
+
+        Partial degradation > all-or-nothing. ``importlib.import_module``
+        normally consults ``sys.modules`` first; setting the entry to
+        ``None`` makes Python raise ``ImportError`` per the import
+        protocol, which the helper catches per-tool.
+        """
+        monkeypatch.setitem(sys.modules, "openhands.tools.file_editor", None)
+
+        names = _try_register_runtime_tools()
+        assert names == ["TerminalTool", "TaskTrackerTool"]
+
+    def test_skips_when_register_tool_raises_for_one(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``register_tool`` raising for one tool → others still register."""
+        sdk_tool_mod = sys.modules["openhands.sdk.tool"]
+        original = sdk_tool_mod.register_tool
+
+        def selective_boom(name: str, cls: Any) -> None:
+            if name == "TaskTrackerTool":
+                raise RuntimeError("registry locked for TaskTracker")
+            original(name, cls)
+
+        monkeypatch.setattr(sdk_tool_mod, "register_tool", selective_boom)
+
+        names = _try_register_runtime_tools()
+        assert names == ["TerminalTool", "FileEditorTool"]
+
+    def test_returns_empty_when_register_tool_unimportable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``openhands.sdk.tool`` missing entirely → empty list, no crash."""
+        monkeypatch.setitem(sys.modules, "openhands.sdk.tool", None)
+        assert _try_register_runtime_tools() == []
+
+
+class TestRuntimeToolsAttachedToAgent:
+    @pytest.mark.asyncio
+    async def test_runtime_tools_appear_in_agent_tools(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._runtime_tool_names == [
+            "TerminalTool",
+            "FileEditorTool",
+            "TaskTrackerTool",
+        ]
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+
+        tools = fake_sdk["agent_kwargs"][0]["tools"]
+        names = [t.name for t in tools]
+        # DelegateTool first (existing Phase 3 contract), runtime
+        # tools follow in spec order.
+        assert names == [
+            "DelegateTool",
+            "TerminalTool",
+            "FileEditorTool",
+            "TaskTrackerTool",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_partial_runtime_tools_when_one_module_missing(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Partially-available openhands-tools → attach the rest, skip absent."""
+        monkeypatch.setitem(sys.modules, "openhands.tools.task_tracker", None)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._runtime_tool_names == ["TerminalTool", "FileEditorTool"]
+
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+        tools = fake_sdk["agent_kwargs"][0]["tools"]
+        names = [t.name for t in tools]
+        assert "TaskTrackerTool" not in names
+        assert "TerminalTool" in names
+        assert "FileEditorTool" in names
+
+    @pytest.mark.asyncio
+    async def test_no_runtime_tools_when_package_missing(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """``openhands-tools`` not installed → DelegateTool only, no crash.
+
+        Same defensive contract Phase 0/1/3 already enforce: a missing
+        optional dependency degrades the adapter, never crashes it.
+        """
+        for mod in (
+            "openhands.tools.terminal",
+            "openhands.tools.file_editor",
+            "openhands.tools.task_tracker",
+        ):
+            monkeypatch.setitem(sys.modules, mod, None)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        assert adapter._runtime_tool_names == []
+
+        await adapter.on_message({"content": "hi", "room_id": "r1"})
+        tools = fake_sdk["agent_kwargs"][0]["tools"]
+        names = [t.name for t in tools]
+        # DelegateTool still attaches (independent registration path).
+        assert names == ["DelegateTool"]

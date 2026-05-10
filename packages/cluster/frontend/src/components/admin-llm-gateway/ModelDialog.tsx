@@ -21,7 +21,17 @@ const PROVIDERS = [
   { id: 'bedrock', label: 'AWS Bedrock', upstreamPrefix: 'bedrock/' },
   { id: 'vertex_ai', label: 'Google Vertex', upstreamPrefix: 'vertex_ai/' },
   { id: 'azure', label: 'Azure OpenAI', upstreamPrefix: 'azure/' },
-  { id: 'ollama', label: 'Ollama (local)', upstreamPrefix: 'ollama/' },
+  // ``ollama_chat/`` (LiteLLM's native /api/chat path) preserves
+  // OpenAI tool_calls and free-form prose responses. The legacy
+  // ``ollama/`` prefix triggers LiteLLM's "functions_unsupported_model"
+  // path which clamps the upstream call to ``format: json`` — that
+  // forces tool-using models (qwen3, Llama 3.1+, …) to wrap their
+  // final summary in a fake JSON envelope like ``{"tool_code": ...,
+  // "tool_output": "<actual answer>"}`` instead of plain prose.
+  // ``config_writer`` rewrites any stored ``ollama/`` to ``ollama_chat/``
+  // at render time too, so older rows keep working; this prefix change
+  // just stores the canonical form for new entries.
+  { id: 'ollama', label: 'Ollama (local)', upstreamPrefix: 'ollama_chat/' },
   { id: 'vllm', label: 'vLLM (local)', upstreamPrefix: 'openai/' },
   { id: 'custom', label: 'Custom', upstreamPrefix: '' },
 ]
