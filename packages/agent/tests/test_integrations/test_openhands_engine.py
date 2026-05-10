@@ -492,6 +492,168 @@ class TestCaptureFromLLMMessage:
         assert reply == "part-1 part-2"
 
 
+# ----------------------------- capture from FinishAction (finish-tool path)
+
+
+class TestCaptureFromFinishAction:
+    """OpenHands V1 SDK terminates a turn either by emitting a
+    ``MessageEvent`` (model returned plain text content) OR by calling
+    the built-in ``finish`` tool. The finish path surfaces as
+    ``ActionEvent`` carrying ``FinishAction(message=...)`` and the SDK
+    does NOT emit a sibling ``MessageEvent`` — ``FinishAction.message``
+    *is* the canonical user-facing reply (per
+    ``openhands.sdk.tool.builtins.finish.FinishAction``: "Final
+    message to send to the user.").
+
+    Smaller / open models (qwen, some Llamas) overwhelmingly choose the
+    finish-tool exit; larger models also use it whenever they decide
+    "task done". Capturing only ``MessageEvent`` silently dropped every
+    such reply — observed live with ``oh-agent04`` running
+    ``openai/qwen3.6:27b`` where every chat returned with no message
+    despite the LLM call succeeding (8.5s duration, lifecycle ok).
+    """
+
+    @pytest.mark.asyncio
+    async def test_finish_action_message_captured(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Happy path — agent-source ActionEvent with FinishAction
+        surfaces ``action.message`` as the assistant reply."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        # Class names must be ``ActionEvent`` and ``FinishAction``
+        # because the capture closure dispatches on
+        # ``type(event).__name__`` / ``type(action).__name__`` (no
+        # hard import — same defensive pattern as MessageEvent above).
+        FinishAction = type("FinishAction", (), {})
+        ActionEvent = type("ActionEvent", (), {})
+
+        class FinishConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                action = FinishAction()
+                action.message = "task complete"
+                event = ActionEvent()
+                event.source = "agent"
+                event.action = action
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", FinishConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply == "task complete"
+
+    @pytest.mark.asyncio
+    async def test_non_finish_action_skipped(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ActionEvent carrying a non-Finish action (e.g. a tool call
+        like ``BashAction`` or ``DelegateAction``) must NOT contribute
+        to the reply — those are intermediate steps, not user-facing
+        text."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        BashAction = type("BashAction", (), {})
+        ActionEvent = type("ActionEvent", (), {})
+
+        class BashActionConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                action = BashAction()
+                # Even if the action object happens to carry a
+                # ``message`` attribute, it must be ignored — only
+                # FinishAction is the user-reply contract.
+                action.message = "ls -la"
+                event = ActionEvent()
+                event.source = "agent"
+                event.action = action
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", BashActionConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply is None
+
+    @pytest.mark.asyncio
+    async def test_user_source_finish_action_skipped(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Defensive guard: only ``source='agent'`` ActionEvents count.
+        The SDK shouldn't emit user-source ActionEvents in practice but
+        the gate keeps this contract explicit and matches the
+        equivalent MessageEvent guard."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        FinishAction = type("FinishAction", (), {})
+        ActionEvent = type("ActionEvent", (), {})
+
+        class UserSourceFinishConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                action = FinishAction()
+                action.message = "should be ignored"
+                event = ActionEvent()
+                event.source = "user"
+                event.action = action
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", UserSourceFinishConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply is None
+
+    @pytest.mark.asyncio
+    async def test_empty_finish_message_skipped(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A FinishAction with empty / whitespace-only message must
+        produce ``None`` rather than an empty reply, matching the
+        same ``text.strip()`` filter MessageEvent capture applies."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        FinishAction = type("FinishAction", (), {})
+        ActionEvent = type("ActionEvent", (), {})
+
+        class EmptyFinishConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                action = FinishAction()
+                action.message = "   "
+                event = ActionEvent()
+                event.source = "agent"
+                event.action = action
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", EmptyFinishConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply is None
+
+
 # ---------------------------------------------------------- ingest_context
 
 
