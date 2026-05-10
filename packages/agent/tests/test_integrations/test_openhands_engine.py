@@ -66,18 +66,55 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self.kwargs = kwargs
             state["agent_kwargs"].append(kwargs)
 
-    # NOTE: class name MUST be ``MessageEvent`` — the adapter's
-    # capture closure dispatches on ``type(event).__name__`` (defensive
-    # since the real SDK's event class lives in
-    # ``openhands.sdk.event`` and we don't want a hard import just for
-    # ``isinstance``). Renaming this class will make the capture skip
-    # the event silently.
-    class MessageEvent:
-        """Mimics openhands.sdk.event.MessageEvent shape just enough."""
+    # Issue #372 — fixture stubs MUST mirror the *real* SDK shape:
+    # - ``MessageEvent`` exposes ``source: SourceType`` (string-valued
+    #   'agent' / 'user') + ``llm_message: Message``.
+    # - ``Message`` carries ``role: 'assistant' | 'user' | 'system' |
+    #   'tool'`` + ``content: list[TextContent | ...]``.
+    # - ``TextContent`` carries ``.text: str``.
+    # The class name MUST stay ``MessageEvent`` because the adapter's
+    # capture closure dispatches on ``type(event).__name__`` (no hard
+    # import to keep tests fast).
+    class TextContent:
+        def __init__(self, text: str) -> None:
+            self.text = text
 
-        def __init__(self, role: str, content: str) -> None:
+    class _Message:
+        def __init__(
+            self,
+            role: str,
+            content: list,
+        ) -> None:
             self.role = role
             self.content = content
+
+    class MessageEvent:
+        """Mimics openhands.sdk.event.MessageEvent shape just enough.
+
+        Constructed via the helper ``_make_assistant_event(text)`` for
+        the happy-path stub but exposes the underlying fields so tests
+        that need richer events (tool role, image content, etc) can
+        instantiate directly.
+        """
+
+        def __init__(self, source: str, llm_message: Any) -> None:
+            self.source = source
+            self.llm_message = llm_message
+
+    def _make_assistant_event(text: str) -> Any:
+        """Build a MessageEvent that the capture closure will accept.
+
+        Mirrors what the real SDK emits when the LLM returns an
+        assistant turn: source='agent', llm_message.role='assistant',
+        llm_message.content=[TextContent(text)].
+        """
+        return MessageEvent(
+            source="agent",
+            llm_message=_Message(
+                role="assistant",
+                content=[TextContent(text)],
+            ),
+        )
 
     class FakeConversation:
         def __init__(
@@ -104,11 +141,10 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             # Synthesize a single assistant MessageEvent so the
             # capture closure has something to emit. Tests can patch
             # this if they need other event sequences.
-            event = MessageEvent(
-                role="assistant",
-                content=f"echo: {self.sent_messages[-1]}"
+            event = _make_assistant_event(
+                f"echo: {self.sent_messages[-1]}"
                 if self.sent_messages
-                else "echo: <empty>",
+                else "echo: <empty>"
             )
             for cb in self.callbacks:
                 cb(event)
@@ -163,6 +199,8 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     state["FakeDelegateTool"] = FakeDelegateTool
 
     state["MessageEvent"] = MessageEvent
+    state["TextContent"] = TextContent
+    state["make_assistant_event"] = _make_assistant_event
     state["Conversation"] = FakeConversation
     return state
 
@@ -311,6 +349,147 @@ class TestOnMessage:
         sent = fake_sdk["conversations"][0].sent_messages[0]
         assert sent.startswith(marker)
         assert "ping" in sent
+
+
+# -------------------------------------- Issue #372 — capture from llm_message
+
+
+class TestCaptureFromLLMMessage:
+    """Locks the regression where the capture closure read the wrong
+    fields (``event.role`` / ``event.content``) because the fake SDK
+    used a flatter shape than the real one. The fix mirrors
+    ``openhands.sdk.event.MessageEvent`` exactly: ``source`` for
+    agent-vs-user discrimination, ``llm_message.role`` for tool-vs-
+    assistant discrimination, ``llm_message.content`` for the actual
+    text parts.
+    """
+
+    @pytest.mark.asyncio
+    async def test_assistant_message_captured(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """Happy path — assistant reply with text content reaches
+        ``on_message``'s return value."""
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "hello", "room_id": "r1"}
+        )
+        # The fake Conversation.run synthesizes an assistant
+        # MessageEvent with text "echo: hello"; capture must extract
+        # it via ``source='agent'`` + ``llm_message.role='assistant'``
+        # + ``llm_message.content[0].text``.
+        assert reply == "echo: hello"
+
+    @pytest.mark.asyncio
+    async def test_user_source_event_skipped(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """User-source MessageEvents (echoes of user messages) must
+        not appear in the assistant reply."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        Message = type("_Msg", (), {})
+
+        class UserSourceConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                user_msg = Message()
+                user_msg.role = "user"
+                user_msg.content = [
+                    fake_sdk["TextContent"]("user input echo")
+                ]
+                event = fake_sdk["MessageEvent"](
+                    source="user", llm_message=user_msg
+                )
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", UserSourceConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply is None, (
+            "user-source events must not contribute to the assistant reply"
+        )
+
+    @pytest.mark.asyncio
+    async def test_tool_role_message_skipped(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Tool-execution results show up as MessageEvent with
+        source='agent' but llm_message.role='tool'. They must NOT
+        reach the user's reply text — only ``role='assistant'``
+        does."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        Message = type("_Msg", (), {})
+
+        class ToolRoleConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                tool_msg = Message()
+                tool_msg.role = "tool"
+                tool_msg.content = [
+                    fake_sdk["TextContent"]("tool execution dump")
+                ]
+                event = fake_sdk["MessageEvent"](
+                    source="agent", llm_message=tool_msg
+                )
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", ToolRoleConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply is None, (
+            "tool-role messages must not show up as assistant text"
+        )
+
+    @pytest.mark.asyncio
+    async def test_multiple_text_parts_concatenated(
+        self,
+        fake_sdk: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Some LLMs emit multiple text content parts per message
+        (mid-stream switches between thinking and final). The capture
+        must concatenate them in order into the reply string."""
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_conv = fake_sdk["Conversation"]
+        Message = type("_Msg", (), {})
+
+        class MultiPartConv(original_conv):  # type: ignore[misc, valid-type]
+            def run(self) -> None:
+                self.run_count += 1
+                msg = Message()
+                msg.role = "assistant"
+                msg.content = [
+                    fake_sdk["TextContent"]("part-1 "),
+                    fake_sdk["TextContent"]("part-2"),
+                ]
+                event = fake_sdk["MessageEvent"](
+                    source="agent", llm_message=msg
+                )
+                for cb in self.callbacks:
+                    cb(event)
+
+        monkeypatch.setattr(sdk_mod, "Conversation", MultiPartConv)
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message(
+            {"content": "ping", "room_id": "r1"}
+        )
+        assert reply == "part-1 part-2"
 
 
 # ---------------------------------------------------------- ingest_context

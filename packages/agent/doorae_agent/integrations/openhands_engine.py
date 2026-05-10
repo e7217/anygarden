@@ -433,38 +433,55 @@ class OpenHandsAdapter(EngineAdapter):
             import dependency just for ``isinstance``. Match by class
             name + attributes instead, the same pattern claude_code
             uses for ``AssistantMessage`` / ``TextBlock``.
+
+            Issue #372 — schema corrected against the actual SDK
+            structure. ``openhands.sdk.event.MessageEvent`` exposes:
+              - ``source: SourceType`` ('agent' / 'user'), NOT ``role``
+              - ``llm_message: Message``, NOT ``message`` / ``content``
+            and ``Message`` carries ``role`` + ``content`` (a list of
+            ``TextContent`` / ``ImageContent`` parts).
+
+            Pre-#372 the capture matched ``event.role`` /
+            ``event.content`` which never existed → captured stayed
+            empty → ``on_message`` returned ``None`` → user saw
+            no reply despite the LLM call returning 200 OK.
             """
             try:
                 event_type = type(event).__name__
-                # MessageEvent carries (role, content) per the SDK
-                # event reference. Only the assistant role contributes
-                # to the user-visible reply.
                 if event_type != "MessageEvent":
                     return
-                role = getattr(event, "role", None) or getattr(
-                    getattr(event, "message", None), "role", None
-                )
-                if role != "assistant":
+                # First gate: is this an agent-emitted event? OpenHands
+                # uses ``SourceType`` (string-valued enum 'agent' /
+                # 'user' / etc) to distinguish, NOT a per-message
+                # ``role`` field.
+                source = getattr(event, "source", None)
+                # ``source`` is an enum-like; compare against both raw
+                # string and ``.value`` attribute so this works whether
+                # the SDK ships a plain string literal or a StrEnum.
+                source_value = getattr(source, "value", source)
+                if source_value != "agent":
                     return
-                # Content can be a plain string or a list of parts; we
-                # accept both shapes so the capture survives minor SDK
-                # reshapes without a code change.
-                text: str | None = None
-                content = getattr(event, "content", None)
-                if isinstance(content, str):
-                    text = content
-                elif isinstance(content, list):
-                    text = "".join(
-                        getattr(part, "text", "") or ""
-                        for part in content
-                        if getattr(part, "text", None) is not None
-                    )
-                else:
-                    msg_obj = getattr(event, "message", None)
-                    if msg_obj is not None:
-                        msg_content = getattr(msg_obj, "content", None)
-                        if isinstance(msg_content, str):
-                            text = msg_content
+                # Second gate: ``llm_message.role == "assistant"``.
+                # Tool execution results show up as MessageEvent with
+                # source='agent' too but role='tool', and we don't
+                # want those in the user-facing reply.
+                llm_message = getattr(event, "llm_message", None)
+                if llm_message is None:
+                    return
+                if getattr(llm_message, "role", None) != "assistant":
+                    return
+                # Content is a list of pydantic content blocks
+                # (``TextContent`` carrying ``.text``, ``ImageContent``
+                # carrying ``.image_url``, etc). Collect text from the
+                # ones that have it; skip the rest. Defensive against
+                # future content kinds — anything without ``.text`` is
+                # silently ignored.
+                content = getattr(llm_message, "content", None) or []
+                text = "".join(
+                    getattr(part, "text", "") or ""
+                    for part in content
+                    if getattr(part, "text", None) is not None
+                )
                 if text and text.strip():
                     captured.append(text)
             except Exception as exc:  # noqa: BLE001 — capture must never raise
