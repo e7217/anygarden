@@ -25,6 +25,7 @@ Phase 0 scope (see ``.tmp/plan-355-openhands-engine-migration.md``):
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 from pathlib import Path
@@ -140,6 +141,18 @@ class OpenHandsAdapter(EngineAdapter):
         # this to decide whether to add ``Tool(name="DelegateTool")`` to
         # the agent's tools list.
         self._delegate_tool_registered: bool = False
+        # Names of runtime tools (TerminalTool / FileEditorTool /
+        # TaskTrackerTool) successfully registered on first ``start``.
+        # Without these the agent has only FinishTool + ThinkTool +
+        # MCP, so any prompt needing shell or file work terminates
+        # after a single text turn (the SDK's
+        # ``_handle_content_response`` marks the conversation FINISHED
+        # whenever the LLM returns plain content with no tool call).
+        # Registration is best-effort and granular: a partially-
+        # available ``openhands-tools`` install attaches whichever
+        # tools imported successfully and skips the rest, mirroring
+        # how the adapter degrades gracefully on a missing SDK.
+        self._runtime_tool_names: list[str] = []
         # Per-room ``Conversation`` instances. OpenHands keeps its own
         # event-sourced history, so handing the same instance back per
         # room is enough for multi-turn context.
@@ -192,10 +205,21 @@ class OpenHandsAdapter(EngineAdapter):
         # missing plugins.
         self._delegate_tool_registered = _try_register_delegate_tool()
 
+        # Runtime tool bundle — TerminalTool, FileEditorTool,
+        # TaskTrackerTool. Each tool registers independently so a
+        # partially-available ``openhands-tools`` install still
+        # contributes whatever it can. Browser tools and the
+        # sub-agent ``TaskToolSet`` are intentionally skipped: the
+        # browser dependency is heavy and rarely needed for chat
+        # agents, and ``TaskToolSet`` overlaps with the existing
+        # ``DelegateTool`` path.
+        self._runtime_tool_names = _try_register_runtime_tools()
+
         logger.info(
             "openhands.initialized",
             model=self._model,
             delegate_tool=self._delegate_tool_registered,
+            runtime_tools=self._runtime_tool_names,
         )
 
     async def stop(self) -> None:
@@ -544,6 +568,16 @@ class OpenHandsAdapter(EngineAdapter):
                     "openhands.delegate_tool_attach_failed",
                     error=str(exc),
                 )
+        if self._tool_cls is not None:
+            for tool_name in self._runtime_tool_names:
+                try:
+                    tools.append(self._tool_cls(name=tool_name))
+                except Exception as exc:  # noqa: BLE001 — never crash on tool init
+                    logger.warning(
+                        "openhands.runtime_tool_attach_failed",
+                        tool_name=tool_name,
+                        error=str(exc),
+                    )
         agent_kwargs: dict[str, Any] = {"llm": llm, "tools": tools}
         if mcp_config is not None:
             agent_kwargs["mcp_config"] = mcp_config
@@ -676,6 +710,87 @@ def _try_register_delegate_tool() -> bool:
         )
         return False
     return True
+
+
+# Each entry: ``(public tool name, dotted module path, class attribute)``.
+# Names match the ``Tool.name`` constant the runtime classes expose
+# (``TerminalTool.name == "execute_bash"`` etc.) — kept verbatim so
+# ``Tool(name=...)`` lookups against the SDK registry succeed.
+_RUNTIME_TOOL_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("TerminalTool", "openhands.tools.terminal", "TerminalTool"),
+    ("FileEditorTool", "openhands.tools.file_editor", "FileEditorTool"),
+    ("TaskTrackerTool", "openhands.tools.task_tracker", "TaskTrackerTool"),
+)
+
+
+def _try_register_runtime_tools() -> list[str]:
+    """Register OpenHands' runtime tool bundle with the SDK.
+
+    Returns the names of tools that registered successfully so the
+    adapter can attach the matching ``Tool(name=...)`` references on
+    each new ``Conversation``. Tools that fail to import (older or
+    missing ``openhands-tools`` install) or fail to register (registry
+    rejection) are skipped individually — partial registration is
+    preferred over an all-or-nothing failure so a deployment with a
+    quirky tool subset still gains the rest.
+
+    Mirrors ``_try_register_delegate_tool`` in style: best-effort,
+    structured-log on degradation, never raises.
+
+    Background — without these tools the agent only sees ``FinishTool``
+    + ``ThinkTool`` (the SDK builtins). Models routinely emit a plain
+    text preamble when they want to "use" a missing capability ("I'll
+    check the hostname…"); the SDK's response dispatcher then takes
+    the content-response path and marks the conversation FINISHED
+    after that single message. Adding TerminalTool / FileEditorTool /
+    TaskTrackerTool gives the model a real path to satisfy those
+    requests.
+    """
+    try:
+        from openhands.sdk.tool import (  # type: ignore[import-not-found]
+            register_tool,
+        )
+    except ImportError as exc:
+        logger.warning(
+            "openhands.runtime_tools_unavailable",
+            hint="pip install openhands-sdk (or upgrade)",
+            error=str(exc),
+        )
+        return []
+
+    registered: list[str] = []
+    for tool_name, module_path, attr in _RUNTIME_TOOL_SPECS:
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as exc:
+            logger.warning(
+                "openhands.runtime_tool_unavailable",
+                tool_name=tool_name,
+                module=module_path,
+                hint="pip install openhands-tools (or upgrade)",
+                error=str(exc),
+            )
+            continue
+        cls = getattr(module, attr, None)
+        if cls is None:
+            logger.warning(
+                "openhands.runtime_tool_attribute_missing",
+                tool_name=tool_name,
+                module=module_path,
+                attribute=attr,
+            )
+            continue
+        try:
+            register_tool(tool_name, cls)
+        except Exception as exc:  # noqa: BLE001 — registry may raise typed
+            logger.warning(
+                "openhands.runtime_tool_register_failed",
+                tool_name=tool_name,
+                error=str(exc),
+            )
+            continue
+        registered.append(tool_name)
+    return registered
 
 
 def _load_skills_summary(skills_dir: Path) -> str | None:

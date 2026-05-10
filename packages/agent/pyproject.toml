@@ -26,6 +26,14 @@ dependencies = [
     # Issue #355 Phase 0 — OpenHands V1 SDK as the in-process Python
     # adapter alternative to the three CLI engines.
     "openhands-sdk>=1.21",
+    # Runtime tool bundle (TerminalTool / FileEditorTool /
+    # TaskTrackerTool / DelegateTool). Without these the SDK only
+    # ships FinishTool + ThinkTool, so any user query that needs
+    # shell or file work terminates after a single text turn — LLM
+    # emits a preamble ("I'll check..."), no tool call follows, and
+    # the SDK's ``_handle_content_response`` marks the conversation
+    # FINISHED. The package ships these tools as a separate wheel.
+    "openhands-tools>=1.21",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +53,7 @@ dev = [
     "claude-agent-sdk>=0.1.0",
     # Issue #355 — same pattern for openhands-sdk in dev.
     "openhands-sdk>=1.21",
+    "openhands-tools>=1.21",
 ]
 
 [project.scripts]
