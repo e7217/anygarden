@@ -224,7 +224,12 @@ class GeminiCliAdapter(EngineAdapter):
         # turn_content flows into both this transcript and the
         # per-room ``_conversations`` history, so subsequent turns
         # keep the wrapped breadcrumb as prior context.
-        turn_content = self.assemble_user_content(room_id, content)
+        metadata = msg.get("metadata")
+        turn_content = self.assemble_user_content(
+            room_id,
+            content,
+            metadata if isinstance(metadata, dict) else None,
+        )
 
         # Build prompt with per-room conversation context.
         conversation.append({"role": "user", "content": turn_content})

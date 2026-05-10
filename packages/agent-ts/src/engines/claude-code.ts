@@ -18,6 +18,7 @@
 
 import type { EngineAdapter } from "./types.js";
 import type { MessageOut } from "../protocol/frames.js";
+import { withReferencedFilesHint } from "../context/references.js";
 import { log } from "../logging.js";
 
 // We load the SDK lazily so tests can ``vi.mock`` it without the
@@ -97,10 +98,11 @@ export class ClaudeCodeAdapter implements EngineAdapter {
     const content = msg.content ?? "";
     if (!content) return null;
     const roomId = msg.room_id || "_default";
+    const prompt = withReferencedFilesHint(msg);
 
     try {
       const session = this.ensureSession(this.sdk, roomId);
-      await session.send(content);
+      await session.send(prompt);
       return await this.collectReply(session, roomId);
     } catch (exc) {
       log.error({ error: String(exc), room_id: roomId }, "claude_code.query_failed");

@@ -359,7 +359,12 @@ class CodexAdapter(EngineAdapter):
             # concat lives on ``EngineAdapter.assemble_user_content``
             # so all three session adapters share one pipeline; see
             # the base method's docstring for the full rationale.
-            turn_content = self.assemble_user_content(room_id, content)
+            metadata = msg.get("metadata")
+            turn_content = self.assemble_user_content(
+                room_id,
+                content,
+                metadata if isinstance(metadata, dict) else None,
+            )
 
             # Issue #237 / #255 / #279 / #293 — sha-tracked memory +
             # roster injection. Codex threads persist history, so

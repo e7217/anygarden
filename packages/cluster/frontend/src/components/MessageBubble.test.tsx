@@ -210,6 +210,36 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.queryByTestId('room-query-result-q1')).toBeNull()
     expect(screen.getByText('just a hello')).toBeInTheDocument()
   })
+
+  it('renders inline shared-file references distinctly from attachments', () => {
+    const msg = baseMsg({
+      content: 'please review',
+      metadata: {
+        references: [
+          {
+            type: 'shared_file',
+            id: 'file-1',
+            name: 'spec.md',
+            storage_name: 'spec.md',
+            origin: 'inline',
+          },
+          {
+            type: 'shared_file',
+            id: 'file-2',
+            name: 'data.json',
+            storage_name: 'data.json',
+            origin: 'attachment',
+          },
+        ],
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+
+    expect(screen.getByText('$ spec.md')).toBeInTheDocument()
+    expect(screen.getByText('data.json')).toBeInTheDocument()
+  })
 })
 
 describe('MessageBubble — avatar wiring', () => {

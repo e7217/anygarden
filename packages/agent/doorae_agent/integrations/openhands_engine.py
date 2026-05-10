@@ -254,7 +254,12 @@ class OpenHandsAdapter(EngineAdapter):
         # claude_code/codex/gemini_cli — the helpers live on the base
         # class precisely so a new engine adapter inherits the
         # behaviour for free (#286, #293).
-        prompt = self.assemble_user_content(room_id, content)
+        metadata = msg.get("metadata")
+        prompt = self.assemble_user_content(
+            room_id,
+            content,
+            metadata if isinstance(metadata, dict) else None,
+        )
         suffix = compose_session_context_suffix(
             self._client,
             room_id,

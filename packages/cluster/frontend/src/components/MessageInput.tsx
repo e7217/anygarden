@@ -4,8 +4,15 @@ import { Paperclip, Send, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
+import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { parseSlashCommand } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
+import {
+  buildSharedFileReference,
+  dedupeSharedFileReferences,
+  resolveFileReferencesInText,
+  type SharedFileReference,
+} from '@/lib/fileReferences'
 
 interface MessageInputProps {
   onSend: (content: string, metadata?: Record<string, unknown>) => void
@@ -22,10 +29,11 @@ interface Attachment {
   id: string
   filename: string
   storage_name: string
+  sha256?: string
 }
 
 interface MentionState {
-  type: '@' | '#'
+  type: '@' | '#' | '$'
   startIndex: number
   query: string
 }
@@ -34,6 +42,11 @@ interface MentionState {
 interface TrackedMention {
   displayText: string
   token: string
+}
+
+interface TrackedFileReference {
+  displayText: string
+  reference: SharedFileReference
 }
 
 export default function MessageInput({
@@ -59,6 +72,7 @@ export default function MessageInput({
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const { files: roomFiles, refresh: refreshRoomFiles } = useRoomFiles(roomId ?? null)
 
   const autoResize = useCallback(() => {
     const el = textareaRef.current
@@ -70,7 +84,21 @@ export default function MessageInput({
 
   useEffect(() => { autoResize() }, [value, autoResize])
 
-  const currentOptions = mention?.type === '@' ? mentionUsers : mentionRooms
+  const fileOptions = useMemo<MentionOption[]>(
+    () => roomFiles.map(file => ({
+      id: file.id,
+      display: file.filename,
+      kind: 'file',
+      description: file.storage_name === file.filename ? file.mime : file.storage_name,
+    })),
+    [roomFiles],
+  )
+
+  const currentOptions = mention?.type === '@'
+    ? mentionUsers
+    : mention?.type === '#'
+      ? mentionRooms
+      : fileOptions
   const filtered = useMemo(
     () => mention
       ? currentOptions.filter(o => o.display.toLowerCase().includes(mention.query.toLowerCase()))
@@ -81,9 +109,33 @@ export default function MessageInput({
   useEffect(() => { setSelectedIndex(0) }, [mention?.type, mention?.query])
 
   const closeMention = useCallback(() => { setMention(null) }, [])
+  const trackedFileReferences = useRef<TrackedFileReference[]>([])
 
   const selectMention = useCallback((option: MentionOption) => {
     if (!mention) return
+    if (mention.type === '$') {
+      const file = roomFiles.find(f => f.id === option.id)
+      if (!file) return
+      const displayText = `$${file.filename}`
+      const before = value.slice(0, mention.startIndex)
+      const after = value.slice(mention.startIndex + 1 + mention.query.length)
+      const newValue = before + displayText + ' ' + after
+      setValue(newValue)
+      trackedFileReferences.current.push({
+        displayText,
+        reference: buildSharedFileReference(file, 'inline'),
+      })
+      setMention(null)
+      setTimeout(() => {
+        const el = textareaRef.current
+        if (el) {
+          const cursorPos = before.length + displayText.length + 1
+          el.setSelectionRange(cursorPos, cursorPos)
+          el.focus()
+        }
+      }, 0)
+      return
+    }
     const prefix = mention.type === '@' ? '@' : '#'
     const displayText = `${prefix}${option.display}`
     const tokenType = mention.type === '@' ? 'user' : 'room'
@@ -103,7 +155,7 @@ export default function MessageInput({
         el.focus()
       }
     }, 0)
-  }, [mention, value])
+  }, [mention, roomFiles, value])
 
   const handleSend = () => {
     const trimmed = value.trim()
@@ -159,6 +211,7 @@ export default function MessageInput({
           // would just race with itself.
           setValue('')
           trackedMentions.current = []
+          trackedFileReferences.current = []
           setMention(null)
           onTyping(false)
           if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
@@ -175,17 +228,25 @@ export default function MessageInput({
         : `📎 ${attachments.length} files`
     }
     const mentions = extractMentionsMetadata(content)
-    const references = attachments.map(a => ({
-      type: 'shared_file' as const,
-      id: a.id,
-      name: a.filename,
-    }))
+    const references = dedupeSharedFileReferences([
+      ...trackedFileReferences.current.map(f => f.reference),
+      ...resolveFileReferencesInText(content, roomFiles),
+      ...attachments.map(a => ({
+        type: 'shared_file' as const,
+        id: a.id,
+        name: a.filename,
+        storage_name: a.storage_name,
+        sha256: a.sha256,
+        origin: 'attachment' as const,
+      })),
+    ])
     const metadata: Record<string, unknown> = {}
     if (mentions.length > 0) metadata.mentions = mentions
     if (references.length > 0) metadata.references = references
     onSend(content, Object.keys(metadata).length > 0 ? metadata : undefined)
     setValue('')
     trackedMentions.current = []
+    trackedFileReferences.current = []
     setAttachments([])
     setUploadError(null)
     setMention(null)
@@ -211,8 +272,10 @@ export default function MessageInput({
           id: uploaded.id,
           filename: uploaded.filename,
           storage_name: uploaded.storage_name,
+          sha256: uploaded.sha256,
         },
       ])
+      void refreshRoomFiles()
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -269,6 +332,9 @@ export default function MessageInput({
     trackedMentions.current = trackedMentions.current.filter(
       m => newValue.includes(m.displayText),
     )
+    trackedFileReferences.current = trackedFileReferences.current.filter(
+      f => newValue.includes(f.displayText),
+    )
     onTyping(true)
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
     typingTimeoutRef.current = setTimeout(() => onTyping(false), 2000)
@@ -278,6 +344,7 @@ export default function MessageInput({
 
     const atMatch = textUpToCursor.match(/(?:^|\s)@([^\s]*)$/)
     const hashMatch = textUpToCursor.match(/(?:^|\s)#([^\s]*)$/)
+    const dollarMatch = textUpToCursor.match(/(?:^|\s)\$([^\s$()]*)$/)
 
     if (atMatch) {
       const query = atMatch[1]
@@ -288,6 +355,11 @@ export default function MessageInput({
       const query = hashMatch[1]
       const startIndex = cursorPos - query.length - 1
       setMention({ type: '#', startIndex, query })
+      updateMentionPosition()
+    } else if (dollarMatch && roomFiles.length > 0) {
+      const query = dollarMatch[1]
+      const startIndex = cursorPos - query.length - 1
+      setMention({ type: '$', startIndex, query })
       updateMentionPosition()
     } else {
       setMention(null)

@@ -26,6 +26,7 @@ from doorae_agent.coordination.pending_context import append_context_line
 from doorae_agent.integrations.base import (
     EngineAdapter,
     ShaTrackedInjector,
+    compose_referenced_files_hint,
     compose_session_context_suffix,
 )
 
@@ -55,6 +56,57 @@ class TestAssembleUserContent:
         short-circuit and the contract is now codified at the base."""
         adapter = _BareAdapter()
         assert adapter.assemble_user_content("r1", "hello") == "hello"
+
+    def test_shared_file_references_are_prepended(self) -> None:
+        adapter = _BareAdapter()
+
+        out = adapter.assemble_user_content(
+            "r1",
+            "please review this",
+            {
+                "references": [
+                    {
+                        "type": "shared_file",
+                        "id": "file-1",
+                        "name": "spec.md",
+                        "storage_name": "spec.md",
+                    }
+                ]
+            },
+        )
+
+        assert out == (
+            "<referenced-files>\n"
+            "- spec.md: memory/shared/spec.md\n"
+            "</referenced-files>\n\n"
+            "please review this"
+        )
+
+    def test_ambient_context_precedes_shared_file_references(self) -> None:
+        adapter = _BareAdapter()
+        append_context_line(
+            adapter._pending_context, "r1", "[참고] @abc12345: 답변"
+        )
+
+        out = adapter.assemble_user_content(
+            "r1",
+            "hello",
+            {
+                "references": [
+                    {
+                        "type": "shared_file",
+                        "id": "file-1",
+                        "name": "spec.md",
+                        "storage_name": "spec.md",
+                    }
+                ]
+            },
+        )
+
+        assert out.index("<room_conversation>") < out.index(
+            "<referenced-files>"
+        )
+        assert out.index("</referenced-files>") < out.index("hello")
 
     def test_single_line_wrapped_and_prepended(self) -> None:
         """One absorbed ambient line lands inside the wrapper, with
@@ -117,6 +169,43 @@ class TestAssembleUserContent:
         # Buffer remains empty because the default ingest_context
         # is intentionally a no-op (session adapters override).
         assert adapter._pending_context == {}
+
+
+class TestComposeReferencedFilesHint:
+    def test_empty_for_missing_references(self) -> None:
+        assert compose_referenced_files_hint(None) == ""
+        assert compose_referenced_files_hint({}) == ""
+        assert compose_referenced_files_hint({"references": "x"}) == ""
+
+    def test_filters_invalid_and_dedupes_by_path(self) -> None:
+        out = compose_referenced_files_hint(
+            {
+                "references": [
+                    {"type": "other", "name": "ignored"},
+                    {
+                        "type": "shared_file",
+                        "name": "spec.md",
+                        "storage_name": "spec.md",
+                    },
+                    {
+                        "type": "shared_file",
+                        "name": "duplicate.md",
+                        "storage_name": "spec.md",
+                    },
+                    {
+                        "type": "shared_file",
+                        "name": "bad.md",
+                        "storage_name": "../bad.md",
+                    },
+                ]
+            }
+        )
+
+        assert out == (
+            "<referenced-files>\n"
+            "- spec.md: memory/shared/spec.md\n"
+            "</referenced-files>"
+        )
 
 
 def _stub_client(

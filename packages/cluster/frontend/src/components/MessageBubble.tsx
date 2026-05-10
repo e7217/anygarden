@@ -46,6 +46,8 @@ interface SharedFileReference {
   type: 'shared_file'
   id: string
   name: string
+  storage_name?: string
+  origin?: 'inline' | 'attachment'
 }
 
 function MessageReferences({
@@ -71,8 +73,12 @@ function MessageReferences({
           className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-xs text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
           title={r.name}
         >
-          <Paperclip className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" />
-          <span className="truncate">{r.name}</span>
+          {r.origin === 'inline' ? (
+            <span className="shrink-0 font-medium text-[var(--color-foreground-subtle)]">$</span>
+          ) : (
+            <Paperclip className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" />
+          )}
+          <span className="truncate">{r.origin === 'inline' ? `$ ${r.name}` : r.name}</span>
         </span>
       ))}
     </div>

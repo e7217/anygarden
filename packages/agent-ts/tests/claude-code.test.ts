@@ -8,14 +8,15 @@ import { describe, it, expect, vi } from "vitest";
 import { ClaudeCodeAdapter, type SDKModule, type SDKSession } from "../src/engines/claude-code.js";
 import type { MessageOut } from "../src/protocol/frames.js";
 
-function makeSession(stream: unknown[]): SDKSession {
+function makeSession(stream: unknown[], sentMessages?: string[]): SDKSession {
   let sessionId: string | undefined;
   const session: SDKSession = {
     get sessionId() {
       if (!sessionId) throw new Error("not initialised");
       return sessionId;
     },
-    async send(_msg: string) {
+    async send(msg: string) {
+      sentMessages?.push(msg);
       sessionId ??= "sid-from-send";
     },
     stream() {
@@ -28,16 +29,20 @@ function makeSession(stream: unknown[]): SDKSession {
   return session;
 }
 
-function makeSdk(firstStream: unknown[], secondStream?: unknown[]) {
+function makeSdk(
+  firstStream: unknown[],
+  secondStream?: unknown[],
+  sentMessages?: string[],
+) {
   const calls = { create: 0, resume: 0 };
   const sdk: SDKModule = {
     unstable_v2_createSession: () => {
       calls.create += 1;
-      return makeSession(firstStream);
+      return makeSession(firstStream, sentMessages);
     },
     unstable_v2_resumeSession: () => {
       calls.resume += 1;
-      return makeSession(secondStream ?? firstStream);
+      return makeSession(secondStream ?? firstStream, sentMessages);
     },
   };
   return { sdk, calls };
@@ -81,6 +86,40 @@ describe("ClaudeCodeAdapter", () => {
     await adapter.start();
     const reply = await adapter.onMessage(makeMsg());
     expect(reply).toBe("final answer");
+  });
+
+  it("prepends referenced shared files to the sent prompt", async () => {
+    const sentMessages: string[] = [];
+    const { sdk } = makeSdk(
+      [{ type: "result", result: "ok" }],
+      undefined,
+      sentMessages,
+    );
+    const adapter = new ClaudeCodeAdapter({ sdkLoader: async () => sdk });
+    await adapter.start();
+
+    await adapter.onMessage(
+      makeMsg({
+        content: "please inspect this",
+        metadata: {
+          references: [
+            {
+              type: "shared_file",
+              id: "file-1",
+              name: "spec.md",
+              storage_name: "spec.md",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(sentMessages).toEqual([
+      "<referenced-files>\n" +
+        "- spec.md: memory/shared/spec.md\n" +
+        "</referenced-files>\n\n" +
+        "please inspect this",
+    ]);
   });
 
   it("falls back to concatenated TextBlocks when no result field", async () => {
