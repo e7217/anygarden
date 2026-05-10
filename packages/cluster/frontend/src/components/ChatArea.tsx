@@ -13,6 +13,7 @@ import {
 } from '@/lib/pending-queries'
 import { parseHandoff, isHandoffStatusMessage } from '@/lib/handoff'
 import { parseServerDate } from '@/lib/datetime'
+import { useRoomFiles } from '@/hooks/useRoomFiles'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -56,6 +57,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
   // useWebSocket hook resets ``messages`` on room switch. Safer
   // than threading a new prop through every call site.
   const currentRoomId = messages.length > 0 ? messages[messages.length - 1].room_id : ''
+  const { files: roomFiles } = useRoomFiles(currentRoomId || null)
 
   // ``new Date()`` is produced inside the factory so a fresh now is
   // read every time ``messages``/``currentRoomId``/``dismissedIds``/
@@ -279,6 +281,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
                   isMine={msg.participant_id === myParticipantId}
                   pendingQueryIds={pendingQueryIds}
                   handoffResolvedAt={handoffResolvedMap.get(msg.id) ?? null}
+                  roomFiles={roomFiles}
                 />
               </div>
             )

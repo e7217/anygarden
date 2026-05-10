@@ -97,3 +97,70 @@ describe('MarkdownContent — regression: plain markdown still renders', () => {
     expect(screen.getByText('@Alice')).toBeInTheDocument()
   })
 })
+
+describe('MarkdownContent — file reference rendering', () => {
+  const fileReferenceCandidates = [
+    {
+      id: 'file-1',
+      name: 'spec.md',
+      storage_name: 'spec.md',
+    },
+    {
+      id: 'file-2',
+      name: 'Original Name.md',
+      storage_name: 'sanitized.md',
+    },
+  ]
+
+  it('renders valid $filename tokens as inline file reference pills', () => {
+    const { container } = render(
+      <MarkdownContent
+        content="please read $spec.md"
+        fileReferenceCandidates={fileReferenceCandidates}
+      />,
+    )
+
+    const ref = container.querySelector('[data-file-reference="file-1"]')
+    expect(ref).not.toBeNull()
+    expect(ref).toHaveTextContent('$spec.md')
+  })
+
+  it('resolves by storage_name and preserves trailing punctuation', () => {
+    const { container } = render(
+      <MarkdownContent
+        content="compare $sanitized.md."
+        fileReferenceCandidates={fileReferenceCandidates}
+      />,
+    )
+
+    const ref = container.querySelector('[data-file-reference="file-2"]')
+    expect(ref).not.toBeNull()
+    expect(ref).toHaveTextContent('$sanitized.md')
+    expect(container.textContent).toContain('$sanitized.md.')
+  })
+
+  it('leaves unknown and shell-like $ tokens as plain text', () => {
+    const { container } = render(
+      <MarkdownContent
+        content="echo $HOME, pay $10, run $(date), see abc$spec.md and $missing.txt"
+        fileReferenceCandidates={fileReferenceCandidates}
+      />,
+    )
+
+    expect(container.querySelectorAll('[data-file-reference]')).toHaveLength(0)
+    expect(container).toHaveTextContent('$HOME')
+    expect(container).toHaveTextContent('$missing.txt')
+  })
+
+  it('does not render file references inside inline or fenced code', () => {
+    const { container } = render(
+      <MarkdownContent
+        content={'inline `$spec.md`\n\n```\n$spec.md\n```'}
+        fileReferenceCandidates={fileReferenceCandidates}
+      />,
+    )
+
+    expect(container.querySelectorAll('[data-file-reference]')).toHaveLength(0)
+    expect(container.querySelectorAll('code')).toHaveLength(2)
+  })
+})

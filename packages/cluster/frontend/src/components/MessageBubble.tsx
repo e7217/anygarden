@@ -19,6 +19,11 @@ import { parseHandoff, stripHandoffToTrailer } from '@/lib/handoff'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import { parseServerDate } from '@/lib/datetime'
+import {
+  buildFileReferenceCandidates,
+  extractSharedFileReferencesFromMetadata,
+} from '@/lib/fileReferences'
+import type { RoomSharedFile } from '@/lib/roomFiles'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -36,37 +41,20 @@ interface MessageBubbleProps {
    * Ignored for non-handoff messages. ``ChatArea`` computes this by
    * forward-scanning the message stream. */
   handoffResolvedAt?: string | null
-}
-
-/** #246 — render file attachments announced via
- * ``metadata.references``. Only ``shared_file`` references are
- * supported for now; future reference kinds can fan out from the
- * same metadata key. */
-interface SharedFileReference {
-  type: 'shared_file'
-  id: string
-  name: string
-  storage_name?: string
-  origin?: 'inline' | 'attachment'
+  roomFiles?: RoomSharedFile[]
 }
 
 function MessageReferences({
   metadata,
+  align = 'start',
 }: {
   metadata?: Record<string, unknown>
+  align?: 'start' | 'end'
 }) {
-  if (!metadata) return null
-  const raw = metadata.references
-  if (!Array.isArray(raw)) return null
-  const refs = raw.filter(
-    (r): r is SharedFileReference =>
-      typeof r === 'object' && r !== null && (r as { type?: unknown }).type === 'shared_file'
-      && typeof (r as { id?: unknown }).id === 'string'
-      && typeof (r as { name?: unknown }).name === 'string',
-  )
+  const refs = extractSharedFileReferencesFromMetadata(metadata)
   if (refs.length === 0) return null
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
+    <div className={`mt-2 flex flex-wrap gap-1.5 ${align === 'end' ? 'justify-end' : ''}`}>
       {refs.map(r => (
         <span
           key={r.id}
@@ -92,9 +80,14 @@ export default memo(function MessageBubble({
   isMine,
   pendingQueryIds,
   handoffResolvedAt,
+  roomFiles = [],
 }: MessageBubbleProps) {
   const [saved, setSaved] = useState(false)
   const { rooms } = useRooms()
+  const fileReferenceCandidates = useMemo(
+    () => buildFileReferenceCandidates(message.metadata, roomFiles),
+    [message.metadata, roomFiles],
+  )
 
   const resolveUser = useCallback(
     (id: string) => participants[id]?.display_name,
@@ -371,6 +364,7 @@ export default memo(function MessageBubble({
             content={stripped}
             resolveUser={resolveUser}
             resolveRoom={resolveRoom}
+            fileReferenceCandidates={fileReferenceCandidates}
           />
         </div>
         <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
@@ -394,7 +388,9 @@ export default memo(function MessageBubble({
             content={message.content}
             resolveUser={resolveUser}
             resolveRoom={resolveRoom}
+            fileReferenceCandidates={fileReferenceCandidates}
           />
+          <MessageReferences metadata={message.metadata} align="end" />
         </div>
         <div className="mt-1 pr-1 flex items-center gap-2 justify-end">
           {pendingBadge}
@@ -435,7 +431,12 @@ export default memo(function MessageBubble({
           progressively tighter at sm/md/lg. Non-agent (orphan/guest)
           uses the tighter user-side ladder. */}
       <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
-        <MarkdownContent content={renderedContent} resolveUser={resolveUser} resolveRoom={resolveRoom} />
+        <MarkdownContent
+          content={renderedContent}
+          resolveUser={resolveUser}
+          resolveRoom={resolveRoom}
+          fileReferenceCandidates={fileReferenceCandidates}
+        />
         <MessageReferences metadata={message.metadata} />
       </div>
       <div className="mt-1 pl-1 flex items-center gap-2">

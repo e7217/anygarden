@@ -240,6 +240,77 @@ describe('MessageBubble — plain regression', () => {
     expect(screen.getByText('$ spec.md')).toBeInTheDocument()
     expect(screen.getByText('data.json')).toBeInTheDocument()
   })
+
+  it('renders shared-file chips for my messages too', () => {
+    const msg = baseMsg({
+      participant_id: 'user-alice',
+      content: 'please review $spec.md',
+      metadata: {
+        references: [
+          {
+            type: 'shared_file',
+            id: 'file-1',
+            name: 'spec.md',
+            storage_name: 'spec.md',
+            origin: 'inline',
+          },
+        ],
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={true} />,
+    )
+
+    expect(screen.getByText('$ spec.md')).toBeInTheDocument()
+  })
+
+  it('highlights metadata-backed file references even without roomFiles', () => {
+    const msg = baseMsg({
+      content: 'please review $spec.md',
+      metadata: {
+        references: [
+          {
+            type: 'shared_file',
+            id: 'file-1',
+            name: 'spec.md',
+            storage_name: 'spec.md',
+            origin: 'inline',
+          },
+        ],
+      },
+    })
+    const { container } = render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+
+    expect(container.querySelector('[data-file-reference="file-1"]')).not.toBeNull()
+  })
+
+  it('highlights agent-mentioned files from current room files', () => {
+    const msg = baseMsg({ content: 'I checked $spec.md' })
+    const { container } = render(
+      <MessageBubble
+        message={msg}
+        participants={participants}
+        isMine={false}
+        roomFiles={[
+          {
+            id: 'file-1',
+            room_id: 'room-b',
+            filename: 'spec.md',
+            storage_name: 'spec.md',
+            sha256: 'sha-file-1',
+            size_bytes: 10,
+            mime: 'text/plain',
+            uploaded_by: null,
+            created_at: '2026-05-10T00:00:00Z',
+          },
+        ]}
+      />,
+    )
+
+    expect(container.querySelector('[data-file-reference="file-1"]')).not.toBeNull()
+  })
 })
 
 describe('MessageBubble — avatar wiring', () => {
