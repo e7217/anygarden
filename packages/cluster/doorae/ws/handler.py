@@ -17,6 +17,10 @@ from doorae.config import DooraeSettings
 from doorae.db.models import ActivityLog, Agent, Participant, Room, User
 from doorae.db.repository import append_message, replay_since_seq
 from doorae.rooms.membership import ensure_agent_in_room
+from doorae.messages.references import (
+    InvalidSharedFileReference,
+    canonicalize_shared_file_references,
+)
 from doorae.observability.metrics import (
     guest_active,
     guest_rate_limited_total,
@@ -647,6 +651,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
 
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
+                async with session_factory() as ref_db:
+                    try:
+                        metadata = await canonicalize_shared_file_references(
+                            ref_db,
+                            room_id=room_id,
+                            metadata=metadata,
+                            allow_shared_files=not is_guest,
+                        )
+                    except InvalidSharedFileReference:
+                        await websocket.send_text(
+                            ErrorOut(
+                                detail="Invalid shared file reference"
+                            ).model_dump_json()
+                        )
+                        continue
                 if mentions:
                     metadata["mentions"] = mentions
 

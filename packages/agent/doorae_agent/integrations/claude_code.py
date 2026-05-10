@@ -171,7 +171,12 @@ class ClaudeCodeAdapter(EngineAdapter):
         # means a future augmentation lands once and propagates to
         # all session adapters automatically. The result is
         # byte-identical to the inline pipeline (#284 contract).
-        prompt = self.assemble_user_content(room_id, content)
+        metadata = msg.get("metadata")
+        prompt = self.assemble_user_content(
+            room_id,
+            content,
+            metadata if isinstance(metadata, dict) else None,
+        )
 
         # Issue #159 Phase C — expose the current room to the
         # ``handoff_to`` tool closure. Cleared in ``finally`` so a

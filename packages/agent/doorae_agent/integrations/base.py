@@ -21,6 +21,65 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
+def _clean_reference_field(value: str) -> str:
+    return " ".join(value.replace("\r", " ").replace("\n", " ").split())
+
+
+def _xml_escape_text(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
+    """Render a user-turn hint for explicitly referenced shared files.
+
+    The shared-file contents are already available through the room's
+    ``memory/shared`` context block. This hint preserves the user's
+    explicit ``$file`` intent without duplicating file contents into the
+    turn payload.
+    """
+    if not metadata:
+        return ""
+
+    references = metadata.get("references")
+    if not isinstance(references, list):
+        return ""
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for ref in references:
+        if not isinstance(ref, dict) or ref.get("type") != "shared_file":
+            continue
+
+        name = ref.get("name")
+        storage_name = ref.get("storage_name")
+        if not isinstance(name, str) or not isinstance(storage_name, str):
+            continue
+
+        name = _clean_reference_field(name)
+        storage_name = _clean_reference_field(storage_name)
+        if not name or not storage_name:
+            continue
+        if "/" in storage_name or "\\" in storage_name:
+            continue
+
+        path = f"memory/shared/{storage_name}"
+        if path in seen:
+            continue
+        seen.add(path)
+        lines.append(
+            f"- {_xml_escape_text(name)}: {_xml_escape_text(path)}"
+        )
+
+    if not lines:
+        return ""
+
+    return "<referenced-files>\n" + "\n".join(lines) + "\n</referenced-files>"
+
+
 class MessagePolicy(Enum):
     """Decision for how an incoming message should be handled.
 
@@ -76,14 +135,20 @@ class EngineAdapter(ABC):
     async def stop(self) -> None:
         """Cleanup resources. Override if the engine needs teardown."""
 
-    def assemble_user_content(self, room_id: str, raw_content: str) -> str:
+    def assemble_user_content(
+        self,
+        room_id: str,
+        raw_content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
         """Standard user-content augmentation pipeline (#286).
 
         Drains the room's pending-context buffer (#74 / #148 Part 3),
         wraps any ambient lines in ``<room_conversation>`` XML
-        (#284), and prepends the result to ``raw_content``. An
-        empty buffer short-circuits the function so the adapter
-        emits ``raw_content`` byte-identical to the bare-input path.
+        (#284), adds any explicit shared-file references, and prepends
+        those blocks to ``raw_content``. An empty buffer and empty
+        metadata short-circuit the function so the adapter emits
+        ``raw_content`` byte-identical to the bare-input path.
 
         Why this lives on the base class: pre-#286 each session
         adapter (Claude Code, Codex, Gemini CLI) inlined the same
@@ -96,10 +161,21 @@ class EngineAdapter(ABC):
         guard for *system-prompt* augmentation is a separate
         codepath and not affected).
         """
+        parts: list[str] = []
+
         prefix = drain_context(self._pending_context, room_id)
         if prefix:
-            prefix = wrap_as_room_conversation(prefix)
-        return f"{prefix}\n\n{raw_content}" if prefix else raw_content
+            parts.append(wrap_as_room_conversation(prefix))
+
+        referenced_files = compose_referenced_files_hint(metadata)
+        if referenced_files:
+            parts.append(referenced_files)
+
+        if not parts:
+            return raw_content
+
+        parts.append(raw_content)
+        return "\n\n".join(parts)
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Absorb a message into the engine's context without replying.

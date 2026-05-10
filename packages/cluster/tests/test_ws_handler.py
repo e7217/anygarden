@@ -16,7 +16,7 @@ from doorae.app import create_app
 from doorae.auth.jwt import create_user_token
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Project, Room, User
+from doorae.db.models import Agent, Base, Participant, Project, Room, RoomSharedFile, User
 from doorae.db.repository import append_message
 from doorae.ws.manager import ConnectionManager
 from doorae.ws.protocol import (
@@ -375,6 +375,112 @@ class TestWSEndpoint:
                 }))
                 resp = json.loads(ws.receive_text())
                 assert resp["content"] == "with meta"
+
+    @pytest.mark.asyncio
+    async def test_ws_canonicalizes_shared_file_references(self, ws_env) -> None:
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        async with ws_env["session_factory"]() as db:
+            db.add(
+                RoomSharedFile(
+                    id="file-1",
+                    room_id=room_id,
+                    filename="spec.md",
+                    storage_name="spec.md",
+                    storage_path=f"{room_id}/file-1",
+                    sha256="real-sha",
+                    size_bytes=12,
+                    mime="text/markdown",
+                    uploaded_by=None,
+                )
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "$spec.md review",
+                    "metadata": {
+                        "references": [
+                            {
+                                "type": "shared_file",
+                                "id": "file-1",
+                                "name": "spoofed.md",
+                                "storage_name": "../bad",
+                                "sha256": "fake",
+                                "origin": "inline",
+                            }
+                        ]
+                    },
+                }))
+                msg = json.loads(ws.receive_text())
+
+        assert msg["metadata"]["references"] == [
+            {
+                "type": "shared_file",
+                "id": "file-1",
+                "name": "spec.md",
+                "storage_name": "spec.md",
+                "sha256": "real-sha",
+                "origin": "inline",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ws_rejects_cross_room_shared_file_reference(self, ws_env) -> None:
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        async with ws_env["session_factory"]() as db:
+            other_room = Room(project_id=ws_env["room"].project_id, name="other")
+            db.add(other_room)
+            await db.flush()
+            db.add(
+                RoomSharedFile(
+                    id="other-file",
+                    room_id=other_room.id,
+                    filename="secret.md",
+                    storage_name="secret.md",
+                    storage_path=f"{other_room.id}/other-file",
+                    sha256="other-sha",
+                    size_bytes=12,
+                    mime="text/markdown",
+                    uploaded_by=None,
+                )
+            )
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "bad ref",
+                    "metadata": {
+                        "references": [
+                            {"type": "shared_file", "id": "other-file"}
+                        ]
+                    },
+                }))
+                err = json.loads(ws.receive_text())
+
+        assert err["type"] == "error"
+        assert err["detail"] == "Invalid shared file reference"
 
 
 # ── Since-Seq Recovery Tests ──────────────────────────────────────────

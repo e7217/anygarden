@@ -34,6 +34,29 @@ Delete inverts the flow: the DB row + on-disk file are removed synchronously;
 `fan_out_delete` schedules an `AgentMemorySharedFileDeleteFrame` to every
 placed agent so their copies go with it.
 
+## Message references
+
+Users can explicitly reference a room shared file from the composer with
+`$filename`. The client resolves the token against the room's shared-file
+list and sends a `metadata.references[]` item of type `shared_file`; directly
+typed tokens and newly uploaded attachments are deduped before send.
+
+The WebSocket handler canonicalizes each shared-file reference against the
+current room before storing the message, replacing client-provided names with
+DB values and rejecting cross-room or unknown file ids. Guests cannot submit
+shared-file references.
+
+Agents receive a small turn-local hint instead of another content copy:
+
+```
+<referenced-files>
+- spec.md: memory/shared/spec.md
+</referenced-files>
+```
+
+The referenced file content itself remains in the existing `memory/shared/`
+fan-out path and `<shared-context>` prompt block.
+
 ## Storage layout
 
 ```

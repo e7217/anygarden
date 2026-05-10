@@ -28,6 +28,7 @@ from doorae.db.models import (
     Participant,
     Project,
     Room,
+    RoomSharedFile,
     RoomInviteLink,
     User,
 )
@@ -166,6 +167,51 @@ async def guest_env(config: DooraeSettings) -> AsyncIterator[dict]:
 
 
 class TestGuestWSSendFrame:
+    def test_guest_cannot_send_shared_file_reference(self, guest_env) -> None:
+        app = guest_env["app"]
+        room_id = guest_env["room"].id
+
+        async def seed_file() -> None:
+            async with guest_env["session_factory"]() as db:
+                db.add(
+                    RoomSharedFile(
+                        id="guest-file",
+                        room_id=room_id,
+                        filename="guest.md",
+                        storage_name="guest.md",
+                        storage_path=f"{room_id}/guest-file",
+                        sha256="guest-sha",
+                        size_bytes=12,
+                        mime="text/markdown",
+                        uploaded_by=None,
+                    )
+                )
+                await db.commit()
+
+        import anyio
+
+        anyio.run(seed_file)
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({
+                    "type": "send",
+                    "content": "$guest.md",
+                    "metadata": {
+                        "references": [
+                            {"type": "shared_file", "id": "guest-file"}
+                        ]
+                    },
+                }))
+                err = json.loads(ws.receive_text())
+
+        assert err["type"] == "error"
+        assert err["detail"] == "Invalid shared file reference"
+
     def test_guest_cannot_trigger_room_mention_routing(self, guest_env) -> None:
         """A guest's ``<#room:X>`` mention is silently stripped, so the
         representative auto-join path never runs and no Participant

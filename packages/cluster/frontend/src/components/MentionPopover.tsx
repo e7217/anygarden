@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 export interface MentionOption {
   id: string
   display: string
-  kind: 'user' | 'agent' | 'room'
+  kind: 'user' | 'agent' | 'room' | 'file'
   // Issue #271 — short self-introduction shown as a secondary line
   // in the autocomplete so a user picking among multiple agents can
   // tell *what* each one does. Optional; absent for rooms, users,
@@ -26,7 +26,7 @@ export default function MentionPopover({
 
   useEffect(() => {
     const el = listRef.current?.children[selectedIndex] as HTMLElement | undefined
-    el?.scrollIntoView({ block: 'nearest' })
+    el?.scrollIntoView?.({ block: 'nearest' })
   }, [selectedIndex])
 
   if (options.length === 0) return null
@@ -55,13 +55,22 @@ export default function MentionPopover({
             onMouseDown={(e) => { e.preventDefault(); onSelect(option) }}
           >
             <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-[10px]">
-              {option.kind === 'room' ? '#' : option.kind === 'agent' ? '🤖' : option.display[0]?.toUpperCase()}
+              {option.kind === 'room'
+                ? '#'
+                : option.kind === 'file'
+                  ? '$'
+                  : option.kind === 'agent'
+                    ? '🤖'
+                    : option.display[0]?.toUpperCase()}
             </span>
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="flex items-center gap-2">
                 <span className="truncate">{option.display}</span>
                 {option.kind === 'agent' && (
                   <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">agent</span>
+                )}
+                {option.kind === 'file' && (
+                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">file</span>
                 )}
               </span>
               {hasDesc && (
