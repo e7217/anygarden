@@ -208,6 +208,39 @@ async def _alembic_action(action: str, db_url: str, target: str) -> None:
     await asyncio.to_thread(_run)
 
 
+async def _reset_openhands_agents_for_restart(db) -> list[str]:
+    """Flip active openhands agents into the orphan state on cluster boot.
+
+    Issue #379 — the openhands engine is an in-process SDK adapter; its
+    per-room ``Conversation`` cache lives in agent-process memory and
+    is lost whenever the agent process restarts. The CLI-based engines
+    (claude-code, codex, gemini-cli) spawn a fresh subprocess per
+    session so they boot cleanly, but openhands agents would otherwise
+    require a manual stop/start to recover. By setting
+    ``actual_state='pending'`` and clearing ``placed_on_machine_id``,
+    the standard machine-reconnect path (``_place_orphaned_agents``
+    in ``ws/machine_handler.py``) picks them up and triggers a fresh
+    ``request_start`` with a bumped generation.
+
+    Returns the agent IDs that were reset, so callers can log them.
+    """
+    from doorae.db.models import Agent
+
+    result = await db.execute(
+        select(Agent).where(
+            Agent.engine == "openhands",
+            Agent.actual_state.in_(("running", "starting", "stopping")),
+        )
+    )
+    agents = result.scalars().all()
+    for agent in agents:
+        agent.actual_state = "pending"
+        agent.desired_state = "running"
+        agent.pid = None
+        agent.placed_on_machine_id = None
+    return [a.id for a in agents]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Application startup / shutdown lifecycle."""
@@ -397,6 +430,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # v2: No stale agent reset. Machines reconnect and report actual state.
     # Server reconciles via sync_batch on reconnect.
+    # Issue #379 — openhands is the lone exception: its in-process SDK
+    # state can't survive a process restart, so we proactively flip
+    # those agents into the orphan state and let the standard
+    # machine-reconnect respawn path bring them back fresh.
     if not engine_provided:
         from doorae.db.models import Machine as _Machine
         async with app.state.session_factory() as db:
@@ -407,9 +444,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 .where(_Machine.status == "online")
                 .values(status="offline")
             )
+            reset_openhands_ids = await _reset_openhands_agents_for_restart(db)
             await db.commit()
             import structlog
-            structlog.get_logger().info("startup.machines_reset_offline")
+            logger = structlog.get_logger()
+            logger.info("startup.machines_reset_offline")
+            if reset_openhands_ids:
+                logger.info(
+                    "startup.openhands_agents_reset",
+                    count=len(reset_openhands_ids),
+                    agent_ids=reset_openhands_ids,
+                )
 
     # #246 — reconcile on-disk room shared files against the DB. A
     # crash mid-upload can leave a renamed file with no matching row,
