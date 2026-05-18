@@ -3,9 +3,9 @@ name: Release
 on:
   push:
     tags:
-      - 'doorae-agent-v*'
-      - 'doorae-cluster-v*'
-      - 'doorae-machine-v*'
+      - 'dragent-v*'
+      - 'drhub-v*'
+      - 'drmachine-v*'
 
 permissions:
   contents: write
@@ -23,12 +23,20 @@ jobs:
         id: parse
         run: |
           TAG="${GITHUB_REF_NAME}"
-          PKG="${TAG#doorae-}"
-          PKG="${PKG%-v*}"
+          NAME="${TAG#dr}"
+          NAME="${NAME%-v*}"
           VERSION="${TAG##*-v}"
+          # PyPI distribution name is drhub, but the source lives in
+          # packages/cluster/ — keep the directory layout stable and
+          # map the published name here instead of renaming the dir.
+          case "${NAME}" in
+            hub) PKG="cluster" ;;
+            *)   PKG="${NAME}" ;;
+          esac
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "package=${PKG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG} -> package=${PKG}, version=${VERSION}"
+          echo "Tag: ${TAG} -> name=${NAME}, package=${PKG}, version=${VERSION}"
 
       - name: Verify pyproject version matches tag
         working-directory: packages/${{ steps.parse.outputs.package }}
@@ -54,28 +62,29 @@ jobs:
       - name: Resolve previous tag for same package
         id: prev
         run: |
-          PKG="${{ steps.parse.outputs.package }}"
+          NAME="${{ steps.parse.outputs.name }}"
           CURRENT="${GITHUB_REF_NAME}"
-          PREV=$(git tag --list "doorae-${PKG}-v*" --sort=-version:refname \
+          PREV=$(git tag --list "dr${NAME}-v*" --sort=-version:refname \
             | grep -vx "${CURRENT}" \
             | head -n1 || true)
           echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
           if [ -n "${PREV}" ]; then
-            echo "Previous ${PKG} tag: ${PREV}"
+            echo "Previous dr${NAME} tag: ${PREV}"
           else
-            echo "No previous ${PKG} tag found - this is the first release for the package."
+            echo "No previous dr${NAME} tag found - this is the first release for the package."
           fi
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          NAME="${{ steps.parse.outputs.name }}"
           PKG="${{ steps.parse.outputs.package }}"
           VERSION="${{ steps.parse.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           ARGS=(
             "${GITHUB_REF_NAME}"
-            --title "doorae-${PKG} v${VERSION}"
+            --title "dr${NAME} v${VERSION}"
             --generate-notes
           )
           if [ -n "${PREV_TAG}" ]; then

@@ -16,6 +16,6 @@ members = ["packages/*"]
 exclude = ["packages/agent-ts"]
 
 [tool.uv.sources]
-doorae-agent = { workspace = true }
-doorae-cluster = { workspace = true }
-doorae-machine = { workspace = true }
+dragent = { workspace = true }
+drhub = { workspace = true }
+drmachine = { workspace = true }

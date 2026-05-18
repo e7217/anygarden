@@ -23,13 +23,13 @@ lint:                   ## Run ruff across all packages
 dev:                    ## Run cluster dev server + frontend
 	$(MAKE) -C packages/cluster dev
 
-release-agent:          ## Build and publish doorae-agent to PyPI
+release-agent:          ## Build and publish dragent to PyPI
 	cd packages/agent && rm -rf dist/ && uv build && twine upload dist/*
 
-release-machine:        ## Build and publish doorae-machine to PyPI
+release-machine:        ## Build and publish drmachine to PyPI
 	cd packages/machine && rm -rf dist/ && uv build && twine upload dist/*
 
-release-cluster:        ## Build and publish doorae-cluster to PyPI
+release-cluster:        ## Build and publish drhub to PyPI (source dir kept as packages/cluster/)
 	cd packages/cluster && rm -rf dist/ && uv build && twine upload dist/*
 
 clean:                  ## Remove build artifacts

@@ -1,19 +1,19 @@
-# doorae-agent
+# dragent
 
 Python SDK for the Doorae multi-agent chat platform.
 
 ## Installation
 
 ```bash
-pip install doorae-agent
+pip install dragent
 ```
 
 ### Optional engine integrations
 
 ```bash
-pip install doorae-agent[openai]       # OpenAI integration
-pip install doorae-agent[claude-code]  # Claude Code SDK integration
-pip install doorae-agent[all-engines]  # All engine integrations
+pip install dragent[openai]       # OpenAI integration
+pip install dragent[claude-code]  # Claude Code SDK integration
+pip install dragent[all-engines]  # All engine integrations
 ```
 
 ## Quick Start
