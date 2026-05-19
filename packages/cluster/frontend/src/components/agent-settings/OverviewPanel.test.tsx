@@ -86,6 +86,14 @@ describe('OverviewPanel', () => {
     expect(screen.getByText('online')).toBeInTheDocument()
   })
 
+  it('shows a running agent as unreachable when its machine is offline', () => {
+    setup({
+      agent: makeAgent({ actual_state: 'running', machine_online: false }),
+    })
+    expect(screen.getByText('unreachable')).toBeInTheDocument()
+    expect(screen.getByLabelText('오프라인 · unreachable')).toBeInTheDocument()
+  })
+
   describe('name inline edit', () => {
     it('commits on blur when the name changed', async () => {
       const { updateAgent } = setup()

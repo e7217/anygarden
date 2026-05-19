@@ -41,7 +41,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   }
 }
 
-function setup(open: boolean = true) {
+function setup(open: boolean = true, agent: Agent = makeAgent()) {
   const updateAgent = vi.fn().mockResolvedValue(makeAgent())
   const fetchAgentFiles = vi.fn().mockResolvedValue([])
   const upsertAgentFile = vi.fn()
@@ -54,7 +54,7 @@ function setup(open: boolean = true) {
   render(
     <MemoryRouter>
       <AgentSettingsDialog
-        agent={makeAgent()}
+        agent={agent}
         open={open}
         onOpenChange={onOpenChange}
         fetchAgentFiles={fetchAgentFiles}
@@ -116,6 +116,11 @@ describe('AgentSettingsDialog', () => {
     expect(screen.queryByTestId('manifest-panel')).toBeNull()
     expect(screen.queryByTestId('rooms-panel')).toBeNull()
     expect(screen.queryByTestId('activity-panel')).toBeNull()
+  })
+
+  it('marks the header presence dot offline when machine_online is false', () => {
+    setup(true, makeAgent({ actual_state: 'running', machine_online: false }))
+    expect(screen.getAllByLabelText('오프라인 · unreachable').length).toBeGreaterThan(0)
   })
 })
 

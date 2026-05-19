@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -28,6 +28,9 @@ from doorae.dependencies import get_admin_identity, get_db
 from doorae.engines import get_engine_entry
 from doorae.rooms.membership import ensure_agent_in_room
 from doorae.scheduler.gateway_secrets import openhands_model_id_for_gateway
+
+if TYPE_CHECKING:
+    from doorae.scheduler.machine_bus import MachineBus
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 
@@ -152,6 +155,7 @@ class AgentOut(BaseModel):
     desired_state: str
     actual_state: str
     placed_on_machine_id: Optional[str] = None
+    machine_online: bool = False
     restart_policy: str
     agents_md: Optional[str] = None
     # Last failure reason as recorded by the lifecycle — surfaced
@@ -193,6 +197,16 @@ class AgentOut(BaseModel):
     # render a toggle without a second query.
     collaboration_mode: str = "solo"
     model_config = {"from_attributes": True, "protected_namespaces": ()}
+
+
+def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
+    out = AgentOut.model_validate(agent)
+    out.machine_online = bool(
+        agent.placed_on_machine_id
+        and machine_bus
+        and machine_bus.is_connected(agent.placed_on_machine_id)
+    )
+    return out
 
 
 class AgentFileOut(BaseModel):
@@ -310,7 +324,7 @@ async def create_agent(
     await lifecycle.request_start(agent.id)
     await db.refresh(agent)
 
-    return agent
+    return _agent_to_out(agent, request.app.state.machine_bus)
 
 
 @router.put("/{agent_id}", response_model=AgentOut)
@@ -435,7 +449,7 @@ async def update_agent(
         lifecycle = request.app.state.agent_lifecycle
         await lifecycle.bump_generation(agent_id)
 
-    return agent
+    return _agent_to_out(agent, request.app.state.machine_bus)
 
 
 # ── agent_files CRUD ────────────────────────────────────────────────
@@ -560,17 +574,20 @@ async def delete_agent_file(
 
 @router.get("", response_model=list[AgentOut])
 async def list_agents(
+    request: Request,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
     """List all agents."""
     result = await db.execute(select(Agent).order_by(Agent.created_at))
-    return list(result.scalars().all())
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    return [_agent_to_out(agent, machine_bus) for agent in result.scalars().all()]
 
 
 @router.get("/{agent_id}", response_model=AgentOut)
 async def get_agent(
     agent_id: str,
+    request: Request,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -584,7 +601,7 @@ async def get_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agent
+    return _agent_to_out(agent, getattr(request.app.state, "machine_bus", None))
 
 
 class EngineInfo(BaseModel):
@@ -821,7 +838,7 @@ async def start_agent(
     await lifecycle.request_start(agent.id)
 
     await db.refresh(agent)
-    return AgentOut.model_validate(agent)
+    return _agent_to_out(agent, request.app.state.machine_bus)
 
 
 # ── Agent room management ───────────────────────────────────────────

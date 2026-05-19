@@ -7,7 +7,7 @@ import {
 } from '@/components/ui/dialog'
 import { Bot, Plus, Minus, Loader2 } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
-import { deriveAgentOnline } from '@/lib/agent-liveness'
+import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 
 interface ManageRoomAgentsDialogProps {
   open: boolean
@@ -103,40 +103,45 @@ export default function ManageRoomAgentsDialog({
                 </p>
               ) : (
                 <ul className="space-y-2">
-                  {inRoom.map(agent => (
-                    <li
-                      key={agent.id}
-                      className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                        <PresenceDot
-                          variant="agent"
-                          online={deriveAgentOnline(agent.actual_state)}
-                          agentState={agent.actual_state}
-                        />
-                        <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
-                        <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
-                        <Badge variant="outline" className={stateBadgeClass(agent.actual_state)}>
-                          {agent.actual_state}
-                        </Badge>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-[var(--color-warning)] hover:text-[var(--color-warning)]"
-                        onClick={() => handleRemove(agent.id)}
-                        disabled={busyAgentId === agent.id}
-                        title="Remove from room"
+                  {inRoom.map(agent => {
+                    const machineOffline = agent.machine_online === false
+                    const online = deriveAgentOnline(agent.actual_state, { machineOffline })
+                    const displayState = agentStatusLabel(agent.actual_state, { machineOffline })
+                    return (
+                      <li
+                        key={agent.id}
+                        className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
                       >
-                        {busyAgentId === agent.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Minus className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </li>
-                  ))}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                          <PresenceDot
+                            variant="agent"
+                            online={online}
+                            agentState={displayState}
+                          />
+                          <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
+                          <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
+                          <Badge variant="outline" className={stateBadgeClass(displayState)}>
+                            {displayState}
+                          </Badge>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-[var(--color-warning)] hover:text-[var(--color-warning)]"
+                          onClick={() => handleRemove(agent.id)}
+                          disabled={busyAgentId === agent.id}
+                          title="Remove from room"
+                        >
+                          {busyAgentId === agent.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Minus className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>
@@ -152,40 +157,45 @@ export default function ManageRoomAgentsDialog({
                 </p>
               ) : (
                 <ul className="space-y-2">
-                  {available.map(agent => (
-                    <li
-                      key={agent.id}
-                      className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                        <PresenceDot
-                          variant="agent"
-                          online={deriveAgentOnline(agent.actual_state)}
-                          agentState={agent.actual_state}
-                        />
-                        <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
-                        <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
-                        <Badge variant="outline" className={stateBadgeClass(agent.actual_state)}>
-                          {agent.actual_state}
-                        </Badge>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-[var(--color-success)] hover:text-[var(--color-success)]"
-                        onClick={() => handleAdd(agent.id)}
-                        disabled={busyAgentId === agent.id}
-                        title="Add to room"
+                  {available.map(agent => {
+                    const machineOffline = agent.machine_online === false
+                    const online = deriveAgentOnline(agent.actual_state, { machineOffline })
+                    const displayState = agentStatusLabel(agent.actual_state, { machineOffline })
+                    return (
+                      <li
+                        key={agent.id}
+                        className="flex items-center justify-between bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)]"
                       >
-                        {busyAgentId === agent.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Plus className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </li>
-                  ))}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Bot className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
+                          <PresenceDot
+                            variant="agent"
+                            online={online}
+                            agentState={displayState}
+                          />
+                          <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
+                          <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
+                          <Badge variant="outline" className={stateBadgeClass(displayState)}>
+                            {displayState}
+                          </Badge>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-[var(--color-success)] hover:text-[var(--color-success)]"
+                          onClick={() => handleAdd(agent.id)}
+                          disabled={busyAgentId === agent.id}
+                          title="Add to room"
+                        >
+                          {busyAgentId === agent.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Plus className="h-4 w-4" />
+                          )}
+                        </Button>
+                      </li>
+                    )
+                  })}
                 </ul>
               )}
             </div>
