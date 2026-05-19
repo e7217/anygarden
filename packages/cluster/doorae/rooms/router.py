@@ -54,6 +54,7 @@ from doorae.rooms.shared_files import (
     InvalidFilenameError,
     UnsupportedMimeError,
 )
+from doorae.rooms.unread import compute_has_updates_map, mark_room_read
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
 
@@ -100,6 +101,10 @@ class RoomOut(BaseModel):
     # sidebar doesn't apply to them.
     pinned: bool = False
     sort_order: Optional[int] = None
+    # Caller-specific unread-update bit (#385). This is intentionally
+    # a boolean, not a count: the sidebar only needs to show whether
+    # the room has activity since the user's last read cursor.
+    has_updates: bool = False
     # #148 — when True the server stamps ``metadata.ingest_only=True``
     # on ambient (un-addressed) broadcasts so peer agents pick up the
     # text as background context. Part 1 only surfaces storage; Part 3
@@ -185,6 +190,11 @@ class PinOrderOut(BaseModel):
     pinned_room_ids: list[str]
 
 
+class MarkReadOut(BaseModel):
+    room_id: str
+    last_read_message_seq: Optional[int] = None
+
+
 # -- Endpoints ----------------------------------------------------------------
 
 
@@ -256,6 +266,7 @@ async def list_rooms(
     # registered users — the other identity kinds keep the default
     # ``pinned=False``.
     pin_state: dict[str, tuple[bool, Optional[int]]] = {}
+    has_updates: dict[str, bool] = {}
     if identity.kind == "user" and rooms:
         room_ids = [r.id for r in rooms]
         pin_result = await db.execute(
@@ -270,6 +281,9 @@ async def list_rooms(
         )
         for row in pin_result.all():
             pin_state[row[0]] = (bool(row[1]), row[2])
+        has_updates = await compute_has_updates_map(
+            db, user_id=identity.id, room_ids=room_ids
+        )
 
     out: list[RoomOut] = []
     for r in rooms:
@@ -285,6 +299,7 @@ async def list_rooms(
                 representative_agent_id=r.representative_agent_id,
                 pinned=pinned,
                 sort_order=sort_order,
+                has_updates=has_updates.get(r.id, False),
                 context_window_enabled=r.context_window_enabled,
                 speaker_strategy=r.speaker_strategy,
                 orchestrator_agent_id=r.orchestrator_agent_id,
@@ -292,6 +307,33 @@ async def list_rooms(
             )
         )
     return out
+
+
+@router.post("/{room_id}/read", response_model=MarkReadOut)
+async def mark_room_read_endpoint(
+    room_id: str,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> MarkReadOut:
+    """Mark the caller's room messages as read up to the latest seq."""
+    if identity.kind != "user":
+        raise HTTPException(status_code=403, detail="Only users can mark rooms read")
+
+    seq = await mark_room_read(db, user_id=identity.id, room_id=room_id)
+    if seq is None:
+        participant = (
+            await db.execute(
+                select(Participant.id).where(
+                    Participant.room_id == room_id,
+                    Participant.user_id == identity.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if participant is None:
+            raise HTTPException(status_code=403, detail="Not a member of this room")
+
+    await db.commit()
+    return MarkReadOut(room_id=room_id, last_read_message_seq=seq)
 
 
 @router.get("/{room_id}", response_model=RoomDetailOut)

@@ -512,6 +512,12 @@ class Participant(Base):
     sort_order: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, default=None
     )
+    # Sidebar unread-update marker (#385). Stores the highest
+    # room-local message seq this user has seen. NULL means the
+    # room has never been marked read by this participant.
+    last_read_message_seq: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True, default=None
+    )
 
     # ``foreign_keys`` disambiguates the join after #159 Phase A
     # introduced ``Room.next_speaker_participant_id`` — otherwise

@@ -13,6 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
+import UpdateDot from '@/components/UpdateDot'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
@@ -687,7 +688,8 @@ export default function Sidebar({
                         kind="agent"
                         size="xs"
                       />
-                      <span className="truncate">{label}</span>
+                      <span className="min-w-0 truncate">{label}</span>
+                      {dm.has_updates && <UpdateDot className="ml-auto" />}
                     </button>
                   )
                 })}
@@ -850,7 +852,8 @@ function RoomTreeNodeView({
           data-testid={`sidebar-room-${node.room.id}`}
         >
           <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-          <span className="truncate">{node.room.name}</span>
+          <span className="min-w-0 truncate">{node.room.name}</span>
+          {node.room.has_updates && <UpdateDot className="ml-auto" />}
         </button>
         {canPin && (
           <button
@@ -1126,6 +1129,7 @@ function AgentDMListAdmin({
         // chevron (plan §3.2 decision 5). Two+ DMs render a collapsible
         // tree with the DM list underneath.
         const hasMultipleDMs = agentDms.length > 1
+        const agentHasUpdates = hasMultipleDMs && agentDms.some(dm => dm.has_updates)
         const isExpanded = !hasMultipleDMs || expandedAgents.has(agent.id)
         // For single-DM agents the row itself navigates to the DM so
         // the clickable area feels identical to the pre-#237 behaviour.
@@ -1181,17 +1185,21 @@ function AgentDMListAdmin({
                   online={online}
                   agentState={displayState}
                 />
-                <span className="truncate" title={agent.name}>
+                <span className="min-w-0 truncate" title={agent.name}>
                   {agent.name}
                 </span>
+                {soloDM?.has_updates && <UpdateDot className="ml-auto" />}
                 {hasMultipleDMs && (
                   // #243 — hide the DM count on hover so the space is
                   // handed back to the name while the action buttons
                   // (``+`` new DM + ``⋯`` settings) are revealed. On
                   // mouse-out the badge fades back in; the information
                   // is never lost, only toggled with the user's intent.
-                  <span className="ml-auto shrink-0 rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)] group-hover:hidden">
-                    {agentDms.length}
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5 group-hover:hidden">
+                    {agentHasUpdates && <UpdateDot />}
+                    <span className="rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)]">
+                      {agentDms.length}
+                    </span>
                   </span>
                 )}
               </button>
@@ -1253,7 +1261,7 @@ function AgentDMListAdmin({
                         className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-[13px] font-medium transition-colors"
                       >
                         <MessageSquare className="h-3 w-3 shrink-0" />
-                        <span className="truncate">{label}</span>
+                        <span className="min-w-0 truncate">{label}</span>
                         {dm.ephemeral && (
                           <span
                             className="shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
@@ -1262,6 +1270,7 @@ function AgentDMListAdmin({
                             임시
                           </span>
                         )}
+                        {dm.has_updates && <UpdateDot className="ml-auto" />}
                       </button>
                       <SidebarRoomMenu
                         roomId={dm.id}
@@ -1296,7 +1305,8 @@ function AgentDMListAdmin({
               kind="agent"
               size="xs"
             />
-            <span className="truncate">{label}</span>
+            <span className="min-w-0 truncate">{label}</span>
+            {dm.has_updates && <UpdateDot className="ml-auto" />}
           </button>
         )
       })}
@@ -1400,7 +1410,8 @@ function PinnedRoomItem({
         data-testid={`sidebar-pinned-${room.id}`}
       >
         <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-        <span className="truncate">{room.name}</span>
+        <span className="min-w-0 truncate">{room.name}</span>
+        {room.has_updates && <UpdateDot className="ml-auto" />}
       </button>
       <button
         type="button"

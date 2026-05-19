@@ -60,7 +60,15 @@ export default function ChatPage() {
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
   const selectedRoom = roomId ?? null
-  const { projects, rooms, agentDMs, fetchRooms, fetchAgentDMs, setRoomEphemeral } = useRooms()
+  const {
+    projects,
+    rooms,
+    agentDMs,
+    fetchRooms,
+    fetchAgentDMs,
+    setRoomEphemeral,
+    markRoomRead,
+  } = useRooms()
   const { user } = useAuth()
   const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(selectedRoom)
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
@@ -152,6 +160,19 @@ export default function ChatPage() {
 
   // #115 — Ctrl/Cmd+B now lives inside <Sidebar>'s useEffect so the
   // shortcut binds only on routes that render Sidebar.
+
+  useEffect(() => {
+    if (!selectedRoom) return
+    void markRoomRead(selectedRoom)
+  }, [selectedRoom, markRoomRead])
+
+  useEffect(() => {
+    if (!selectedRoom || messages.length === 0) return
+    const timer = window.setTimeout(() => {
+      void markRoomRead(selectedRoom)
+    }, 1500)
+    return () => window.clearTimeout(timer)
+  }, [selectedRoom, messages.length, markRoomRead])
 
   // Fetch room details to get participants with display_name/kind
   useEffect(() => {

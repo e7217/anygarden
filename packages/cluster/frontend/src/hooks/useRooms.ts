@@ -40,6 +40,9 @@ export interface Room {
   // system_prompt) not to write to its long-term memory file in
   // this room. Trust-model signal, not a hard FS guard.
   ephemeral?: boolean;
+  // Caller-specific sidebar update state (#385). True means this
+  // user has not marked the room read at the latest message seq.
+  has_updates?: boolean;
 }
 
 // Fetch state machine for the projects+rooms store.
@@ -104,6 +107,9 @@ interface RoomsContextValue {
   /** #237 — PATCH the room's ephemeral flag. Optimistic update on
    *  local state so the room header reflects the change instantly. */
   setRoomEphemeral: (roomId: string, ephemeral: boolean) => Promise<void>;
+  /** #385 — mark a room read for the current user and clear the
+   *  sidebar update dot locally when the server accepts it. */
+  markRoomRead: (roomId: string) => Promise<void>;
 }
 
 const RoomsContext = createContext<RoomsContextValue | null>(null);
@@ -181,6 +187,12 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
       console.warn('RoomsProvider.fetchAgentDMs failed (silent)', e);
     }
   }, []);
+
+  const refreshSidebarRooms = useCallback(() => {
+    if (localStorage.getItem('doorae_is_guest') === '1') return;
+    projects.forEach(p => { void fetchRooms(p.id); });
+    void fetchAgentDMs();
+  }, [projects, fetchRooms, fetchAgentDMs]);
 
   // ---- Explicit refetch -------------------------------------
   //
@@ -477,6 +489,33 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     [applyRoomPatch],
   );
 
+  const clearRoomUpdates = useCallback((roomId: string) => {
+    setAgentDMs(prev =>
+      prev.map(r => (r.id === roomId ? { ...r, has_updates: false } : r)),
+    );
+    setRooms(prev => {
+      const out: Record<string, Room[]> = { ...prev };
+      for (const [pid, list] of Object.entries(prev)) {
+        out[pid] = list.map(r =>
+          r.id === roomId ? { ...r, has_updates: false } : r,
+        );
+      }
+      return out;
+    });
+  }, []);
+
+  const markRoomRead = useCallback(async (roomId: string) => {
+    if (localStorage.getItem('doorae_is_guest') === '1') return;
+    try {
+      const resp = await apiFetch(`/api/v1/rooms/${roomId}/read`, {
+        method: 'POST',
+      });
+      if (resp.ok) clearRoomUpdates(roomId);
+    } catch (e) {
+      console.warn(`RoomsProvider.markRoomRead(${roomId}) failed (silent)`, e);
+    }
+  }, [clearRoomUpdates]);
+
   // ---- Boot cascade -----------------------------------------
   //
   // Initial mount runs ``refetch`` so ``status`` reaches
@@ -497,6 +536,21 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     projects.forEach(p => { void fetchRooms(p.id); });
   }, [projects, fetchRooms]);
+
+  // #385 — keep sidebar update dots reasonably fresh even when the
+  // current tab is idle: poll once a minute and refresh immediately
+  // when the user returns to a visible tab.
+  useEffect(() => {
+    const intervalId = window.setInterval(refreshSidebarRooms, 60_000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshSidebarRooms();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [refreshSidebarRooms]);
 
   // Server-pushed membership changes (see
   // ws/protocol.py::RoomMembershipChangedOut) arrive on whichever
@@ -598,7 +652,8 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     reorderPinnedRooms,
     createAgentDM,
     setRoomEphemeral,
-  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms, createAgentDM, setRoomEphemeral]);
+    markRoomRead,
+  }), [projects, rooms, agentDMs, status, fetchProjects, fetchRooms, fetchAgentDMs, refetch, createProject, deleteProject, createRoom, createSubRoom, pinRoom, reorderPinnedRooms, createAgentDM, setRoomEphemeral, markRoomRead]);
 
   // JSX is deliberately avoided here to keep this file a ``.ts``
   // (not ``.tsx``) so the import shape of existing callers stays

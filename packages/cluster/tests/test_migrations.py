@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "039"
+                assert version == "040"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -71,6 +71,12 @@ class TestMigrations:
                 }
                 missing = expected - tables
                 assert not missing, f"Missing tables after upgrade: {missing}"
+
+                participant_columns = {
+                    row[1]: row[2]
+                    for row in conn.execute(text("PRAGMA table_info(participants)"))
+                }
+                assert participant_columns["last_read_message_seq"].upper() == "BIGINT"
             engine.dispose()
         finally:
             try:
@@ -398,7 +404,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "039"
+                assert version == "040"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -438,7 +444,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "039"
+                assert version == "040"
             sync_engine.dispose()
         finally:
             try:
@@ -472,7 +478,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "039"
+            assert head == "040"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -574,7 +580,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "039"
+                assert version == "040"
             sync_engine.dispose()
         finally:
             try:
