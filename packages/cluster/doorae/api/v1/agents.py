@@ -607,6 +607,8 @@ async def get_agent(
 class EngineInfo(BaseModel):
     engine: str
     machine_count: int
+    deprecated: bool = False
+    deprecation_note: Optional[str] = None
 
 
 @router.get("/engines/available", response_model=list[EngineInfo])
@@ -628,7 +630,18 @@ async def list_available_engines(
         .order_by(MachineEngine.engine)
     )
     rows = (await db.execute(stmt)).all()
-    return [EngineInfo(engine=row.engine, machine_count=row.machine_count) for row in rows]
+    infos: list[EngineInfo] = []
+    for row in rows:
+        entry = get_engine_entry(row.engine)
+        infos.append(
+            EngineInfo(
+                engine=row.engine,
+                machine_count=row.machine_count,
+                deprecated=entry.deprecated if entry else False,
+                deprecation_note=entry.deprecation_note if entry else None,
+            )
+        )
+    return infos
 
 
 class EngineModelOut(BaseModel):
@@ -647,6 +660,8 @@ class EngineCatalogOut(BaseModel):
     default_model: str
     models: list[EngineModelOut]
     reasoning_levels: list[str]
+    deprecated: bool = False
+    deprecation_note: Optional[str] = None
 
 
 @router.get("/engines/{engine}/models", response_model=EngineCatalogOut)
@@ -724,6 +739,8 @@ async def get_engine_models(
         default_model=entry.default_model,
         models=models,
         reasoning_levels=list(entry.reasoning_levels),
+        deprecated=entry.deprecated,
+        deprecation_note=entry.deprecation_note,
     )
 
 

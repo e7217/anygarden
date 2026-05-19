@@ -12,7 +12,7 @@ from doorae.app import create_app
 from doorae.auth.jwt import create_user_token
 from doorae.config import DooraeSettings
 from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, User
+from doorae.db.models import Base, Machine, MachineEngine, User
 from doorae.engines import (
     ENGINE_CATALOG,
     get_engine_entry,
@@ -73,35 +73,29 @@ class TestCatalog:
 class TestDeprecationFields:
     """Issue #355 Phase 6 — catalog can flag legacy engines.
 
-    The flag itself stays ``False`` for every engine until Phase 5
-    validation (``docs/decisions/005-openhands-validation-plan.md``)
-    clears the four decision criteria. This test class verifies the
-    *infrastructure* (field presence, helper behaviour) so a future
-    PR can flip the flag without re-justifying the schema change.
+    Issue #382 flips ``claude-code`` after the Anthropic Agent SDK
+    credit split made non-interactive CLI orchestration a cost risk.
+    Other engines remain non-deprecated until a separate decision
+    explicitly moves them.
     """
 
     def test_default_deprecated_false_for_all_engines(self) -> None:
-        # Pre-validation invariant: nothing is yet flagged. If this
-        # fails after validation runs, that's a feature — update the
-        # test to assert the new expected state.
         for name, entry in ENGINE_CATALOG.items():
-            assert entry.deprecated is False, (
-                f"engine {name!r} marked deprecated before Phase 5 "
-                "validation lands; verify "
-                "docs/decisions/005-openhands-validation-plan.md "
-                "decision criteria before flipping"
-            )
+            assert entry.deprecated is (name == "claude-code")
 
     def test_default_deprecation_note_none(self) -> None:
-        for entry in ENGINE_CATALOG.values():
-            assert entry.deprecation_note is None
+        for name, entry in ENGINE_CATALOG.items():
+            if name == "claude-code":
+                assert entry.deprecation_note is not None
+                assert "OpenHands" in entry.deprecation_note
+            else:
+                assert entry.deprecation_note is None
 
     def test_is_deprecated_helper(self) -> None:
         # Unknown engine — caller-friendly False.
         assert is_deprecated("no-such-engine") is False
-        # Every catalog entry is currently False.
         for name in ENGINE_CATALOG:
-            assert is_deprecated(name) is False
+            assert is_deprecated(name) is (name == "claude-code")
 
     def test_entry_can_carry_deprecation_metadata(self) -> None:
         """Frozen dataclass accepts the new fields when constructed.
@@ -146,6 +140,7 @@ async def catalog_env():
         token = create_user_token(
             admin.id, admin.email, admin.is_admin, secret=config.jwt_secret
         )
+        admin_id = admin.id
 
     app = create_app(config)
     app.state.engine = engine
@@ -154,7 +149,7 @@ async def catalog_env():
     transport = ASGITransport(app=app)
     client = AsyncClient(transport=transport, base_url="http://test")
     try:
-        yield {"client": client, "token": token}
+        yield {"client": client, "token": token, "admin_id": admin_id}
     finally:
         await client.aclose()
         await engine.dispose()
@@ -178,6 +173,25 @@ class TestEngineModelsEndpoint:
         assert "gpt-5.5" in model_ids
         assert "gpt-5.4" in model_ids
         assert "gpt-5.4-mini" in model_ids
+        assert data["deprecated"] is False
+        assert data["deprecation_note"] is None
+
+    @pytest.mark.asyncio
+    async def test_get_claude_code_models_exposes_deprecation_metadata(
+        self, catalog_env
+    ) -> None:
+        client = catalog_env["client"]
+        token = catalog_env["token"]
+
+        resp = await client.get(
+            "/api/v1/agents/engines/claude-code/models",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["engine"] == "claude-code"
+        assert data["deprecated"] is True
+        assert "OpenHands" in data["deprecation_note"]
 
     @pytest.mark.asyncio
     async def test_get_unknown_engine_returns_404(self, catalog_env) -> None:
@@ -214,6 +228,41 @@ class TestEngineModelsEndpoint:
         assert "xhigh" in gpt54["reasoning_levels"]
         gpt52 = next(m for m in data["models"] if m["id"] == "gpt-5.2")
         assert "xhigh" not in gpt52["reasoning_levels"]
+
+
+class TestAvailableEnginesEndpoint:
+    @pytest.mark.asyncio
+    async def test_available_engines_expose_deprecation_metadata(
+        self, catalog_env
+    ) -> None:
+        factory = catalog_env["client"]._transport.app.state.session_factory
+        async with factory() as db:
+            machine = Machine(
+                name="worker",
+                hostname="worker.local",
+                owner_user_id=catalog_env["admin_id"],
+                status="online",
+            )
+            db.add(machine)
+            await db.flush()
+            db.add_all(
+                [
+                    MachineEngine(machine_id=machine.id, engine="claude-code"),
+                    MachineEngine(machine_id=machine.id, engine="codex"),
+                ]
+            )
+            await db.commit()
+
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/available",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        assert resp.status_code == 200
+        rows = {row["engine"]: row for row in resp.json()}
+        assert rows["claude-code"]["deprecated"] is True
+        assert "OpenHands" in rows["claude-code"]["deprecation_note"]
+        assert rows["codex"]["deprecated"] is False
+        assert rows["codex"]["deprecation_note"] is None
 
 
 # ── Issue #359 — gateway model merge ────────────────────────────────

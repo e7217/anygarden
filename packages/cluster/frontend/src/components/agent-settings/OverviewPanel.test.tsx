@@ -44,6 +44,8 @@ function makeClaudeCatalog(): EngineCatalog {
       { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', reasoning_levels: [] },
     ],
     reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    deprecated: true,
+    deprecation_note: 'Legacy CLI engine; prefer OpenHands for new agents.',
   }
 }
 
@@ -92,6 +94,16 @@ describe('OverviewPanel', () => {
     })
     expect(screen.getByText('unreachable')).toBeInTheDocument()
     expect(screen.getByLabelText('오프라인 · unreachable')).toBeInTheDocument()
+  })
+
+  it('renders Deprecated badge when the engine catalog flags deprecated', async () => {
+    setup()
+    const badge = await screen.findByText('Deprecated')
+    expect(badge).toBeInTheDocument()
+    expect(badge).toHaveAttribute(
+      'title',
+      'Legacy CLI engine; prefer OpenHands for new agents.',
+    )
   })
 
   describe('name inline edit', () => {

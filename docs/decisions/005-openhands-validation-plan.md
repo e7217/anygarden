@@ -157,6 +157,22 @@ If any of (1)–(4) fail, document the gap in this file and either
 fix in a follow-up PR before flipping deprecation, or accept the
 tradeoff explicitly.
 
+## 2026-05-19 operational flip (Issue #382)
+
+`claude-code` was flipped to `deprecated=True` ahead of Phase 5
+technical validation data. The trigger is not the A-E scenario
+matrix above; it is Anthropic's 2026-06-15 Agent SDK credit split.
+Subscription-based non-interactive `claude` usage from third-party
+orchestrators such as Doorae draws from a separate $20-$200/month
+pool, with overflow billed at API rates. That cost trajectory is
+incompatible with multi-agent orchestration regardless of the
+technical comparison outcome.
+
+Phase 5 technical validation remains tracked separately. Results
+should still be backfilled in the `Results` sections as runs
+complete; a passing technical track is additive context, not a
+precondition for this operational flip.
+
 ## Recording results
 
 Append a new section below as runs complete:
