@@ -98,6 +98,7 @@ async def agents_env():
                 "admin": admin,
                 "regular": regular,
                 "machine": machine,
+                "bus": bus,
             }
 
     await engine.dispose()
@@ -184,6 +185,67 @@ class TestAgentsAPI:
         assert len(data) >= 1
         names = [a["name"] for a in data]
         assert "list-agent" in names
+
+    @pytest.mark.asyncio
+    async def test_agent_responses_include_machine_online(self, agents_env) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        bus = agents_env["bus"]
+        machine = agents_env["machine"]
+
+        create = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "machine-aware"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create.status_code == 201
+        created = create.json()
+        assert created["placed_on_machine_id"] == machine.id
+        assert created["machine_online"] is True
+
+        listed = await client.get(
+            "/api/v1/agents",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert listed.status_code == 200
+        listed_agent = next(a for a in listed.json() if a["id"] == created["id"])
+        assert listed_agent["machine_online"] is True
+
+        await bus.unregister(machine.id)
+
+        fetched = await client.get(
+            f"/api/v1/agents/{created['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert fetched.status_code == 200
+        assert fetched.json()["machine_online"] is False
+
+    @pytest.mark.asyncio
+    async def test_agent_without_machine_is_not_machine_online(self, agents_env) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="unplaced-running",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=None,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        resp = await client.get(
+            f"/api/v1/agents/{agent_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["placed_on_machine_id"] is None
+        assert data["machine_online"] is False
 
     @pytest.mark.asyncio
     async def test_delete_agent(self, agents_env) -> None:

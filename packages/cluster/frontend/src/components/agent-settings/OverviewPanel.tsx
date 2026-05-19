@@ -25,7 +25,7 @@ import { Input } from '@/components/ui/input'
 import { Copy, Check, AlertCircle } from 'lucide-react'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
-import { deriveAgentOnline } from '@/lib/agent-liveness'
+import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
 
@@ -174,6 +174,10 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       </div>
     )
   }
+
+  const machineOffline = agent.machine_online === false
+  const agentOnline = deriveAgentOnline(agent.actual_state, { machineOffline })
+  const displayState = agentStatusLabel(agent.actual_state, { machineOffline })
 
   const commitName = async () => {
     const trimmed = nameDraft.trim()
@@ -591,11 +595,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
         <dd className="flex items-center gap-2">
           <PresenceDot
             variant="agent"
-            online={deriveAgentOnline(agent.actual_state)}
-            agentState={agent.actual_state}
+            online={agentOnline}
+            agentState={displayState}
           />
           <span className="text-[var(--color-foreground)]">
-            {agent.actual_state}
+            {displayState}
           </span>
         </dd>
       </dl>

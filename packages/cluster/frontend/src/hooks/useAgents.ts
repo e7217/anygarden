@@ -8,6 +8,7 @@ export interface Agent {
   desired_state: string;
   actual_state: string;
   placed_on_machine_id?: string;
+  machine_online?: boolean;
   restart_policy: string;
   // Phase 0 file manifest. `agents_md` is the per-agent system
   // prompt / role / rules body the materializer writes into

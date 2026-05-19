@@ -5,7 +5,7 @@ import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
 import { apiFetch } from '@/lib/api'
-import { deriveAgentOnline } from '@/lib/agent-liveness'
+import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
@@ -1119,7 +1119,9 @@ function AgentDMListAdmin({
   return (
     <div className="flex flex-col gap-0.5">
       {[...grouped.byAgent.values()].map(({ agent, dms: agentDms }) => {
-        const online = deriveAgentOnline(agent.actual_state)
+        const machineOffline = agent.machine_online === false
+        const online = deriveAgentOnline(agent.actual_state, { machineOffline })
+        const displayState = agentStatusLabel(agent.actual_state, { machineOffline })
         // Adaptive: single-DM agents render inline without a toggle
         // chevron (plan §3.2 decision 5). Two+ DMs render a collapsible
         // tree with the DM list underneath.
@@ -1177,7 +1179,7 @@ function AgentDMListAdmin({
                 <PresenceDot
                   variant="agent"
                   online={online}
-                  agentState={agent.actual_state}
+                  agentState={displayState}
                 />
                 <span className="truncate" title={agent.name}>
                   {agent.name}

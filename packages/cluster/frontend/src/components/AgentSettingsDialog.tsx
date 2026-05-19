@@ -28,7 +28,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
-import { deriveAgentOnline } from '@/lib/agent-liveness'
+import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
@@ -164,6 +164,10 @@ export default function AgentSettingsDialog({
   fetchEngineCatalog,
   onRoomsChange,
 }: Props) {
+  const machineOffline = agent?.machine_online === false
+  const agentOnline = deriveAgentOnline(agent?.actual_state, { machineOffline })
+  const displayState = agentStatusLabel(agent?.actual_state, { machineOffline })
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
@@ -175,8 +179,8 @@ export default function AgentSettingsDialog({
                 <span className="text-[var(--color-foreground-subtle)]">—</span>
                 <PresenceDot
                   variant="agent"
-                  online={deriveAgentOnline(agent.actual_state)}
-                  agentState={agent.actual_state}
+                  online={agentOnline}
+                  agentState={displayState}
                 />
                 <span className="truncate max-w-[20rem]">
                   {agent.name}
