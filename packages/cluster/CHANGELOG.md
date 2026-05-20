@@ -3,6 +3,70 @@
 
 ## Unreleased
 
+## v0.7.0 (2026-05-20)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `doorae-cluster` to `drhub`
+  ([#387](https://github.com/e7217/doorae/pull/387)). Python import
+  path, CLI command (`doorae-server`), source directory, and
+  CHANGELOG history unchanged.
+
+### Features
+
+- OpenHands V1 SDK migration Phases 0–6 — in-process Python agent
+  runtime alternative to CLI engines
+  ([#355](https://github.com/e7217/doorae/pull/355),
+  [#356](https://github.com/e7217/doorae/pull/356)).
+- Wire `engine_secrets` + gateway model merge for OpenHands Ollama
+  path ([#359](https://github.com/e7217/doorae/pull/359),
+  [#361](https://github.com/e7217/doorae/pull/361)).
+- Mark `claude-code` engine deprecated; admin UI surfaces a
+  Deprecated badge with migration hint
+  ([#382](https://github.com/e7217/doorae/pull/382),
+  [#388](https://github.com/e7217/doorae/pull/388)).
+- Shared file references in chat — inline highlighting + sidebar
+  ([#376](https://github.com/e7217/doorae/pull/376),
+  [#378](https://github.com/e7217/doorae/pull/378)).
+- Sidebar unread update indicators
+  ([#385](https://github.com/e7217/doorae/pull/385),
+  [#386](https://github.com/e7217/doorae/pull/386)).
+- Expose machine online status on agent rows
+  ([#383](https://github.com/e7217/doorae/pull/383),
+  [#384](https://github.com/e7217/doorae/pull/384)).
+
+### Fixes
+
+- **Orchestrator strategy: server-side fallback nominate** when
+  the moderator LLM omits handoff/mention tokens — round-robin
+  rotation prevents silent room stalls
+  ([#389](https://github.com/e7217/doorae/pull/389)).
+- Auto-reset OpenHands agents on cluster startup
+  ([#379](https://github.com/e7217/doorae/pull/379),
+  [#380](https://github.com/e7217/doorae/pull/380)).
+- OpenHands runtime tools registration, gateway provider rewrite,
+  detector visibility
+  ([#377](https://github.com/e7217/doorae/pull/377)).
+- Increase litellm health-probe timeout (10s → 30s)
+  ([#362](https://github.com/e7217/doorae/pull/362),
+  [#363](https://github.com/e7217/doorae/pull/363)).
+- Add `llm_gateway_binary` config knob to escape PATH-shadowed
+  bare `litellm` ([#364](https://github.com/e7217/doorae/pull/364),
+  [#365](https://github.com/e7217/doorae/pull/365)).
+- Prevent stale auth token websocket reconnect loops
+  ([#371](https://github.com/e7217/doorae/pull/371)).
+- Cache `doorae_token` per-agent so `sync_batch` frame rebuilds
+  don't orphan it ([#369](https://github.com/e7217/doorae/pull/369),
+  [#370](https://github.com/e7217/doorae/pull/370)).
+
+### Docs
+
+- README overview + Mermaid "How It Works" diagram
+  ([#381](https://github.com/e7217/doorae/pull/381)).
+- Deep-research note documenting multi-agent turn-taking mediator
+  failure modes and mitigation roadmap
+  (`docs/research/2026-05-12-multi-agent-turn-taking-mediator-failure.md`).
+
 ## v0.6.0 (2026-05-06)
 
 ### Features — autonomous responsibility & Goals UI (#302)

@@ -3,6 +3,39 @@
 
 ## Unreleased
 
+## v0.7.0 (2026-05-20)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `doorae-agent` to `dragent`
+  ([#387](https://github.com/e7217/doorae/pull/387)). Python import
+  path (`doorae_agent`), CLI commands (`doorae-agent`,
+  `doorae-client`), and source directory unchanged.
+
+### Features
+
+- OpenHands V1 SDK adapter — in-process Python runtime alternative
+  to CLI engines, ships with `openhands-sdk` + `openhands-tools`
+  (TerminalTool / FileEditorTool / TaskTrackerTool / DelegateTool)
+  ([#355](https://github.com/e7217/doorae/pull/355),
+  [#356](https://github.com/e7217/doorae/pull/356)).
+- Register runtime tools with the OpenHands adapter so user queries
+  that need shell/file work don't terminate after a single text turn
+  ([#377](https://github.com/e7217/doorae/pull/377)).
+- Shared file references in chat (agent side)
+  ([#376](https://github.com/e7217/doorae/pull/376)).
+
+### Fixes
+
+- OpenHands: capture user-facing reply from `FinishAction` tool path
+  ([#375](https://github.com/e7217/doorae/pull/375)).
+- OpenHands: capture assistant text from `MessageEvent.llm_message`
+  ([#372](https://github.com/e7217/doorae/pull/372),
+  [#373](https://github.com/e7217/doorae/pull/373)).
+- OpenHands: pass `api_key` explicitly so the LLM caches the right
+  token ([#366](https://github.com/e7217/doorae/pull/366),
+  [#367](https://github.com/e7217/doorae/pull/367)).
+
 ### Changed — agent cwd assumptions (#345)
 
 - codex, gemini-cli, and claude-code adapters now assume the Python

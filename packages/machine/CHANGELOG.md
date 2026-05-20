@@ -3,6 +3,31 @@
 
 ## Unreleased
 
+## v0.7.0 (2026-05-20)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `doorae-machine` to `drmachine`
+  ([#387](https://github.com/e7217/doorae/pull/387)). Python import
+  path, CLI command (`doorae-machine`), and source directory
+  unchanged.
+
+### Features
+
+- Detect OpenHands SDK as a Python-import engine so the in-process
+  Python runtime is advertised to the agent-creation UI
+  ([#357](https://github.com/e7217/doorae/pull/357),
+  [#358](https://github.com/e7217/doorae/pull/358)).
+- Register runtime tools (`TerminalTool` / `FileEditorTool` /
+  `TaskTrackerTool` / `DelegateTool`) for OpenHands; rewrite gateway
+  provider detection visibility
+  ([#377](https://github.com/e7217/doorae/pull/377)).
+
+### Fixes
+
+- Prevent stale auth token websocket reconnect loops
+  ([#371](https://github.com/e7217/doorae/pull/371)).
+
 ### Changed — writable agent skills (#350)
 
 - Treat `skills/` as agent-owned runtime content after initial seeding:

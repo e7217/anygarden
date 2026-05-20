@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "drmachine"
-version = "0.6.0"
+version = "0.7.0"
 description = "Machine daemon for Doorae agent orchestration"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
