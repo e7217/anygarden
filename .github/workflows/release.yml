@@ -54,10 +54,14 @@ jobs:
           cache-dependency-glob: "**/pyproject.toml"
 
       - name: Build sdist + wheel
-        working-directory: packages/${{ steps.parse.outputs.package }}
         run: |
           rm -rf dist/
-          uv build
+          # uv writes build artifacts to the workspace root `dist/`
+          # regardless of the directory `uv build` is invoked from, so
+          # run from repo root and select the package by name. This
+          # also keeps the per-package dist isolated to just this
+          # tag's artifacts.
+          uv build --package "dr${{ steps.parse.outputs.name }}"
 
       - name: Resolve previous tag for same package
         id: prev
@@ -79,7 +83,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NAME="${{ steps.parse.outputs.name }}"
-          PKG="${{ steps.parse.outputs.package }}"
           VERSION="${{ steps.parse.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           ARGS=(
@@ -90,4 +93,4 @@ jobs:
           if [ -n "${PREV_TAG}" ]; then
             ARGS+=(--notes-start-tag "${PREV_TAG}")
           fi
-          gh release create "${ARGS[@]}" packages/${PKG}/dist/*
+          gh release create "${ARGS[@]}" dist/dr${NAME}-${VERSION}*
