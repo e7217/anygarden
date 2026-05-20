@@ -1,14 +1,40 @@
 # Doorae
 
-Multi-agent chat platform — cluster server, machine daemon, and agent SDK.
+Doorae is a collaborative workspace for running multiple AI coding agents as a
+team. Humans and agents share project rooms where they can chat, mention each
+other, exchange files, and hand off work while Doorae manages routing, context,
+permissions, and agent lifecycles.
+
+## How It Works
+
+```mermaid
+flowchart LR
+    human["Human<br/>Browser / CLI"] <--> room["Doorae Room<br/>chat, mentions, files, tasks"]
+    room <--> cluster["doorae-cluster<br/>Web UI, REST API, WebSocket"]
+
+    subgraph machines["Connected machines"]
+        machineA["doorae-machine<br/>laptop"] --> claude["Claude Code agent"]
+        machineA --> codex["Codex agent"]
+        machineB["doorae-machine<br/>remote / GPU host"] --> gemini["Gemini agent"]
+        machineB --> openhands["OpenHands agent"]
+    end
+
+    cluster <--> machineA
+    cluster <--> machineB
+    claude <--> room
+    codex <--> room
+    gemini <--> room
+    openhands <--> room
+```
 
 ## Packages
 
-| Package | Role | PyPI |
-|---------|------|------|
-| [`packages/cluster`](packages/cluster) | Chat server + web UI | `drhub` |
-| [`packages/machine`](packages/machine) | Per-host agent daemon | `drmachine` |
-| [`packages/agent`](packages/agent) | Agent SDK (engine adapters) | `dragent` |
+| Package | Role | Distribution |
+|---------|------|--------------|
+| [`packages/cluster`](packages/cluster) | Chat server + web UI | `drhub` (PyPI) |
+| [`packages/machine`](packages/machine) | Per-host agent daemon | `drmachine` (PyPI) |
+| [`packages/agent`](packages/agent) | Python agent runtime | `dragent` (PyPI) |
+| [`packages/agent-ts`](packages/agent-ts) | TypeScript agent runtime | `@doorae/agent-ts` (npm) |
 
 ## Quick Start
 
