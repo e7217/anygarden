@@ -1,6 +1,6 @@
-# doorae-machine
+# drmachine
 
-Machine daemon for Doorae agent orchestration. Connects to the doorae-server via WebSocket and manages agent subprocesses on the local machine.
+Machine daemon for Doorae agent orchestration. Connects to the drhub server via WebSocket and manages agent subprocesses on the local machine.
 
 ## Installation
 

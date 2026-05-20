@@ -6,9 +6,9 @@ Multi-agent chat platform — cluster server, machine daemon, and agent SDK.
 
 | Package | Role | PyPI |
 |---------|------|------|
-| [`packages/cluster`](packages/cluster) | Chat server + web UI | `doorae-cluster` |
-| [`packages/machine`](packages/machine) | Per-host agent daemon | `doorae-machine` |
-| [`packages/agent`](packages/agent) | Agent SDK (engine adapters) | `doorae-agent` |
+| [`packages/cluster`](packages/cluster) | Chat server + web UI | `drhub` |
+| [`packages/machine`](packages/machine) | Per-host agent daemon | `drmachine` |
+| [`packages/agent`](packages/agent) | Agent SDK (engine adapters) | `dragent` |
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ make dev
 configures `core.hooksPath=.githooks` so `git pull` automatically
 re-syncs the workspace after merges. Without this, `.venv/bin/*`
 can go stale after a pull and the machine daemon will silently
-fall back to PyPI-cached builds of `doorae-agent` that lag behind
+fall back to PyPI-cached builds of `dragent` that lag behind
 engine-adapter fixes.
 
 Environment variables (`DOORAE_JWT_SECRET`, `DOORAE_MCP_SECRETS_KEY`,
