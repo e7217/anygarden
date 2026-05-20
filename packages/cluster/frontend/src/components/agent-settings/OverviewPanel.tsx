@@ -22,6 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { Copy, Check, AlertCircle } from 'lucide-react'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
@@ -42,6 +43,9 @@ type CatalogState =
 // Match AdminMachines.tsx so the two dialogs render identical selects.
 const SELECT_CSS =
   'flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60'
+
+const DEPRECATED_BADGE_CSS =
+  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[10px] text-[var(--color-warning)]'
 
 // The `Agent.avatar_kind` column is typed as a loose `string` (it's
 // open-ended at the DB layer), but EntityAvatar only understands
@@ -459,7 +463,18 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
         </dd>
 
         <dt className="text-[var(--color-foreground-muted)]">Engine</dt>
-        <dd className="text-[var(--color-foreground)]">{agent.engine}</dd>
+        <dd className="flex items-center gap-2 text-[var(--color-foreground)]">
+          <span>{agent.engine}</span>
+          {catalogState.kind === 'ready' && catalogState.catalog.deprecated ? (
+            <Badge
+              variant="outline"
+              className={DEPRECATED_BADGE_CSS}
+              title={catalogState.catalog.deprecation_note ?? undefined}
+            >
+              Deprecated
+            </Badge>
+          ) : null}
+        </dd>
 
         {/* #217 — Model + Reasoning editing. Rows only render when
             the catalog resolved successfully; unknown/loading engines

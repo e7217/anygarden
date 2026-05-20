@@ -49,6 +49,9 @@ const ENGINE_LABELS: Record<string, string> = {
   'anthropic': 'Anthropic API',
 }
 
+const DEPRECATED_BADGE_CSS =
+  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[10px] text-[var(--color-warning)]'
+
 function statusDot(status: string) {
   if (status === 'online' || status === 'running') return 'bg-[var(--color-success)]'
   if (status === 'draining' || status === 'starting' || status === 'pending') return 'bg-[var(--color-warning)]'
@@ -71,6 +74,7 @@ export default function AdminMachines() {
     pendingIds,
     deleteAgent, updateAgent, fetchAgentFiles, upsertAgentFile, deleteAgentFile,
     fetchAttachedSkills, fetchSkillPreview,
+    availableEngines,
   } = useAgents()
   const { projects, rooms: roomsByProject, fetchAgentDMs } = useRooms()
 
@@ -182,6 +186,33 @@ export default function AdminMachines() {
   const [agentCatalog, setAgentCatalog] = useState<EngineCatalog | null>(null)
   const [agentRooms, setAgentRooms] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
+
+  const engineMetadataById = useMemo(() => {
+    const map = new Map<string, (typeof availableEngines)[number]>()
+    for (const engine of availableEngines) map.set(engine.engine, engine)
+    return map
+  }, [availableEngines])
+
+  const sortedMachineEngines = useMemo(
+    () =>
+      machineEngines
+        .map((info, index) => ({ info, index }))
+        .sort((a, b) => {
+          const aDeprecated =
+            engineMetadataById.get(a.info.engine)?.deprecated === true
+          const bDeprecated =
+            engineMetadataById.get(b.info.engine)?.deprecated === true
+          if (aDeprecated !== bDeprecated) return aDeprecated ? 1 : -1
+          return a.index - b.index
+        })
+        .map(item => item.info),
+    [engineMetadataById, machineEngines],
+  )
+
+  const preferredMachineEngine = sortedMachineEngines[0]?.engine ?? ''
+  const selectedAgentEngineMeta = agentEngine
+    ? engineMetadataById.get(agentEngine)
+    : undefined
 
   // Keep the model/reasoning catalog in sync with the selected engine.
   // Resetting model + reasoning on every change prevents a stale
@@ -490,11 +521,25 @@ export default function AdminMachines() {
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Engines</span>
                   <div className="flex flex-wrap gap-1 mt-0.5">
-                    {machineEngines.map(e => (
-                      <Badge key={e.engine} variant="outline" className="text-xs">
-                        {ENGINE_LABELS[e.engine] ?? e.engine}
-                      </Badge>
-                    ))}
+                    {machineEngines.map(e => {
+                      const engineMeta = engineMetadataById.get(e.engine)
+                      return (
+                        <span key={e.engine} className="inline-flex items-center gap-1">
+                          <Badge variant="outline" className="text-xs">
+                            {ENGINE_LABELS[e.engine] ?? e.engine}
+                          </Badge>
+                          {engineMeta?.deprecated ? (
+                            <Badge
+                              variant="outline"
+                              className={DEPRECATED_BADGE_CSS}
+                              title={engineMeta.deprecation_note ?? undefined}
+                            >
+                              Deprecated
+                            </Badge>
+                          ) : null}
+                        </span>
+                      )
+                    })}
                     {machineEngines.length === 0 && <span className="text-[var(--color-foreground-subtle)]">-</span>}
                   </div>
                 </div>
@@ -520,7 +565,9 @@ export default function AdminMachines() {
                   size="sm"
                   onClick={() => {
                     setCreateAgentOpen(true)
-                    if (machineEngines.length > 0 && !agentEngine) setAgentEngine(machineEngines[0].engine)
+                    if (preferredMachineEngine && !agentEngine) {
+                      setAgentEngine(preferredMachineEngine)
+                    }
                   }}
                   disabled={selectedMachine.status !== 'online'}
                 >
@@ -815,12 +862,24 @@ export default function AdminMachines() {
               <Label>Engine</Label>
               <select value={agentEngine} onChange={e => setAgentEngine(e.target.value)} className={selectCSS}>
                 <option value="" disabled>Select engine</option>
-                {machineEngines.map(e => (
-                  <option key={e.engine} value={e.engine}>
-                    {ENGINE_LABELS[e.engine] ?? e.engine}
-                  </option>
-                ))}
+                {sortedMachineEngines.map(e => {
+                  const label = ENGINE_LABELS[e.engine] ?? e.engine
+                  const deprecated = engineMetadataById.get(e.engine)?.deprecated === true
+                  return (
+                    <option key={e.engine} value={e.engine}>
+                      {deprecated ? `${label} (Deprecated)` : label}
+                    </option>
+                  )
+                })}
               </select>
+              {selectedAgentEngineMeta?.deprecated ? (
+                <p
+                  className="text-xs text-[var(--color-warning)]"
+                  title={selectedAgentEngineMeta.deprecation_note ?? undefined}
+                >
+                  Deprecated engine. OpenHands is recommended for new agents.
+                </p>
+              ) : null}
             </div>
             {agentCatalog && agentCatalog.models.length > 0 && (
               <div className="space-y-2">

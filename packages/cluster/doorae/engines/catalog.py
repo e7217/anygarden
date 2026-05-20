@@ -179,6 +179,8 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             ),
         ),
         reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+        deprecated=True,
+        deprecation_note="Legacy CLI engine; prefer OpenHands for new agents.",
     ),
     # Gemini CLI: no reasoning-effort flag at the CLI layer. The
     # Doorae adapter (``packages/agent/doorae_agent/integrations/

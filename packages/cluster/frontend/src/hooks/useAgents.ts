@@ -60,11 +60,15 @@ export interface EngineCatalog {
   default_model: string;
   models: EngineModel[];
   reasoning_levels: string[];
+  deprecated?: boolean;
+  deprecation_note?: string | null;
 }
 
 export interface AvailableEngine {
   engine: string;
   machine_count: number;
+  deprecated?: boolean;
+  deprecation_note?: string | null;
 }
 
 export interface AgentFile {
