@@ -222,6 +222,117 @@ async def _apply_orchestrator_handoff(
     return target_pid
 
 
+async def _apply_orchestrator_fallback_nominate(
+    db: AsyncSession,
+    *,
+    room_id: str,
+    content: str,
+    metadata: dict[str, Any],
+    orchestrator_agent_id: str | None,
+    sender_agent_id: str | None,
+    current_speaker_index: int,
+) -> tuple[int, str] | None:
+    """Server-side safety net for ``orchestrator`` strategy rooms when
+    the moderator LLM emits a message *without* a valid handoff
+    (no ``[HANDOFF]`` prefix that ``_apply_orchestrator_handoff``
+    accepts, and no addressable mention parsed into metadata).
+
+    Returns ``(new_index, next_speaker_participant_id)`` when a
+    fallback nomination was applied, or ``None`` when no action was
+    taken.
+
+    Background: docs/research/2026-05-12-multi-agent-turn-taking-
+    mediator-failure.md documents an LLM failure pattern where the
+    orchestrator nails the first handoff but omits the mention token
+    from the second onward (instruction-following decay + format-task
+    interference). Without this fallback, the room silently stalls —
+    every participant sees the message as ``ingest_only`` and no one
+    is triggered to reply. The fallback rotates to the next non-
+    orchestrator participant so the conversation keeps moving.
+
+    Acceptance rules (every one must hold):
+
+    1. The room has a valid ``orchestrator_agent_id``.
+    2. The sender is the orchestrator agent. Worker messages don't
+       trigger the safety net — they're routed via mention parsing.
+    3. ``content`` does not start with ``[종료]``. The orchestrator's
+       explicit termination marker is respected; no nominate is made
+       so the room comes to rest. Other prefixes like ``[HANDOFF]``,
+       ``[DELEGATED]``, ``[ROOM_QUERY]`` are handled upstream — if
+       they succeed they stamp ``next_speaker_participant_id`` which
+       rule 4 below short-circuits on, and if they fail the room
+       genuinely needs the fallback.
+    4. ``metadata.next_speaker_participant_id`` is not already set.
+       A successful ``_apply_orchestrator_handoff`` upstream stamps
+       this; we never override an explicit nomination.
+    5. ``metadata.mentions`` contains no ``type=user`` or
+       ``type=legacy`` entry. An addressable mention means the
+       moderator did address someone and the agent-side rule 3 will
+       route normally — no fallback needed.
+
+    On success the helper:
+
+    - Updates ``Room.current_speaker_index`` and
+      ``next_speaker_participant_id`` in the caller's DB transaction.
+    - Mutates ``metadata`` in place to add
+      ``next_speaker_participant_id``. The broadcast carries this
+      stamp so agent-side ``decide_policy`` rule 4a (O2) wakes the
+      nominated participant.
+
+    Round-robin pool excludes the orchestrator itself — the moderator
+    role is "distribute speaking turns", and nominating yourself
+    would loop on the same failure. If the pool is empty (only the
+    orchestrator is present, or no agent participants beyond the
+    orchestrator), the helper returns ``None`` and the message just
+    flows as ingest_only.
+    """
+    if not orchestrator_agent_id:
+        return None
+    if sender_agent_id != orchestrator_agent_id:
+        return None
+    # Explicit termination — respect the orchestrator's wrap-up.
+    if content.startswith("[종료]"):
+        return None
+    # Upstream handoff already nominated — never override.
+    if metadata.get("next_speaker_participant_id"):
+        return None
+    # Addressable mention exists — mention routing will handle it.
+    mentions = metadata.get("mentions") or []
+    for m in mentions:
+        if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
+            return None
+
+    # Round-robin among non-orchestrator agent participants. Stable
+    # order mirrors ``_compute_round_robin_next`` (joined_at, id) so
+    # the rotation matches user expectations from the standard
+    # round_robin strategy.
+    rows = (
+        await db.execute(
+            select(Participant.id, Participant.agent_id)
+            .where(Participant.room_id == room_id)
+            .where(Participant.agent_id.isnot(None))
+            .where(Participant.agent_id != orchestrator_agent_id)
+            .order_by(Participant.joined_at.asc(), Participant.id.asc())
+        )
+    ).all()
+    if not rows:
+        return None
+
+    new_index = (current_speaker_index + 1) % len(rows)
+    next_pid: str = rows[new_index][0]
+
+    await db.execute(
+        sa_update(Room)
+        .where(Room.id == room_id)
+        .values(
+            current_speaker_index=new_index,
+            next_speaker_participant_id=next_pid,
+        )
+    )
+    metadata["next_speaker_participant_id"] = next_pid
+    return new_index, next_pid
+
+
 async def _compute_round_robin_next(
     db: AsyncSession,
     *,
@@ -1021,6 +1132,41 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         orchestrator_agent_id=orchestrator_agent_id,
                         sender_agent_id=sender_agent_id,
                     )
+
+                    # Orchestrator fallback nominate — when the
+                    # moderator emits a non-terminal message without
+                    # a valid handoff or addressable mention, the
+                    # server rotates to the next non-orchestrator
+                    # participant via round-robin so the room never
+                    # silently stalls on LLM instruction-following
+                    # decay. See
+                    # ``_apply_orchestrator_fallback_nominate`` and
+                    # docs/research/2026-05-12-multi-agent-turn-
+                    # taking-mediator-failure.md for the failure
+                    # mode this defends against (V1-V5 PoC observed
+                    # the orchestrator omit the mention token from
+                    # the second handoff onward in 5/5 trials, even
+                    # with persona reinforcement).
+                    if speaker_strategy == "orchestrator":
+                        fallback_info = (
+                            await _apply_orchestrator_fallback_nominate(
+                                db,
+                                room_id=room_id,
+                                content=frame_in.content,
+                                metadata=metadata,
+                                orchestrator_agent_id=orchestrator_agent_id,
+                                sender_agent_id=sender_agent_id,
+                                current_speaker_index=current_speaker_index,
+                            )
+                        )
+                        if fallback_info is not None:
+                            new_index, next_pid = fallback_info
+                            logger.warning(
+                                "orchestrator_fallback_nominate",
+                                room_id=room_id,
+                                next_participant_id=next_pid,
+                                new_index=new_index,
+                            )
 
                     # #313 — auto-route response detection. If this
                     # message carries the rep agent's reply to an
