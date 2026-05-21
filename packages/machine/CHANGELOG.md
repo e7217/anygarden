@@ -3,6 +3,16 @@
 
 ## Unreleased
 
+## v0.7.1 (2026-05-21)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `drmachine` to `anygarden-machine`
+  — service rebrand to anygarden. `drmachine` 0.7.0 will be yanked
+  after this release publishes. Python import path
+  (`doorae_machine`), CLI command (`doorae-machine`), and source
+  directory unchanged.
+
 ## v0.7.0 (2026-05-20)
 
 ### Release infrastructure

@@ -3,9 +3,9 @@ name: Release
 on:
   push:
     tags:
-      - 'dragent-v*'
-      - 'drhub-v*'
-      - 'drmachine-v*'
+      - 'anygarden-v*'
+      - 'anygarden-machine-v*'
+      - 'anygarden-agent-v*'
 
 permissions:
   contents: write
@@ -23,20 +23,25 @@ jobs:
         id: parse
         run: |
           TAG="${GITHUB_REF_NAME}"
-          NAME="${TAG#dr}"
-          NAME="${NAME%-v*}"
+          # Format: anygarden-v<ver>, anygarden-machine-v<ver>, anygarden-agent-v<ver>
+          DIST_NAME="${TAG%-v*}"
           VERSION="${TAG##*-v}"
-          # PyPI distribution name is drhub, but the source lives in
-          # packages/cluster/ — keep the directory layout stable and
-          # map the published name here instead of renaming the dir.
-          case "${NAME}" in
-            hub) PKG="cluster" ;;
-            *)   PKG="${NAME}" ;;
+          # PyPI distribution name → packages/<dir> mapping. The cluster
+          # package publishes as bare `anygarden`; the directory is still
+          # packages/cluster/ so the source layout stays stable.
+          case "${DIST_NAME}" in
+            anygarden)         PKG="cluster" ;;
+            anygarden-machine) PKG="machine" ;;
+            anygarden-agent)   PKG="agent" ;;
+            *)
+              echo "::error::Unknown tag prefix: ${DIST_NAME}"
+              exit 1
+              ;;
           esac
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "dist_name=${DIST_NAME}" >> "$GITHUB_OUTPUT"
           echo "package=${PKG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Tag: ${TAG} -> name=${NAME}, package=${PKG}, version=${VERSION}"
+          echo "Tag: ${TAG} -> dist=${DIST_NAME}, package=${PKG}, version=${VERSION}"
 
       - name: Verify pyproject version matches tag
         working-directory: packages/${{ steps.parse.outputs.package }}
@@ -56,41 +61,44 @@ jobs:
       - name: Build sdist + wheel
         run: |
           rm -rf dist/
-          # uv writes build artifacts to the workspace root `dist/`
-          # regardless of the directory `uv build` is invoked from, so
-          # run from repo root and select the package by name. This
-          # also keeps the per-package dist isolated to just this
-          # tag's artifacts.
-          uv build --package "dr${{ steps.parse.outputs.name }}"
+          # uv writes workspace-member artifacts to the workspace root
+          # `dist/` regardless of cwd, so run from repo root and select
+          # by distribution name.
+          uv build --package "${{ steps.parse.outputs.dist_name }}"
 
       - name: Resolve previous tag for same package
         id: prev
         run: |
-          NAME="${{ steps.parse.outputs.name }}"
+          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
           CURRENT="${GITHUB_REF_NAME}"
-          PREV=$(git tag --list "dr${NAME}-v*" --sort=-version:refname \
+          PREV=$(git tag --list "${DIST_NAME}-v*" --sort=-version:refname \
             | grep -vx "${CURRENT}" \
             | head -n1 || true)
           echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
           if [ -n "${PREV}" ]; then
-            echo "Previous dr${NAME} tag: ${PREV}"
+            echo "Previous ${DIST_NAME} tag: ${PREV}"
           else
-            echo "No previous dr${NAME} tag found - this is the first release for the package."
+            echo "No previous ${DIST_NAME} tag found - this is the first release for the package."
           fi
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NAME="${{ steps.parse.outputs.name }}"
+          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
           VERSION="${{ steps.parse.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
+          # uv normalizes hyphens to underscores in wheel/sdist
+          # filenames (PEP 491/625), so anygarden-machine ships as
+          # anygarden_machine-<ver>-*.whl. Translate the distribution
+          # name to the filename form before globbing.
+          FILE_PREFIX="${DIST_NAME//-/_}"
           ARGS=(
             "${GITHUB_REF_NAME}"
-            --title "dr${NAME} v${VERSION}"
+            --title "${DIST_NAME} v${VERSION}"
             --generate-notes
           )
           if [ -n "${PREV_TAG}" ]; then
             ARGS+=(--notes-start-tag "${PREV_TAG}")
           fi
-          gh release create "${ARGS[@]}" dist/dr${NAME}-${VERSION}*
+          gh release create "${ARGS[@]}" dist/${FILE_PREFIX}-${VERSION}*

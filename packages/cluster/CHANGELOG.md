@@ -3,6 +3,16 @@
 
 ## Unreleased
 
+## v0.7.1 (2026-05-21)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `drhub` to `anygarden` — service
+  rebrand to anygarden. `drhub` 0.7.0 will be yanked after this
+  release publishes on PyPI. Python import path (`doorae`), CLI
+  command (`doorae-server`), source directory, and CHANGELOG history
+  unchanged.
+
 ## v0.7.0 (2026-05-20)
 
 ### Release infrastructure

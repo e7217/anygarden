@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "drhub"
-version = "0.7.0"
+name = "anygarden"
+version = "0.7.1"
 description = "Lightweight multi-agent chat server"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
@@ -33,7 +33,7 @@ dependencies = [
     "cryptography>=42",
     "tomli-w>=1.0",
     # #197 — LiteLLM gateway config.yaml rendering. Was previously
-    # available only transitively via drmachine; pinned directly
+    # available only transitively via anygarden-machine; pinned directly
     # now that llm_gateway/config_writer.py consumes it.
     "pyyaml>=6.0",
     # #302 — cron parsing for the autonomous responsibility scheduler
@@ -53,7 +53,7 @@ dev = [
     # Required by tests/test_e2e_materialize.py — validates the
     # cross-package spawn-frame → materialize pipeline. Sourced from
     # the sibling monorepo path via [tool.uv.sources] below.
-    "drmachine",
+    "anygarden-machine",
 ]
 
 [project.scripts]
@@ -63,7 +63,7 @@ doorae-server = "doorae.cli:main"
 packages = ["doorae"]
 
 [tool.uv.sources]
-drmachine = { workspace = true }
+anygarden-machine = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

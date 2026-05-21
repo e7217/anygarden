@@ -16,6 +16,6 @@ members = ["packages/*"]
 exclude = ["packages/agent-ts"]
 
 [tool.uv.sources]
-dragent = { workspace = true }
-drhub = { workspace = true }
-drmachine = { workspace = true }
+anygarden = { workspace = true }
+anygarden-agent = { workspace = true }
+anygarden-machine = { workspace = true }
