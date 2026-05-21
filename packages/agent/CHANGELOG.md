@@ -3,6 +3,18 @@
 
 ## Unreleased
 
+## v0.7.1 (2026-05-21)
+
+### Release infrastructure
+
+- **Renamed PyPI distribution** from `dragent` to `anygarden-agent` —
+  service rebrand to anygarden. The `dragent` name was rejected by
+  PyPI's similarity check (`"dragent" is too similar to existing
+  project "dr-agent"`), so v0.7.0 never published on PyPI; v0.7.1 is
+  the first PyPI release under the anygarden line. Python import
+  path (`doorae_agent`), CLI commands (`doorae-agent`,
+  `doorae-client`), and source directory unchanged.
+
 ## v0.7.0 (2026-05-20)
 
 ### Release infrastructure

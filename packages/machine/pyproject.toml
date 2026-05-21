@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "drmachine"
-version = "0.7.0"
+name = "anygarden-machine"
+version = "0.7.1"
 description = "Machine daemon for Doorae agent orchestration"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"

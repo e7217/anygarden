@@ -23,14 +23,14 @@ lint:                   ## Run ruff across all packages
 dev:                    ## Run cluster dev server + frontend
 	$(MAKE) -C packages/cluster dev
 
-release-agent:          ## Build and publish dragent to PyPI
-	cd packages/agent && rm -rf dist/ && uv build && twine upload dist/*
+release-agent:          ## Build and publish anygarden-agent to PyPI
+	rm -rf dist/ && uv build --package anygarden-agent && twine upload dist/anygarden_agent-*
 
-release-machine:        ## Build and publish drmachine to PyPI
-	cd packages/machine && rm -rf dist/ && uv build && twine upload dist/*
+release-machine:        ## Build and publish anygarden-machine to PyPI
+	rm -rf dist/ && uv build --package anygarden-machine && twine upload dist/anygarden_machine-*
 
-release-cluster:        ## Build and publish drhub to PyPI (source dir kept as packages/cluster/)
-	cd packages/cluster && rm -rf dist/ && uv build && twine upload dist/*
+release-cluster:        ## Build and publish anygarden to PyPI (source dir kept as packages/cluster/)
+	rm -rf dist/ && uv build --package anygarden && twine upload dist/anygarden-*
 
 clean:                  ## Remove build artifacts
 	find . -type d -name __pycache__ -exec rm -rf {} +

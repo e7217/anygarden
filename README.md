@@ -31,9 +31,9 @@ flowchart LR
 
 | Package | Role | Distribution |
 |---------|------|--------------|
-| [`packages/cluster`](packages/cluster) | Chat server + web UI | `drhub` (PyPI) |
-| [`packages/machine`](packages/machine) | Per-host agent daemon | `drmachine` (PyPI) |
-| [`packages/agent`](packages/agent) | Python agent runtime | `dragent` (PyPI) |
+| [`packages/cluster`](packages/cluster) | Chat server + web UI | `anygarden` (PyPI) |
+| [`packages/machine`](packages/machine) | Per-host agent daemon | `anygarden-machine` (PyPI) |
+| [`packages/agent`](packages/agent) | Python agent runtime | `anygarden-agent` (PyPI) |
 | [`packages/agent-ts`](packages/agent-ts) | TypeScript agent runtime | `@doorae/agent-ts` (npm) |
 
 ## Quick Start
@@ -50,7 +50,7 @@ make dev
 configures `core.hooksPath=.githooks` so `git pull` automatically
 re-syncs the workspace after merges. Without this, `.venv/bin/*`
 can go stale after a pull and the machine daemon will silently
-fall back to PyPI-cached builds of `dragent` that lag behind
+fall back to PyPI-cached builds of `anygarden-agent` that lag behind
 engine-adapter fixes.
 
 Environment variables (`DOORAE_JWT_SECRET`, `DOORAE_MCP_SECRETS_KEY`,
