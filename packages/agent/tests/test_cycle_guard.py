@@ -6,7 +6,7 @@ from collections import deque
 
 import pytest
 
-from doorae_agent.integrations.cycle_guard import (
+from anygarden_agent.integrations.cycle_guard import (
     hash_content,
     is_cycle_detected,
 )

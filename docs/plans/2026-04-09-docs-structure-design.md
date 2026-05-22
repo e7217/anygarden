@@ -1,4 +1,4 @@
-# Doorae 문서 구조 설계
+# Anygarden 문서 구조 설계
 
 ## 개요
 
@@ -50,5 +50,5 @@ frontmatter(id, title, status, date) + Context/Decision/Consequences
 
 ## 스킬
 
-`doorae-status` 스킬: 코드베이스를 스캔하여 STATUS.md를 자동 갱신
-`doorae-api-doc` 스킬: FastAPI 라우터를 파싱하여 API.md를 자동 갱신
+`anygarden-status` 스킬: 코드베이스를 스캔하여 STATUS.md를 자동 갱신
+`anygarden-api-doc` 스킬: FastAPI 라우터를 파싱하여 API.md를 자동 갱신

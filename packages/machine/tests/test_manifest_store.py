@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from doorae_machine.manifest_store import ManifestStore
-from doorae_machine.protocol.frames import SyncDesiredStateFrame
+from anygarden_machine.manifest_store import ManifestStore
+from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -299,11 +299,11 @@ class TestManifestStoreUpdateDesiredState:
 
 
 class TestManifestStoreDefaultRoot:
-    """ManifestStore uses ~/.doorae/agents by default."""
+    """ManifestStore uses ~/.anygarden/agents by default."""
 
-    def test_default_root_is_home_dotdoorae_agents(self) -> None:
+    def test_default_root_is_home_dotanygarden_agents(self) -> None:
         store = ManifestStore()
-        expected = Path.home() / ".doorae" / "agents"
+        expected = Path.home() / ".anygarden" / "agents"
         assert store.agents_root == expected
 
 

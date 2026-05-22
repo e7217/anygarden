@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import (
+from anygarden.db.models import (
     Agent,
     AgentFile,
     Machine,
@@ -17,7 +17,7 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.db.repository import append_message, replay_since_seq
+from anygarden.db.repository import append_message, replay_since_seq
 
 
 # ── Helper to create common fixtures ──────────────────────────────────
@@ -63,15 +63,15 @@ class TestProjectCRUD:
 class TestUserCRUD:
     @pytest.mark.asyncio
     async def test_create_user(self, db: AsyncSession) -> None:
-        u = await _make_user(db, "alice@doorae.io")
+        u = await _make_user(db, "alice@anygarden.io")
         result = await db.execute(select(User).where(User.id == u.id))
         fetched = result.scalar_one()
-        assert fetched.email == "alice@doorae.io"
+        assert fetched.email == "alice@anygarden.io"
 
     @pytest.mark.asyncio
     async def test_user_email_unique(self, db: AsyncSession) -> None:
-        await _make_user(db, "dup@doorae.io")
-        db.add(User(email="dup@doorae.io", password_hash="x"))
+        await _make_user(db, "dup@anygarden.io")
+        db.add(User(email="dup@anygarden.io", password_hash="x"))
         with pytest.raises(IntegrityError):
             await db.flush()
 
@@ -107,8 +107,8 @@ class TestUserCRUD:
         self, db: AsyncSession
     ) -> None:
         """Registered users still cannot share an email — regression check."""
-        await _make_user(db, "registered@doorae.io")
-        db.add(User(email="registered@doorae.io", password_hash="x"))
+        await _make_user(db, "registered@anygarden.io")
+        db.add(User(email="registered@anygarden.io", password_hash="x"))
         with pytest.raises(IntegrityError):
             await db.flush()
 
@@ -118,7 +118,7 @@ class TestUserCRUD:
     ) -> None:
         """is_anonymous defaults to False so existing callers keep
         producing registered rows."""
-        u = await _make_user(db, "notguest@doorae.io")
+        u = await _make_user(db, "notguest@anygarden.io")
         assert u.is_anonymous is False
         assert u.display_name is None
 
@@ -144,7 +144,7 @@ class TestRoomCRUD:
 class TestMachineCRUD:
     @pytest.mark.asyncio
     async def test_create_machine(self, db: AsyncSession) -> None:
-        user = await _make_user(db, "owner@doorae.io")
+        user = await _make_user(db, "owner@anygarden.io")
         machine = Machine(
             name="dev-box",
             hostname="dev.local",
@@ -253,7 +253,7 @@ class TestAgentFileCRUD:
 class TestParticipantCRUD:
     @pytest.mark.asyncio
     async def test_create_participant_with_user(self, db: AsyncSession) -> None:
-        user = await _make_user(db, "part@doorae.io")
+        user = await _make_user(db, "part@anygarden.io")
         proj = await _make_project(db)
         room = await _make_room(db, proj.id)
         p = Participant(room_id=room.id, user_id=user.id, role="member")
@@ -266,7 +266,7 @@ class TestParticipantCRUD:
 class TestMessageAndSeq:
     @pytest.mark.asyncio
     async def test_append_message_assigns_seq(self, db: AsyncSession) -> None:
-        user = await _make_user(db, "msg@doorae.io")
+        user = await _make_user(db, "msg@anygarden.io")
         proj = await _make_project(db)
         room = await _make_room(db, proj.id)
         part = Participant(room_id=room.id, user_id=user.id)
@@ -280,7 +280,7 @@ class TestMessageAndSeq:
 
     @pytest.mark.asyncio
     async def test_replay_since_seq(self, db: AsyncSession) -> None:
-        user = await _make_user(db, "replay@doorae.io")
+        user = await _make_user(db, "replay@anygarden.io")
         proj = await _make_project(db)
         room = await _make_room(db, proj.id)
         part = Participant(room_id=room.id, user_id=user.id)
@@ -297,7 +297,7 @@ class TestMessageAndSeq:
     @pytest.mark.asyncio
     async def test_seq_unique_per_room(self, db: AsyncSession) -> None:
         """Messages in different rooms can share the same seq number."""
-        user = await _make_user(db, "seq@doorae.io")
+        user = await _make_user(db, "seq@anygarden.io")
         proj = await _make_project(db)
         r1 = await _make_room(db, proj.id, "room-a")
         r2 = await _make_room(db, proj.id, "room-b")

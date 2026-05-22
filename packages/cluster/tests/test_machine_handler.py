@@ -10,9 +10,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -23,16 +23,16 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.auth.machine_token import generate_machine_token, hash_machine_token
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.ws.machine_handler import _authenticate_machine, _handle_register
+from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.ws.machine_handler import _authenticate_machine, _handle_register
 
 
 @pytest_asyncio.fixture()
 async def handler_env():
     """Set up DB with a machine, valid token, agent, room, and participant."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -125,7 +125,7 @@ class TestMachineHandler:
             result = await _authenticate_machine(
                 db,
                 machine.id,
-                f"doorae.v1, bearer.{token}",
+                f"anygarden.v1, bearer.{token}",
             )
             assert result is True
 
@@ -139,7 +139,7 @@ class TestMachineHandler:
             result = await _authenticate_machine(
                 db,
                 machine.id,
-                "doorae.v1, bearer.mch_bad_token_here",
+                "anygarden.v1, bearer.mch_bad_token_here",
             )
             assert result is False
 

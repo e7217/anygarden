@@ -7,7 +7,7 @@ import { useEffect, useState, useCallback } from 'react'
  *   1. REST ``GET /rooms/{id}`` on mount — supplies the initial
  *      snapshot via ``seed``.
  *   2. WS ``presence_update`` frames — rebroadcast by
- *      ``useWebSocket`` on the ``doorae:presence:update`` window
+ *      ``useWebSocket`` on the ``anygarden:presence:update`` window
  *      event. We listen once per ``roomId`` and merge by
  *      ``participant_id``.
  *
@@ -88,8 +88,8 @@ export function useParticipantPresence(
   )
 
   useEffect(() => {
-    window.addEventListener('doorae:presence:update', onEvent)
-    return () => window.removeEventListener('doorae:presence:update', onEvent)
+    window.addEventListener('anygarden:presence:update', onEvent)
+    return () => window.removeEventListener('anygarden:presence:update', onEvent)
   }, [onEvent])
 
   return state

@@ -6,7 +6,7 @@
 // upgrade and smoke test manually.
 //
 // Python reference:
-// ``packages/agent/doorae_agent/integrations/claude_code.py``. The
+// ``packages/agent/anygarden_agent/integrations/claude_code.py``. The
 // equivalent Python class keeps one session id per ``room_id`` and
 // passes ``resume=<sid>`` on follow-up turns so context persists
 // within a room. We do the same here with a per-room

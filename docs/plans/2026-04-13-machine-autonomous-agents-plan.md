@@ -14,47 +14,47 @@
 
 ## File Structure
 
-### doorae-machine (new files)
+### anygarden-machine (new files)
 
 | File | Responsibility |
 |------|---------------|
-| `doorae_machine/manifest_store.py` | Read/write/list `manifest.json` under `~/.doorae/agents/<id>/` |
-| `doorae_machine/crash_budget.py` | Per-agent crash rate limiter (timestamps in sliding window) |
+| `anygarden_machine/manifest_store.py` | Read/write/list `manifest.json` under `~/.anygarden/agents/<id>/` |
+| `anygarden_machine/crash_budget.py` | Per-agent crash rate limiter (timestamps in sliding window) |
 | `tests/test_manifest_store.py` | ManifestStore unit tests |
 | `tests/test_crash_budget.py` | CrashBudget unit tests |
 
-### doorae-machine (modified files)
+### anygarden-machine (modified files)
 
 | File | Changes |
 |------|---------|
-| `doorae_machine/protocol/frames.py` | Add new frame models, update `ServerFrame`/`MachineFrame` unions, update parser |
-| `doorae_machine/daemon.py` | Replace `_handle_spawn`/`_handle_kill` with `_handle_sync_desired_state`/`_handle_sync_batch`/`_handle_token_grant`; change heartbeat to `report_actual_state`; add reconnect sequence with token_request; wire ManifestStore + CrashBudget |
-| `doorae_machine/spawner.py` | Add `get_running(agent_id)` accessor; no other structural changes |
+| `anygarden_machine/protocol/frames.py` | Add new frame models, update `ServerFrame`/`MachineFrame` unions, update parser |
+| `anygarden_machine/daemon.py` | Replace `_handle_spawn`/`_handle_kill` with `_handle_sync_desired_state`/`_handle_sync_batch`/`_handle_token_grant`; change heartbeat to `report_actual_state`; add reconnect sequence with token_request; wire ManifestStore + CrashBudget |
+| `anygarden_machine/spawner.py` | Add `get_running(agent_id)` accessor; no other structural changes |
 | `tests/test_daemon.py` | Update tests for new frame handlers |
 | `tests/test_spawner.py` | Update `spawn_msg` fixture to new frame type |
 
-### doorae-server (modified files)
+### anygarden-server (modified files)
 
 | File | Changes |
 |------|---------|
-| `doorae/db/models.py` | Add `generation: int` column to `Agent`, add `max_restarts`/`restart_window_seconds` columns |
-| `doorae/scheduler/lifecycle.py` | Rewrite `request_start` → send `sync_desired_state`; remove `on_agent_crashed` restart logic; add `handle_token_request`, `handle_request_replacement`, `handle_report_actual_state`; add `_build_sync_frame` helper |
-| `doorae/ws/machine_handler.py` | Replace heartbeat/agent_* frame handlers with `report_actual_state`, `token_request`, `request_replacement`; add `sync_batch` sending on reconnect |
-| `doorae/app.py` | Remove stale-state reset in lifespan; add optional stale-machine background task |
-| `doorae/api/v1/agents.py` | Increment `generation` on config-changing updates |
+| `anygarden/db/models.py` | Add `generation: int` column to `Agent`, add `max_restarts`/`restart_window_seconds` columns |
+| `anygarden/scheduler/lifecycle.py` | Rewrite `request_start` → send `sync_desired_state`; remove `on_agent_crashed` restart logic; add `handle_token_request`, `handle_request_replacement`, `handle_report_actual_state`; add `_build_sync_frame` helper |
+| `anygarden/ws/machine_handler.py` | Replace heartbeat/agent_* frame handlers with `report_actual_state`, `token_request`, `request_replacement`; add `sync_batch` sending on reconnect |
+| `anygarden/app.py` | Remove stale-state reset in lifespan; add optional stale-machine background task |
+| `anygarden/api/v1/agents.py` | Increment `generation` on config-changing updates |
 | `tests/test_machine_handler.py` | Rewrite for new protocol |
 
 ---
 
-### Task 1: Protocol Frame Models (doorae-machine)
+### Task 1: Protocol Frame Models (anygarden-machine)
 
 **Files:**
-- Modify: `doorae-machine/doorae_machine/protocol/frames.py`
-- Test: `doorae-machine/tests/test_protocol_frames.py` (create)
+- Modify: `anygarden-machine/anygarden_machine/protocol/frames.py`
+- Test: `anygarden-machine/tests/test_protocol_frames.py` (create)
 
 - [ ] **Step 1: Write failing tests for new frame models**
 
-Create `doorae-machine/tests/test_protocol_frames.py`:
+Create `anygarden-machine/tests/test_protocol_frames.py`:
 
 ```python
 """Tests for the new declarative protocol frame models."""
@@ -63,7 +63,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae_machine.protocol.frames import (
+from anygarden_machine.protocol.frames import (
     SyncDesiredStateFrame,
     SyncBatchFrame,
     TokenGrantFrame,
@@ -211,12 +211,12 @@ class TestParseServerFrame:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd doorae-machine && uv run pytest tests/test_protocol_frames.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_protocol_frames.py -v`
 Expected: ImportError — new frame classes don't exist yet.
 
 - [ ] **Step 3: Implement new frame models**
 
-Replace the contents of `doorae-machine/doorae_machine/protocol/frames.py`:
+Replace the contents of `anygarden-machine/anygarden_machine/protocol/frames.py`:
 
 ```python
 """Pydantic frame models for Machine <-> Server WebSocket protocol.
@@ -386,18 +386,18 @@ def parse_server_frame(data: dict) -> ServerFrame:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd doorae-machine && uv run pytest tests/test_protocol_frames.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_protocol_frames.py -v`
 Expected: All 12 tests PASS.
 
 - [ ] **Step 5: Run existing tests to check for regressions**
 
-Run: `cd doorae-machine && uv run pytest -v`
+Run: `cd anygarden-machine && uv run pytest -v`
 Expected: `test_daemon.py` and `test_spawner.py` will FAIL because they import old frames (`SpawnAgentFrame`, `AgentStartedFrame`, etc.) that no longer exist. This is expected — we'll fix them in later tasks.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add doorae-machine/doorae_machine/protocol/frames.py doorae-machine/tests/test_protocol_frames.py
+git add anygarden-machine/anygarden_machine/protocol/frames.py anygarden-machine/tests/test_protocol_frames.py
 git commit -m "feat(machine): declarative protocol frame models
 
 Replace spawn_agent/kill_agent/heartbeat frames with
@@ -406,15 +406,15 @@ sync_desired_state/sync_batch/report_actual_state/token_request."
 
 ---
 
-### Task 2: ManifestStore (doorae-machine)
+### Task 2: ManifestStore (anygarden-machine)
 
 **Files:**
-- Create: `doorae-machine/doorae_machine/manifest_store.py`
-- Test: `doorae-machine/tests/test_manifest_store.py` (create)
+- Create: `anygarden-machine/anygarden_machine/manifest_store.py`
+- Test: `anygarden-machine/tests/test_manifest_store.py` (create)
 
 - [ ] **Step 1: Write failing tests**
 
-Create `doorae-machine/tests/test_manifest_store.py`:
+Create `anygarden-machine/tests/test_manifest_store.py`:
 
 ```python
 """Tests for the local manifest persistence layer."""
@@ -426,8 +426,8 @@ from pathlib import Path
 
 import pytest
 
-from doorae_machine.manifest_store import ManifestStore
-from doorae_machine.protocol.frames import SyncDesiredStateFrame
+from anygarden_machine.manifest_store import ManifestStore
+from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
 
 @pytest.fixture
@@ -539,17 +539,17 @@ class TestManifestStore:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd doorae-machine && uv run pytest tests/test_manifest_store.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_manifest_store.py -v`
 Expected: ImportError — `manifest_store` module doesn't exist.
 
 - [ ] **Step 3: Implement ManifestStore**
 
-Create `doorae-machine/doorae_machine/manifest_store.py`:
+Create `anygarden-machine/anygarden_machine/manifest_store.py`:
 
 ```python
 """Local manifest persistence for agent desired-state.
 
-Stores a ``manifest.json`` per agent under ``~/.doorae/agents/<agent_id>/``.
+Stores a ``manifest.json`` per agent under ``~/.anygarden/agents/<agent_id>/``.
 Sensitive fields (agent_token, engine_secrets) are excluded — the daemon
 requests fresh tokens from the server on every (re)start.
 """
@@ -563,7 +563,7 @@ from pathlib import Path
 
 import structlog
 
-from doorae_machine.protocol.frames import SyncDesiredStateFrame
+from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
 log = structlog.get_logger()
 
@@ -578,7 +578,7 @@ class ManifestStore:
         self._agents_root = (
             agents_root
             if agents_root is not None
-            else Path.home() / ".doorae" / "agents"
+            else Path.home() / ".anygarden" / "agents"
         )
 
     def save(self, frame: SyncDesiredStateFrame) -> Path:
@@ -646,27 +646,27 @@ class ManifestStore:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd doorae-machine && uv run pytest tests/test_manifest_store.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_manifest_store.py -v`
 Expected: All 9 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add doorae-machine/doorae_machine/manifest_store.py doorae-machine/tests/test_manifest_store.py
+git add anygarden-machine/anygarden_machine/manifest_store.py anygarden-machine/tests/test_manifest_store.py
 git commit -m "feat(machine): ManifestStore for local agent manifest persistence"
 ```
 
 ---
 
-### Task 3: CrashBudget (doorae-machine)
+### Task 3: CrashBudget (anygarden-machine)
 
 **Files:**
-- Create: `doorae-machine/doorae_machine/crash_budget.py`
-- Test: `doorae-machine/tests/test_crash_budget.py` (create)
+- Create: `anygarden-machine/anygarden_machine/crash_budget.py`
+- Test: `anygarden-machine/tests/test_crash_budget.py` (create)
 
 - [ ] **Step 1: Write failing tests**
 
-Create `doorae-machine/tests/test_crash_budget.py`:
+Create `anygarden-machine/tests/test_crash_budget.py`:
 
 ```python
 """Tests for per-agent crash rate limiting."""
@@ -677,7 +677,7 @@ import time
 
 import pytest
 
-from doorae_machine.crash_budget import CrashBudget
+from anygarden_machine.crash_budget import CrashBudget
 
 
 class TestCrashBudget:
@@ -723,12 +723,12 @@ class TestCrashBudget:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd doorae-machine && uv run pytest tests/test_crash_budget.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_crash_budget.py -v`
 Expected: ImportError.
 
 - [ ] **Step 3: Implement CrashBudget**
 
-Create `doorae-machine/doorae_machine/crash_budget.py`:
+Create `anygarden-machine/anygarden_machine/crash_budget.py`:
 
 ```python
 """Per-agent crash rate limiter.
@@ -775,31 +775,31 @@ class CrashBudget:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd doorae-machine && uv run pytest tests/test_crash_budget.py -v`
+Run: `cd anygarden-machine && uv run pytest tests/test_crash_budget.py -v`
 Expected: All 6 tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add doorae-machine/doorae_machine/crash_budget.py doorae-machine/tests/test_crash_budget.py
+git add anygarden-machine/anygarden_machine/crash_budget.py anygarden-machine/tests/test_crash_budget.py
 git commit -m "feat(machine): CrashBudget — per-agent crash rate limiter"
 ```
 
 ---
 
-### Task 4: Daemon Frame Handlers + Reconnect Logic (doorae-machine)
+### Task 4: Daemon Frame Handlers + Reconnect Logic (anygarden-machine)
 
 **Files:**
-- Modify: `doorae-machine/doorae_machine/daemon.py`
-- Modify: `doorae-machine/doorae_machine/spawner.py` (minor accessor)
-- Modify: `doorae-machine/tests/test_daemon.py`
-- Modify: `doorae-machine/tests/test_spawner.py` (update fixture)
+- Modify: `anygarden-machine/anygarden_machine/daemon.py`
+- Modify: `anygarden-machine/anygarden_machine/spawner.py` (minor accessor)
+- Modify: `anygarden-machine/tests/test_daemon.py`
+- Modify: `anygarden-machine/tests/test_spawner.py` (update fixture)
 
 This is the largest machine-side task. The daemon's `_handle`, `_connect_and_serve`, heartbeat loop, and crash callbacks all change.
 
 - [ ] **Step 1: Update spawner with `get_running` accessor**
 
-Add to `doorae-machine/doorae_machine/spawner.py`, after the `list_running` method:
+Add to `anygarden-machine/anygarden_machine/spawner.py`, after the `list_running` method:
 
 ```python
     def get_running(self, agent_id: str) -> RunningAgent | None:
@@ -809,7 +809,7 @@ Add to `doorae-machine/doorae_machine/spawner.py`, after the `list_running` meth
 
 - [ ] **Step 2: Rewrite daemon.py**
 
-Replace `doorae-machine/doorae_machine/daemon.py` with:
+Replace `anygarden-machine/anygarden_machine/daemon.py` with:
 
 ```python
 """WebSocket daemon: declarative desired-state sync with local autonomy.
@@ -830,11 +830,11 @@ import structlog
 import websockets
 from websockets.asyncio.client import connect
 
-from doorae_machine.config import save_token
-from doorae_machine.crash_budget import CrashBudget
-from doorae_machine.detector import detect_engines
-from doorae_machine.manifest_store import ManifestStore
-from doorae_machine.protocol.frames import (
+from anygarden_machine.config import save_token
+from anygarden_machine.crash_budget import CrashBudget
+from anygarden_machine.detector import detect_engines
+from anygarden_machine.manifest_store import ManifestStore
+from anygarden_machine.protocol.frames import (
     AgentActual,
     RegisterFrame,
     ReportActualStateFrame,
@@ -843,7 +843,7 @@ from doorae_machine.protocol.frames import (
     TokenRequestFrame,
     parse_server_frame,
 )
-from doorae_machine.spawner import Spawner
+from anygarden_machine.spawner import Spawner
 
 log = structlog.get_logger()
 
@@ -927,7 +927,7 @@ class MachineDaemon:
     async def _connect_and_serve(self) -> None:
         """Establish WS connection, run reconnect sequence + message loop."""
         subprotocols = [
-            websockets.Subprotocol("doorae.v1"),
+            websockets.Subprotocol("anygarden.v1"),
             websockets.Subprotocol(f"bearer.{self.machine_token}"),
         ]
 
@@ -1109,7 +1109,7 @@ class MachineDaemon:
         # Build a SpawnAgentFrame-compatible message for the spawner.
         # The spawner still uses SpawnAgentFrame internally for
         # materialization — we adapt the manifest into that shape.
-        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+        from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
         spawn_data = _manifest_to_spawn_kwargs(manifest, token, self.server_url)
         result = await self._spawner.spawn_from_manifest(spawn_data)
@@ -1252,7 +1252,7 @@ And the `Spawner` needs a `spawn_from_manifest(kwargs: dict)` method that create
         SyncDesiredStateFrame + fresh token, and we wrap it in a
         SpawnAgentFrame for backward-compatible materialization.
         """
-        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+        from anygarden_machine.protocol.frames import SyncDesiredStateFrame
         # We still need the old-style frame for _materialize_agent_dir.
         # Rather than duplicating, we create a lightweight adapter.
         msg = _SpawnManifest(**kwargs)
@@ -1263,7 +1263,7 @@ Actually, this is getting complex. A cleaner approach: refactor `spawner.spawn()
 
 - [ ] **Step 3: Add SpawnManifest dataclass to spawner.py**
 
-Add at the top of `doorae-machine/doorae_machine/spawner.py`, after existing imports:
+Add at the top of `anygarden-machine/anygarden_machine/spawner.py`, after existing imports:
 
 ```python
 @dataclass
@@ -1290,7 +1290,7 @@ Then change `spawner.spawn(msg: SpawnAgentFrame)` signature to `spawner.spawn(ms
 Change `spawn_msg` fixture in `tests/test_spawner.py`:
 
 ```python
-from doorae_machine.spawner import Spawner, SpawnResult, SpawnManifest
+from anygarden_machine.spawner import Spawner, SpawnResult, SpawnManifest
 
 @pytest.fixture
 def spawn_msg() -> SpawnManifest:
@@ -1313,15 +1313,15 @@ Rewrite tests to use new frame types. Key changes:
 - Update `_handle_spawn` test to test `_handle_sync_desired_state`
 - Add tests for `_handle_sync_batch`, `_handle_token_grant`, crash budget behavior
 
-- [ ] **Step 6: Run all doorae-machine tests**
+- [ ] **Step 6: Run all anygarden-machine tests**
 
-Run: `cd doorae-machine && uv run pytest -v`
+Run: `cd anygarden-machine && uv run pytest -v`
 Expected: All tests PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add doorae-machine/
+git add anygarden-machine/
 git commit -m "feat(machine): declarative daemon with local crash restart
 
 - Daemon handles sync_desired_state/sync_batch/token_grant frames
@@ -1333,15 +1333,15 @@ git commit -m "feat(machine): declarative daemon with local crash restart
 
 ---
 
-### Task 5: Server — Agent Model Migration (doorae-server)
+### Task 5: Server — Agent Model Migration (anygarden-server)
 
 **Files:**
-- Modify: `doorae-server/doorae/db/models.py`
+- Modify: `anygarden-server/anygarden/db/models.py`
 - Test: verify migration with existing test suite
 
 - [ ] **Step 1: Add generation, max_restarts, restart_window_seconds to Agent model**
 
-In `doorae-server/doorae/db/models.py`, add to the `Agent` class after `restart_policy`:
+In `anygarden-server/anygarden/db/models.py`, add to the `Agent` class after `restart_policy`:
 
 ```python
     generation: Mapped[int] = mapped_column(Integer, default=0)
@@ -1351,22 +1351,22 @@ In `doorae-server/doorae/db/models.py`, add to the `Agent` class after `restart_
 
 - [ ] **Step 2: Run existing server tests to verify no regressions**
 
-Run: `cd doorae-server && uv run pytest -v`
+Run: `cd anygarden-server && uv run pytest -v`
 Expected: Tests pass (SQLite test DB auto-creates tables with new columns).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add doorae-server/doorae/db/models.py
+git add anygarden-server/anygarden/db/models.py
 git commit -m "feat(server): add generation/max_restarts/restart_window_seconds to Agent model"
 ```
 
 ---
 
-### Task 6: Server — Lifecycle Declarative Rewrite (doorae-server)
+### Task 6: Server — Lifecycle Declarative Rewrite (anygarden-server)
 
 **Files:**
-- Modify: `doorae-server/doorae/scheduler/lifecycle.py`
+- Modify: `anygarden-server/anygarden/scheduler/lifecycle.py`
 
 - [ ] **Step 1: Rewrite lifecycle.py**
 
@@ -1395,10 +1395,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.db.models import ActivityLog, Agent, AgentFile, AgentToken, Participant, Room
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.scheduler.placement import NoSuitableMachineError, select_machine_for
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.db.models import ActivityLog, Agent, AgentFile, AgentToken, Participant, Room
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 logger = structlog.get_logger(__name__)
 
@@ -1633,13 +1633,13 @@ class AgentLifecycle:
 
 - [ ] **Step 2: Run server tests**
 
-Run: `cd doorae-server && uv run pytest -v`
+Run: `cd anygarden-server && uv run pytest -v`
 Expected: `test_machine_handler.py` tests will fail (they reference old lifecycle methods). This is expected — fixed in next task.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add doorae-server/doorae/scheduler/lifecycle.py
+git add anygarden-server/anygarden/scheduler/lifecycle.py
 git commit -m "feat(server): rewrite lifecycle.py for declarative desired-state model
 
 - request_start sends sync_desired_state instead of spawn_agent
@@ -1653,11 +1653,11 @@ git commit -m "feat(server): rewrite lifecycle.py for declarative desired-state 
 
 ---
 
-### Task 7: Server — Machine Handler Rewrite (doorae-server)
+### Task 7: Server — Machine Handler Rewrite (anygarden-server)
 
 **Files:**
-- Modify: `doorae-server/doorae/ws/machine_handler.py`
-- Modify: `doorae-server/tests/test_machine_handler.py`
+- Modify: `anygarden-server/anygarden/ws/machine_handler.py`
+- Modify: `anygarden-server/tests/test_machine_handler.py`
 
 - [ ] **Step 1: Rewrite machine_handler.py frame dispatch**
 
@@ -1701,7 +1701,7 @@ Remove the old `_handle_heartbeat` function entirely.
 Update the import in `tests/test_machine_handler.py`:
 
 ```python
-from doorae.ws.machine_handler import _authenticate_machine, _handle_register
+from anygarden.ws.machine_handler import _authenticate_machine, _handle_register
 ```
 
 Remove all tests that reference `_handle_heartbeat`, `on_agent_started`, `on_agent_crashed`, `on_agent_stopped`. Add new tests for:
@@ -1712,13 +1712,13 @@ Remove all tests that reference `_handle_heartbeat`, `on_agent_started`, `on_age
 
 - [ ] **Step 3: Run all server tests**
 
-Run: `cd doorae-server && uv run pytest -v`
+Run: `cd anygarden-server && uv run pytest -v`
 Expected: All tests PASS.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add doorae-server/doorae/ws/machine_handler.py doorae-server/tests/test_machine_handler.py
+git add anygarden-server/anygarden/ws/machine_handler.py anygarden-server/tests/test_machine_handler.py
 git commit -m "feat(server): rewrite machine_handler for declarative protocol
 
 - report_actual_state replaces heartbeat + agent_started/crashed/stopped
@@ -1729,15 +1729,15 @@ git commit -m "feat(server): rewrite machine_handler for declarative protocol
 
 ---
 
-### Task 8: Server — Remove Lifespan Reset + Config Generation Bump (doorae-server)
+### Task 8: Server — Remove Lifespan Reset + Config Generation Bump (anygarden-server)
 
 **Files:**
-- Modify: `doorae-server/doorae/app.py`
-- Modify: `doorae-server/doorae/api/v1/agents.py`
+- Modify: `anygarden-server/anygarden/app.py`
+- Modify: `anygarden-server/anygarden/api/v1/agents.py`
 
 - [ ] **Step 1: Remove stale-state reset in app.py lifespan**
 
-In `doorae-server/doorae/app.py`, remove lines 254-274 (the block that resets agents to pending and machines to offline). Replace with:
+In `anygarden-server/anygarden/app.py`, remove lines 254-274 (the block that resets agents to pending and machines to offline). Replace with:
 
 ```python
     # v2: No stale-state reset. Machines reconnect and report actual state.
@@ -1745,7 +1745,7 @@ In `doorae-server/doorae/app.py`, remove lines 254-274 (the block that resets ag
     # within 5 minutes have their agents flagged for re-placement
     # (handled by the stale-machine background task if enabled).
     if not engine_provided:
-        from doorae.db.models import Machine as _Machine
+        from anygarden.db.models import Machine as _Machine
         async with app.state.session_factory() as db:
             from sqlalchemy import update
             # Only reset machines to offline — agents are NOT reset.
@@ -1762,7 +1762,7 @@ In `doorae-server/doorae/app.py`, remove lines 254-274 (the block that resets ag
 
 - [ ] **Step 2: Add generation bump to agents API on config-changing updates**
 
-In `doorae-server/doorae/api/v1/agents.py`, find the PUT/PATCH endpoint that updates agent config fields (`agents_md`, `profile_yaml`, `engine`, `reasoning_effort`). After saving changes, add:
+In `anygarden-server/anygarden/api/v1/agents.py`, find the PUT/PATCH endpoint that updates agent config fields (`agents_md`, `profile_yaml`, `engine`, `reasoning_effort`). After saving changes, add:
 
 ```python
     # Bump generation and push updated config to machine
@@ -1772,13 +1772,13 @@ In `doorae-server/doorae/api/v1/agents.py`, find the PUT/PATCH endpoint that upd
 
 - [ ] **Step 3: Run all server tests**
 
-Run: `cd doorae-server && uv run pytest -v`
+Run: `cd anygarden-server && uv run pytest -v`
 Expected: All tests PASS.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add doorae-server/doorae/app.py doorae-server/doorae/api/v1/agents.py
+git add anygarden-server/anygarden/app.py anygarden-server/anygarden/api/v1/agents.py
 git commit -m "feat(server): remove lifespan agent reset, add generation bump on config change
 
 - Server no longer resets all agents to pending on startup
@@ -1791,7 +1791,7 @@ git commit -m "feat(server): remove lifespan agent reset, add generation bump on
 ### Task 9: Integration Test — Full Reconcile Cycle
 
 **Files:**
-- Create: `doorae-server/tests/test_declarative_reconcile.py`
+- Create: `anygarden-server/tests/test_declarative_reconcile.py`
 
 - [ ] **Step 1: Write integration test**
 
@@ -1815,18 +1815,18 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Machine, MachineToken, Participant, Project, Room, User
-from doorae.auth.machine_token import generate_machine_token, hash_machine_token
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Machine, MachineToken, Participant, Project, Room, User
+from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
 async def env():
     """Set up DB with machine, agent, room for reconcile testing."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
     )
@@ -1957,18 +1957,18 @@ class TestDeclarativeReconcile:
 
 - [ ] **Step 2: Run integration tests**
 
-Run: `cd doorae-server && uv run pytest tests/test_declarative_reconcile.py -v`
+Run: `cd anygarden-server && uv run pytest tests/test_declarative_reconcile.py -v`
 Expected: All 5 tests PASS.
 
 - [ ] **Step 3: Run full test suite for both packages**
 
-Run: `cd doorae-machine && uv run pytest -v && cd ../doorae-server && uv run pytest -v`
+Run: `cd anygarden-machine && uv run pytest -v && cd ../anygarden-server && uv run pytest -v`
 Expected: All tests PASS across both packages.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add doorae-server/tests/test_declarative_reconcile.py
+git add anygarden-server/tests/test_declarative_reconcile.py
 git commit -m "test: integration tests for declarative desired-state reconcile cycle"
 ```
 

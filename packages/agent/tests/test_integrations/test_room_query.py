@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_agent.integrations.room_query import (
+from anygarden_agent.integrations.room_query import (
     RoomQuery,
     _strip_room_mention,
     execute_room_query,
@@ -146,7 +146,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query()
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -182,7 +182,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(source_participant_name=None)
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -203,7 +203,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(content="<#room:room-b> 내일 동탄 날씨는?")
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -220,7 +220,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(content="<#room:room-b>")
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -300,7 +300,7 @@ class TestExecuteRoomQuery:
             content="의견?",
         )
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -347,7 +347,7 @@ class TestExecuteRoomQuery:
             content="의견?",
         )
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -371,7 +371,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(content="API 의견?")
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -431,7 +431,7 @@ class TestExecuteRoomQuery:
 
         # Patch only the create_task / sleep calls so we can drive
         # the timeout path manually instead of waiting 5 minutes.
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             captured: dict[str, Any] = {}
 
             def _capture_task(coro):
@@ -483,7 +483,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(content="API 의견?")
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -518,7 +518,7 @@ class TestExecuteRoomQuery:
         client = _make_client()
         query = _make_query(content="API 의견?")
 
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
@@ -559,7 +559,7 @@ class TestForwardBodyRegression:
     async def test_forward_body_unchanged(self):
         client = _make_client()
         query = _make_query(content="quick check")
-        with patch("doorae_agent.integrations.room_query.asyncio") as mock_asyncio:
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
             mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)

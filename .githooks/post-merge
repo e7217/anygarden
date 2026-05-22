@@ -4,8 +4,8 @@
 # Runs after ``git merge`` and ``git pull`` (fast-forward or real
 # merge) to keep the editable installs in ``.venv/bin/*`` in sync
 # with the checked-out source. Without this, ``git pull`` on main
-# can leave ``.venv/bin/doorae-agent`` missing or stale, and the
-# machine daemon's spawner silently falls back to ``uvx doorae-agent``
+# can leave ``.venv/bin/anygarden-agent`` missing or stale, and the
+# machine daemon's spawner silently falls back to ``uvx anygarden-agent``
 # (PyPI cached version) which lags behind recent engine-adapter
 # fixes — exactly the symptom that kept Issue #142 diagnosis going
 # for hours.

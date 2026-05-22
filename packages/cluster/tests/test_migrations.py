@@ -21,7 +21,7 @@ from sqlalchemy.exc import OperationalError
 
 def _alembic_config(db_path: str) -> Config:
     cfg = Config()
-    script_location = Path(__file__).resolve().parent.parent / "doorae" / "db" / "migrations"
+    script_location = Path(__file__).resolve().parent.parent / "anygarden" / "db" / "migrations"
     cfg.set_main_option("script_location", str(script_location))
     cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_path}")
     return cfg
@@ -386,8 +386,8 @@ class TestEnsureSchemaReady:
     @pytest.mark.asyncio
     async def test_fresh_db_creates_and_stamps(self) -> None:
         """Empty DB → create_all + stamp head → alembic_version=004."""
-        from doorae.app import _ensure_schema_ready
-        from doorae.db.engine import build_engine
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -423,8 +423,8 @@ class TestEnsureSchemaReady:
     @pytest.mark.asyncio
     async def test_already_stamped_db_runs_upgrade(self) -> None:
         """Stamped DB → upgrade head (idempotent when already at head)."""
-        from doorae.app import _ensure_schema_ready
-        from doorae.db.engine import build_engine
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -464,8 +464,8 @@ class TestEnsureSchemaReady:
         create_all and `alembic stamp` ran in separate transactions,
         and a crash between them would trap the operator forever.
         """
-        from doorae.app import _ensure_schema_ready, _discover_head_revision
-        from doorae.db.engine import build_engine
+        from anygarden.app import _ensure_schema_ready, _discover_head_revision
+        from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -523,8 +523,8 @@ class TestEnsureSchemaReady:
         unstamped" on the next boot and trap the operator.
         """
         from unittest.mock import patch
-        from doorae.app import _ensure_schema_ready
-        from doorae.db.engine import build_engine
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -539,7 +539,7 @@ class TestEnsureSchemaReady:
             engine = build_engine(db_url)
             try:
                 with patch(
-                    "doorae.app._discover_head_revision",
+                    "anygarden.app._discover_head_revision",
                     side_effect=RuntimeError("simulated alembic-config crash"),
                 ):
                     with pytest.raises(RuntimeError, match="simulated"):
@@ -599,8 +599,8 @@ class TestEnsureSchemaReady:
         schema was actually stale (e.g. messages.participant_id still
         NOT NULL).
         """
-        from doorae.app import _ensure_schema_ready
-        from doorae.db.engine import build_engine
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name

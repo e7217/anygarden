@@ -1,6 +1,6 @@
 """Tests for the /delegate command parsing."""
 
-from doorae_agent.integrations.delegate import parse_delegate
+from anygarden_agent.integrations.delegate import parse_delegate
 
 
 class TestParseDelegate:

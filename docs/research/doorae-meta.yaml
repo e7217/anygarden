@@ -1,4 +1,4 @@
-# doorae self-mapping against awesome-ai-anatomy META_SCHEMA v2.
+# anygarden self-mapping against awesome-ai-anatomy META_SCHEMA v2.
 # Schema: https://github.com/NeuZhou/awesome-ai-anatomy/blob/main/META_SCHEMA.yaml
 #
 # Phase A output of the awesome-ai-anatomy benchmark research
@@ -7,8 +7,8 @@
 # locations as comments where the choice required code-level judgement.
 
 # ─── Basic Info ───────────────────────────────────────────────
-name: Doorae
-repo: e7217/doorae
+name: Anygarden
+repo: e7217/anygarden
 stars: null              # Personal GitHub repo, no public star tracking yet
 forks: null
 language: [Python, TypeScript]
@@ -21,14 +21,14 @@ data_as_of: "2026-04-25"
 # enum reminder:
 #   coding-agent | workflow-engine | browser | security-framework |
 #   memory-system | social-simulation | dev-tool
-# doorae is a multi-agent chat platform that hosts coding-agent CLIs
+# anygarden is a multi-agent chat platform that hosts coding-agent CLIs
 # (claude/codex/gemini/openhands) inside chat rooms. The closest enum
 # fit is "coding-agent" because the agents wired in are coding agents,
 # but the project is more accurately a host/orchestrator for them.
 # See the "host-of-agents" note in characteristics.architecture.
 category: coding-agent
-maturity: beta            # 11 days old, production gating active (DOORAE_MCP_SECRETS_KEY refusal in prod boot, worklog 138)
-deployment: pip           # PyPI: doorae-cluster, doorae-machine, doorae-agent (+ npm @doorae/agent-ts). No Dockerfile in repo.
+maturity: beta            # 11 days old, production gating active (ANYGARDEN_MCP_SECRETS_KEY refusal in prod boot, worklog 138)
+deployment: pip           # PyPI: anygarden-cluster, anygarden-machine, anygarden-agent (+ npm @anygarden/agent-ts). No Dockerfile in repo.
 
 # ─── Characteristics (factual, no grades) ────────────────────
 characteristics:
@@ -38,26 +38,26 @@ characteristics:
     agent subprocesses) ↔ agent SDK (engine-adapter library imported
     by the agent process). Communication uses an engine-agnostic
     SpawnManifest dataclass between cluster and machine
-    (packages/machine/doorae_machine/spawner.py:30) so the spawner
+    (packages/machine/anygarden_machine/spawner.py:30) so the spawner
     never depends on protocol-frame shape. Frontend talks to cluster
     over /api (REST) and /ws (WebSocket).
 
   code_organization: >
-    3 Python packages (doorae-cluster, doorae-machine, doorae-agent)
-    + 1 npm package (@doorae/agent-ts) + React SPA in
+    3 Python packages (anygarden-cluster, anygarden-machine, anygarden-agent)
+    + 1 npm package (@anygarden/agent-ts) + React SPA in
     packages/cluster/frontend. Cluster has 19 sibling modules
     (rooms/messages/orchestration/scheduler/llm_gateway/mcp/auth/...);
     machine has 12 (spawner/supervisor/safefs/agent_dir/...); agent
     runtime is intentionally thin (handler_wrapper.py only) and
     delegates the agent loop to engine-specific integrations
     (anthropic, claude_code, codex, deep_agents, gemini_cli, openai,
-    openhands) under doorae_agent/integrations/.
+    openhands) under anygarden_agent/integrations/.
 
   security_approach: >
     Multi-token capability model — user JWT (python-jose), per-machine
     machine_token, per-room invite_token, per-agent agent_token issued
     in SpawnManifest. argon2-cffi for passwords; cryptography Fernet
-    for MCP credential at-rest (DOORAE_MCP_SECRETS_KEY required for
+    for MCP credential at-rest (ANYGARDEN_MCP_SECRETS_KEY required for
     prod boot, worklog 138). FastAPI dependencies enforce admin/owner
     ACL: /api/v1/agents/* admin-only, /api/v1/machines/* owner-only.
     No container/sandbox isolation — agents run as subprocesses under
@@ -93,9 +93,9 @@ features:
 
   agent_loop: custom
   # The schema enum (react/plan-execute/event-driven/workflow-dag/
-  # custom) doesn't fit cleanly. doorae's pattern is
+  # custom) doesn't fit cleanly. anygarden's pattern is
   # "engine-loop-as-adapter": the agent loop body lives inside the
-  # external CLI (claude, codex, gemini, openhands) and doorae wires
+  # external CLI (claude, codex, gemini, openhands) and anygarden wires
   # message IPC + room shared files + cycle guard around it. The
   # cluster side IS event-driven (WebSocket fan-in/fan-out, cooldown
   # token bucket per participant in orchestration/rules.py), but the
@@ -113,7 +113,7 @@ features:
   #     caps consecutive agent messages, task-init reset guard
   #     prevents prefix abuse.
   # (b) #157 Phase B: content-hash semantic cycle detector
-  #     (packages/agent/doorae_agent/integrations/cycle_guard.py).
+  #     (packages/agent/anygarden_agent/integrations/cycle_guard.py).
   #     SHA-1 of casefolded first 64 chars, 16-hex output, fires
   #     when (sender, hash) pair appears ≥2 times in last 6
   #     messages. Citation: $47K production loop case from the
@@ -151,7 +151,7 @@ features:
   providers:
     count: 7
     names: [anthropic, claude_code, codex, deep_agents, gemini_cli, openai, openhands]
-    # packages/agent/doorae_agent/integrations/. Note: machine/
+    # packages/agent/anygarden_agent/integrations/. Note: machine/
     # detector.py auto-detects only 4 binaries (claude-code, codex,
     # gemini-cli, openhands) — the SDK adapters (anthropic, openai,
     # deep_agents) are library-only and don't need a CLI on PATH.
@@ -161,7 +161,7 @@ features:
 
 # ─── Key Insights ─────────────────────────────────────────────
 key_finding: >
-  doorae is a "host of coding-agent CLIs" rather than a coding agent
+  anygarden is a "host of coding-agent CLIs" rather than a coding agent
   itself — it wraps 4 external agent binaries (claude/codex/gemini/
   openhands) plus 3 SDK paths in an engine-agnostic chat-room layer
   with multi-token capability auth, per-room context policy, and a

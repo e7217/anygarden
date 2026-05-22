@@ -7,10 +7,10 @@ import secrets
 
 import pytest
 
-from doorae.auth.jwt import InvalidToken, UserClaims, create_user_token, verify_user_token
-from doorae.auth.token import generate_token, hash_token, verify_token_hash
-from doorae.auth.dependencies import Identity, get_identity
-from doorae.config import DooraeSettings
+from anygarden.auth.jwt import InvalidToken, UserClaims, create_user_token, verify_user_token
+from anygarden.auth.token import generate_token, hash_token, verify_token_hash
+from anygarden.auth.dependencies import Identity, get_identity
+from anygarden.config import AnygardenSettings
 
 
 _SECRET = "test-secret-key-for-jwt-testing-only"
@@ -110,7 +110,7 @@ class TestIdentityParsing:
         identity = await get_identity(
             db,
             jwt_secret=config.jwt_secret,
-            sec_websocket_protocol=f"doorae.v1, bearer.{token}",
+            sec_websocket_protocol=f"anygarden.v1, bearer.{token}",
         )
         assert identity.kind == "user"
         assert identity.id == "u11"

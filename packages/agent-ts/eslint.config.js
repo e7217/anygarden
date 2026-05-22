@@ -1,4 +1,4 @@
-// ESLint v9 flat config for @doorae/agent-ts.
+// ESLint v9 flat config for @anygarden/agent-ts.
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
 import js from "@eslint/js";

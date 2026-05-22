@@ -1,7 +1,7 @@
 // ChatClient — WebSocket client with per-room reconnection,
 // since_seq recovery, and message-handler callbacks.
 //
-// Ported from ``packages/agent/doorae_agent/client.py``.
+// Ported from ``packages/agent/anygarden_agent/client.py``.
 //
 // The class exposes the same shape the Python version does so adapter
 // code reads identically across languages:

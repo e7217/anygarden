@@ -16,9 +16,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from doorae.db.engine import build_session_factory
-from doorae.db.models import ActivityLog, Agent
-from doorae.scheduler.lifecycle import (
+from anygarden.db.engine import build_session_factory
+from anygarden.db.models import ActivityLog, Agent
+from anygarden.scheduler.lifecycle import (
     ORPHAN_THRESHOLD_SEC_DEFAULT,
     sweep_orphaned_requests,
 )

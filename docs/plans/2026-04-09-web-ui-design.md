@@ -1,20 +1,20 @@
-# Doorae Web UI 설계
+# Anygarden Web UI 설계
 
 ## 개요
 
-doorae-server에 웹 UI를 추가하여 로그인, 채팅, 에이전트/머신 관리를 브라우저에서 수행할 수 있게 한다. `uvx doorae-server` 한 줄로 UI 포함 기동.
+anygarden-server에 웹 UI를 추가하여 로그인, 채팅, 에이전트/머신 관리를 브라우저에서 수행할 수 있게 한다. `uvx anygarden-server` 한 줄로 UI 포함 기동.
 
 ## 기술 스택
 
 - **프론트엔드**: React 18 + TypeScript + Vite + shadcn/ui + Tailwind CSS
-- **빌드**: `frontend/` → `npm run build` → `doorae/static/`
+- **빌드**: `frontend/` → `npm run build` → `anygarden/static/`
 - **서빙**: FastAPI `StaticFiles` + SPA fallback
 - **실시간**: 브라우저 네이티브 WebSocket → 기존 `/ws/rooms/{id}` 핸들러
 
 ## 디렉토리 구조
 
 ```
-doorae-server/
+anygarden-server/
 ├── frontend/                    # React 소스
 │   ├── src/
 │   │   ├── components/ui/       # shadcn/ui 컴포넌트
@@ -47,7 +47,7 @@ doorae-server/
 │   ├── tsconfig.json
 │   ├── vite.config.ts
 │   └── tailwind.config.ts
-├── doorae/
+├── anygarden/
 │   ├── static/                  # 빌드 결과물 (git 포함)
 │   ├── auth/
 │   │   └── routes.py            # NEW: register, login, me
@@ -98,7 +98,7 @@ doorae-server/
 
 ```
 로그인 → JWT 획득 → 룸 선택
-→ new WebSocket("/ws/rooms/{id}", ["doorae.v1", "bearer.<jwt>"])
+→ new WebSocket("/ws/rooms/{id}", ["anygarden.v1", "bearer.<jwt>"])
 → 수신: onmessage → 채팅 목록 추가 (seq 추적)
 → 전송: ws.send({"type":"send","content":"..."})
 → typing: ws.send({"type":"typing","is_typing":true})
@@ -121,9 +121,9 @@ app.mount("/", StaticFiles(directory=static_dir, html=True))
 ```bash
 # 개발 시
 cd frontend && npm run dev          # Vite HMR on :5173
-cd doorae-server && uv run doorae-server  # API on :8000
+cd anygarden-server && uv run anygarden-server  # API on :8000
 # vite.config.ts에서 /api, /ws를 :8000으로 프록시
 
 # 빌드
-cd frontend && npm run build        # → ../doorae/static/
+cd frontend && npm run build        # → ../anygarden/static/
 ```

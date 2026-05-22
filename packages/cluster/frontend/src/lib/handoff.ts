@@ -12,7 +12,7 @@
 // caller hide the ambient protocol noise surrounding the handoff.
 //
 // Server contract (see ``_apply_orchestrator_handoff`` in
-// ``packages/cluster/doorae/ws/handler.py``): an accepted handoff is
+// ``packages/cluster/anygarden/ws/handler.py``): an accepted handoff is
 // emitted with
 //
 //   * ``content.startswith('[HANDOFF] ')``                (protocol marker)

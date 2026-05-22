@@ -7,7 +7,7 @@ date: 2026-04-11
 
 # 2. Per-agent directory on machine, sourced from server manifest
 
-> Amendment 2026-05-06 (#345): `doorae-agent` subprocesses now start
+> Amendment 2026-05-06 (#345): `anygarden-agent` subprocesses now start
 > with `cwd=<agent_dir>` rather than `cwd=<agent_dir>/workspace/`.
 > Materialize refreshes only managed top-level entries and preserves
 > agent-created root output. `workspace/` remains only as a codex SDK
@@ -23,9 +23,9 @@ date: 2026-04-11
 
 각 에이전트의 개성 (역할, 참조 문서, 스킬 세트, 엔진 고유 설정) 을 단일 `system_prompt` 에만 담아 전달하는 방식은 한계에 닿았다. 구체적으로:
 
-- Codex CLI 는 cwd 상향 탐색으로 `AGENTS.md` 를 자동 로드하는 네이티브 메커니즘을 가지고 있으나, Doorae 는 subprocess 를 의미 없는 cwd 로 기동해 이 기능을 못 쓰고 있다.
-- Claude Code SDK 는 `.claude/skills/<name>/SKILL.md` 를 project-local 로 discovery 하지만, Doorae 에는 그런 위치를 구성할 자리가 없다.
-- Gemini CLI 는 `.agents/skills/` 와 `.gemini/settings.json` 을 표준 레이아웃으로 인식하지만 역시 Doorae 에서 활용되지 못한다.
+- Codex CLI 는 cwd 상향 탐색으로 `AGENTS.md` 를 자동 로드하는 네이티브 메커니즘을 가지고 있으나, Anygarden 는 subprocess 를 의미 없는 cwd 로 기동해 이 기능을 못 쓰고 있다.
+- Claude Code SDK 는 `.claude/skills/<name>/SKILL.md` 를 project-local 로 discovery 하지만, Anygarden 에는 그런 위치를 구성할 자리가 없다.
+- Gemini CLI 는 `.agents/skills/` 와 `.gemini/settings.json` 을 표준 레이아웃으로 인식하지만 역시 Anygarden 에서 활용되지 못한다.
 - Deep Agents (langchain-ai/deepagents) 는 `FilesystemBackend(root_dir=...)` + `skills=[...]` + `memory=["AGENTS.md"]` 로 에이전트 디렉토리를 직접 소비하도록 설계되어 있다.
 - SDK 프로필 스키마의 `mcp_servers` 필드는 어떤 어댑터에서도 읽히지 않는 dead field 상태.
 
@@ -35,7 +35,7 @@ date: 2026-04-11
 
 ## Decision
 
-에이전트마다 **머신 로컬 파일시스템에 고정된 디렉토리** `~/.doorae/agents/<agent_id>/` 를 배치한다. 이 디렉토리의 구조는 다음 원칙을 따른다:
+에이전트마다 **머신 로컬 파일시스템에 고정된 디렉토리** `~/.anygarden/agents/<agent_id>/` 를 배치한다. 이 디렉토리의 구조는 다음 원칙을 따른다:
 
 1. **`AGENTS.md` + `skills/<name>/SKILL.md` 가 에이전트가 읽는 표준 투영점**. [agents.md](https://agents.md) 와 [agentskills.io](https://agentskills.io) 표준을 채택. `skills/`는 초기 manifest seed 뒤에는 agent-owned runtime 영역으로 보존한다.
 2. 엔진별 관례 파일명/경로 (`CLAUDE.md`, `GEMINI.md`, `.agents/skills/`, `.claude/skills/`) 는 모두 심볼릭 링크 또는 자동 렌더링 결과물.
@@ -68,8 +68,8 @@ Admin 은 REST API 로 파일을 CRUD 하고, 이는 DB 에만 반영된다. 실
 ## Alternatives considered
 
 - **Machine-local authoring**: admin 이 각 머신에 SSH 해서 파일 관리. 기각 — 규모 불가능, 중앙 제어 불가.
-- **Git repo pointer**: 에이전트 프로필에 git URL + ref 를 두고 머신이 `git clone/pull`. 기각(유보) — 스킬을 이미 git 으로 관리하는 팀에는 자연스럽지만, doorae 가 git 의존성을 머신 데몬에 추가하는 것은 과도. 이후 phase 로 재검토 가능.
-- **Managed Agents API (Anthropic) 에 위임**: Claude 의 /v1/agents + /v1/skills 업로드를 통해 skill 관리를 Anthropic 에 맡기는 방법. 기각 — 특정 벤더 종속, self-host 불가, Bedrock/Vertex 미지원, Doorae 의 멀티엔진 지향과 모순.
+- **Git repo pointer**: 에이전트 프로필에 git URL + ref 를 두고 머신이 `git clone/pull`. 기각(유보) — 스킬을 이미 git 으로 관리하는 팀에는 자연스럽지만, anygarden 가 git 의존성을 머신 데몬에 추가하는 것은 과도. 이후 phase 로 재검토 가능.
+- **Managed Agents API (Anthropic) 에 위임**: Claude 의 /v1/agents + /v1/skills 업로드를 통해 skill 관리를 Anthropic 에 맡기는 방법. 기각 — 특정 벤더 종속, self-host 불가, Bedrock/Vertex 미지원, Anygarden 의 멀티엔진 지향과 모순.
 - **API endpoint per-file pull**: 머신이 spawn 시 서버에 HTTP GET 으로 파일들을 pull. 유보 — 현재 프레임 인라인 전달로 수백 KB 까지 충분. 대용량 필요 시 이후 phase.
 
 ## Consequences

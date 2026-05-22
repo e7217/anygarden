@@ -2,7 +2,7 @@
  * CreateSubRoomDialog — spawn a child room under an existing room.
  *
  * The server-side rule in
- * ``doorae-server/doorae/rooms/service.py::create_sub_room`` is:
+ * ``anygarden-server/anygarden/rooms/service.py::create_sub_room`` is:
  *
  *   1. The ``creator_participant_id`` must be a member of the
  *      parent room.

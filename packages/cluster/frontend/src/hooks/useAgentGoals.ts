@@ -55,8 +55,8 @@ export function useAgentGoals(agentId: string | null): UseAgentGoalsValue {
     const handler = () => {
       refresh()
     }
-    window.addEventListener('doorae:goal:updated', handler)
-    return () => window.removeEventListener('doorae:goal:updated', handler)
+    window.addEventListener('anygarden:goal:updated', handler)
+    return () => window.removeEventListener('anygarden:goal:updated', handler)
   }, [agentId, refresh])
 
   const remove = useCallback(async (goalId: string) => {

@@ -1,8 +1,8 @@
-// Engine adapter interface — bridges Doorae chat messages to an LLM
+// Engine adapter interface — bridges Anygarden chat messages to an LLM
 // engine and returns the reply (or null to skip).
 //
 // Mirrors the Python ``EngineAdapter`` abstract class in
-// ``packages/agent/doorae_agent/integrations/base.py``. Concrete
+// ``packages/agent/anygarden_agent/integrations/base.py``. Concrete
 // adapters live in ``src/engines/<name>.ts``.
 
 import type { MessageOut } from "../protocol/frames.js";

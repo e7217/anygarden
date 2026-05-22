@@ -397,8 +397,8 @@ export default function ChatPage() {
         navigate('/')
       }
     }
-    window.addEventListener('doorae:room:deleted', onDeleted)
-    return () => window.removeEventListener('doorae:room:deleted', onDeleted)
+    window.addEventListener('anygarden:room:deleted', onDeleted)
+    return () => window.removeEventListener('anygarden:room:deleted', onDeleted)
   }, [selectedRoom, navigate])
 
   const handleSetRepresentative = useCallback(async (agentId: string | null) => {
@@ -639,11 +639,11 @@ export default function ChatPage() {
               >
                 <Menu className="h-5 w-5" />
               </Button>
-              <span className="text-[15px] font-bold tracking-tight">Doorae</span>
+              <span className="text-[15px] font-bold tracking-tight">Anygarden</span>
             </div>
             <div className="flex flex-1 flex-col items-center justify-center bg-[var(--color-surface-alt)] px-6 text-center">
               <MessageSquare className="mb-4 h-16 w-16 text-[var(--color-foreground-subtle)] opacity-70" />
-              <h2 className="text-body-lg text-[var(--color-foreground)]">Welcome to Doorae</h2>
+              <h2 className="text-body-lg text-[var(--color-foreground)]">Welcome to Anygarden</h2>
               <p className="text-caption mt-2">Select a room from the sidebar to start chatting.</p>
               {projects.length === 0 && (
                 <p className="text-caption mt-1">Create a project first to get started.</p>

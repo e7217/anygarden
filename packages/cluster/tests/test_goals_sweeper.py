@@ -17,13 +17,13 @@ from typing import Any
 
 import pytest
 
-from doorae.db.models import Agent, Goal, Participant, Room, Task, User
-from doorae.goals.policy import (
+from anygarden.db.models import Agent, Goal, Participant, Room, Task, User
+from anygarden.goals.policy import (
     GOAL_FAILURE_PAUSE_THRESHOLD,
     TASK_EXECUTION_TIMEOUT_SECONDS,
     TASK_PICKUP_TIMEOUT_SECONDS,
 )
-from doorae.goals.sweeper import sweep_stuck_tasks
+from anygarden.goals.sweeper import sweep_stuck_tasks
 
 
 def _utcnow() -> datetime:

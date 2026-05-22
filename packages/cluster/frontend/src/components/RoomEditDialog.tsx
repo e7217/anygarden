@@ -21,7 +21,7 @@ interface Props {
 }
 
 // Strategy options exposed to the admin UI. Must stay in sync with
-// the server-side validator in ``doorae/rooms/router.py`` —
+// the server-side validator in ``anygarden/rooms/router.py`` —
 // bidding / llm_judge are deliberately absent (plan-159 §1).
 const STRATEGY_OPTIONS: { value: string; label: string; hint: string }[] = [
   {
@@ -326,7 +326,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
           {isAdmin && (
             <div className="space-y-4 border-t border-[var(--color-border)] pt-4">
               {/* #148 + #225 — ambient context window toggle. Replaces
-                  the machine-level ``DOORAE_CONTEXT_WINDOW_ENABLED``
+                  the machine-level ``ANYGARDEN_CONTEXT_WINDOW_ENABLED``
                   env knob with a per-room admin toggle. Default is
                   True (see migration 028); un-checking opts the room
                   out of ambient sharing to save tokens. */}

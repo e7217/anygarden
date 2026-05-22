@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae.routing.protocol import (
+from anygarden.routing.protocol import (
     ROUTING_REQUEST_MARKER,
     ROUTING_RESPONSE_MARKER,
     _AgentLine,

@@ -60,7 +60,7 @@ export function useGraphData(
     loadingRef.current = true
     setError(null)
 
-    const token = localStorage.getItem('doorae_token')
+    const token = localStorage.getItem('anygarden_token')
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }

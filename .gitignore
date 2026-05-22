@@ -32,8 +32,8 @@ node_modules/
 .vite/
 *.tsbuildinfo
 
-# Doorae runtime
-.doorae/
+# Anygarden runtime
+.anygarden/
 *.db
 *.db-journal
 

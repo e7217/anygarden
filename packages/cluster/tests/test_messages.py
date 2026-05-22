@@ -10,16 +10,16 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, Participant, Project, Room, User
-from doorae.db.repository import append_message
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, Participant, Project, Room, User
+from anygarden.db.repository import append_message
 
 
 @pytest_asyncio.fixture()
-async def msg_env(config: DooraeSettings):
+async def msg_env(config: AnygardenSettings):
     """Set up a full app with a seeded user, room, participant, and messages."""
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)

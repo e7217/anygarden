@@ -6,12 +6,12 @@
 
 ## 배경
 
-doorae의 현재 에이전트 인식 메커니즘은 **이름과 UUID만**을 기반으로 한다.
+anygarden의 현재 에이전트 인식 메커니즘은 **이름과 UUID만**을 기반으로 한다.
 
-- `Agent` 모델(`packages/cluster/doorae/db/models.py:212-287`)에는 다른 에이전트가 참고할 만한 외부 공개용 설명 필드가 없다.
-- WS 프로토콜의 `ParticipantBrief`(`packages/cluster/doorae/ws/protocol.py:182-196`)는 `id`, `display_name`, `kind`, `agent_id`만 노출한다.
-- 에이전트 런타임의 로스터(`packages/agent/doorae_agent/integrations/claude_code.py:300-331`, `_compose_participants_roster`)는 `- <@user:{uuid}> {name} ({kind})` 형식으로 LLM에 주입한다.
-- 멘션 라우팅(`packages/cluster/doorae/orchestration/rules.py:107-130`)은 명시적 `@` 멘션 파싱만 수행한다.
+- `Agent` 모델(`packages/cluster/anygarden/db/models.py:212-287`)에는 다른 에이전트가 참고할 만한 외부 공개용 설명 필드가 없다.
+- WS 프로토콜의 `ParticipantBrief`(`packages/cluster/anygarden/ws/protocol.py:182-196`)는 `id`, `display_name`, `kind`, `agent_id`만 노출한다.
+- 에이전트 런타임의 로스터(`packages/agent/anygarden_agent/integrations/claude_code.py:300-331`, `_compose_participants_roster`)는 `- <@user:{uuid}> {name} ({kind})` 형식으로 LLM에 주입한다.
+- 멘션 라우팅(`packages/cluster/anygarden/orchestration/rules.py:107-130`)은 명시적 `@` 멘션 파싱만 수행한다.
 
 → LLM이 "어떤 에이전트가 어떤 일에 적합한가"를 판단할 의미적 메타정보가 시스템 차원에서 제공되지 않는다.
 
@@ -54,7 +54,7 @@ DB 컬럼만 추가하면 채울 방법이 없어 본 목적이 달성되지 않
 
 ### 1. 데이터 모델
 
-**`packages/cluster/doorae/db/models.py`** — `Agent` 클래스에 컬럼 추가:
+**`packages/cluster/anygarden/db/models.py`** — `Agent` 클래스에 컬럼 추가:
 
 ```python
 description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -66,7 +66,7 @@ Alembic revision 1개 추가 (nullable 컬럼 → 다운타임 없음).
 
 ### 2. REST API
 
-**`packages/cluster/doorae/api/v1/agents.py` 인근 Pydantic 스키마**:
+**`packages/cluster/anygarden/api/v1/agents.py` 인근 Pydantic 스키마**:
 
 - `AgentCreate.description: str | None = Field(default=None, max_length=200)`
 - `AgentUpdate.description: str | None`
@@ -76,15 +76,15 @@ Alembic revision 1개 추가 (nullable 컬럼 → 다운타임 없음).
 
 ### 3. WebSocket 프로토콜
 
-**`packages/cluster/doorae/ws/protocol.py`** — `ParticipantBrief.description: str | None = None` 추가.
+**`packages/cluster/anygarden/ws/protocol.py`** — `ParticipantBrief.description: str | None = None` 추가.
 
-**`packages/cluster/doorae/ws/handler.py — _build_participants_brief`** — Agent join 시 `description` 컬럼 함께 select하여 brief에 채움. 유저/게스트는 `None`.
+**`packages/cluster/anygarden/ws/handler.py — _build_participants_brief`** — Agent join 시 `description` 컬럼 함께 select하여 brief에 채움. 유저/게스트는 `None`.
 
 WS 프로토콜 변화는 추가 필드뿐 → 비파괴적. 구버전 클라이언트는 무시.
 
 ### 4. 에이전트 런타임 로스터
 
-**`packages/agent/doorae_agent/integrations/claude_code.py — _compose_participants_roster`**:
+**`packages/agent/anygarden_agent/integrations/claude_code.py — _compose_participants_roster`**:
 
 ```python
 desc = (p.description or "").strip().replace("\n", " ").replace("\r", " ")
@@ -155,12 +155,12 @@ DESIGN.md의 보조 텍스트 톤(낮은 대비, 작은 사이즈) 적용.
 
 ## 변경 파일 (예상)
 
-- `packages/cluster/doorae/db/models.py` — Agent 컬럼 추가
+- `packages/cluster/anygarden/db/models.py` — Agent 컬럼 추가
 - `packages/cluster/alembic/versions/<new>.py` — 마이그레이션 신설
-- `packages/cluster/doorae/api/v1/agents.py` (또는 인근 schemas) — Pydantic 필드
-- `packages/cluster/doorae/ws/protocol.py` — `ParticipantBrief.description`
-- `packages/cluster/doorae/ws/handler.py` — `_build_participants_brief` 조정
-- `packages/agent/doorae_agent/integrations/claude_code.py` — `_compose_participants_roster`
+- `packages/cluster/anygarden/api/v1/agents.py` (또는 인근 schemas) — Pydantic 필드
+- `packages/cluster/anygarden/ws/protocol.py` — `ParticipantBrief.description`
+- `packages/cluster/anygarden/ws/handler.py` — `_build_participants_brief` 조정
+- `packages/agent/anygarden_agent/integrations/claude_code.py` — `_compose_participants_roster`
 - `packages/cluster/frontend/src/components/AgentSettingsDialog.tsx` — 입력
 - `packages/cluster/frontend/src/components/MentionPopover.tsx` — 표시
 - `packages/cluster/frontend/src/components/ParticipantListPopover.tsx` — 표시

@@ -1,4 +1,4 @@
-"""Unit tests for ``doorae.rooms.membership`` helpers."""
+"""Unit tests for ``anygarden.rooms.membership`` helpers."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import Agent, Participant, Project, Room, User
-from doorae.rooms.membership import add_user_to_room, ensure_agent_in_room
-from doorae.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
+from anygarden.db.models import Agent, Participant, Project, Room, User
+from anygarden.rooms.membership import add_user_to_room, ensure_agent_in_room
+from anygarden.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
 
 
 @dataclass
@@ -192,7 +192,7 @@ class TestEnsureAgentInRoom:
         also nudge the machine via ``bump_generation`` / ``request_start``,
         but we want a metric+warning so a regression never hides again.
         """
-        from doorae.observability.metrics import agent_joinroom_drop_total
+        from anygarden.observability.metrics import agent_joinroom_drop_total
 
         project, agent = await _seed_agent(db)
         room_a = await _make_room(db, project.id, "a")
@@ -231,7 +231,7 @@ class TestEnsureAgentInRoom:
         """Mirror: when every ``other_pid`` has a live subscription,
         the drop counter stays put. This guards against an overeager
         counter that trips on success."""
-        from doorae.observability.metrics import agent_joinroom_drop_total
+        from anygarden.observability.metrics import agent_joinroom_drop_total
 
         project, agent = await _seed_agent(db)
         room_a = await _make_room(db, project.id, "a")

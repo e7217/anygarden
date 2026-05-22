@@ -26,8 +26,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import Agent, Participant, Project, Room, User
-from doorae.rooms.membership import ensure_agent_in_room, add_user_to_room
+from anygarden.db.models import Agent, Participant, Project, Room, User
+from anygarden.rooms.membership import ensure_agent_in_room, add_user_to_room
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ class TestRepSuccession:
         """Remove the current rep → the next agent (by joined_at)
         takes over. We seed three agents with non-overlapping join
         timestamps so the order is unambiguous."""
-        from doorae.rooms.membership import _set_next_rep_after_removal
+        from anygarden.rooms.membership import _set_next_rep_after_removal
 
         room = await _seed_room(db)
         a1 = await _seed_agent(db, "a1")
@@ -236,7 +236,7 @@ class TestRepSuccession:
         is deterministic via ``id`` ASC. uuid order is arbitrary but
         stable, which is enough — what we forbid is "no answer" or
         "different answer per call"."""
-        from doorae.rooms.membership import _set_next_rep_after_removal
+        from anygarden.rooms.membership import _set_next_rep_after_removal
 
         room = await _seed_room(db)
         rep = await _seed_agent(db, "rep")
@@ -299,7 +299,7 @@ class TestRepSuccession:
     ) -> None:
         """No agents left → rep = NULL. Empty room is a degenerate
         state but the field must not point at a removed/dead row."""
-        from doorae.rooms.membership import _set_next_rep_after_removal
+        from anygarden.rooms.membership import _set_next_rep_after_removal
 
         room = await _seed_room(db)
         agent = await _seed_agent(db, "a1")
@@ -333,7 +333,7 @@ class TestRepSuccession:
         """Removing a participant who *isn't* the rep is a no-op for
         the field — the helper only intervenes when the removed agent
         held the role."""
-        from doorae.rooms.membership import _set_next_rep_after_removal
+        from anygarden.rooms.membership import _set_next_rep_after_removal
 
         room = await _seed_room(db)
         rep = await _seed_agent(db, "rep")

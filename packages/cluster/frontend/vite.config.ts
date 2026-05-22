@@ -12,7 +12,7 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, './src') },
   },
   build: {
-    outDir: '../doorae/static',
+    outDir: '../anygarden/static',
     emptyOutDir: true,
   },
   server: {

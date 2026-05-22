@@ -7,7 +7,7 @@ import { useAuth } from './useAuth'
 function LoginHarness() {
   const { login } = useAuth()
   return (
-    <button type="button" onClick={() => void login('admin@doorae.dev', 'pw')}>
+    <button type="button" onClick={() => void login('admin@anygarden.dev', 'pw')}>
       login
     </button>
   )
@@ -36,11 +36,11 @@ afterEach(() => {
 
 describe('useAuth storage cleanup', () => {
   it('clears guest/prelogin state when login succeeds', async () => {
-    localStorage.setItem('doorae_token', 'old-guest')
-    localStorage.setItem('doorae_token_prelogin', 'expired-user')
-    localStorage.setItem('doorae_is_guest', '1')
-    localStorage.setItem('doorae_guest_room_id', 'room-1')
-    localStorage.setItem('doorae_guest_display_name', 'Guest')
+    localStorage.setItem('anygarden_token', 'old-guest')
+    localStorage.setItem('anygarden_token_prelogin', 'expired-user')
+    localStorage.setItem('anygarden_is_guest', '1')
+    localStorage.setItem('anygarden_guest_room_id', 'room-1')
+    localStorage.setItem('anygarden_guest_display_name', 'Guest')
 
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/v1/auth/me')) {
@@ -50,7 +50,7 @@ describe('useAuth storage cleanup', () => {
         return Promise.resolve(
           jsonResponse({
             token: 'fresh-user',
-            user: { id: 'u1', email: 'admin@doorae.dev', is_admin: true },
+            user: { id: 'u1', email: 'admin@anygarden.dev', is_admin: true },
           }),
         )
       }
@@ -61,20 +61,20 @@ describe('useAuth storage cleanup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'login' }))
 
     await waitFor(() => {
-      expect(localStorage.getItem('doorae_token')).toBe('fresh-user')
+      expect(localStorage.getItem('anygarden_token')).toBe('fresh-user')
     })
-    expect(localStorage.getItem('doorae_token_prelogin')).toBeNull()
-    expect(localStorage.getItem('doorae_is_guest')).toBeNull()
-    expect(localStorage.getItem('doorae_guest_room_id')).toBeNull()
-    expect(localStorage.getItem('doorae_guest_display_name')).toBeNull()
+    expect(localStorage.getItem('anygarden_token_prelogin')).toBeNull()
+    expect(localStorage.getItem('anygarden_is_guest')).toBeNull()
+    expect(localStorage.getItem('anygarden_guest_room_id')).toBeNull()
+    expect(localStorage.getItem('anygarden_guest_display_name')).toBeNull()
   })
 
   it('clears all stale auth state when /auth/me rejects the saved token', async () => {
-    localStorage.setItem('doorae_token', 'expired-user')
-    localStorage.setItem('doorae_token_prelogin', 'older-user')
-    localStorage.setItem('doorae_is_guest', '1')
-    localStorage.setItem('doorae_guest_room_id', 'room-1')
-    localStorage.setItem('doorae_guest_display_name', 'Guest')
+    localStorage.setItem('anygarden_token', 'expired-user')
+    localStorage.setItem('anygarden_token_prelogin', 'older-user')
+    localStorage.setItem('anygarden_is_guest', '1')
+    localStorage.setItem('anygarden_guest_room_id', 'room-1')
+    localStorage.setItem('anygarden_guest_display_name', 'Guest')
 
     globalThis.fetch = vi.fn().mockImplementation((url: string) => {
       if (url.includes('/api/v1/auth/me')) {
@@ -86,11 +86,11 @@ describe('useAuth storage cleanup', () => {
     render(<MountHarness />)
 
     await waitFor(() => {
-      expect(localStorage.getItem('doorae_token')).toBeNull()
+      expect(localStorage.getItem('anygarden_token')).toBeNull()
     })
-    expect(localStorage.getItem('doorae_token_prelogin')).toBeNull()
-    expect(localStorage.getItem('doorae_is_guest')).toBeNull()
-    expect(localStorage.getItem('doorae_guest_room_id')).toBeNull()
-    expect(localStorage.getItem('doorae_guest_display_name')).toBeNull()
+    expect(localStorage.getItem('anygarden_token_prelogin')).toBeNull()
+    expect(localStorage.getItem('anygarden_is_guest')).toBeNull()
+    expect(localStorage.getItem('anygarden_guest_room_id')).toBeNull()
+    expect(localStorage.getItem('anygarden_guest_display_name')).toBeNull()
   })
 })

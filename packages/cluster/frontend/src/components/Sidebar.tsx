@@ -203,7 +203,7 @@ export default function Sidebar({
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => {
     try {
-      const saved = localStorage.getItem('doorae_expanded_projects')
+      const saved = localStorage.getItem('anygarden_expanded_projects')
       return saved ? new Set(JSON.parse(saved)) : new Set()
     } catch { return new Set() }
   })
@@ -211,7 +211,7 @@ export default function Sidebar({
   useEffect(() => {
     try {
       localStorage.setItem(
-        'doorae_expanded_projects',
+        'anygarden_expanded_projects',
         JSON.stringify(Array.from(expandedProjects)),
       )
     } catch { /* ignore */ }
@@ -392,7 +392,7 @@ export default function Sidebar({
       <div className="flex h-14 items-center justify-between px-4">
         <div className="flex items-center">
           <MessageSquare className="mr-2 size-5 text-[var(--color-foreground)]" />
-          <h1 className="text-[15px] font-bold text-[var(--color-foreground)] tracking-tight">Doorae</h1>
+          <h1 className="text-[15px] font-bold text-[var(--color-foreground)] tracking-tight">Anygarden</h1>
         </div>
         <div className="flex items-center gap-1">
           {/* Desktop collapse trigger (#106). Paired with the
@@ -913,7 +913,7 @@ function RoomTreeNodeView({
 function loadExpandedAgents(userId: string | undefined): Set<string> {
   if (!userId) return new Set()
   try {
-    const raw = localStorage.getItem(`doorae_expanded_agents_v1_${userId}`)
+    const raw = localStorage.getItem(`anygarden_expanded_agents_v1_${userId}`)
     if (!raw) return new Set()
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return new Set()
@@ -930,7 +930,7 @@ function saveExpandedAgents(
   if (!userId) return
   try {
     localStorage.setItem(
-      `doorae_expanded_agents_v1_${userId}`,
+      `anygarden_expanded_agents_v1_${userId}`,
       JSON.stringify([...expanded]),
     )
   } catch {

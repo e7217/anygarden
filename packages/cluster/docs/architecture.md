@@ -1,16 +1,16 @@
-# doorae-cluster Architecture
+# anygarden-cluster Architecture
 
 ## Overview
 
-doorae-cluster는 다중 에이전트 채팅 서버이다. FastAPI + SQLite + WebSocket 기반으로, 유저와 에이전트가 룸에서 대화하고 머신에 에이전트를 스케줄링한다.
+anygarden-cluster는 다중 에이전트 채팅 서버이다. FastAPI + SQLite + WebSocket 기반으로, 유저와 에이전트가 룸에서 대화하고 머신에 에이전트를 스케줄링한다.
 
 ## Package Structure
 
 ```
-doorae/
+anygarden/
 ├── app.py              # FastAPI 앱 팩토리
-├── cli.py              # CLI 엔트리포인트 (doorae-server)
-├── config.py           # 설정 (DooraeSettings, pydantic-settings)
+├── cli.py              # CLI 엔트리포인트 (anygarden-server)
+├── config.py           # 설정 (AnygardenSettings, pydantic-settings)
 ├── dependencies.py     # FastAPI 의존성 주입
 ├── agent_files.py      # 에이전트 파일/manifest 관리
 │

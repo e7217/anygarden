@@ -18,21 +18,21 @@ from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, User
-from doorae.mcp_templates.encryption import MCPSecrets
-from doorae.mcp_templates.service import MCPTemplateService
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, User
+from anygarden.mcp_templates.encryption import MCPSecrets
+from anygarden.mcp_templates.service import MCPTemplateService
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
 async def mcp_env():
     """App wired with a Fernet key, an admin user, and two agents."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=pysecrets.token_urlsafe(32),
         log_level="DEBUG",

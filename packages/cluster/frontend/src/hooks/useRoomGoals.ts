@@ -50,7 +50,7 @@ export function useRoomGoals(roomId: string | null): UseRoomGoalsValue {
     refresh()
   }, [refresh])
 
-  // ``doorae:goal:updated`` is the broadcast we'll start firing from
+  // ``anygarden:goal:updated`` is the broadcast we'll start firing from
   // the server in a follow-up — listen for it now so a server-side
   // upgrade lights up live without a frontend redeploy.
   useEffect(() => {
@@ -58,8 +58,8 @@ export function useRoomGoals(roomId: string | null): UseRoomGoalsValue {
     const handler = () => {
       refresh()
     }
-    window.addEventListener('doorae:goal:updated', handler)
-    return () => window.removeEventListener('doorae:goal:updated', handler)
+    window.addEventListener('anygarden:goal:updated', handler)
+    return () => window.removeEventListener('anygarden:goal:updated', handler)
   }, [roomId, refresh])
 
   const remove = useCallback(async (goalId: string) => {

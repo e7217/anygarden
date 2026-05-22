@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from doorae_machine.protocol.frames import (
+from anygarden_machine.protocol.frames import (
     AgentActual,
     ReportActualStateFrame,
     RequestReplacementFrame,
@@ -399,21 +399,21 @@ class TestParseServerFrame:
         assert frame.agent_token == "tok-abc"
 
     def test_drain(self):
-        from doorae_machine.protocol.frames import DrainFrame
+        from anygarden_machine.protocol.frames import DrainFrame
 
         data = {"type": "drain"}
         frame = parse_server_frame(data)
         assert isinstance(frame, DrainFrame)
 
     def test_ping(self):
-        from doorae_machine.protocol.frames import PingFrame
+        from anygarden_machine.protocol.frames import PingFrame
 
         data = {"type": "ping"}
         frame = parse_server_frame(data)
         assert isinstance(frame, PingFrame)
 
     def test_rotate_token(self):
-        from doorae_machine.protocol.frames import RotateTokenFrame
+        from anygarden_machine.protocol.frames import RotateTokenFrame
 
         data = {"type": "rotate_token", "new_token": "new-tok-xyz"}
         frame = parse_server_frame(data)
@@ -455,7 +455,7 @@ class TestMemoryFrames237:
     """
 
     def test_sync_frame_parses_memory_md(self):
-        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+        from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
         frame = SyncDesiredStateFrame.model_validate(
             {
@@ -470,7 +470,7 @@ class TestMemoryFrames237:
         assert frame.memory_md == "## Note\nremember me"
 
     def test_sync_frame_memory_md_defaults_to_none(self):
-        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+        from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
         frame = SyncDesiredStateFrame.model_validate(
             {
@@ -483,7 +483,7 @@ class TestMemoryFrames237:
         assert frame.memory_md is None
 
     def test_agent_memory_update_frame_serialises(self):
-        from doorae_machine.protocol.frames import AgentMemoryUpdateFrame
+        from anygarden_machine.protocol.frames import AgentMemoryUpdateFrame
 
         frame = AgentMemoryUpdateFrame(agent_id="a1", memory_md="hello")
         payload = frame.model_dump()
@@ -502,7 +502,7 @@ class TestSharedFileFrames:
     """
 
     def test_write_round_trip(self):
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileWriteFrame,
         )
 
@@ -522,7 +522,7 @@ class TestSharedFileFrames:
         assert parsed.content_sha256 == "deadbeef"
 
     def test_delete_round_trip(self):
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileDeleteFrame,
         )
 

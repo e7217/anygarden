@@ -1,4 +1,4 @@
-"""Tests for :mod:`doorae.llm_gateway.usage_logger` (#197).
+"""Tests for :mod:`anygarden.llm_gateway.usage_logger` (#197).
 
 Two pure functions over dict payloads — no DB, no HTTP. Each shape
 (Anthropic + OpenAI, JSON + SSE) gets a positive case; missing fields
@@ -8,7 +8,7 @@ record "which model was called" even when token counts are unavailable.
 
 from __future__ import annotations
 
-from doorae.llm_gateway.usage_logger import (
+from anygarden.llm_gateway.usage_logger import (
     ParsedUsage,
     parse_json_usage,
     parse_stream_event,

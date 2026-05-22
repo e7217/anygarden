@@ -20,11 +20,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     AgentToken,
     Base,
@@ -33,10 +33,10 @@ from doorae.db.models import (
     Room,
     Task,
 )
-from doorae.mcp.tools import create_task
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.skills_library.service import SkillLibraryService
+from anygarden.mcp.tools import create_task
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.skills_library.service import SkillLibraryService
 
 
 async def _seed_orchestrator_room(
@@ -274,7 +274,7 @@ async def test_unknown_room_is_error(db) -> None:
 async def rpc_env():
     """Live FastAPI app + agent token wired so the JSON-RPC endpoint
     accepts ``tools/call create_task``."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

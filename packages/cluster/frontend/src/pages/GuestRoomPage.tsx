@@ -16,8 +16,8 @@ import { Hash, LogOut, Users } from 'lucide-react'
  * ``/g/:roomId``
  *
  * Single-room shell for an anonymous guest. The guest JWT is stored
- * under the shared ``doorae_token`` slot; we rely on
- * ``doorae_is_guest`` + ``doorae_guest_room_id`` sentinels to
+ * under the shared ``anygarden_token`` slot; we rely on
+ * ``anygarden_is_guest`` + ``anygarden_guest_room_id`` sentinels to
  * distinguish the flow from a registered-user session so (a) we
  * don't call ``/auth/me`` (403 for guests) and (b) we refuse to
  * render if the JWT was issued for a different room.
@@ -37,8 +37,8 @@ export default function GuestRoomPage() {
   const [participantsOpen, setParticipantsOpen] = useState(false)
 
   const isGuest = isGuestSession()
-  const boundRoomId = localStorage.getItem('doorae_guest_room_id')
-  const displayName = localStorage.getItem('doorae_guest_display_name') ?? ''
+  const boundRoomId = localStorage.getItem('anygarden_guest_room_id')
+  const displayName = localStorage.getItem('anygarden_guest_display_name') ?? ''
 
   // Defend against stale URLs — a guest with a valid JWT but typing a
   // different room UUID into the address bar must be bounced.

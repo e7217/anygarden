@@ -1,6 +1,6 @@
 # drmachine
 
-Machine daemon for Doorae agent orchestration. Connects to the drhub server via WebSocket and manages agent subprocesses on the local machine.
+Machine daemon for Anygarden agent orchestration. Connects to the drhub server via WebSocket and manages agent subprocesses on the local machine.
 
 ## Installation
 
@@ -11,15 +11,15 @@ pip install -e ".[dev]"
 ## Usage
 
 ```bash
-# Register this machine with a Doorae server
-doorae-machine register --server wss://doorae.example.com --name my-machine
+# Register this machine with a Anygarden server
+anygarden-machine register --server wss://anygarden.example.com --name my-machine
 
 # Run the daemon
-doorae-machine run
+anygarden-machine run
 
 # Check status
-doorae-machine status
+anygarden-machine status
 
 # Install as systemd user service
-doorae-machine install-systemd-unit
+anygarden-machine install-systemd-unit
 ```

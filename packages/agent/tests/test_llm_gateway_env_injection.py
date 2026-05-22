@@ -2,7 +2,7 @@
 into ``os.environ`` only for the duration of its SDK call (#197 Phase 5).
 
 The contract: when ``engine_secrets`` (piped via stdin at startup,
-stored in :mod:`doorae_agent.secrets`) carries ``ANTHROPIC_BASE_URL`` /
+stored in :mod:`anygarden_agent.secrets`) carries ``ANTHROPIC_BASE_URL`` /
 ``ANTHROPIC_AUTH_TOKEN``, the adapter must temporarily place those into
 ``os.environ`` so the in-process SDK's credential discovery can read
 them — and clean them back out after the call returns so a later tool
@@ -15,8 +15,8 @@ import os
 
 import pytest
 
-from doorae_agent import secrets as agent_secrets
-from doorae_agent.integrations.claude_code import ClaudeCodeAdapter
+from anygarden_agent import secrets as agent_secrets
+from anygarden_agent.integrations.claude_code import ClaudeCodeAdapter
 
 
 @pytest.fixture(autouse=True)
@@ -42,8 +42,8 @@ class TestClaudeCodeEnvInjection:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
         agent_secrets.set_secrets({
-            "ANTHROPIC_BASE_URL": "https://doorae-server/api/v1/llm",
-            "ANTHROPIC_AUTH_TOKEN": "sk-doorae-agent-token-xyz",
+            "ANTHROPIC_BASE_URL": "https://anygarden-server/api/v1/llm",
+            "ANTHROPIC_AUTH_TOKEN": "sk-anygarden-agent-token-xyz",
         })
 
         observed: dict[str, str | None] = {}
@@ -63,8 +63,8 @@ class TestClaudeCodeEnvInjection:
         assert reply is None  # no messages → no reply
 
         # The SDK call saw the injected values.
-        assert observed["base_url"] == "https://doorae-server/api/v1/llm"
-        assert observed["auth_token"] == "sk-doorae-agent-token-xyz"
+        assert observed["base_url"] == "https://anygarden-server/api/v1/llm"
+        assert observed["auth_token"] == "sk-anygarden-agent-token-xyz"
 
         # After the call returns the environment is restored — no
         # leak into the long-running agent process.

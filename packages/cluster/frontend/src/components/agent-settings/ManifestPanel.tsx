@@ -13,7 +13,7 @@
  * that is always present and cannot be deleted — clearing its content
  * on Save writes ``agents_md=null``. Other rows live under the
  * ``skills/``, ``.codex/``, ``.claude/``, ``.gemini/``, ``.openhands/``
- * prefixes that the server whitelists in ``doorae/agent_files.py``.
+ * prefixes that the server whitelists in ``anygarden/agent_files.py``.
  *
  * Save semantics:
  *
@@ -50,7 +50,7 @@ import { BookOpen, ExternalLink, Lock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 // Allowed top-level prefixes from the server-side whitelist.
-// Must stay in sync with ``doorae-server/doorae/agent_files.py``.
+// Must stay in sync with ``anygarden-server/anygarden/agent_files.py``.
 const ALLOWED_PREFIXES: readonly string[] = [
   'skills/',
   '.codex/',
@@ -61,7 +61,7 @@ const ALLOWED_PREFIXES: readonly string[] = [
 
 // Allowed file extensions from the server-side whitelist.
 // Must stay in sync with ``_ALLOWED_EXTENSIONS`` in
-// ``packages/cluster/doorae/agent_files.py``. Used for the upload
+// ``packages/cluster/anygarden/agent_files.py``. Used for the upload
 // ``accept`` hint and for client-side pre-validation so the admin
 // gets immediate feedback instead of a 400 from the server.
 const ALLOWED_EXTENSIONS: readonly string[] = [
@@ -73,7 +73,7 @@ const ALLOWED_EXTENSIONS: readonly string[] = [
   '.yml',
   '.env',
   // Issue #112 — scripts admitted under ``skills/<name>/scripts/*``.
-  // doorae does not execute these; engine CLIs do.
+  // anygarden does not execute these; engine CLIs do.
   '.sh',
   '.py',
   '.js',
@@ -98,7 +98,7 @@ const PREFIX_LABELS: Record<string, string> = {
 //
 // Must stay in sync with the backend's ``_ALLOWED_PREFIXES``:
 // adding a new engine means editing this map AND
-// ``doorae/agent_files.py``. The server accepts every prefix
+// ``anygarden/agent_files.py``. The server accepts every prefix
 // regardless of engine today, so this filter is purely a UX
 // affordance — API callers still bear the responsibility of not
 // writing garbage.
@@ -657,7 +657,7 @@ export default function ManifestPanel({
   // dialog opens.
   useEffect(() => {
     if (!agent) return
-    const key = `doorae_agent_tree_${agent.id}`
+    const key = `anygarden_agent_tree_${agent.id}`
     try {
       const saved = localStorage.getItem(key)
       if (saved) {
@@ -688,7 +688,7 @@ export default function ManifestPanel({
       if (agent) {
         try {
           localStorage.setItem(
-            `doorae_agent_tree_${agent.id}`,
+            `anygarden_agent_tree_${agent.id}`,
             JSON.stringify(Array.from(next)),
           )
         } catch {
@@ -908,7 +908,7 @@ export default function ManifestPanel({
       if (agent) {
         try {
           localStorage.setItem(
-            `doorae_agent_tree_${agent.id}`,
+            `anygarden_agent_tree_${agent.id}`,
             JSON.stringify(Array.from(next)),
           )
         } catch {
@@ -954,7 +954,7 @@ export default function ManifestPanel({
       if (agent) {
         try {
           localStorage.setItem(
-            `doorae_agent_tree_${agent.id}`,
+            `anygarden_agent_tree_${agent.id}`,
             JSON.stringify(Array.from(next)),
           )
         } catch {

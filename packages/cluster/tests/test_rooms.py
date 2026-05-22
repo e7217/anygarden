@@ -10,18 +10,18 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Project, Room, User
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Participant, Project, Room, User
 
 
 # -- Fixtures -----------------------------------------------------------------
 
 
 @pytest_asyncio.fixture()
-async def room_env(config: DooraeSettings):
+async def room_env(config: AnygardenSettings):
     """Set up app with engine, session factory, user, project, and room seed data."""
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
@@ -30,7 +30,7 @@ async def room_env(config: DooraeSettings):
         await conn.run_sync(Base.metadata.create_all)
 
     async with session_factory() as db:
-        user = User(email="room-test@doorae.io", password_hash="x")
+        user = User(email="room-test@anygarden.io", password_hash="x")
         db.add(user)
         await db.flush()
 
@@ -145,7 +145,7 @@ class TestRoomCRUD:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Seed a DM room directly
-            from doorae.db.models import Room as RoomModel
+            from anygarden.db.models import Room as RoomModel
             sf = app.state.session_factory
             async with sf() as db:
                 dm = RoomModel(project_id=project.id, name="DM: test-bot", is_dm=True)
@@ -201,8 +201,8 @@ class TestRoomCRUD:
 
         sf = app.state.session_factory
         async with sf() as db:
-            from doorae.db.models import Participant as P
-            from doorae.db.models import User as U
+            from anygarden.db.models import Participant as P
+            from anygarden.db.models import User as U
 
             guest = U(
                 email=None,
@@ -239,8 +239,8 @@ class TestRoomCRUD:
         WS subscription here, so online defaults to False; we then
         subscribe via ``ConnectionManager`` and verify the response
         flips."""
-        from doorae.presence import PresenceService
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.presence import PresenceService
+        from anygarden.ws.manager import ConnectionManager
 
         app = room_env["app"]
         room = room_env["room"]
@@ -368,7 +368,7 @@ class TestRoomCRUD:
         user = room_env["user"]
         token = room_env["token"]
 
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.ws.manager import ConnectionManager
 
         if not getattr(app.state, "connection_manager", None):
             app.state.connection_manager = ConnectionManager()
@@ -557,11 +557,11 @@ class TestRoomCRUD:
 
         # Seed a member-role user in the room and mint their token.
         async with sf() as db:
-            from doorae.auth.jwt import create_user_token as _mk_token
-            from doorae.db.models import Participant as _P
-            from doorae.db.models import User as _U
+            from anygarden.auth.jwt import create_user_token as _mk_token
+            from anygarden.db.models import Participant as _P
+            from anygarden.db.models import User as _U
 
-            member = _U(email="member@doorae.io", password_hash="x")
+            member = _U(email="member@anygarden.io", password_hash="x")
             db.add(member)
             await db.flush()
             db.add(_P(room_id=room.id, user_id=member.id, role="member"))
@@ -594,10 +594,10 @@ class TestRoomCRUD:
         sf = app.state.session_factory
 
         async with sf() as db:
-            from doorae.auth.jwt import create_user_token as _mk_token
-            from doorae.db.models import User as _U
+            from anygarden.auth.jwt import create_user_token as _mk_token
+            from anygarden.db.models import User as _U
 
-            outsider = _U(email="outsider@doorae.io", password_hash="x")
+            outsider = _U(email="outsider@anygarden.io", password_hash="x")
             db.add(outsider)
             await db.commit()
             await db.refresh(outsider)
@@ -628,10 +628,10 @@ class TestRoomCRUD:
         sf = app.state.session_factory
 
         async with sf() as db:
-            from doorae.auth.jwt import create_user_token as _mk_token
-            from doorae.db.models import User as _U
+            from anygarden.auth.jwt import create_user_token as _mk_token
+            from anygarden.db.models import User as _U
 
-            admin = _U(email="g-admin@doorae.io", password_hash="x", is_admin=True)
+            admin = _U(email="g-admin@anygarden.io", password_hash="x", is_admin=True)
             db.add(admin)
             await db.commit()
             await db.refresh(admin)
@@ -665,7 +665,7 @@ class TestRoomCRUD:
         owner_part = room_env["participant"]
         sf = app.state.session_factory
 
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.ws.manager import ConnectionManager
 
         if not getattr(app.state, "connection_manager", None):
             app.state.connection_manager = ConnectionManager()
@@ -675,9 +675,9 @@ class TestRoomCRUD:
         # second participant_id under the same user_id, which is
         # what the "other-WS push" path reaches for.
         async with sf() as db:
-            from doorae.db.models import Participant as _P
-            from doorae.db.models import Project as _Proj
-            from doorae.db.models import Room as _R
+            from anygarden.db.models import Participant as _P
+            from anygarden.db.models import Project as _Proj
+            from anygarden.db.models import Room as _R
 
             other_proj = _Proj(name="sib-proj")
             db.add(other_proj)
@@ -757,7 +757,7 @@ class TestRoomCRUD:
         sf = app.state.session_factory
 
         async with sf() as db:
-            from doorae.db.models import Room as _R
+            from anygarden.db.models import Room as _R
 
             child = _R(
                 project_id=room.project_id,
@@ -780,7 +780,7 @@ class TestRoomCRUD:
         async with sf() as db:
             from sqlalchemy import select as _select
 
-            from doorae.db.models import Room as _R
+            from anygarden.db.models import Room as _R
 
             reloaded = (
                 await db.execute(_select(_R).where(_R.id == child_id))
@@ -831,7 +831,7 @@ class TestRepresentativeAgent:
     """Tests for PUT /api/v1/rooms/{room_id}/representative."""
 
     @pytest_asyncio.fixture()
-    async def rep_env(self, config: DooraeSettings):
+    async def rep_env(self, config: AnygardenSettings):
         """Admin user + room + agent participant for representative tests."""
         engine = build_engine(config.db_url)
         session_factory = build_session_factory(engine)
@@ -840,7 +840,7 @@ class TestRepresentativeAgent:
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            admin = User(email="rep-admin@doorae.io", password_hash="x", is_admin=True)
+            admin = User(email="rep-admin@anygarden.io", password_hash="x", is_admin=True)
             db.add(admin)
             await db.flush()
 
@@ -948,7 +948,7 @@ class TestRoomSpeakerStrategy:
     """
 
     @pytest_asyncio.fixture()
-    async def rep_env(self, config: DooraeSettings):
+    async def rep_env(self, config: AnygardenSettings):
         """Admin user + room + participant agent. Structural twin of
         ``TestRepresentativeAgent.rep_env`` — duplicated rather than
         hoisted to the module because ``pytest`` class fixtures can't
@@ -960,7 +960,7 @@ class TestRoomSpeakerStrategy:
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            admin = User(email="ss-admin@doorae.io", password_hash="x", is_admin=True)
+            admin = User(email="ss-admin@anygarden.io", password_hash="x", is_admin=True)
             db.add(admin)
             await db.flush()
 
@@ -1130,8 +1130,8 @@ class TestRoomSpeakerStrategy:
         frame was wired, the settings lived only in the welcome frame,
         so a mid-session change silently left connected agents on the
         old strategy until they reconnected."""
-        from doorae.ws.manager import ConnectionManager
-        from doorae.ws.protocol import RoomSettingsChangedOut
+        from anygarden.ws.manager import ConnectionManager
+        from anygarden.ws.protocol import RoomSettingsChangedOut
 
         app, room, agent, token = (
             rep_env["app"],
@@ -1183,8 +1183,8 @@ class TestRoomSpeakerStrategy:
         """Rename-only PATCH stays silent — no cached agent state
         depends on ``name``/``description``, so emitting a frame would
         be wasted traffic."""
-        from doorae.ws.manager import ConnectionManager
-        from doorae.ws.protocol import RoomSettingsChangedOut
+        from anygarden.ws.manager import ConnectionManager
+        from anygarden.ws.protocol import RoomSettingsChangedOut
 
         app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
         app.state.connection_manager = ConnectionManager()
@@ -1222,7 +1222,7 @@ class TestRoomContextWindow:
     """
 
     @pytest_asyncio.fixture()
-    async def admin_env(self, config: DooraeSettings):
+    async def admin_env(self, config: AnygardenSettings):
         """Admin user + room. Mirrors the shape of the ``rep_env``
         fixture above so the admin-only PATCH tests use the same
         pattern as the speaker-strategy suite."""
@@ -1233,7 +1233,7 @@ class TestRoomContextWindow:
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            admin = User(email="cw-admin@doorae.io", password_hash="x", is_admin=True)
+            admin = User(email="cw-admin@anygarden.io", password_hash="x", is_admin=True)
             db.add(admin)
             await db.flush()
 
@@ -1396,7 +1396,7 @@ class TestRemoveParticipant:
     """Tests for DELETE /api/v1/rooms/{room_id}/participants/{participant_id}."""
 
     @pytest_asyncio.fixture()
-    async def removal_env(self, config: DooraeSettings):
+    async def removal_env(self, config: AnygardenSettings):
         """Room with an owner, a regular member, an agent (representative),
         and an outsider (not a member of the room)."""
         engine = build_engine(config.db_url)
@@ -1406,10 +1406,10 @@ class TestRemoveParticipant:
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            owner = User(email="owner@doorae.io", password_hash="x")
-            member = User(email="member@doorae.io", password_hash="x")
-            outsider = User(email="outsider@doorae.io", password_hash="x")
-            admin = User(email="admin@doorae.io", password_hash="x", is_admin=True)
+            owner = User(email="owner@anygarden.io", password_hash="x")
+            member = User(email="member@anygarden.io", password_hash="x")
+            outsider = User(email="outsider@anygarden.io", password_hash="x")
+            admin = User(email="admin@anygarden.io", password_hash="x", is_admin=True)
             db.add_all([owner, member, outsider, admin])
             await db.flush()
 
@@ -1488,7 +1488,7 @@ class TestRemoveParticipant:
         member_part = removal_env["member_part"]
         owner_token = removal_env["owner_token"]
 
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.ws.manager import ConnectionManager
 
         if not getattr(app.state, "connection_manager", None):
             app.state.connection_manager = ConnectionManager()
@@ -1547,7 +1547,7 @@ class TestRemoveParticipant:
         member_part = removal_env["member_part"]
         owner_token = removal_env["owner_token"]
 
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.ws.manager import ConnectionManager
 
         if not getattr(app.state, "connection_manager", None):
             app.state.connection_manager = ConnectionManager()
@@ -1654,7 +1654,7 @@ class TestRemoveParticipant:
     @pytest.mark.asyncio
     async def test_guest_forbidden(self, removal_env) -> None:
         """A guest token is rejected by ``forbid_guest`` before any DB work."""
-        from doorae.auth.jwt import create_guest_token
+        from anygarden.auth.jwt import create_guest_token
         from datetime import datetime, timedelta, timezone
 
         app = removal_env["app"]
@@ -1710,7 +1710,7 @@ class TestRemoveParticipant:
             assert "leave-room" in resp.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_removing_last_admin_returns_409(self, config: DooraeSettings) -> None:
+    async def test_removing_last_admin_returns_409(self, config: AnygardenSettings) -> None:
         """Removing the only admin/owner of a room returns 409."""
         engine = build_engine(config.db_url)
         session_factory = build_session_factory(engine)
@@ -1719,8 +1719,8 @@ class TestRemoveParticipant:
             await conn.run_sync(Base.metadata.create_all)
 
         async with session_factory() as db:
-            global_admin = User(email="ga@doorae.io", password_hash="x", is_admin=True)
-            sole_owner = User(email="sole@doorae.io", password_hash="x")
+            global_admin = User(email="ga@anygarden.io", password_hash="x", is_admin=True)
+            sole_owner = User(email="sole@anygarden.io", password_hash="x")
             db.add_all([global_admin, sole_owner])
             await db.flush()
 

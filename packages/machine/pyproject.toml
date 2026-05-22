@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "anygarden-machine"
 version = "0.7.1"
-description = "Machine daemon for Doorae agent orchestration"
+description = "Machine daemon for Anygarden agent orchestration"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
 readme = "README.md"
@@ -43,10 +43,10 @@ dev = [
 ]
 
 [project.scripts]
-doorae-machine = "doorae_machine.cli:main"
+anygarden-machine = "anygarden_machine.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["doorae_machine"]
+packages = ["anygarden_machine"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,7 +1,7 @@
 """Tests for agent directory path validation.
 
-Shared whitelist rules between doorae-server (manifest writes) and
-doorae-machine (materialization) to defend against path traversal,
+Shared whitelist rules between anygarden-server (manifest writes) and
+anygarden-machine (materialization) to defend against path traversal,
 clobber attacks, and accidental escapes from the managed tree.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae_machine.agent_dir import (
+from anygarden_machine.agent_dir import (
     AgentFilePathError,
     validate_agent_file_path,
     validate_agent_id,
@@ -110,7 +110,7 @@ class TestRejectedPaths:
 
 
 class TestValidateAgentId:
-    """agent_id is used as a path segment under ~/.doorae/agents/, so
+    """agent_id is used as a path segment under ~/.anygarden/agents/, so
     a maliciously crafted value could escape the managed root. The
     rules enforce a narrow filename-like alphabet — UUIDs fit and so
     does any reasonable test id like ``agent-x``.

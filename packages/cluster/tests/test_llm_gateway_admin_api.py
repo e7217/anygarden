@@ -20,25 +20,25 @@ from cryptography.fernet import Fernet
 from httpx import ASGITransport, AsyncClient, MockTransport, Response
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Base,
     LLMGatewayModel,
     LLMGatewaySecret,
     LLMGatewayUsage,
     User,
 )
-from doorae.mcp_templates.encryption import MCPSecrets
+from anygarden.mcp_templates.encryption import MCPSecrets
 
 
 class _FakeSupervisor:
     """In-memory stand-in — records restart() calls for assertions."""
 
     def __init__(self) -> None:
-        from doorae.llm_gateway.supervisor import GatewayState, GatewayStatus
+        from anygarden.llm_gateway.supervisor import GatewayState, GatewayStatus
 
         self._state = GatewayState.RUNNING
         self._status = GatewayStatus(
@@ -73,7 +73,7 @@ class _FakeSupervisor:
 @pytest_asyncio.fixture()
 async def env() -> AsyncIterator[dict[str, Any]]:
     fernet_key = Fernet.generate_key().decode("ascii")
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=_stdlib_secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -215,7 +215,7 @@ async def test_create_model_ollama_allows_missing_api_key_ref(env) -> None:
     핸들러는 provider가 ``ollama``/``vllm``/``custom``이면 빈/None
     ``api_key_ref``를 허용하고 고정 sentinel ``OLLAMA_DUMMY``를 DB에
     저장한다. 이 sentinel은 supervisor가 child_env에
-    ``DOORAE_LITELLM_OLLAMA_DUMMY`` 로 주입하는 기본 placeholder와
+    ``ANYGARDEN_LITELLM_OLLAMA_DUMMY`` 로 주입하는 기본 placeholder와
     한 짝으로 동작한다.
     """
     async with AsyncClient(
@@ -463,7 +463,7 @@ async def test_status_503_when_supervisor_absent(env) -> None:
 
 
 async def test_usage_aggregates_by_model_and_agent(env) -> None:
-    from doorae.db.models import Agent
+    from anygarden.db.models import Agent
 
     now = datetime.now(timezone.utc)
     # Three requests: two for claude from agent-A, one for gpt from agent-B.

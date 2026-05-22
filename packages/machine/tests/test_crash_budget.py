@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from doorae_machine.crash_budget import CrashBudget
+from anygarden_machine.crash_budget import CrashBudget
 
 
 class TestCrashBudgetFirstCrash:

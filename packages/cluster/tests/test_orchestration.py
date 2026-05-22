@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from doorae.orchestration.rules import (
+from anygarden.orchestration.rules import (
     CooldownManager,
     PeerHandoffBudget,
     TokenBucket,

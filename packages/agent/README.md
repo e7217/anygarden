@@ -1,6 +1,6 @@
 # dragent
 
-Python SDK for the Doorae multi-agent chat platform.
+Python SDK for the Anygarden multi-agent chat platform.
 
 ## Installation
 
@@ -19,7 +19,7 @@ pip install dragent[all-engines]  # All engine integrations
 ## Quick Start
 
 ```python
-from doorae_agent.client import ChatClient
+from anygarden_agent.client import ChatClient
 
 client = ChatClient("ws://localhost:8000", token="your-token", agent_name="MyAgent")
 
@@ -35,10 +35,10 @@ await client.run()
 
 ```bash
 # Run an agent
-doorae-agent --engine openai --name PM --server ws://localhost:8000 --token $TOK --room room1
+anygarden-agent --engine openai --name PM --server ws://localhost:8000 --token $TOK --room room1
 
 # Run a text chat client
-doorae-client --server ws://localhost:8000 --user me --room sprint-42
+anygarden-client --server ws://localhost:8000 --user me --room sprint-42
 ```
 
 ## Context Injection (#74)
@@ -64,8 +64,8 @@ Agents can opt out per-agent via the `agents.context_window_opt_out` flag
 (surfaced as "대화 맥락 공유 제외" in `AgentSettingsMenu`); opted-out agents
 turn a received `ingest_only` broadcast into `SKIP` in `decide_policy`.
 
-**Deprecated**: the former `DOORAE_CONTEXT_WINDOW_ENABLED` /
-`DOORAE_CONTEXT_WINDOW_SIZE` environment variables from Stage B (#74 Part
+**Deprecated**: the former `ANYGARDEN_CONTEXT_WINDOW_ENABLED` /
+`ANYGARDEN_CONTEXT_WINDOW_SIZE` environment variables from Stage B (#74 Part
 B) are removed as of #148 Part 4. The decision now lives in the cluster DB
 and takes effect the next time the agent reconnects (Part 2's UI toggle
 triggers a `bump_generation` respawn so the refresh is automatic).

@@ -11,7 +11,7 @@ build/
 .env
 
 # Vite build output (served by FastAPI)
-doorae/static/
+anygarden/static/
 
 # Node
 frontend/node_modules/

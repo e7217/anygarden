@@ -6,10 +6,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Machine, MachineEngine, User
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.scheduler.placement import NoSuitableMachineError, select_machine_for
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Machine, MachineEngine, User
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 
 @pytest_asyncio.fixture()

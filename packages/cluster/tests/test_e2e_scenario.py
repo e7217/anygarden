@@ -23,12 +23,12 @@ import pytest
 import pytest_asyncio
 from starlette.testclient import TestClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     AgentToken,
     Base,
@@ -39,13 +39,13 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.auth.machine_token import generate_machine_token, hash_machine_token
+from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 
 
 @pytest_asyncio.fixture()
 async def e2e_env():
     """Full E2E environment: server + user + agent + room + participants."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="WARNING",
@@ -58,7 +58,7 @@ async def e2e_env():
 
     async with session_factory() as db:
         # 1. 유저 생성
-        user = User(email="alice@doorae.io", password_hash="hashed_pw", is_admin=True)
+        user = User(email="alice@anygarden.io", password_hash="hashed_pw", is_admin=True)
         db.add(user)
         await db.flush()
 
@@ -216,7 +216,7 @@ class TestE2EScenario:
         with TestClient(e2e_env["app"]) as tc:
             with tc.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -238,7 +238,7 @@ class TestE2EScenario:
         with TestClient(e2e_env["app"]) as tc:
             with tc.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -288,7 +288,7 @@ class TestE2EScenario:
 
                 with tc.websocket_connect(
                     url,
-                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{token}"],
                 ) as ws:
                     welcome = json.loads(ws.receive_text())
                     assert welcome["type"] == "welcome"
@@ -336,7 +336,7 @@ class TestE2EScenario:
         with TestClient(e2e_env["app"]) as tc:
             with tc.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{user_jwt}"],
+                subprotocols=["anygarden.v1", f"bearer.{user_jwt}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -366,7 +366,7 @@ class TestE2EScenario:
             # 첫 연결: 3개 메시지 전송
             with tc.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{user_jwt}"],
+                subprotocols=["anygarden.v1", f"bearer.{user_jwt}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -379,7 +379,7 @@ class TestE2EScenario:
             # 재연결: since_seq로 놓친 메시지 수신
             with tc.websocket_connect(
                 f"/ws/rooms/{room_id}?since_seq={last_seq - 1}",
-                subprotocols=["doorae.v1", f"bearer.{user_jwt}"],
+                subprotocols=["anygarden.v1", f"bearer.{user_jwt}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"

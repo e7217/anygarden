@@ -1,15 +1,15 @@
-# doorae-machine Architecture
+# anygarden-machine Architecture
 
 ## Overview
 
-doorae-machine은 호스트 머신에서 실행되는 데몬으로, Doorae 서버(cluster)에 WebSocket으로 연결하여 에이전트 서브프로세스의 생명주기를 관리한다.
+anygarden-machine은 호스트 머신에서 실행되는 데몬으로, Anygarden 서버(cluster)에 WebSocket으로 연결하여 에이전트 서브프로세스의 생명주기를 관리한다.
 
 ## Package Structure
 
 ```
-doorae_machine/
+anygarden_machine/
 ├── cli.py              # CLI 엔트리포인트 (register, run, status, install-systemd-unit)
-├── config.py           # 설정 로더 (~/.doorae/machine.toml)
+├── config.py           # 설정 로더 (~/.anygarden/machine.toml)
 ├── daemon.py           # 메인 데몬 루프 (WebSocket 연결, 하트비트)
 ├── spawner.py          # 에이전트 subprocess spawn/kill/watch
 ├── supervisor.py       # 프로세스 감시 (crash 감지, stderr 수집)
@@ -39,7 +39,7 @@ spawner.py ──→ agent directory 구성 (materialize)
     │            └── workspace/ (codex sandbox fallback only)
     │
     ▼
-subprocess ──→ doorae-agent 실행
+subprocess ──→ anygarden-agent 실행
     │
     ▼
 supervisor.py ──→ 프로세스 감시, crash 보고
@@ -51,12 +51,12 @@ supervisor.py ──→ 프로세스 감시, crash 보고
 
 에이전트 서브프로세스 관리의 핵심:
 1. **materialize**: 서버 manifest를 디스크에 구현 (ADR-002)
-   - 에이전트별 디렉토리 `~/.doorae/agents/<agent_id>/`
+   - 에이전트별 디렉토리 `~/.anygarden/agents/<agent_id>/`
    - AGENTS.md, 엔진별 설정, memory 디렉토리 작성
    - `skills/`는 agent-owned 디렉토리로 보존하고 manifest skill은 없을 때만 seed
-   - `doorae-agent` subprocess cwd는 agent root
+   - `anygarden-agent` subprocess cwd는 agent root
    - codex는 `read_only_paths` 미지원 버전 보호를 위해 SDK thread cwd만 `workspace/` fallback 사용
-2. **spawn**: `doorae-agent` 또는 `uvx doorae-agent`로 subprocess 시작
+2. **spawn**: `anygarden-agent` 또는 `uvx anygarden-agent`로 subprocess 시작
 3. **kill**: SIGTERM → 10초 대기 → SIGKILL 순서로 종료
 
 ### Supervisor (supervisor.py)

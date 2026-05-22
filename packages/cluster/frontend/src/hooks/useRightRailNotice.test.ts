@@ -9,7 +9,7 @@ import { RightSidebarLayoutProvider, useRightSidebarLayout } from './useRightSid
 import { useRightRailNotice } from './useRightRailNotice'
 
 const ROOM = 'room-1'
-const STORAGE_KEY = 'doorae_right_sidebar_collapsed'
+const STORAGE_KEY = 'anygarden_right_sidebar_collapsed'
 
 function wrap({ children }: { children: ReactNode }) {
   return createElement(RightSidebarLayoutProvider, null, children)
@@ -27,7 +27,7 @@ afterEach(() => {
 
 function fireTaskEvent(roomId: string) {
   window.dispatchEvent(
-    new CustomEvent('doorae:task:updated', {
+    new CustomEvent('anygarden:task:updated', {
       detail: { task: { room_id: roomId } },
     }),
   )

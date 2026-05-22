@@ -1,4 +1,4 @@
-"""Shared test fixtures for doorae-agent."""
+"""Shared test fixtures for anygarden-agent."""
 
 from __future__ import annotations
 

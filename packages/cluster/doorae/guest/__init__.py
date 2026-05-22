@@ -1,5 +1,0 @@
-"""Guest lifecycle utilities (§11.10 of the design doc)."""
-
-from doorae.guest.anonymize import anonymize_expired_guests
-
-__all__ = ["anonymize_expired_guests"]

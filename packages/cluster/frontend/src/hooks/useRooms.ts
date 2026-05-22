@@ -189,7 +189,7 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshSidebarRooms = useCallback(() => {
-    if (localStorage.getItem('doorae_is_guest') === '1') return;
+    if (localStorage.getItem('anygarden_is_guest') === '1') return;
     projects.forEach(p => { void fetchRooms(p.id); });
     void fetchAgentDMs();
   }, [projects, fetchRooms, fetchAgentDMs]);
@@ -219,7 +219,7 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
     // and parks ``status`` at ``error`` forever. No-op and stay on
     // ``idle`` so consumers treat it as "not applicable" rather than
     // "failed".
-    if (localStorage.getItem('doorae_is_guest') === '1') return;
+    if (localStorage.getItem('anygarden_is_guest') === '1') return;
     setStatus('loading');
     try {
       const resp = await apiFetch('/api/v1/projects');
@@ -300,7 +300,7 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   // enforces that ``creator_participant_id`` must be a member of
   // the parent, and that every requested participant is also a
   // parent member — see
-  // ``doorae-server/doorae/rooms/service.py::create_sub_room``.
+  // ``anygarden-server/anygarden/rooms/service.py::create_sub_room``.
   // The refetched list lets every subscriber (notably Sidebar)
   // pick up the new child immediately.
   const createSubRoom = useCallback(async (
@@ -505,7 +505,7 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const markRoomRead = useCallback(async (roomId: string) => {
-    if (localStorage.getItem('doorae_is_guest') === '1') return;
+    if (localStorage.getItem('anygarden_is_guest') === '1') return;
     try {
       const resp = await apiFetch(`/api/v1/rooms/${roomId}/read`, {
         method: 'POST',
@@ -555,15 +555,15 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
   // Server-pushed membership changes (see
   // ws/protocol.py::RoomMembershipChangedOut) arrive on whichever
   // per-room WS the user happens to have open. The room-level hook
-  // re-emits them as ``doorae:rooms:invalidate`` window events so
+  // re-emits them as ``anygarden:rooms:invalidate`` window events so
   // we can refresh the tree from the provider regardless of which
   // ChatPage instance received the frame. ``refetch`` is the right
   // hammer here — DM additions, project additions, and per-project
   // room additions all need a consistent view.
   useEffect(() => {
     const handler = () => { void refetch(); };
-    window.addEventListener('doorae:rooms:invalidate', handler);
-    return () => window.removeEventListener('doorae:rooms:invalidate', handler);
+    window.addEventListener('anygarden:rooms:invalidate', handler);
+    return () => window.removeEventListener('anygarden:rooms:invalidate', handler);
   }, [refetch]);
 
   // Sidebar pin / reorder changes from another session of the same
@@ -595,10 +595,10 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
         return out;
       });
     };
-    window.addEventListener('doorae:rooms:pin-order', handler as EventListener);
+    window.addEventListener('anygarden:rooms:pin-order', handler as EventListener);
     return () => {
       window.removeEventListener(
-        'doorae:rooms:pin-order', handler as EventListener,
+        'anygarden:rooms:pin-order', handler as EventListener,
       );
     };
   }, []);
@@ -628,10 +628,10 @@ export function RoomsProvider({ children }: { children: ReactNode }) {
       });
     };
     window.addEventListener(
-      'doorae:rooms:settings-changed', handler as EventListener,
+      'anygarden:rooms:settings-changed', handler as EventListener,
     );
     return () => window.removeEventListener(
-      'doorae:rooms:settings-changed', handler as EventListener,
+      'anygarden:rooms:settings-changed', handler as EventListener,
     );
   }, []);
 

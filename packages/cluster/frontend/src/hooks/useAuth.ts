@@ -15,7 +15,7 @@ export function useAuth() {
   const fetchMe = useCallback(async () => {
     const token = getAuthToken();
 
-    // No token — try dev-token auto-login (only works when DOORAE_DEV=1)
+    // No token — try dev-token auto-login (only works when ANYGARDEN_DEV=1)
     if (!token) {
       try {
         const devResp = await fetch('/api/v1/auth/dev-token');

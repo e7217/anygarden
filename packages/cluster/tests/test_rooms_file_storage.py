@@ -1,4 +1,4 @@
-"""Tests for ``doorae.rooms.file_storage`` (#246)."""
+"""Tests for ``anygarden.rooms.file_storage`` (#246)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from doorae.rooms.file_storage import (
+from anygarden.rooms.file_storage import (
     FileTooLargeError,
     StoredFile,
     cleanup_orphans,
@@ -24,7 +24,7 @@ def _sha256(data: bytes) -> str:
 
 class TestSaveUpload:
     def test_writes_payload_and_returns_metadata(self, tmp_path: Path) -> None:
-        payload = b"hello doorae\n"
+        payload = b"hello anygarden\n"
         result = save_upload(
             room_files_dir=tmp_path,
             room_id="room-a",

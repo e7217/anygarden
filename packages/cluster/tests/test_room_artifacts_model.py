@@ -29,9 +29,9 @@ from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, delete, select, text
 from sqlalchemy.exc import IntegrityError
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -45,7 +45,7 @@ from doorae.db.models import (
 def _alembic_config(db_path: str) -> Config:
     cfg = Config()
     script_location = (
-        Path(__file__).resolve().parent.parent / "doorae" / "db" / "migrations"
+        Path(__file__).resolve().parent.parent / "anygarden" / "db" / "migrations"
     )
     cfg.set_main_option("script_location", str(script_location))
     cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_path}")
@@ -125,7 +125,7 @@ class TestRoomArtifactsMigration:
 
 @pytest.fixture()
 async def artifacts_session(tmp_path: Path):
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         mcp_secrets_key=Fernet.generate_key().decode("ascii"),

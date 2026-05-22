@@ -20,7 +20,7 @@
 | Modify | `frontend/src/components/MarkdownContent.tsx` | 멘션 토큰 렌더링 |
 | Modify | `frontend/src/hooks/useWebSocket.ts` | send에 metadata 전달 |
 | Modify | `frontend/src/pages/ChatPage.tsx` | participants/rooms를 MessageInput에 전달 |
-| Modify | `doorae/orchestration/rules.py` | `parse_mentions` ID 기반 패턴 지원 |
+| Modify | `anygarden/orchestration/rules.py` | `parse_mentions` ID 기반 패턴 지원 |
 
 ---
 
@@ -82,12 +82,12 @@ git commit -m "feat(mentions): add mention token parse/serialize utilities"
 ### Task 2: 서버 `parse_mentions` 업그레이드
 
 **Files:**
-- Modify: `doorae-server/doorae/orchestration/rules.py:63-75`
+- Modify: `anygarden-server/anygarden/orchestration/rules.py:63-75`
 
 - [ ] **Step 1: 기존 테스트 확인**
 
 ```bash
-cd doorae-server && uv run pytest tests/ -k "mention" -v
+cd anygarden-server && uv run pytest tests/ -k "mention" -v
 ```
 
 - [ ] **Step 2: 테스트 작성**
@@ -96,7 +96,7 @@ cd doorae-server && uv run pytest tests/ -k "mention" -v
 
 ```python
 # tests/test_mention_parsing.py
-from doorae.orchestration.rules import parse_mentions
+from anygarden.orchestration.rules import parse_mentions
 
 def test_parse_id_based_user_mention():
     result = parse_mentions("Hello <@user:abc123> check this")
@@ -126,7 +126,7 @@ def test_parse_legacy_at_mention():
 - [ ] **Step 3: 테스트 실행 — 실패 확인**
 
 ```bash
-cd doorae-server && uv run pytest tests/test_mention_parsing.py -v
+cd anygarden-server && uv run pytest tests/test_mention_parsing.py -v
 ```
 
 Expected: FAIL — 현재 `parse_mentions`는 `list[str]`을 반환
@@ -134,7 +134,7 @@ Expected: FAIL — 현재 `parse_mentions`는 `list[str]`을 반환
 - [ ] **Step 4: `parse_mentions` 업그레이드**
 
 ```python
-# doorae/orchestration/rules.py — Mention Parsing 섹션 교체
+# anygarden/orchestration/rules.py — Mention Parsing 섹션 교체
 
 # ID-based mention tokens: <@user:id> and <#room:id>
 _ID_MENTION_PATTERN = re.compile(r"<@user:([^>]+)>|<#room:([^>]+)>")
@@ -171,7 +171,7 @@ def parse_mentions(content: str) -> list[dict[str, str]]:
 - [ ] **Step 5: 테스트 실행 — 통과 확인**
 
 ```bash
-cd doorae-server && uv run pytest tests/test_mention_parsing.py -v
+cd anygarden-server && uv run pytest tests/test_mention_parsing.py -v
 ```
 
 Expected: ALL PASS
@@ -179,7 +179,7 @@ Expected: ALL PASS
 - [ ] **Step 6: 기존 테스트 회귀 확인**
 
 ```bash
-cd doorae-server && uv run pytest -v
+cd anygarden-server && uv run pytest -v
 ```
 
 Expected: 기존 214개 테스트 전체 통과 (handler.py가 `parse_mentions` 반환 타입에 의존하므로 확인)
@@ -187,7 +187,7 @@ Expected: 기존 214개 테스트 전체 통과 (handler.py가 `parse_mentions` 
 - [ ] **Step 7: 커밋**
 
 ```bash
-cd doorae-server && git add doorae/orchestration/rules.py tests/test_mention_parsing.py
+cd anygarden-server && git add anygarden/orchestration/rules.py tests/test_mention_parsing.py
 git commit -m "feat(server): upgrade parse_mentions to ID-based token format
 
 Support <@user:id> and <#room:id> patterns alongside legacy @Name.
@@ -643,7 +643,7 @@ import type { MentionOption } from '@/components/MentionPopover'
 - [ ] **Step 5: 프론트엔드 빌드 확인**
 
 ```bash
-cd doorae-server/frontend && npm run build
+cd anygarden-server/frontend && npm run build
 ```
 
 Expected: 빌드 성공, 타입 에러 없음
@@ -820,7 +820,7 @@ const resolveRoom = (id: string) => {
 - [ ] **Step 3: 빌드 확인**
 
 ```bash
-cd doorae-server/frontend && npm run build
+cd anygarden-server/frontend && npm run build
 ```
 
 Expected: 빌드 성공
@@ -845,7 +845,7 @@ Resolvers use participants map and useRooms context."
 - [ ] **Step 1: 서버 전체 테스트**
 
 ```bash
-cd doorae-server && uv run pytest -v
+cd anygarden-server && uv run pytest -v
 ```
 
 Expected: 전체 통과
@@ -853,7 +853,7 @@ Expected: 전체 통과
 - [ ] **Step 2: 프론트엔드 빌드**
 
 ```bash
-cd doorae-server/frontend && npm run build
+cd anygarden-server/frontend && npm run build
 ```
 
 Expected: 빌드 성공
@@ -861,8 +861,8 @@ Expected: 빌드 성공
 - [ ] **Step 3: dev server 실행 & 수동 확인**
 
 ```bash
-cd doorae-server && uv run doorae-server --host 0.0.0.0 --port 8001 &
-cd doorae-server/frontend && npm run dev
+cd anygarden-server && uv run anygarden-server --host 0.0.0.0 --port 8001 &
+cd anygarden-server/frontend && npm run dev
 ```
 
 브라우저에서 `http://localhost:5173`에서 확인:

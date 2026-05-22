@@ -9,8 +9,8 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     AgentFile,
     Base,
@@ -21,8 +21,8 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 class FakeWS:
@@ -712,7 +712,7 @@ class TestSharedFilesBackfillOnRunningTransition:
         ``RoomSharedFile`` row. Returns the storage-relative path
         used by the DB row.
         """
-        from doorae.db.models import RoomSharedFile
+        from anygarden.db.models import RoomSharedFile
 
         room_files_dir.mkdir(parents=True, exist_ok=True)
         rel = f"{room_id}/{storage_name}"

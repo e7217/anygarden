@@ -1,10 +1,10 @@
-// CLI entrypoint for ``doorae-agent-ts``.
+// CLI entrypoint for ``anygarden-agent-ts``.
 //
-// Spawner-compatible: accepts the same flags doorae-machine's Python
-// spawner already passes to ``doorae-agent`` so the daemon can swap
+// Spawner-compatible: accepts the same flags anygarden-machine's Python
+// spawner already passes to ``anygarden-agent`` so the daemon can swap
 // runtimes without changing the argv shape.
 //
-// Auth: ``DOORAE_TOKEN`` is read from the environment only. Never
+// Auth: ``ANYGARDEN_TOKEN`` is read from the environment only. Never
 // accept the token on argv — mirrors the Python CLI contract.
 
 import { Command } from "commander";
@@ -33,12 +33,12 @@ interface CliOptions {
 export function buildCli(): Command {
   const cmd = new Command();
   cmd
-    .name("doorae-agent-ts")
-    .description("Doorae TypeScript agent runtime (Claude Code MVP)")
+    .name("anygarden-agent-ts")
+    .description("Anygarden TypeScript agent runtime (Claude Code MVP)")
     .version(CLI_VERSION)
     .requiredOption("--engine <name>", "engine id (claude_code)")
     .option("--name <name>", "display name for this agent", "")
-    .requiredOption("--server <url>", "Doorae cluster WebSocket URL")
+    .requiredOption("--server <url>", "Anygarden cluster WebSocket URL")
     .option("--room <id...>", "room id to join on start (repeatable)", collect, [])
     .option("--model <id>", "override the engine's default model")
     .option("--reasoning-effort <level>", "reasoning effort (low/medium/high)");
@@ -78,9 +78,9 @@ export async function main(argv: string[]): Promise<number> {
   cli.parse(argv, { from: "user" });
   const opts = cli.opts<CliOptions>();
 
-  const token = process.env.DOORAE_TOKEN;
+  const token = process.env.ANYGARDEN_TOKEN;
   if (!token) {
-    log.error("DOORAE_TOKEN env var is required but was not set");
+    log.error("ANYGARDEN_TOKEN env var is required but was not set");
     return 2;
   }
 

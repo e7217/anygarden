@@ -37,7 +37,7 @@ export function useWebSocket(roomId: string | null) {
     let url = `${proto}//${host}/ws/rooms/${roomId}`;
     if (seqRef.current > 0) url += `?since_seq=${seqRef.current}`;
 
-    const ws = new WebSocket(url, ['doorae.v1', `bearer.${token}`]);
+    const ws = new WebSocket(url, ['anygarden.v1', `bearer.${token}`]);
     wsRef.current = ws;
 
     ws.onopen = () => { setConnected(true); reconnectRef.current = 1; };
@@ -48,7 +48,7 @@ export function useWebSocket(roomId: string | null) {
       const authRejected = evt.code === 4001 || evt.code === 4003;
       if (authRejected) {
         window.dispatchEvent(
-          new CustomEvent('doorae:auth:invalid', {
+          new CustomEvent('anygarden:auth:invalid', {
             detail: { code: evt.code, reason: evt.reason },
           }),
         );
@@ -85,7 +85,7 @@ export function useWebSocket(roomId: string | null) {
         // provider listen. Detail mirrors the server frame so future
         // consumers (toasts, focus-the-new-room flows) can read it
         // without parsing again.
-        window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
+        window.dispatchEvent(new CustomEvent('anygarden:rooms:invalidate', { detail: data }));
       } else if (data.type === 'room_pin_order_changed') {
         // Sidebar pin / reorder landed in another session of the
         // same user (#47). We forward it to the RoomsProvider via
@@ -93,25 +93,25 @@ export function useWebSocket(roomId: string | null) {
         // exact new order — the provider can apply it directly
         // without a refetch round-trip. Shape: { user_id, pinned_room_ids }.
         window.dispatchEvent(
-          new CustomEvent('doorae:rooms:pin-order', { detail: data }),
+          new CustomEvent('anygarden:rooms:pin-order', { detail: data }),
         )
       } else if (data.type === 'room_deleted') {
         // The whole room is gone. Bubble two events:
-        //   1. ``doorae:rooms:invalidate`` — same listener
+        //   1. ``anygarden:rooms:invalidate`` — same listener
         //      ``RoomsProvider`` already uses for membership changes,
         //      so the sidebar drops the room without us having to
         //      reach into the store.
-        //   2. ``doorae:room:deleted`` — carries the room_id so a
+        //   2. ``anygarden:room:deleted`` — carries the room_id so a
         //      page currently *viewing* that room can navigate
         //      away (otherwise the user is left staring at a 404
         //      or an empty chat view).
-        window.dispatchEvent(new CustomEvent('doorae:rooms:invalidate', { detail: data }));
-        window.dispatchEvent(new CustomEvent('doorae:room:deleted', { detail: data }));
+        window.dispatchEvent(new CustomEvent('anygarden:rooms:invalidate', { detail: data }));
+        window.dispatchEvent(new CustomEvent('anygarden:room:deleted', { detail: data }));
       } else if (data.type === 'room_settings_changed') {
         // #237 — forward settings change so ``useRooms`` updates its
         // cached ephemeral flag on other tabs / other open sessions.
         window.dispatchEvent(
-          new CustomEvent('doorae:rooms:settings-changed', { detail: data }),
+          new CustomEvent('anygarden:rooms:settings-changed', { detail: data }),
         );
       } else if (data.type === 'presence_update') {
         // #54 — participant liveness toggled in the current room.
@@ -122,7 +122,7 @@ export function useWebSocket(roomId: string | null) {
         // do. Detail mirrors the server frame exactly:
         //   { type, room_id, participant_id, online, last_seen_at }.
         window.dispatchEvent(
-          new CustomEvent('doorae:presence:update', { detail: data }),
+          new CustomEvent('anygarden:presence:update', { detail: data }),
         );
       } else if (data.type === 'task.updated') {
         // #266 — task lifecycle event. The 1차 view (TaskPanel) and
@@ -131,7 +131,7 @@ export function useWebSocket(roomId: string | null) {
         // (TaskPanel's filter state, AgentTasksTab's agent_id scope).
         // Detail shape: { type, event, task: {...} }.
         window.dispatchEvent(
-          new CustomEvent('doorae:task:updated', { detail: data }),
+          new CustomEvent('anygarden:task:updated', { detail: data }),
         );
       } else if (data.type === 'room_artifact.added') {
         // #290 — agent dropped a new file in memory/outbox/. The
@@ -139,11 +139,11 @@ export function useWebSocket(roomId: string | null) {
         // listens on the window so it doesn't need to be wired into
         // the WS hook's prop tree. Detail mirrors the server frame.
         window.dispatchEvent(
-          new CustomEvent('doorae:room_artifact:added', { detail: data }),
+          new CustomEvent('anygarden:room_artifact:added', { detail: data }),
         );
       } else if (data.type === 'room_artifact.removed') {
         window.dispatchEvent(
-          new CustomEvent('doorae:room_artifact:removed', { detail: data }),
+          new CustomEvent('anygarden:room_artifact:removed', { detail: data }),
         );
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
@@ -218,7 +218,7 @@ export function useWebSocket(roomId: string | null) {
             clearAuthSession();
           }
           window.dispatchEvent(
-            new CustomEvent('doorae:auth:invalid', {
+            new CustomEvent('anygarden:auth:invalid', {
               detail: { status: r.status },
             }),
           );

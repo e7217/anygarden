@@ -17,14 +17,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Project, Room
-from doorae.ws.handler import _apply_orchestrator_handoff
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Participant, Project, Room
+from anygarden.ws.handler import _apply_orchestrator_handoff
 
 
 @pytest_asyncio.fixture()
-async def handoff_env(config: DooraeSettings):
+async def handoff_env(config: AnygardenSettings):
     """Room with orchestrator agent + worker agent, both participants."""
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)

@@ -11,7 +11,7 @@
 6. 5턴 대화
 
 Usage:
-    cd doorae-server && uv run python scripts/e2e_full_pipeline.py
+    cd anygarden-server && uv run python scripts/e2e_full_pipeline.py
 """
 
 import asyncio
@@ -32,7 +32,7 @@ def call_codex(prompt: str) -> str:
     codex = shutil.which("codex")
     if not codex:
         sys.exit("codex not found")
-    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, prefix="doorae-") as f:
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, prefix="anygarden-") as f:
         out = f.name
     r = subprocess.run(
         [codex, "exec", prompt, "--ephemeral", "--skip-git-repo-check", "-o", out],
@@ -52,22 +52,22 @@ async def run():
     # ══════════════════════════════════════════════════════════════
     # Step 1: 서버 기동
     # ══════════════════════════════════════════════════════════════
-    db_dir = tempfile.mkdtemp(prefix="doorae-e2e-")
+    db_dir = tempfile.mkdtemp(prefix="anygarden-e2e-")
     db_path = Path(db_dir) / "test.db"
     jwt_secret = secrets.token_urlsafe(32)
     port = 18743
 
     env = {
         **os.environ,
-        "DOORAE_DB_URL": f"sqlite+aiosqlite:///{db_path}",
-        "DOORAE_JWT_SECRET": jwt_secret,
-        "DOORAE_LOG_LEVEL": "WARNING",
-        "DOORAE_HOST": "127.0.0.1",
-        "DOORAE_PORT": str(port),
+        "ANYGARDEN_DB_URL": f"sqlite+aiosqlite:///{db_path}",
+        "ANYGARDEN_JWT_SECRET": jwt_secret,
+        "ANYGARDEN_LOG_LEVEL": "WARNING",
+        "ANYGARDEN_HOST": "127.0.0.1",
+        "ANYGARDEN_PORT": str(port),
     }
 
     server_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "doorae.app:create_app",
+        [sys.executable, "-m", "uvicorn", "anygarden.app:create_app",
          "--factory", "--host", "127.0.0.1", "--port", str(port),
          "--log-level", "warning"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -89,20 +89,20 @@ async def run():
             sys.exit("서버 시작 실패")
 
     print("\n" + "=" * 65)
-    print("  Doorae 전체 파이프라인 E2E")
+    print("  Anygarden 전체 파이프라인 E2E")
     print("=" * 65)
     print(f"  ✓ Step 1: 서버 기동 완료 (port={port}, pid={server_proc.pid})")
 
     try:
         # DB 직접 접근용
-        from doorae.db.engine import build_engine, build_session_factory
-        from doorae.db.models import (
+        from anygarden.db.engine import build_engine, build_session_factory
+        from anygarden.db.models import (
             Agent, AgentToken, Base, Machine, MachineEngine, MachineToken,
             Participant, Project, Room, User,
         )
-        from doorae.auth.jwt import create_user_token
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.auth.machine_token import generate_machine_token, hash_machine_token
+        from anygarden.auth.jwt import create_user_token
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 
         engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
         sf = build_session_factory(engine)
@@ -112,7 +112,7 @@ async def run():
         # Step 2: 유저 생성 + 머신 등록 (REST API)
         # ══════════════════════════════════════════════════════════
         async with sf() as db:
-            user = User(email="alice@doorae.io", password_hash="x", is_admin=True)
+            user = User(email="alice@anygarden.io", password_hash="x", is_admin=True)
             db.add(user)
             await db.commit()
             await db.refresh(user)
@@ -141,7 +141,7 @@ async def run():
         daemon_ws = await websockets.connect(
             f"{ws_base}/ws/machines/{machine_id}",
             subprotocols=[
-                websockets.Subprotocol("doorae.v1"),
+                websockets.Subprotocol("anygarden.v1"),
                 websockets.Subprotocol(f"bearer.{machine_token}"),
             ],
         )
@@ -224,7 +224,7 @@ async def run():
         # Step 6: 5턴 대화 (유저 ↔ 에이전트)
         # ══════════════════════════════════════════════════════════
         # 데몬이 spawn하는 대신, 직접 에이전트 역할 수행
-        # (실제로는 doorae-agent subprocess가 이를 수행)
+        # (실제로는 anygarden-agent subprocess가 이를 수행)
 
         user_msgs = [
             "안녕하세요! Sprint-42에서 가장 중요한 우선순위 3가지를 간단히 제안해주세요.",
@@ -270,7 +270,7 @@ async def run():
             async with websockets.connect(
                 url,
                 subprotocols=[
-                    websockets.Subprotocol("doorae.v1"),
+                    websockets.Subprotocol("anygarden.v1"),
                     websockets.Subprotocol(f"bearer.{token}"),
                 ],
             ) as ws:

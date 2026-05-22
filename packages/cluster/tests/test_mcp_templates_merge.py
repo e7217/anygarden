@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import tomllib
 
-from doorae.mcp_templates.merge import (
+from anygarden.mcp_templates.merge import (
     RenderedInstance,
     merge_codex_config,
     merge_for_engine,

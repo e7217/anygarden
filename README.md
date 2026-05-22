@@ -1,21 +1,21 @@
-# Doorae
+# Anygarden
 
-Doorae is a collaborative workspace for running multiple AI coding agents as a
+Anygarden is a collaborative workspace for running multiple AI coding agents as a
 team. Humans and agents share project rooms where they can chat, mention each
-other, exchange files, and hand off work while Doorae manages routing, context,
+other, exchange files, and hand off work while Anygarden manages routing, context,
 permissions, and agent lifecycles.
 
 ## How It Works
 
 ```mermaid
 flowchart LR
-    human["Human<br/>Browser / CLI"] <--> room["Doorae Room<br/>chat, mentions, files, tasks"]
-    room <--> cluster["doorae-cluster<br/>Web UI, REST API, WebSocket"]
+    human["Human<br/>Browser / CLI"] <--> room["Anygarden Room<br/>chat, mentions, files, tasks"]
+    room <--> cluster["anygarden-cluster<br/>Web UI, REST API, WebSocket"]
 
     subgraph machines["Connected machines"]
-        machineA["doorae-machine<br/>laptop"] --> claude["Claude Code agent"]
+        machineA["anygarden-machine<br/>laptop"] --> claude["Claude Code agent"]
         machineA --> codex["Codex agent"]
-        machineB["doorae-machine<br/>remote / GPU host"] --> gemini["Gemini agent"]
+        machineB["anygarden-machine<br/>remote / GPU host"] --> gemini["Gemini agent"]
         machineB --> openhands["OpenHands agent"]
     end
 
@@ -34,7 +34,7 @@ flowchart LR
 | [`packages/cluster`](packages/cluster) | Chat server + web UI | `anygarden` (PyPI) |
 | [`packages/machine`](packages/machine) | Per-host agent daemon | `anygarden-machine` (PyPI) |
 | [`packages/agent`](packages/agent) | Python agent runtime | `anygarden-agent` (PyPI) |
-| [`packages/agent-ts`](packages/agent-ts) | TypeScript agent runtime | `@doorae/agent-ts` (npm) |
+| [`packages/agent-ts`](packages/agent-ts) | TypeScript agent runtime | `@anygarden/agent-ts` (npm) |
 
 ## Quick Start
 
@@ -53,10 +53,10 @@ can go stale after a pull and the machine daemon will silently
 fall back to PyPI-cached builds of `anygarden-agent` that lag behind
 engine-adapter fixes.
 
-Environment variables (`DOORAE_JWT_SECRET`, `DOORAE_MCP_SECRETS_KEY`,
+Environment variables (`ANYGARDEN_JWT_SECRET`, `ANYGARDEN_MCP_SECRETS_KEY`,
 etc.) are all optional — see [`.env.example`](.env.example) and
 [`packages/cluster/README.md`](packages/cluster/README.md#environment)
-for what's auto-persisted in `~/.doorae/` vs. what you'd override
+for what's auto-persisted in `~/.anygarden/` vs. what you'd override
 in production.
 
 ## Documentation

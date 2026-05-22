@@ -8,7 +8,7 @@ related:
   - docs/research/2026-04-19-multi-agent-context-injection.md
 ---
 
-> **구현 상태 (2026-04-19)**: Stage A(플래그 기반 명시 주입)가 Issue #74에서 구현·배포됨. 플래그 부착 위치는 서버 `ws/handler.py`가 아니라 **대표 에이전트의 `packages/agent/doorae_agent/integrations/room_query.py` `_deliver_result`** (cluster 코드 변경 0). Stage B(sliding-window ambient 흡수)는 관찰 기반 후속.
+> **구현 상태 (2026-04-19)**: Stage A(플래그 기반 명시 주입)가 Issue #74에서 구현·배포됨. 플래그 부착 위치는 서버 `ws/handler.py`가 아니라 **대표 에이전트의 `packages/agent/anygarden_agent/integrations/room_query.py` `_deliver_result`** (cluster 코드 변경 0). Stage B(sliding-window ambient 흡수)는 관찰 기반 후속.
 
 # 에이전트 컨텍스트 주입 분리
 
@@ -28,7 +28,7 @@ related:
 - 다른 에이전트의 응답이 제3 에이전트의 세션에 들어가지 않음 (협업 불가)
 - 멘션 없이 자연스럽게 흐르는 대화는 에이전트에게 사라진 것과 같음
 
-연구 리포트 `docs/research/2026-04-19-multi-agent-context-injection.md`는 이 공백이 엔진 SDK 세션에 기반한 Doorae 아키텍처의 구조적 귀결임을 18개 소스로 교차 검증했다. 업계 표준(AutoGen, LangGraph, CAMEL, AgentVerse)은 "공유 히스토리 + 스피커 선택" 모델이고, 2025 신작(Intrinsic Memory Agents 2508.08997)은 per-agent 메모리와 공유 공간을 명시 분리한다. 두 흐름 모두 수신과 응답을 독립 결정으로 다룬다.
+연구 리포트 `docs/research/2026-04-19-multi-agent-context-injection.md`는 이 공백이 엔진 SDK 세션에 기반한 Anygarden 아키텍처의 구조적 귀결임을 18개 소스로 교차 검증했다. 업계 표준(AutoGen, LangGraph, CAMEL, AgentVerse)은 "공유 히스토리 + 스피커 선택" 모델이고, 2025 신작(Intrinsic Memory Agents 2508.08997)은 per-agent 메모리와 공유 공간을 명시 분리한다. 두 흐름 모두 수신과 응답을 독립 결정으로 다룬다.
 
 ## 핵심 결정
 
@@ -60,7 +60,7 @@ related:
 
 ## 서버 흐름 변경
 
-`packages/cluster/doorae/ws/handler.py`의 메시지 broadcast 직전에 `metadata.room_query_result`가 이미 부착된 메시지는 추가로 `metadata.ingest_only=true`도 함께 설정한다. 이는 수신 어댑터가 동일 플래그 하나로 "응답 안 함 + 주입 함" 상태를 인식하게 하기 위한 정규화다.
+`packages/cluster/anygarden/ws/handler.py`의 메시지 broadcast 직전에 `metadata.room_query_result`가 이미 부착된 메시지는 추가로 `metadata.ingest_only=true`도 함께 설정한다. 이는 수신 어댑터가 동일 플래그 하나로 "응답 안 함 + 주입 함" 상태를 인식하게 하기 위한 정규화다.
 
 ```python
 # execute_room_query 내부 _deliver_result 직전
@@ -71,7 +71,7 @@ metadata["ingest_only"] = True
 
 ## SDK 흐름 변경
 
-`packages/agent/doorae_agent/integrations/base.py`의 `should_respond` 반환 타입을 enum으로 전환한다.
+`packages/agent/anygarden_agent/integrations/base.py`의 `should_respond` 반환 타입을 enum으로 전환한다.
 
 ```python
 from enum import Enum

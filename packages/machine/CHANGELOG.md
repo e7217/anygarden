@@ -10,33 +10,33 @@
 - **Renamed PyPI distribution** from `drmachine` to `anygarden-machine`
   — service rebrand to anygarden. `drmachine` 0.7.0 will be yanked
   after this release publishes. Python import path
-  (`doorae_machine`), CLI command (`doorae-machine`), and source
+  (`anygarden_machine`), CLI command (`anygarden-machine`), and source
   directory unchanged.
 
 ## v0.7.0 (2026-05-20)
 
 ### Release infrastructure
 
-- **Renamed PyPI distribution** from `doorae-machine` to `drmachine`
-  ([#387](https://github.com/e7217/doorae/pull/387)). Python import
-  path, CLI command (`doorae-machine`), and source directory
+- **Renamed PyPI distribution** from `anygarden-machine` to `drmachine`
+  ([#387](https://github.com/e7217/anygarden/pull/387)). Python import
+  path, CLI command (`anygarden-machine`), and source directory
   unchanged.
 
 ### Features
 
 - Detect OpenHands SDK as a Python-import engine so the in-process
   Python runtime is advertised to the agent-creation UI
-  ([#357](https://github.com/e7217/doorae/pull/357),
-  [#358](https://github.com/e7217/doorae/pull/358)).
+  ([#357](https://github.com/e7217/anygarden/pull/357),
+  [#358](https://github.com/e7217/anygarden/pull/358)).
 - Register runtime tools (`TerminalTool` / `FileEditorTool` /
   `TaskTrackerTool` / `DelegateTool`) for OpenHands; rewrite gateway
   provider detection visibility
-  ([#377](https://github.com/e7217/doorae/pull/377)).
+  ([#377](https://github.com/e7217/anygarden/pull/377)).
 
 ### Fixes
 
 - Prevent stale auth token websocket reconnect loops
-  ([#371](https://github.com/e7217/doorae/pull/371)).
+  ([#371](https://github.com/e7217/anygarden/pull/371)).
 
 ### Changed — writable agent skills (#350)
 
@@ -51,7 +51,7 @@
 
 ### Changed — agent runtime cwd (#345)
 
-- Spawn `doorae-agent` from the canonical agent directory instead of
+- Spawn `anygarden-agent` from the canonical agent directory instead of
   `workspace/`, remove claude/gemini workspace bridge files, preserve
   agent-created root output across materialize, and migrate legacy
   `workspace/` runtime files upward when safe.
@@ -65,9 +65,9 @@
 ### Features — per-agent permission level (#309)
 
 - Wire 3-tier permission model into spawner / engine launch (PR-A,
-  [#310](https://github.com/e7217/doorae/pull/310)).
+  [#310](https://github.com/e7217/anygarden/pull/310)).
 - gemini + claude-code permission mappings + codex sandbox dial
-  (PR-B, [#311](https://github.com/e7217/doorae/pull/311)).
+  (PR-B, [#311](https://github.com/e7217/anygarden/pull/311)).
 
 ## v0.5.1 (2026-04-28)
 
@@ -80,7 +80,7 @@
   agent dir's `manifest.json`. Combined with
   `PROTECTED_DACL_SECURITY_INFORMATION` stripping inherited admin
   rights, the file became un-deletable even by the owner that
-  created it ([#305](https://github.com/e7217/doorae/pull/305)).
+  created it ([#305](https://github.com/e7217/anygarden/pull/305)).
 
 ## v0.5.0 (2026-04-28)
 
@@ -99,7 +99,7 @@
 - `subprocess_group_kwargs()` returns `start_new_session=True`
   (POSIX) or `creationflags=CREATE_NEW_PROCESS_GROUP` (Windows),
   applied to spawner agent spawn
-  ([#301](https://github.com/e7217/doorae/pull/301)).
+  ([#301](https://github.com/e7217/anygarden/pull/301)).
 
 ## v0.4.1 (2026-04-28)
 
@@ -107,79 +107,79 @@
 
 - Machine-side support for the artifact pipeline so emitted
   artifacts surface in the originating room
-  ([#296](https://github.com/e7217/doorae/pull/296)).
+  ([#296](https://github.com/e7217/anygarden/pull/296)).
 
 ### Fixes — workspace/memory/outbox
 
 - Bridge `workspace/memory/outbox` to the canonical outbox path so
   artifacts flow into the agent → room pipeline correctly
-  ([#298](https://github.com/e7217/doorae/pull/298)).
+  ([#298](https://github.com/e7217/anygarden/pull/298)).
 
 ### Chores
 
 - Remove dead engine adapters (machine side)
-  ([#294](https://github.com/e7217/doorae/pull/294)).
+  ([#294](https://github.com/e7217/anygarden/pull/294)).
 
 ## v0.4.0 (2026-04-25)
 
 ### Features — shared file memory & multi-session DM
 
 - Bridge `memory/shared/` into agent workspace (#257)
-  ([#260](https://github.com/e7217/doorae/pull/260))
+  ([#260](https://github.com/e7217/anygarden/pull/260))
 - Room shared files copy-distributed to agent memory
-  ([#250](https://github.com/e7217/doorae/pull/250))
+  ([#250](https://github.com/e7217/anygarden/pull/250))
 - Per-agent multi-session DM + cross-engine file memory +
   ephemeral mode
-  ([#240](https://github.com/e7217/doorae/pull/240))
+  ([#240](https://github.com/e7217/anygarden/pull/240))
 
 ### Features — lifecycle visibility
 
 - Surface `starting` / `stopping` transitional states to
-  cluster ([#220](https://github.com/e7217/doorae/pull/220))
+  cluster ([#220](https://github.com/e7217/anygarden/pull/220))
 
 ### Features — LLM gateway wiring (#197 Phase 5)
 
 - Agent wiring closes the loop
-  ([#209](https://github.com/e7217/doorae/pull/209))
+  ([#209](https://github.com/e7217/anygarden/pull/209))
 
 ### Features — protocol
 
 - Add `is_full_snapshot` flag to `SyncBatchFrame` (#185)
-  ([#192](https://github.com/e7217/doorae/pull/192))
+  ([#192](https://github.com/e7217/anygarden/pull/192))
 
 ### Features — engine support
 
 - Materialize default `.claude/settings.json` for
   `claude-code` agents
-  ([#113](https://github.com/e7217/doorae/pull/113))
+  ([#113](https://github.com/e7217/anygarden/pull/113))
 
 ### Hardening / safety
 
 - Use `O_NOFOLLOW` for agent-dir writes (#186)
-  ([#188](https://github.com/e7217/doorae/pull/188))
+  ([#188](https://github.com/e7217/anygarden/pull/188))
 - Inject `engine_secrets` via subprocess env, not disk
   `.env` (#184)
-  ([#189](https://github.com/e7217/doorae/pull/189))
+  ([#189](https://github.com/e7217/anygarden/pull/189))
 - Keep `engine_secrets` out of agent
   `/proc/self/environ` (#184 follow-up)
-  ([#193](https://github.com/e7217/doorae/pull/193))
+  ([#193](https://github.com/e7217/anygarden/pull/193))
 
 ### Fixes
 
 - Symlink host `~/.codex/auth.json` into per-agent
   `CODEX_HOME`
-  ([#214](https://github.com/e7217/doorae/pull/214))
+  ([#214](https://github.com/e7217/anygarden/pull/214))
 - Redirect `CODEX_HOME` per-agent so MCP templates load
-  ([#213](https://github.com/e7217/doorae/pull/213))
+  ([#213](https://github.com/e7217/anygarden/pull/213))
 - Serialize per-agent reconcile with lock + pre-reservation
-  (#183) ([#191](https://github.com/e7217/doorae/pull/191))
+  (#183) ([#191](https://github.com/e7217/anygarden/pull/191))
 - Mark manifest stopped after `request_replacement` (#182)
-  ([#187](https://github.com/e7217/doorae/pull/187))
+  ([#187](https://github.com/e7217/anygarden/pull/187))
 
 ### Refactors
 
 - Remove `codex-extra` virtual engine
-  ([#258](https://github.com/e7217/doorae/pull/258))
+  ([#258](https://github.com/e7217/anygarden/pull/258))
 
 
 ## v0.3.2 (2026-04-17)
@@ -205,20 +205,20 @@ release cadence established in v0.2.0.
 
 ### Features
 
-- Log the resolved doorae-agent binary on every spawn
-  ([#38](https://github.com/e7217/doorae/pull/38))
+- Log the resolved anygarden-agent binary on every spawn
+  ([#38](https://github.com/e7217/anygarden/pull/38))
   — new ``agent_binary_resolved`` structlog event with
   ``source=(path|uvx)`` and the absolute path (or ``None`` for
   the uvx fallback). Forensic breadcrumb for "which
-  doorae-agent actually ran?" version-skew debugging. No
+  anygarden-agent actually ran?" version-skew debugging. No
   change to the discovery priority.
 
 ### Earlier (post-0.1.0, no separate release)
 
 - Hide ``max_agents`` from user-facing surfaces
-  ([#3](https://github.com/e7217/doorae/pull/3))
+  ([#3](https://github.com/e7217/anygarden/pull/3))
 - Per-agent model + reasoning effort selection
-  ([#5](https://github.com/e7217/doorae/pull/5))
+  ([#5](https://github.com/e7217/anygarden/pull/5))
 
 
 ## v0.1.0 (2026-04-14)

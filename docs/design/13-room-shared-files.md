@@ -19,7 +19,7 @@ per-agent `<memory>` block (#237).
           └─ [server] rooms.shared_files.upload_file
                 ├─ size + MIME whitelist check
                 ├─ save to tmp path, sha256, atomic rename
-                │    (~/.doorae/room_files/<room_id>/.tmp/<id> → .../<id>)
+                │    (~/.anygarden/room_files/<room_id>/.tmp/<id> → .../<id>)
                 ├─ DB upsert on (room_id, storage_name)
                 │    (commit failure unlinks the freshly-written file)
                 └─ BackgroundTasks: fan_out_write
@@ -60,8 +60,8 @@ fan-out path and `<shared-context>` prompt block.
 ## Storage layout
 
 ```
-~/.doorae/
-├── doorae.db
+~/.anygarden/
+├── anygarden.db
 ├── agents/<agent_id>/
 │   └── memory/
 │       ├── notes.md        # #237 — agent↔server bidirectional sync
@@ -75,7 +75,7 @@ fan-out path and `<shared-context>` prompt block.
 ```
 
 *The DB keeps only metadata + `sha256`; the raw bytes live on disk so the
-default SQLite `doorae.db` stays compact as rooms accumulate attachments.*
+default SQLite `anygarden.db` stays compact as rooms accumulate attachments.*
 
 ## Limits & validation
 
@@ -83,7 +83,7 @@ default SQLite `doorae.db` stays compact as rooms accumulate attachments.*
 |---|---|---|
 | Max upload size | 256 KB | `shared_files.DEFAULT_MAX_SIZE_BYTES` |
 | MIME whitelist | text/plain, text/markdown, text/csv, text/yaml, text/html, application/json, application/xml, text/x-python, … | `ALLOWED_MIME_TYPES` |
-| Storage root | `~/.doorae/room_files` | `DOORAE_ROOM_FILES_DIR` |
+| Storage root | `~/.anygarden/room_files` | `ANYGARDEN_ROOM_FILES_DIR` |
 
 Filename sanitisation drops path separators, control chars, reserved names
 (`.`, `..`, ``) and truncates to 200 bytes. On-disk filename is always a
@@ -117,7 +117,7 @@ uuid — user input never reaches the filesystem path.
 
 ## Backup / operations
 
-`~/.doorae/` is a single backup root: `tar` of the directory captures the
+`~/.anygarden/` is a single backup root: `tar` of the directory captures the
 DB, room attachments, per-agent memory, and the machine token. There is no
 separate restore procedure for `room_files/` — lost files surface on the
 next fan-out (the frame read fails) and get logged; recovery is

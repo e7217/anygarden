@@ -10,15 +10,15 @@ from httpx import ASGITransport, AsyncClient
 
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, User
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.skills_library.github_fetcher import SkillFetchResult
-from doorae.skills_library.service import SkillLibraryService
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, User
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.skills_library.github_fetcher import SkillFetchResult
+from anygarden.skills_library.service import SkillLibraryService
 
 
 async def _register_and_approve(
@@ -60,7 +60,7 @@ class FakeFetcher:
 
 @pytest_asyncio.fixture()
 async def skills_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -568,7 +568,7 @@ class TestSkillsApprovalAPI:
         # this simulates a grandfathered attach row from a pre-Phase-2
         # deploy).
         async with factory() as db:
-            from doorae.db.models import AgentSkill
+            from anygarden.db.models import AgentSkill
             db.add(AgentSkill(agent_id=agent.id, skill_library_id=skill_id))
             await db.commit()
 

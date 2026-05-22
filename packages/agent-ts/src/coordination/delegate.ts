@@ -1,6 +1,6 @@
 // Delegate command — forward tasks from the parent room to a sub-room.
 //
-// Ported from ``packages/agent/doorae_agent/integrations/delegate.py``.
+// Ported from ``packages/agent/anygarden_agent/integrations/delegate.py``.
 // V1 semantics: the first reply from the sub-room agent is posted back
 // to the parent room as the task result.
 

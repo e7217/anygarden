@@ -6,8 +6,8 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     AgentSkill,
     Base,
@@ -15,8 +15,8 @@ from doorae.db.models import (
     SkillLibraryEntry,
     User,
 )
-from doorae.skills_library.github_fetcher import SkillFetchResult
-from doorae.skills_library.service import (
+from anygarden.skills_library.github_fetcher import SkillFetchResult
+from anygarden.skills_library.service import (
     ACTION_APPROVE,
     ACTION_ATTACH,
     ACTION_DETACH,

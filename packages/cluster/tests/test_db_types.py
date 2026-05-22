@@ -9,7 +9,7 @@ from sqlalchemy import Integer, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from doorae.db.types import UtcDateTime
+from anygarden.db.types import UtcDateTime
 
 
 class _Base(DeclarativeBase):

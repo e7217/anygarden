@@ -8,18 +8,18 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, Machine, MachineEngine, User
-from doorae.engines import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, Machine, MachineEngine, User
+from anygarden.engines import (
     ENGINE_CATALOG,
     get_engine_entry,
     is_valid_model,
     is_valid_reasoning_effort,
 )
-from doorae.engines.catalog import is_deprecated
+from anygarden.engines.catalog import is_deprecated
 
 
 # ── Catalog unit tests ───────────────────────────────────────────────
@@ -104,7 +104,7 @@ class TestDeprecationFields:
         accidentally drops the deprecation fields, this test fails
         loudly rather than silently no-op'ing.
         """
-        from doorae.engines.catalog import EngineCatalogEntry
+        from anygarden.engines.catalog import EngineCatalogEntry
 
         entry = EngineCatalogEntry(
             engine="probe",
@@ -120,7 +120,7 @@ class TestDeprecationFields:
 
 @pytest_asyncio.fixture()
 async def catalog_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -283,7 +283,7 @@ class TestOpenHandsGatewayMerge:
     async def _seed_gateway_model(
         self, factory, *, provider: str, model_name: str, enabled: bool = True
     ) -> None:
-        from doorae.db.models import LLMGatewayModel
+        from anygarden.db.models import LLMGatewayModel
         async with factory() as db:
             db.add(
                 LLMGatewayModel(

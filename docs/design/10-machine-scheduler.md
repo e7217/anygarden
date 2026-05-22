@@ -1,14 +1,14 @@
 # 10 · Machine 스케줄링 계층
 
-> Machine은 1급 스케줄링 리소스다. `doorae-machine` 데몬이 각 호스트에서 에이전트 subprocess를 관리하며, 서버 스케줄러가 "이 엔진으로 저 에이전트 띄워라"를 선언적으로 명령한다. 이 계층은 §1-§9의 경량 원칙 위에 **추가되는** 계층이지, 대체하지 않는다.
+> Machine은 1급 스케줄링 리소스다. `anygarden-machine` 데몬이 각 호스트에서 에이전트 subprocess를 관리하며, 서버 스케줄러가 "이 엔진으로 저 에이전트 띄워라"를 선언적으로 명령한다. 이 계층은 §1-§9의 경량 원칙 위에 **추가되는** 계층이지, 대체하지 않는다.
 
 ## 10.0 요약
 
-**한 줄**: "Machine은 1급 스케줄링 리소스이며, `doorae-machine` Daemon을 통해 서버가 에이전트를 선언적으로 생성/종료한다."
+**한 줄**: "Machine은 1급 스케줄링 리소스이며, `anygarden-machine` Daemon을 통해 서버가 에이전트를 선언적으로 생성/종료한다."
 
 ### 왜 이 계층이 필요한가
 
-원래 요구사항("프로젝트·머신·에이전트·유저" 4대 엔티티)에서 Machine은 "호스트당 복수 에이전트를 생성하는 활성 참여자"였다. 그러나 §1-§9의 초기 설계는 Machine을 **DB 테이블에만 존재하는 수동 메타데이터**로 다뤘고, 사용자가 매번 `uvx doorae-agent`를 수동 실행하는 것을 전제로 했다. 이것은 다음과 같은 운영 요구를 충족하지 못한다:
+원래 요구사항("프로젝트·머신·에이전트·유저" 4대 엔티티)에서 Machine은 "호스트당 복수 에이전트를 생성하는 활성 참여자"였다. 그러나 §1-§9의 초기 설계는 Machine을 **DB 테이블에만 존재하는 수동 메타데이터**로 다뤘고, 사용자가 매번 `uvx anygarden-agent`를 수동 실행하는 것을 전제로 했다. 이것은 다음과 같은 운영 요구를 충족하지 못한다:
 
 - "알리스는 자기 노트북에 PM과 Designer를, 밥은 GPU 머신에 Coder와 Analyst를" 같은 분산 배치
 - 웹 UI에서 "PM 에이전트 1개 추가" 버튼으로 선언적 생성
@@ -22,11 +22,11 @@
 
 | 구성 요소 | 설명 | LOC 추정 |
 |---|---|---|
-| **Machine Daemon** (`doorae-machine`) | 각 호스트에 상주. 엔진 자동 감지, 서버 WS 연결, subprocess spawn/kill 관리 | ~410 (별도 패키지, §10.3) |
-| **서버 스케줄러** (`doorae/scheduler/` + `ws/` + `api/v1/`) | 에이전트 배치 결정, 생명주기 상태 머신, 활성 Machine 연결 풀 관리, REST/WS 엔드포인트 | ~440 (§10.7) |
+| **Machine Daemon** (`anygarden-machine`) | 각 호스트에 상주. 엔진 자동 감지, 서버 WS 연결, subprocess spawn/kill 관리 | ~410 (별도 패키지, §10.3) |
+| **서버 스케줄러** (`anygarden/scheduler/` + `ws/` + `api/v1/`) | 에이전트 배치 결정, 생명주기 상태 머신, 활성 Machine 연결 풀 관리, REST/WS 엔드포인트 | ~440 (§10.7) |
 | **인증·마이그레이션 확장** | `auth/machine_token.py`, Alembic 2종, Machine/Agent 컬럼 추가 | ~190 (§10.13) |
 
-서버 본체(`doorae-server/`) 기준 **Machine 계층 소계 ~1,040**. 기존 §1-§9 기본 ~710 + 이 계층 ~1,040 = **~1,750**. Plan A의 "900-1,100 LOC" 범위를 넘지만 §10.13 예산표 상한 범위 내다. 정확한 세부 내역은 §10.13 체크리스트를 정본으로 참조한다.
+서버 본체(`anygarden-server/`) 기준 **Machine 계층 소계 ~1,040**. 기존 §1-§9 기본 ~710 + 이 계층 ~1,040 = **~1,750**. Plan A의 "900-1,100 LOC" 범위를 넘지만 §10.13 예산표 상한 범위 내다. 정확한 세부 내역은 §10.13 체크리스트를 정본으로 참조한다.
 
 ### 기존 원칙 유지
 
@@ -40,12 +40,12 @@
 
 ### Standalone 모드 (폴백)
 
-Machine Daemon이 **강제**는 아니다. §1-§9의 기존 흐름(`uvx doorae-agent`로 에이전트 직접 기동)도 그대로 지원한다. 두 모드가 공존한다:
+Machine Daemon이 **강제**는 아니다. §1-§9의 기존 흐름(`uvx anygarden-agent`로 에이전트 직접 기동)도 그대로 지원한다. 두 모드가 공존한다:
 
 | 모드 | 사용 시점 | 동작 |
 |---|---|---|
-| **Scheduled 모드** (주력) | 프로덕션, 다중 머신, 선언적 운영 | `doorae-machine` 상주 → 서버가 명령 → Daemon이 spawn |
-| **Standalone 모드** (폴백) | 로컬 테스트, 단발 데모, 1인 사용 | 사용자가 직접 `uvx doorae-agent` 실행. Machine 엔티티 무관 |
+| **Scheduled 모드** (주력) | 프로덕션, 다중 머신, 선언적 운영 | `anygarden-machine` 상주 → 서버가 명령 → Daemon이 spawn |
+| **Standalone 모드** (폴백) | 로컬 테스트, 단발 데모, 1인 사용 | 사용자가 직접 `uvx anygarden-agent` 실행. Machine 엔티티 무관 |
 
 Standalone 모드에서 생성된 에이전트는 DB에 `placed_on_machine_id=NULL`로 기록된다. 서버 스케줄러는 이들을 관리하지 않으며, 수동 기동이 주체의 책임이다.
 
@@ -58,22 +58,22 @@ Machine 등록부터 에이전트 spawn까지의 완전한 시퀀스:
 ```mermaid
 sequenceDiagram
     participant Admin as admin (유저)
-    participant API as doorae-server<br/>(REST)
+    participant API as anygarden-server<br/>(REST)
     participant Sched as scheduler
     participant Bus as MachineBus<br/>(WS 연결 풀)
-    participant MachineD as doorae-machine<br/>(호스트 A)
-    participant Proc as uvx doorae-agent<br/>(자식 프로세스)
+    participant MachineD as anygarden-machine<br/>(호스트 A)
+    participant Proc as uvx anygarden-agent<br/>(자식 프로세스)
     participant WSRoom as /ws/rooms/X
 
     Note over Admin,API: [1] Machine 등록 (1회, REST)
     Admin->>API: POST /api/v1/machines {name:"dev-box-1", owner:alice}
     API->>API: machine_token 발급 (argon2 해시 저장)
     API-->>Admin: {machine_id, machine_token}
-    Admin->>MachineD: token을 ~/.doorae/machine.token에 저장
+    Admin->>MachineD: token을 ~/.anygarden/machine.token에 저장
 
     Note over MachineD,Bus: [2] Machine Daemon 기동 & 등록 (WS)
     MachineD->>MachineD: 엔진 capability 자동 감지<br/>(claude-code --version 등)
-    MachineD->>API: WS /ws/machines/{id}<br/>Sec-WebSocket-Protocol: doorae.v1, bearer.<machine_token>
+    MachineD->>API: WS /ws/machines/{id}<br/>Sec-WebSocket-Protocol: anygarden.v1, bearer.<machine_token>
     API->>Bus: connection 등록
     MachineD->>Bus: "register" 프레임<br/>{capabilities, cpu, memory}
     Bus->>API: machines.status = 'online'
@@ -92,13 +92,13 @@ sequenceDiagram
 
     Note over MachineD,Proc: [4] Machine Daemon이 subprocess spawn
     MachineD->>MachineD: profile_yaml → /tmp/agent-X.yaml
-    MachineD->>Proc: asyncio.create_subprocess_exec(<br/>"uvx", "doorae-agent",<br/>"--agent-id", X,<br/>"--engine", "claude-code",<br/>"--profile", "/tmp/...",<br/>env={DOORAE_TOKEN: agent_token})
+    MachineD->>Proc: asyncio.create_subprocess_exec(<br/>"uvx", "anygarden-agent",<br/>"--agent-id", X,<br/>"--engine", "claude-code",<br/>"--profile", "/tmp/...",<br/>env={ANYGARDEN_TOKEN: agent_token})
     Proc-->>MachineD: pid=12345
     MachineD->>Bus: "agent_started" {agent_id, pid}
     Bus->>API: agents.actual_state = 'running', pid=12345
 
     Note over Proc,WSRoom: [5] Agent가 채팅 서버에 독립 연결
-    Proc->>WSRoom: WS /ws/rooms/sprint-42<br/>Sec-WebSocket-Protocol: doorae.v1, bearer.<agent_token>
+    Proc->>WSRoom: WS /ws/rooms/sprint-42<br/>Sec-WebSocket-Protocol: anygarden.v1, bearer.<agent_token>
     WSRoom-->>Proc: accept
     Proc->>WSRoom: 메시지 송수신 시작 (§1-§9 대로)
 
@@ -234,23 +234,23 @@ CREATE INDEX ix_agents_placed_state
 
 ---
 
-## 10.3 `doorae-machine` 패키지 구조
+## 10.3 `anygarden-machine` 패키지 구조
 
 Machine Daemon은 서버 및 SDK와 **별도 저장소**다. 이유: Machine에 Daemon만 설치하면 되고 SDK나 서버 코드를 깔 필요가 없다.
 
 ```
-doorae-machine/                 # 별도 PyPI 패키지 저장소
-├── pyproject.toml              # name = "doorae-machine", packages = ["doorae_machine"]
+anygarden-machine/                 # 별도 PyPI 패키지 저장소
+├── pyproject.toml              # name = "anygarden-machine", packages = ["anygarden_machine"]
 ├── README.md
 ├── LICENSE
-├── doorae_machine/
+├── anygarden_machine/
 │   ├── __init__.py             # __version__
-│   ├── cli.py                  # doorae-machine CLI 엔트리
+│   ├── cli.py                  # anygarden-machine CLI 엔트리
 │   ├── daemon.py               # 메인 WS 루프 + 명령 처리
 │   ├── detector.py             # 엔진 capability 자동 감지
 │   ├── spawner.py              # asyncio.subprocess 관리
 │   ├── supervisor.py           # 자식 프로세스 watchdog
-│   ├── config.py               # ~/.doorae/machine.toml + ~/.doorae/machine.token
+│   ├── config.py               # ~/.anygarden/machine.toml + ~/.anygarden/machine.token
 │   └── protocol/
 │       ├── __init__.py
 │       └── frames.py           # Machine↔Server 프레임 Pydantic 모델
@@ -268,9 +268,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "doorae-machine"
+name = "anygarden-machine"
 version = "0.1.0"
-description = "Doorae machine daemon — spawns agent subprocesses on a host"
+description = "Anygarden machine daemon — spawns agent subprocesses on a host"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -289,10 +289,10 @@ dependencies = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3", "mypy>=1.9"]
 
 [project.scripts]
-doorae-machine = "doorae_machine.cli:main"
+anygarden-machine = "anygarden_machine.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["doorae_machine"]
+packages = ["anygarden_machine"]
 ```
 
 의존성은 **9개** — Daemon은 매우 가볍다.
@@ -317,7 +317,7 @@ LOC 예산:
 각 엔진의 설치 여부와 버전을 자동 검사한다. Daemon이 `register` 시점에 1회 실행 + 설정 가능한 주기(예: 10분)로 재검증.
 
 ```python
-# doorae_machine/detector.py
+# anygarden_machine/detector.py
 from __future__ import annotations
 import asyncio
 import os
@@ -410,7 +410,7 @@ async def detect_engines() -> list[EngineInfo]:
 ## 10.5 Daemon 메인 루프 (`daemon.py`)
 
 ```python
-# doorae_machine/daemon.py
+# anygarden_machine/daemon.py
 from __future__ import annotations
 import asyncio
 import json
@@ -471,7 +471,7 @@ class MachineDaemon:
                 async with websockets.connect(
                     ws_url,
                     # 토큰은 subprotocol 헤더로만 전달 (쿼리 파라미터 금지).
-                    subprotocols=["doorae.v1", f"bearer.{self.machine_token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{self.machine_token}"],
                     ping_interval=20,
                     ping_timeout=10,
                     max_size=2**20,  # 1MB (프로필 YAML 포함 여유)
@@ -567,13 +567,13 @@ class MachineDaemon:
 ## 10.6 Agent Spawner (`spawner.py`)
 
 자식 프로세스 관리. 핵심 책임:
-- `uvx doorae-agent`로 에이전트 subprocess 실행
+- `uvx anygarden-agent`로 에이전트 subprocess 실행
 - 프로필 YAML을 임시 파일에 저장 (커맨드라인에 내용을 넣지 않음)
 - 토큰은 **환경변수**로만 전달 (`argv` 금지)
 - 종료 감지 → 서버에 `agent_crashed` 보고
 
 ```python
-# doorae_machine/spawner.py
+# anygarden_machine/spawner.py
 from __future__ import annotations
 import asyncio
 import os
@@ -632,7 +632,7 @@ class AgentSpawner:
 
         # 프로필을 임시 파일에 저장 (argv에 내용 넣지 않음)
         profile_path = (
-            Path(tempfile.gettempdir()) / f"doorae-agent-{agent_id}.yaml"
+            Path(tempfile.gettempdir()) / f"anygarden-agent-{agent_id}.yaml"
         )
         profile_path.write_text(yaml.dump(profile, allow_unicode=True))
         os.chmod(profile_path, 0o600)  # 소유자만 읽기
@@ -642,13 +642,13 @@ class AgentSpawner:
             # 토큰은 환경변수로만. argv에 절대 넣지 않는다.
             env = {
                 **os.environ,
-                "DOORAE_TOKEN": agent_token,
-                "DOORAE_AGENT_ID": agent_id,
+                "ANYGARDEN_TOKEN": agent_token,
+                "ANYGARDEN_AGENT_ID": agent_id,
             }
             args = [
                 "uvx",
-                "--from", f"doorae-sdk[{engine}]",
-                "doorae-agent",
+                "--from", f"anygarden-sdk[{engine}]",
+                "anygarden-agent",
                 "--agent-id", agent_id,
                 "--engine", engine,
                 "--profile", str(profile_path),
@@ -740,7 +740,7 @@ class AgentSpawner:
 ```
 
 **핵심 보안 고려사항**:
-- `DOORAE_TOKEN` 환경변수로만 전달 — `ps aux`에 안 보임
+- `ANYGARDEN_TOKEN` 환경변수로만 전달 — `ps aux`에 안 보임
 - 프로필 파일은 `chmod 600` — 같은 호스트의 다른 유저가 못 읽음
 - Agent 프로세스 종료 시 프로필 파일 자동 삭제 — 잔여물 없음
 
@@ -748,10 +748,10 @@ class AgentSpawner:
 
 ## 10.7 서버 스케줄러
 
-서버 본체(`doorae-server`)에 추가되는 모듈:
+서버 본체(`anygarden-server`)에 추가되는 모듈:
 
 ```
-doorae-server/doorae/
+anygarden-server/anygarden/
 ├── scheduler/                  # (신규)
 │   ├── __init__.py
 │   ├── placement.py            # Machine 선택 알고리즘
@@ -782,12 +782,12 @@ LOC 예산:
 ### 10.7.1 Placement 알고리즘 (`placement.py`)
 
 ```python
-# doorae/scheduler/placement.py
+# anygarden/scheduler/placement.py
 from __future__ import annotations
 from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from doorae.db.models import Agent, Machine, MachineEngine
+from anygarden.db.models import Agent, Machine, MachineEngine
 
 
 class NoSuitableMachineError(Exception):
@@ -905,13 +905,13 @@ async def select_machine_for(
 상태 머신 구현:
 
 ```python
-# doorae/scheduler/lifecycle.py
+# anygarden/scheduler/lifecycle.py
 from uuid import UUID
 import structlog
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.db.models import Agent
+from anygarden.db.models import Agent
 from .placement import select_machine_for, NoSuitableMachineError
 
 log = structlog.get_logger()
@@ -942,7 +942,7 @@ class AgentLifecycle:
             return
 
         # agent_token 단명 발급 (실제 AgentToken 레코드 저장은 §10.12.3 참조)
-        from doorae.auth.token import generate_token
+        from anygarden.auth.token import generate_token
         agent_token = generate_token()
 
         agent.placed_on_machine_id = machine.id
@@ -1012,7 +1012,7 @@ class AgentLifecycle:
 활성 Machine WebSocket 연결 풀. 메모리 기반 (단일 서버 프로세스 가정).
 
 ```python
-# doorae/scheduler/machine_bus.py
+# anygarden/scheduler/machine_bus.py
 from __future__ import annotations
 import asyncio
 import json
@@ -1073,7 +1073,7 @@ class MachineBus:
 
 ## 10.8 WebSocket 프로토콜 (`/ws/machines/{id}`)
 
-Machine Daemon ↔ 서버 사이의 모든 상호작용. 인증은 `Sec-WebSocket-Protocol: doorae.v1, bearer.<machine_token>`.
+Machine Daemon ↔ 서버 사이의 모든 상호작용. 인증은 `Sec-WebSocket-Protocol: anygarden.v1, bearer.<machine_token>`.
 
 ### 10.8.1 프레임 타입 표
 
@@ -1135,7 +1135,7 @@ Machine Daemon ↔ 서버 사이의 모든 상호작용. 인증은 `Sec-WebSocke
   "profile": {
     "name": "PM",
     "role": "project_manager",
-    "system_prompt": "당신은 Doorae 프로젝트의 PM입니다...",
+    "system_prompt": "당신은 Anygarden 프로젝트의 PM입니다...",
     "llm": {"model": "claude-sonnet-4-5", "temperature": 0.7},
     "mcp_servers": [...]
   },
@@ -1170,7 +1170,7 @@ Machine Daemon ↔ 서버 사이의 모든 상호작용. 인증은 `Sec-WebSocke
 ### 10.8.3 서버 측 WebSocket 핸들러
 
 ```python
-# doorae/ws/machine_handler.py
+# anygarden/ws/machine_handler.py
 from __future__ import annotations
 import json
 from uuid import UUID
@@ -1178,11 +1178,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, WebSocket
 import structlog
 
-from doorae.auth.dependencies import get_machine_identity
-from doorae.db.engine import get_db
-from doorae.db.models import Machine, MachineEngine
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.auth.dependencies import get_machine_identity
+from anygarden.db.engine import get_db
+from anygarden.db.models import Machine, MachineEngine
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 log = structlog.get_logger()
 router = APIRouter()
@@ -1203,7 +1203,7 @@ async def machine_ws(
         return
 
     # 2) subprotocol 수락
-    await websocket.accept(subprotocol="doorae.v1")
+    await websocket.accept(subprotocol="anygarden.v1")
     await bus.register(machine_id, websocket)
 
     # 3) Machine 상태를 online으로
@@ -1265,7 +1265,7 @@ async def _handle_frame(msg, machine, db, lifecycle: AgentLifecycle):
         ...
 
     elif t == "agent_stopped":
-        from doorae.db.models import Agent
+        from anygarden.db.models import Agent
         agent = await db.get(Agent, UUID(msg["agent_id"]))
         agent.actual_state = "stopped"
         await db.commit()
@@ -1280,12 +1280,12 @@ async def _handle_frame(msg, machine, db, lifecycle: AgentLifecycle):
 
 ---
 
-## 10.9 CLI — `doorae-machine`
+## 10.9 CLI — `anygarden-machine`
 
 ### 10.9.1 명령어 목록
 
 ```
-doorae-machine [command] [options]
+anygarden-machine [command] [options]
 
 Commands:
   register                    서버에 이 머신을 등록하고 토큰을 받는다
@@ -1298,8 +1298,8 @@ Commands:
 ### 10.9.2 `register` 상세
 
 ```bash
-$ doorae-machine register \
-    --server https://doorae.example.com \
+$ anygarden-machine register \
+    --server https://anygarden.example.com \
     --name dev-box-1
 
 ? Owner email: alice@example.com
@@ -1315,29 +1315,29 @@ Detecting engines on this host...
 
 Registering machine...
   ✓ Machine 'dev-box-1' registered (id=mac_01HXABCDEF...)
-  ✓ Token saved to: /home/alice/.doorae/machine.token (chmod 600)
+  ✓ Token saved to: /home/alice/.anygarden/machine.token (chmod 600)
 
 Next steps:
   # Foreground 실행:
-  $ doorae-machine run
+  $ anygarden-machine run
 
   # 또는 systemd user unit 설치 후 상시 실행:
-  $ doorae-machine install-systemd-unit
-  $ systemctl --user enable --now doorae-machine
+  $ anygarden-machine install-systemd-unit
+  $ systemctl --user enable --now anygarden-machine
   $ loginctl enable-linger $USER
 ```
 
 ### 10.9.3 `run` 상세
 
 ```bash
-$ doorae-machine run
-[INFO] Loading config from /home/alice/.doorae/machine.toml
+$ anygarden-machine run
+[INFO] Loading config from /home/alice/.anygarden/machine.toml
 [INFO] Detecting engines...
 [INFO]   - claude-code 0.6.1
 [INFO]   - codex 0.50.3
 [INFO]   - openai
 [INFO]   - anthropic
-[INFO] Connecting to wss://doorae.example.com/ws/machines/mac_01HXABCDEF...
+[INFO] Connecting to wss://anygarden.example.com/ws/machines/mac_01HXABCDEF...
 [INFO] Connected. Waiting for spawn commands.
 [INFO] heartbeat sent (0 running agents)
 [INFO] received spawn_agent: agent_id=01HZ... engine=claude-code
@@ -1349,9 +1349,9 @@ $ doorae-machine run
 ### 10.9.4 `status` 상세
 
 ```bash
-$ doorae-machine status
+$ anygarden-machine status
 Machine: dev-box-1 (mac_01HXABCDEF...)
-Server:  wss://doorae.example.com
+Server:  wss://anygarden.example.com
 Status:  online (connected 2h 15m ago)
 
 Engines:
@@ -1370,15 +1370,15 @@ Running agents: 3
   └──────────────┴──────────┴────────────┴─────────┴──────────┘
 ```
 
-### 10.9.5 설정 파일 (`~/.doorae/machine.toml`)
+### 10.9.5 설정 파일 (`~/.anygarden/machine.toml`)
 
 ```toml
-# ~/.doorae/machine.toml (register 시 자동 생성)
+# ~/.anygarden/machine.toml (register 시 자동 생성)
 
 [machine]
 id = "mac_01HXABCDEF..."
 name = "dev-box-1"
-server_url = "wss://doorae.example.com"
+server_url = "wss://anygarden.example.com"
 
 [limits]
 max_agents = 10
@@ -1389,34 +1389,34 @@ kill_grace_sec = 10
 max_backoff_sec = 60
 ```
 
-토큰은 **별도 파일** `~/.doorae/machine.token`에 저장하며 `chmod 600`. 토큰을 TOML 안에 두지 않는 이유는 실수로 git에 올리는 사고를 줄이기 위함이다.
+토큰은 **별도 파일** `~/.anygarden/machine.token`에 저장하며 `chmod 600`. 토큰을 TOML 안에 두지 않는 이유는 실수로 git에 올리는 사고를 줄이기 위함이다.
 
 ---
 
 ## 10.10 배포 — systemd user unit
 
 ```ini
-# ~/.config/systemd/user/doorae-machine.service
+# ~/.config/systemd/user/anygarden-machine.service
 [Unit]
-Description=Doorae Machine Daemon
+Description=Anygarden Machine Daemon
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/uvx doorae-machine run
+ExecStart=%h/.local/bin/uvx anygarden-machine run
 Restart=on-failure
 RestartSec=10
 MemoryMax=256M
 
 # 로그
-StandardOutput=append:%h/.doorae/logs/machine.log
-StandardError=append:%h/.doorae/logs/machine-err.log
+StandardOutput=append:%h/.anygarden/logs/machine.log
+StandardError=append:%h/.anygarden/logs/machine-err.log
 
 # 보안 하드닝
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=%h/.doorae /tmp
+ReadWritePaths=%h/.anygarden /tmp
 ProtectHome=false
 
 [Install]
@@ -1426,16 +1426,16 @@ WantedBy=default.target
 활성화:
 
 ```bash
-$ doorae-machine install-systemd-unit
-Installed: /home/alice/.config/systemd/user/doorae-machine.service
+$ anygarden-machine install-systemd-unit
+Installed: /home/alice/.config/systemd/user/anygarden-machine.service
 
 $ systemctl --user daemon-reload
-$ systemctl --user enable --now doorae-machine
+$ systemctl --user enable --now anygarden-machine
 $ loginctl enable-linger alice       # 로그아웃 후에도 유지
 
-$ systemctl --user status doorae-machine
-● doorae-machine.service - Doorae Machine Daemon
-   Loaded: loaded (~/.config/systemd/user/doorae-machine.service; enabled)
+$ systemctl --user status anygarden-machine
+● anygarden-machine.service - Anygarden Machine Daemon
+   Loaded: loaded (~/.config/systemd/user/anygarden-machine.service; enabled)
    Active: active (running) since ...
    Memory: 52.3M (max: 256.0M)
 ```
@@ -1518,8 +1518,8 @@ $ systemctl --user status doorae-machine
 ### 10.11.6 Machine 수동 드레인 (유지보수)
 
 ```bash
-# admin CLI (doorae-server 패키지 안)
-$ doorae-client admin machine drain dev-box-1
+# admin CLI (anygarden-server 패키지 안)
+$ anygarden-client admin machine drain dev-box-1
 Draining dev-box-1...
   ✓ "drain" command sent
   Current agents: 3 (will be rescheduled)
@@ -1545,8 +1545,8 @@ Draining dev-box-1...
 | 토큰 | 주체 | 저장 위치 | 스코프 | 유효기간 | 사용 경로 |
 |---|---|---|---|---|---|
 | **JWT** | User | 브라우저 localStorage / CLI 환경변수 | 계정 + 역할 | 24h | `Authorization: Bearer ...` 헤더 (HTTP), `Sec-WebSocket-Protocol` (WS) |
-| **Agent Token** | Agent 인스턴스 | Agent 프로세스 환경변수 `DOORAE_TOKEN` | 특정 agent의 Room 참여 | 단명 (1회성, 프로세스 수명) | `/ws/rooms/{id}` |
-| **Machine Token** | Machine Daemon | `~/.doorae/machine.token` (chmod 600) | 자기 Machine 제어 | 장명 (회전 권장) | `/ws/machines/{id}` |
+| **Agent Token** | Agent 인스턴스 | Agent 프로세스 환경변수 `ANYGARDEN_TOKEN` | 특정 agent의 Room 참여 | 단명 (1회성, 프로세스 수명) | `/ws/rooms/{id}` |
+| **Machine Token** | Machine Daemon | `~/.anygarden/machine.token` (chmod 600) | 자기 Machine 제어 | 장명 (회전 권장) | `/ws/machines/{id}` |
 
 **중요**: Machine Token은 채팅 메시지 송수신 권한이 **없다**. Agent Token은 Machine 제어 권한이 **없다**. User Token은 원칙적으로 양쪽 모두 가능하지만, 서비스 로직이 분리되어 실제로는 필요한 것만 인가한다.
 
@@ -1555,7 +1555,7 @@ Draining dev-box-1...
 **발급** (REST `POST /api/v1/machines`):
 
 ```python
-# doorae/api/v1/machines.py
+# anygarden/api/v1/machines.py
 from secrets import token_urlsafe
 from argon2 import PasswordHasher
 
@@ -1594,7 +1594,7 @@ async def register_machine(
     }
 ```
 
-**검증** (`doorae/auth/machine_token.py`, 신규):
+**검증** (`anygarden/auth/machine_token.py`, 신규):
 
 ```python
 from argon2 import PasswordHasher
@@ -1634,7 +1634,7 @@ async def verify_machine_token(
 
 ### 10.12.3 Agent Token (단명 1회용)
 
-스케줄러가 `spawn_agent` 프레임을 만들 때 발급. 프로세스가 종료되면 DB에서 삭제. 절대 `~/.doorae/`에 영구 저장하지 않는다.
+스케줄러가 `spawn_agent` 프레임을 만들 때 발급. 프로세스가 종료되면 DB에서 삭제. 절대 `~/.anygarden/`에 영구 저장하지 않는다.
 
 ```python
 # scheduler/lifecycle.py 일부
@@ -1678,7 +1678,7 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 | 역량 | 영향 |
 |---|---|
 | **`spawn_agent` 프레임 가로채기** | 진행 중 및 향후 spawn 모두의 `agent_token` 평문 획득 |
-| **기존 subprocess의 환경변수 덤프** | 이미 돌고 있는 Agent들의 `DOORAE_TOKEN` 값 획득 (proc/[pid]/environ) |
+| **기존 subprocess의 환경변수 덤프** | 이미 돌고 있는 Agent들의 `ANYGARDEN_TOKEN` 값 획득 (proc/[pid]/environ) |
 | **Agent 가장 접속** | 획득한 토큰으로 `/ws/rooms/{id}`에 접속하여 해당 Agent의 모든 Room 트래픽을 읽고 쓰기 |
 | **새 프로필로 악성 Agent spawn** | 서버에는 정상으로 보이는 Agent 생성 (서버 스케줄러가 이미 이 Machine을 신뢰한 상태) |
 | **임의 subprocess 실행** | Daemon OS 유저 권한 내에서 아무 명령 실행 가능 (로컬 유저 권한 그대로) |
@@ -1713,7 +1713,7 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 |---|---|---|
 | Daemon을 비관리 유저로 실행 | systemd user unit + `NoNewPrivileges=true`. root 절대 금지. 커널 exploit과의 거리를 둔다. | 예방 전용. 이미 Daemon 프로세스가 악의적 코드를 돌리고 있으면 도움 안 됨 |
 | 호스트 격리 | Daemon 전용 머신/VM. 다른 서비스와 공유 금지. | 예방 전용. 이미 이 호스트가 침해되면 그만이다 |
-| Daemon 소프트웨어 업데이트 | `doorae-machine` 패키지 최신 유지. CI에서 CVE 모니터링 | 예방 전용. 침해 중에는 의미 없음 |
+| Daemon 소프트웨어 업데이트 | `anygarden-machine` 패키지 최신 유지. CI에서 CVE 모니터링 | 예방 전용. 침해 중에는 의미 없음 |
 | 신뢰할 수 있는 호스트에만 Daemon 배치 | 외부 파트너 호스트, 개인 BYOD 기기에는 Daemon 금지 | 예방 전용 |
 | Daemon 바이너리 무결성 검증 | PyPI signed release, GitHub Actions attestation | 예방 전용 |
 
@@ -1726,7 +1726,7 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 | 민감한 Room은 신뢰도 높은 Machine에만 | `required_labels={"trust_tier":"high"}` affinity로 강제. "high" 라벨이 붙은 Machine만 민감 Room에 배치됨 | 유효. 한 Machine의 침해가 모든 Room을 노출시키지 않음 |
 | Machine 분리 by tenant | 테넌트 A Machine은 테넌트 A Agent만 spawn. 서버 placement 필터로 강제 | 유효. 한 테넌트 침해가 다른 테넌트에 퍼지지 않음 |
 | profile_yaml에 비밀 값 넣지 말 것 | API 키, 시크릿은 subprocess의 별도 env 주입 또는 시크릿 스토어에서 agent가 직접 가져옴 | 유효. 침해된 Daemon이 훔치는 것이 "agent 토큰만"으로 축소 (비밀 값은 아예 안 본다) |
-| Untrusted 호스트는 standalone 모드만 | 개인 노트북 등에는 `doorae-machine register` 안 함. 사용자가 `uvx doorae-agent` 직접 기동 | 유효. Daemon이 존재하지 않으므로 Daemon 침해 경로 자체가 없음. 대신 사용자 본인의 호스트 침해에 해당 agent 1개만 노출 |
+| Untrusted 호스트는 standalone 모드만 | 개인 노트북 등에는 `anygarden-machine register` 안 함. 사용자가 `uvx anygarden-agent` 직접 기동 | 유효. Daemon이 존재하지 않으므로 Daemon 침해 경로 자체가 없음. 대신 사용자 본인의 호스트 침해에 해당 agent 1개만 노출 |
 
 **폭발 반경 제한은 이 문서가 제공하는 가장 강한 방어선이다.** 활발한 침해 중에도 유효한 유일한 부류다. 민감한 것은 처음부터 신뢰도 높은 소수의 Machine에만 두어라.
 
@@ -1734,8 +1734,8 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 
 | 수단 | 설명 | 침해 중 효과 |
 |---|---|---|
-| `doorae_auth_anomaly_total` 지표 | 병렬 접속 수 급증, 할당되지 않은 agent_id로의 가장 접속 시도 등을 감시 | 부분적. 공격자가 정상 agent를 정확히 흉내 내면 탐지 어려움. 주로 조잡한 공격만 잡음 |
-| 파일 무결성 모니터링 | `~/.doorae/machine.token`, 바이너리, systemd unit 파일의 해시 변화 감지 (AIDE, Tripwire 등) | 부분적. 공격자가 파일을 건드리지 않고 메모리에서만 활동하면 감지 못 함 |
+| `anygarden_auth_anomaly_total` 지표 | 병렬 접속 수 급증, 할당되지 않은 agent_id로의 가장 접속 시도 등을 감시 | 부분적. 공격자가 정상 agent를 정확히 흉내 내면 탐지 어려움. 주로 조잡한 공격만 잡음 |
+| 파일 무결성 모니터링 | `~/.anygarden/machine.token`, 바이너리, systemd unit 파일의 해시 변화 감지 (AIDE, Tripwire 등) | 부분적. 공격자가 파일을 건드리지 않고 메모리에서만 활동하면 감지 못 함 |
 | 네트워크 이상 징후 | Machine 호스트에서 평소와 다른 outbound 트래픽, 비정상 시간대 활동 | 부분적. SIEM이 이미 갖춰진 환경에서만 의미 있음 |
 | Daemon 자체 감사 로그 | Daemon이 자신의 모든 spawn/kill/heartbeat를 별도 append-only 로그에 기록 | **침해된 Daemon이 스스로 정직하게 로그를 쓸 이유가 없다.** 자기 로그를 자기가 지울 수 있음. 외부 로그 수집기(예: journald remote, syslog forward)로 즉시 내보내지 않으면 가치 없음 |
 | 외부 감사 로그 수집 | journald가 원격 시스템으로 즉시 복제, 또는 Daemon이 tamper-evident 로그 서비스에 기록 | 유효한 탐지. 단, 관찰자 인프라가 별개로 보안되어야 함 |
@@ -1783,34 +1783,34 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 
 ## 10.13 구현 체크리스트
 
-### Machine Daemon 패키지 (`doorae-machine/`)
+### Machine Daemon 패키지 (`anygarden-machine/`)
 
 - [ ] `pyproject.toml` + `hatchling` 빌드 설정
-- [ ] `doorae_machine/detector.py` — 6종 엔진 감지 (binary 3 + python 1 + env 2)
-- [ ] `doorae_machine/spawner.py` — subprocess 관리 + chmod 600 프로필 + env 토큰 전달
-- [ ] `doorae_machine/supervisor.py` — 자식 프로세스 watchdog
-- [ ] `doorae_machine/daemon.py` — WS 재연결 루프 + heartbeat 30s
-- [ ] `doorae_machine/protocol/frames.py` — Pydantic 프레임 11종 (§10.8.1 표)
-- [ ] `doorae_machine/config.py` — TOML 설정 + 토큰 파일 분리
-- [ ] `doorae_machine/cli.py` — `register` / `run` / `status` / `install-systemd-unit`
+- [ ] `anygarden_machine/detector.py` — 6종 엔진 감지 (binary 3 + python 1 + env 2)
+- [ ] `anygarden_machine/spawner.py` — subprocess 관리 + chmod 600 프로필 + env 토큰 전달
+- [ ] `anygarden_machine/supervisor.py` — 자식 프로세스 watchdog
+- [ ] `anygarden_machine/daemon.py` — WS 재연결 루프 + heartbeat 30s
+- [ ] `anygarden_machine/protocol/frames.py` — Pydantic 프레임 11종 (§10.8.1 표)
+- [ ] `anygarden_machine/config.py` — TOML 설정 + 토큰 파일 분리
+- [ ] `anygarden_machine/cli.py` — `register` / `run` / `status` / `install-systemd-unit`
 - [ ] 테스트: detector 단위 / spawner mock / daemon integration
 - [ ] README + systemd unit 템플릿
 
-### 서버 측 (기존 `doorae-server/`)
+### 서버 측 (기존 `anygarden-server/`)
 
-- [ ] `doorae/db/models.py`에 `MachineEngine`, `MachineToken` 모델 추가
-- [ ] `doorae/db/models.py`의 `Machine`, `Agent`에 컬럼 추가
+- [ ] `anygarden/db/models.py`에 `MachineEngine`, `MachineToken` 모델 추가
+- [ ] `anygarden/db/models.py`의 `Machine`, `Agent`에 컬럼 추가
 - [ ] Alembic 마이그레이션 (2개: machine 확장 + agent 확장)
-- [ ] `doorae/auth/machine_token.py` — 발급/검증
-- [ ] `doorae/auth/dependencies.py`에 `get_machine_identity` 추가
-- [ ] `doorae/scheduler/placement.py` — bin-pack 선택
-- [ ] `doorae/scheduler/lifecycle.py` — 상태 머신
-- [ ] `doorae/scheduler/machine_bus.py` — 활성 WS 풀
-- [ ] `doorae/ws/machine_handler.py` — `/ws/machines/{id}` 엔드포인트
-- [ ] `doorae/api/v1/machines.py` — 등록/드레인/리스트 REST
-- [ ] `doorae/api/v1/agents.py` — 선언적 생성 REST
-- [ ] `doorae/cli.py`의 `admin` 서브커맨드에 `machine list/drain`, `agent spawn/kill`
-- [ ] Prometheus 지표 2개 추가 (`doorae_machines_online`, `doorae_agents_by_state`)
+- [ ] `anygarden/auth/machine_token.py` — 발급/검증
+- [ ] `anygarden/auth/dependencies.py`에 `get_machine_identity` 추가
+- [ ] `anygarden/scheduler/placement.py` — bin-pack 선택
+- [ ] `anygarden/scheduler/lifecycle.py` — 상태 머신
+- [ ] `anygarden/scheduler/machine_bus.py` — 활성 WS 풀
+- [ ] `anygarden/ws/machine_handler.py` — `/ws/machines/{id}` 엔드포인트
+- [ ] `anygarden/api/v1/machines.py` — 등록/드레인/리스트 REST
+- [ ] `anygarden/api/v1/agents.py` — 선언적 생성 REST
+- [ ] `anygarden/cli.py`의 `admin` 서브커맨드에 `machine list/drain`, `agent spawn/kill`
+- [ ] Prometheus 지표 2개 추가 (`anygarden_machines_online`, `anygarden_agents_by_state`)
 - [ ] E2E 테스트: register → run → POST /agents → 실제 spawn 확인
 - [ ] 크래시 복구 테스트: 강제 kill → `agent_crashed` 보고 → 자동 재시작
 
@@ -1821,14 +1821,14 @@ Daemon은 이 토큰을 **환경변수로만** subprocess에 전달 (argv 금지
 - [ ] `02-rationale.md`에 ADR-006 (Machine 1급 리소스)
 - [ ] `05-security.md`에 Machine Token 카테고리 추가
 - [ ] `07-error-recovery.md`에 Machine 계층 장애 시나리오 추가
-- [ ] `08-operations.md`에 `doorae-machine` 섹션 추가
+- [ ] `08-operations.md`에 `anygarden-machine` 섹션 추가
 - [ ] `README.md`의 배포 시나리오를 Scheduled 모드 예시로 업데이트
 
 LOC 예산 재확인:
 
 | 항목 | LOC |
 |---|---|
-| `doorae-machine` 패키지 | ~410 |
+| `anygarden-machine` 패키지 | ~410 |
 | 서버 스케줄러 모듈 (6개 파일) | ~440 |
 | DB 마이그레이션 (Alembic 2개) | ~50 |
 | 인증 확장 (`auth/machine_token.py`) | ~60 |
@@ -1846,16 +1846,16 @@ LOC 예산 재확인:
 | 질문 | 답 |
 |---|---|
 | Machine은 1급 리소스인가? | **Yes** — 등록되고, 관찰되고, 선택되고, 명령받는 대상. DB에 수동 기록되는 메타데이터가 아님. |
-| Daemon은 강제인가? | **No** — standalone 모드 (`uvx doorae-agent` 직접 실행)도 계속 지원. Daemon은 다중 머신 운영의 주력 경로. |
+| Daemon은 강제인가? | **No** — standalone 모드 (`uvx anygarden-agent` 직접 실행)도 계속 지원. Daemon은 다중 머신 운영의 주력 경로. |
 | Daemon의 **정상 동작 경로**에서 채팅 메시지가 흐르는가? | **No** — Agent subprocess가 서버와 독립 WebSocket을 맺으며, Daemon의 프레임 채널(`/ws/machines/{id}`)에는 채팅 메시지가 오가지 않는다. 이는 장애 격리 효과. |
 | Daemon이 **침해되었을 때** 채팅 메시지가 보호되는가? | **No** — Daemon은 spawn 시점에 agent_token을 평문으로 본다. 침해된 Daemon은 자기가 spawn한 Agent로 가장하여 Room 트래픽을 읽고 쓸 수 있다. §10.12.4 참조. |
 | 토큰은 몇 종인가? | **3종** — User JWT / Agent Token / Machine Token. 완전 분리. |
-| 서브프로세스에 토큰을 어떻게 전달하나? | **환경변수만** (`DOORAE_TOKEN`). `argv` 금지 — `ps aux` 노출. |
+| 서브프로세스에 토큰을 어떻게 전달하나? | **환경변수만** (`ANYGARDEN_TOKEN`). `argv` 금지 — `ps aux` 노출. |
 | Agent 크래시 시 자동 복구되나? | **Yes** — `restart_policy` 기본값 `restart_on_same_machine`. `no_restart` / `reschedule`도 지원. |
 | 스케줄링 알고리즘은? | **bin-pack** (가장 적은 running agent를 가진 Machine 선택) + labels 필터 + engine 필터 + 용량 체크 |
 | WebSocket 인증은? | **Sec-WebSocket-Protocol subprotocol 헤더** 만 사용. 쿼리 파라미터 토큰 금지. |
 | 기존 §1-§9 원칙이 깨지는가? | **No** — 5대 원칙 모두 유지. 이 계층은 순수한 추가. |
-| LOC 예산은? | 서버 본체 ~710 → ~1,750 (Machine 계층 포함). + `doorae-machine` 패키지 ~410. |
+| LOC 예산은? | 서버 본체 ~710 → ~1,750 (Machine 계층 포함). + `anygarden-machine` 패키지 ~410. |
 | MVP 기간은? | 기존 2-3주 → **4-5주** (Machine 계층 +1-2주). |
 
 "Machine은 등록되고, Daemon은 감지하고, 서버는 명령하고, Agent는 실행한다"가 이 계층의 한 줄 요약이다.

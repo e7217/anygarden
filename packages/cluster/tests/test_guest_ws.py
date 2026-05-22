@@ -17,12 +17,12 @@ import pytest_asyncio
 from sqlalchemy import select
 from starlette.testclient import TestClient
 
-from doorae.app import create_app
-from doorae.auth.invite_token import hash_invite_token
-from doorae.auth.jwt import create_guest_token, create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.invite_token import hash_invite_token
+from anygarden.auth.jwt import create_guest_token, create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Participant,
@@ -32,7 +32,7 @@ from doorae.db.models import (
     RoomInviteLink,
     User,
 )
-from doorae.orchestration.rules import GuestRoomAggregateLimiter
+from anygarden.orchestration.rules import GuestRoomAggregateLimiter
 from datetime import datetime, timedelta, timezone
 
 
@@ -60,7 +60,7 @@ class TestGuestRoomAggregateLimiter:
 
 
 @pytest_asyncio.fixture()
-async def guest_env(config: DooraeSettings) -> AsyncIterator[dict]:
+async def guest_env(config: AnygardenSettings) -> AsyncIterator[dict]:
     """Seed a room, an agent participant (potential representative), an
     invite, and issue a guest JWT ready for WS use.
     """
@@ -71,7 +71,7 @@ async def guest_env(config: DooraeSettings) -> AsyncIterator[dict]:
         await conn.run_sync(Base.metadata.create_all)
 
     async with session_factory() as db:
-        owner = User(email="own@doorae.io", password_hash="x")
+        owner = User(email="own@anygarden.io", password_hash="x")
         db.add(owner)
         await db.flush()
         project = Project(name="p")
@@ -195,7 +195,7 @@ class TestGuestWSSendFrame:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+                subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
             ) as ws:
                 assert json.loads(ws.receive_text())["type"] == "welcome"
                 ws.send_text(json.dumps({
@@ -225,7 +225,7 @@ class TestGuestWSSendFrame:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+                subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -273,7 +273,7 @@ class TestGuestWSSendFrame:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+                subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(
@@ -303,7 +303,7 @@ class TestGuestWSSendFrame:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+                subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 # 3 messages fit; 4th must trip.
@@ -336,7 +336,7 @@ class TestGuestWSSendFrame:
 
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{guest_env['guest_jwt']}"],
+                subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(
@@ -369,7 +369,7 @@ class TestGuestWSSendFrame:
 
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{owner_token}"],
+                subprotocols=["anygarden.v1", f"bearer.{owner_token}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(

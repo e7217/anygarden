@@ -14,11 +14,11 @@ Plan A §3의 "서버는 교환기다, 두뇌가 아니다" 원칙을 이 구현
 | **도구 선택 및 호출** | 각 에이전트 엔진 | 위 동일 |
 | **턴 순서 조율** | Host 에이전트 (LLM 기반) | 메인 Room의 `Host` 역할 에이전트 |
 | **작업 분배** | Host 에이전트 | 위 동일 |
-| **메시지 라우팅** | 서버 | `doorae/ws/manager.py` |
-| **영속화** | 서버 | `doorae/messages/service.py` |
-| **쿨다운/레이트 리밋** | 서버 | `doorae/orchestration/rules.py` |
+| **메시지 라우팅** | 서버 | `anygarden/ws/manager.py` |
+| **영속화** | 서버 | `anygarden/messages/service.py` |
+| **쿨다운/레이트 리밋** | 서버 | `anygarden/orchestration/rules.py` |
 | **멘션 파싱·우선 알림** | 서버 | 위 동일 |
-| **타이핑 알림 브로드캐스트** | 서버 | `doorae/ws/handler.py` |
+| **타이핑 알림 브로드캐스트** | 서버 | `anygarden/ws/handler.py` |
 
 **왜 Host 에이전트에게 위임하는가**:
 
@@ -35,12 +35,12 @@ Host 에이전트는 메인 Room의 **특별한 참여자**이지만, 서버 입
 ### 4.2.1 시스템 프롬프트 예시
 
 ```yaml
-# ~/.doorae/agents/host.yaml
+# ~/.anygarden/agents/host.yaml
 name: Host
 role: orchestrator
 engine: claude-code  # 또는 codex, openai 등
 system_prompt: |
-  당신은 Doorae의 Host 에이전트입니다. 메인 Room의 대화 흐름을 조율합니다.
+  당신은 Anygarden의 Host 에이전트입니다. 메인 Room의 대화 흐름을 조율합니다.
 
   # 당신의 역할
   - 유저의 요청을 받아 가장 적합한 에이전트에게 작업을 위임합니다
@@ -94,15 +94,15 @@ Host: @유저, Hero 섹션 작업이 완료되었습니다:
 
 ## 4.3 서버 최소 룰 (~50줄)
 
-서버가 개입하는 세 가지 지점을 `doorae/orchestration/rules.py`에 구현한다.
+서버가 개입하는 세 가지 지점을 `anygarden/orchestration/rules.py`에 구현한다.
 
 ### 4.3.1 쿨다운 (Rate Limiting)
 
 ```python
-# doorae/orchestration/rules.py
+# anygarden/orchestration/rules.py
 from collections import defaultdict
 from time import monotonic
-from doorae.config import get_settings
+from anygarden.config import get_settings
 
 
 class CooldownPolicy:
@@ -189,7 +189,7 @@ def mark_message_priority(
 ### 4.3.3 타이핑 알림
 
 ```python
-# doorae/ws/handler.py 내부
+# anygarden/ws/handler.py 내부
 async def handle_typing(ws, frame: TypingFrame, participant: Participant):
     # DB 저장 없음 — 휘발성 브로드캐스트
     await manager.broadcast_to_room(
@@ -224,7 +224,7 @@ async def handle_typing(ws, frame: TypingFrame, participant: Participant):
 | **1:1** | 서브 Room에서 Host 없이 직접 대화 | (Host 불참, 두 에이전트가 서브 채널에서 진행) |
 
 **구현 방법**:
-- SDK의 `doorae_sdk/examples/host_prompts.py`에 네 가지 프롬프트 템플릿을 제공한다.
+- SDK의 `anygarden_sdk/examples/host_prompts.py`에 네 가지 프롬프트 템플릿을 제공한다.
 - 에이전트 개발자는 `--mode meeting` 플래그로 프로필 파일을 선택할 수 있다.
 - 서버는 이 차이를 **모른다**.
 
@@ -262,7 +262,7 @@ async def handle_typing(ws, frame: TypingFrame, participant: Participant):
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ doorae-server (경계 안쪽)                               │
+│ anygarden-server (경계 안쪽)                               │
 │                                                         │
 │  • Room 멤버십 검증                                     │
 │  • 메시지 persist + seq 발급                            │
@@ -279,7 +279,7 @@ async def handle_typing(ws, frame: TypingFrame, participant: Participant):
 └─────────────────────────────────────────────────────────┘
             ↕ WebSocket (JSON 프레임)
 ┌─────────────────────────────────────────────────────────┐
-│ doorae-sdk (Machine)                            │
+│ anygarden-sdk (Machine)                            │
 │                                                         │
 │  • WebSocket 연결 관리 + 재연결                         │
 │  • 수신 메시지 → 엔진 대화 컨텍스트 주입                │
@@ -304,12 +304,12 @@ async def handle_typing(ws, frame: TypingFrame, participant: Participant):
 
 ## 4.7 구현 체크리스트
 
-- [ ] `doorae/orchestration/rules.py`: `CooldownPolicy` 클래스 (~35줄)
-- [ ] `doorae/orchestration/rules.py`: `parse_mentions()` + `mark_message_priority()` (~15줄)
-- [ ] `doorae/ws/handler.py`: 메시지 dispatch 전 `policy.check(room_id)` 호출 (~5줄)
-- [ ] `doorae/ws/handler.py`: `handle_typing()` 핸들러 (~15줄)
-- [ ] `doorae/ws/protocol.py`: `TypingFrame` Pydantic 모델 (~10줄)
-- [ ] 예시 Host 프롬프트 4개: `doorae_sdk/examples/host_prompts.py`
+- [ ] `anygarden/orchestration/rules.py`: `CooldownPolicy` 클래스 (~35줄)
+- [ ] `anygarden/orchestration/rules.py`: `parse_mentions()` + `mark_message_priority()` (~15줄)
+- [ ] `anygarden/ws/handler.py`: 메시지 dispatch 전 `policy.check(room_id)` 호출 (~5줄)
+- [ ] `anygarden/ws/handler.py`: `handle_typing()` 핸들러 (~15줄)
+- [ ] `anygarden/ws/protocol.py`: `TypingFrame` Pydantic 모델 (~10줄)
+- [ ] 예시 Host 프롬프트 4개: `anygarden_sdk/examples/host_prompts.py`
 - [ ] 테스트: `tests/test_cooldown.py`, `tests/test_mention_parsing.py`
 
 **총 구현 분량**: 서버 ~80줄 (orchestration/rules.py + ws/handler.py 일부) + SDK 예시 프롬프트 4개. 

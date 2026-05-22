@@ -16,13 +16,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from doorae_machine.agent_dir import AgentFilePathError
-from doorae_machine.spawner import SpawnManifest, Spawner
+from anygarden_machine.agent_dir import AgentFilePathError
+from anygarden_machine.spawner import SpawnManifest, Spawner
 
 
 @pytest.fixture
 def agent_dirs_root(tmp_path: Path) -> Path:
-    return tmp_path / "doorae" / "agents"
+    return tmp_path / "anygarden" / "agents"
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ class TestMaterializeFresh:
         agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
         workspace = agent_root / "workspace"
         assert workspace.is_dir()
-        assert (workspace / ".doorae-codex-workspace").is_file()
+        assert (workspace / ".anygarden-codex-workspace").is_file()
         assert (workspace / "AGENTS.md").is_symlink()
         assert os.readlink(workspace / "AGENTS.md") == "../AGENTS.md"
         assert (workspace / "memory" / "notes.md").is_symlink()

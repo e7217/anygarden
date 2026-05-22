@@ -28,8 +28,8 @@ from typing import Any
 
 import pytest
 
-from doorae_agent import secrets as agent_secrets
-from doorae_agent.integrations.openhands_engine import (
+from anygarden_agent import secrets as agent_secrets
+from anygarden_agent.integrations.openhands_engine import (
     OpenHandsAdapter,
     _OPENHANDS_SDK_ENV_KEYS,
     _load_mcp_manifest,
@@ -378,7 +378,7 @@ class TestOnMessage:
         """
         marker = "##MEMORY-AND-ROSTER##"
         monkeypatch.setattr(
-            "doorae_agent.integrations.openhands_engine.compose_session_context_suffix",
+            "anygarden_agent.integrations.openhands_engine.compose_session_context_suffix",
             lambda *a, **kw: marker,
         )
         adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
@@ -950,7 +950,7 @@ class TestLoadMcpManifest:
         path = tmp_path / "ok.json"
         manifest = {
             "mcpServers": {
-                "doorae": {
+                "anygarden": {
                     "type": "http",
                     "url": "http://localhost/mcp/rpc",
                     "headers": {"Authorization": "Bearer xyz"},
@@ -976,7 +976,7 @@ class TestMcpConfigForwarded:
         """If ``.mcp.json`` exists at cwd, the dict reaches Agent(...)."""
         manifest = {
             "mcpServers": {
-                "doorae": {
+                "anygarden": {
                     "type": "http",
                     "url": "http://localhost:8000/mcp/rpc",
                     "headers": {"Authorization": "Bearer test"},
@@ -1035,7 +1035,7 @@ class TestMcpConfigForwarded:
         legacy SDK, room goes dark" — the same flavour of silent
         breakage #292 cited.
         """
-        manifest = {"mcpServers": {"doorae": {"url": "http://x/mcp"}}}
+        manifest = {"mcpServers": {"anygarden": {"url": "http://x/mcp"}}}
         (tmp_path / ".mcp.json").write_text(
             json.dumps(manifest), encoding="utf-8"
         )

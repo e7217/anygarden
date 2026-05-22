@@ -10,15 +10,15 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.app import _reset_openhands_agents_for_restart
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Machine, User
+from anygarden.app import _reset_openhands_agents_for_restart
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Machine, User
 
 
 @pytest_asyncio.fixture()
 async def factory():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

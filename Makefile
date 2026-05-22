@@ -2,7 +2,7 @@
 
 install:                ## Install all packages (workspace) + litellm gateway CLI (#197)
 	uv sync --all-packages
-	@# Install the litellm CLI as a uv tool so doorae-server can spawn
+	@# Install the litellm CLI as a uv tool so anygarden-server can spawn
 	@# it as a subprocess via PATH (#197 / ADR-004). Using ``uv tool install``
 	@# instead of ``uvx`` gives version stability and zero per-invocation
 	@# overhead — see docs/design/12-llm-gateway.md §12.5.

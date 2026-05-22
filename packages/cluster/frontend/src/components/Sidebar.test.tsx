@@ -189,7 +189,7 @@ describe('Sidebar — experimental admin nav badges (#346)', () => {
 
 describe('Sidebar — update indicators (#385)', () => {
   it('renders a dot beside project rooms with unread updates', () => {
-    localStorage.setItem('doorae_expanded_projects', JSON.stringify(['p1']))
+    localStorage.setItem('anygarden_expanded_projects', JSON.stringify(['p1']))
     roomsMockState.projects = [{ id: 'p1', name: 'Project One' }]
     roomsMockState.rooms = {
       p1: [
@@ -210,7 +210,7 @@ describe('Sidebar — update indicators (#385)', () => {
   })
 
   it('omits the dot when a room has no unread updates', () => {
-    localStorage.setItem('doorae_expanded_projects', JSON.stringify(['p1']))
+    localStorage.setItem('anygarden_expanded_projects', JSON.stringify(['p1']))
     roomsMockState.projects = [{ id: 'p1', name: 'Project One' }]
     roomsMockState.rooms = {
       p1: [

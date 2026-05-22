@@ -1,11 +1,11 @@
-"""Tests for :mod:`doorae.llm_gateway.reverse_proxy` (#197).
+"""Tests for :mod:`anygarden.llm_gateway.reverse_proxy` (#197).
 
 Uses ``httpx.MockTransport`` to stand in for the LiteLLM subprocess
 and a tiny fake supervisor for the runtime state. No real subprocess,
 no real network. The tests exercise the observable contract:
 
 - the proxy forwards method/path/body to the upstream,
-- the caller's doorae token is replaced with the gateway master key,
+- the caller's anygarden token is replaced with the gateway master key,
 - a usage row is written after a successful response,
 - SSE streaming responses are relayed chunk-by-chunk,
 - unauthenticated requests are rejected before reaching the upstream.
@@ -21,17 +21,17 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, MockTransport, Response
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentToken, Base, LLMGatewayUsage
-from doorae.auth.token import generate_token, hash_agent_token
+from anygarden.app import create_app
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentToken, Base, LLMGatewayUsage
+from anygarden.auth.token import generate_token, hash_agent_token
 
 
 @pytest_asyncio.fixture()
 async def gateway_env() -> AsyncIterator[dict[str, Any]]:
     """App + DB + in-memory agent token, with the gateway flag on."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -167,7 +167,7 @@ async def test_proxy_replaces_authorization_with_master_key(gateway_env) -> None
             headers={"Authorization": f"Bearer {gateway_env['agent_token']}"},
         )
 
-    # Caller's doorae token must not leak upstream, and the upstream
+    # Caller's anygarden token must not leak upstream, and the upstream
     # must see the gateway's own master key.
     assert captured["authorization"] == "Bearer sk-secret-gateway"
     assert gateway_env["agent_token"] not in (captured["authorization"] or "")
@@ -284,7 +284,7 @@ async def test_unauthenticated_request_is_rejected(gateway_env) -> None:
 
 async def _seed_user(factory, *, is_admin: bool) -> str:
     """Create a User row and return its id."""
-    from doorae.db.models import User
+    from anygarden.db.models import User
 
     async with factory() as db:
         user = User(
@@ -304,7 +304,7 @@ async def test_user_token_cannot_traverse_proxy(gateway_env) -> None:
     health checks use ``/api/v1/llm-gateway/models/{id}/test`` —
     never this relay — so user tokens have no reason to reach here.
     """
-    from doorae.auth.jwt import create_user_token
+    from anygarden.auth.jwt import create_user_token
 
     app = gateway_env["app"]
     reached_upstream = {"flag": False}
@@ -339,7 +339,7 @@ async def test_admin_user_token_still_cannot_traverse_proxy(gateway_env) -> None
     go through the dedicated ``/api/v1/llm-gateway/models/{id}/test``
     endpoint which uses the gateway master key directly, not this
     relay."""
-    from doorae.auth.jwt import create_user_token
+    from anygarden.auth.jwt import create_user_token
 
     app = gateway_env["app"]
     reached_upstream = {"flag": False}
@@ -374,7 +374,7 @@ async def test_guest_token_cannot_traverse_proxy(gateway_env) -> None:
     to issue LLM calls through the gateway. Allowing them would turn
     a shared invite link into an open billing vector for whoever
     picks it up."""
-    from doorae.auth.jwt import create_guest_token
+    from anygarden.auth.jwt import create_guest_token
 
     app = gateway_env["app"]
     reached_upstream = {"flag": False}
@@ -390,7 +390,7 @@ async def test_guest_token_cannot_traverse_proxy(gateway_env) -> None:
     # guest token factory requires a matching User row because
     # ``get_identity`` looks the guest user up by id on every call.
     from datetime import datetime, timedelta, timezone
-    from doorae.db.models import User
+    from anygarden.db.models import User
 
     async with gateway_env["factory"]() as db:
         # Guests are users with email=NULL / password_hash=NULL per

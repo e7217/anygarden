@@ -11,7 +11,7 @@ import {
   useSidebarLayout,
 } from './useSidebarLayout'
 
-const STORAGE_KEY = 'doorae_sidebar_collapsed'
+const STORAGE_KEY = 'anygarden_sidebar_collapsed'
 
 function wrap({ children }: { children: ReactNode }) {
   return createElement(SidebarLayoutProvider, null, children)

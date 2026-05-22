@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae_agent.client import ChatClient
+from anygarden_agent.client import ChatClient
 
 
 class TestSpeakerStrategyCache:

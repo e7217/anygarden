@@ -77,7 +77,7 @@ beforeEach(() => {
   localStorage.clear()
   // Seed a token so ``useAuth`` skips the dev-token branch and goes
   // straight to /auth/me — the stub above decides admin vs member.
-  localStorage.setItem('doorae_token', 'test-token')
+  localStorage.setItem('anygarden_token', 'test-token')
 })
 
 describe('RoomEditDialog – admin context-window toggle (#225)', () => {

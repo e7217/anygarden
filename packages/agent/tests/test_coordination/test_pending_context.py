@@ -9,7 +9,7 @@ of the module without dragging an adapter fixture along.
 
 from __future__ import annotations
 
-from doorae_agent.coordination.pending_context import (
+from anygarden_agent.coordination.pending_context import (
     ROOM_CONVERSATION_PREAMBLE,
     wrap_as_room_conversation,
 )

@@ -1,4 +1,4 @@
-"""Tests for ``doorae_machine.proc_kill``.
+"""Tests for ``anygarden_machine.proc_kill``.
 
 Verifies that ``terminate_tree`` reaches grandchildren and tolerates
 already-dead processes. The tests spawn Python subprocesses that fork
@@ -15,7 +15,7 @@ import time
 import psutil
 import pytest
 
-from doorae_machine.proc_kill import subprocess_group_kwargs, terminate_tree
+from anygarden_machine.proc_kill import subprocess_group_kwargs, terminate_tree
 
 
 def _spawn_tree() -> subprocess.Popen[bytes]:

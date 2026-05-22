@@ -3,9 +3,9 @@
 The lifespan wiring has three possible sources for the Fernet key,
 in priority order:
 
-1. ``DOORAE_MCP_SECRETS_KEY`` env / ``config.mcp_secrets_key`` —
+1. ``ANYGARDEN_MCP_SECRETS_KEY`` env / ``config.mcp_secrets_key`` —
    explicit operator configuration (K8s secret, CI var, etc.).
-2. ``~/.doorae/mcp_secrets_key`` file — JWT-secret-style auto
+2. ``~/.anygarden/mcp_secrets_key`` file — JWT-secret-style auto
    persistence so local dev survives restarts without any setup.
 3. ``config.dev`` flag + ephemeral ``Fernet.generate_key()`` —
    dev-only fallback. With dev disabled, booting without a key
@@ -25,13 +25,13 @@ from pathlib import Path
 import pytest
 from cryptography.fernet import Fernet
 
-from doorae.app import create_app
-from doorae.config import DooraeSettings
-from doorae.mcp_templates.encryption import MCPSecretsUnavailable
+from anygarden.app import create_app
+from anygarden.config import AnygardenSettings
+from anygarden.mcp_templates.encryption import MCPSecretsUnavailable
 
 
-def _fresh_config(**overrides) -> DooraeSettings:
-    """Build a DooraeSettings without ``mcp_secrets_key``.
+def _fresh_config(**overrides) -> AnygardenSettings:
+    """Build a AnygardenSettings without ``mcp_secrets_key``.
 
     The project conftest.py pre-fills ``mcp_secrets_key`` for every
     other test so the MCP layer boots cleanly. That convenience
@@ -44,7 +44,7 @@ def _fresh_config(**overrides) -> DooraeSettings:
         "log_level": "WARNING",
     }
     base.update(overrides)
-    return DooraeSettings(**base)
+    return AnygardenSettings(**base)
 
 
 @pytest.fixture()
@@ -54,7 +54,7 @@ def tmp_home(tmp_path, monkeypatch) -> Path:
     return tmp_path
 
 
-async def _boot(config: DooraeSettings):
+async def _boot(config: AnygardenSettings):
     """Run the lifespan manually and return the booted app."""
     app = create_app(config)
     async with app.router.lifespan_context(app):
@@ -65,10 +65,10 @@ async def _boot(config: DooraeSettings):
 async def test_explicit_env_key_wins_over_file(tmp_home: Path) -> None:
     """Source 1 beats source 2 — explicit config is authoritative."""
     # Seed a decoy file so we can prove it was not read.
-    doorae_dir = tmp_home / ".doorae"
-    doorae_dir.mkdir()
+    anygarden_dir = tmp_home / ".anygarden"
+    anygarden_dir.mkdir()
     decoy_key = Fernet.generate_key().decode("ascii")
-    (doorae_dir / "mcp_secrets_key").write_text(decoy_key)
+    (anygarden_dir / "mcp_secrets_key").write_text(decoy_key)
 
     real_key = Fernet.generate_key().decode("ascii")
     config = _fresh_config(mcp_secrets_key=real_key)
@@ -85,7 +85,7 @@ async def test_explicit_env_key_wins_over_file(tmp_home: Path) -> None:
 @pytest.mark.asyncio
 async def test_file_fallback_persists_across_restarts(tmp_home: Path) -> None:
     """Source 2 — missing config creates a file, restart reads it back."""
-    key_path = tmp_home / ".doorae" / "mcp_secrets_key"
+    key_path = tmp_home / ".anygarden" / "mcp_secrets_key"
     assert not key_path.exists()
 
     # First boot: no config, no file → file is created.
@@ -110,13 +110,13 @@ async def test_file_fallback_persists_across_restarts(tmp_home: Path) -> None:
 
 
 def _block_mcp_key_file(tmp_home: Path) -> None:
-    """Leave ``~/.doorae`` writable (JWT needs it) but make the
+    """Leave ``~/.anygarden`` writable (JWT needs it) but make the
     ``mcp_secrets_key`` path itself a directory so ``write_text``
     raises ``IsADirectoryError``. Exercises the OSError branch in
     the file fallback without breaking JWT's own file handling.
     """
-    (tmp_home / ".doorae").mkdir()
-    (tmp_home / ".doorae" / "mcp_secrets_key").mkdir()
+    (tmp_home / ".anygarden").mkdir()
+    (tmp_home / ".anygarden" / "mcp_secrets_key").mkdir()
 
 
 @pytest.mark.asyncio

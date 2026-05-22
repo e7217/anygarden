@@ -9,18 +9,18 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, Machine, MachineToken, User
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, Machine, MachineToken, User
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
 async def machines_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -281,7 +281,7 @@ class TestMachinesAPI:
     @pytest.mark.asyncio
     async def test_delete_machine_refuses_with_active_agents(self, machines_env) -> None:
         """DELETE should return 409 if agents are still placed on the machine."""
-        from doorae.db.models import Agent
+        from anygarden.db.models import Agent
 
         client = machines_env["client"]
         token = machines_env["token"]
@@ -318,7 +318,7 @@ class TestMachinesAPI:
     @pytest.mark.asyncio
     async def test_delete_machine_force_stops_agents(self, machines_env) -> None:
         """DELETE ?force=true should stop all agents and delete the machine."""
-        from doorae.db.models import Agent
+        from anygarden.db.models import Agent
 
         client = machines_env["client"]
         token = machines_env["token"]

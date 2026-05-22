@@ -17,14 +17,14 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Project, Room
-from doorae.ws.handler import _apply_orchestrator_fallback_nominate
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Participant, Project, Room
+from anygarden.ws.handler import _apply_orchestrator_fallback_nominate
 
 
 @pytest_asyncio.fixture()
-async def fallback_env(config: DooraeSettings):
+async def fallback_env(config: AnygardenSettings):
     """Room with orchestrator agent + 2 worker agents, all participants.
 
     Joined order: orchestrator → worker1 → worker2. The fallback

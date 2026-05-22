@@ -10,11 +10,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -24,7 +24,7 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.rooms.token_stats import (
+from anygarden.rooms.token_stats import (
     estimate_tokens,
     get_room_token_stats,
     serialise_window,
@@ -51,7 +51,7 @@ class TestEstimateTokens:
 
 @pytest_asyncio.fixture()
 async def stats_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

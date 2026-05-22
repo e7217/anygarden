@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_agent.client import ChatClient, _is_task_init_content
+from anygarden_agent.client import ChatClient, _is_task_init_content
 
 
 class TestChatClientInit:
@@ -168,7 +168,7 @@ class TestWebSocketKeepalive:
             # a fake socket.
             raise RuntimeError("stop-loop")
 
-        with patch("doorae_agent.client.ws_connect", side_effect=fake_ws_connect):
+        with patch("anygarden_agent.client.ws_connect", side_effect=fake_ws_connect):
             # Should return cleanly because _running is False.
             await client._room_loop("room-1")
 

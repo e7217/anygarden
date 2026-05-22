@@ -20,9 +20,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentSkill, Base, SkillLibraryEntry
-from doorae.skills_library.service import (
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentSkill, Base, SkillLibraryEntry
+from anygarden.skills_library.service import (
     SkillLibraryService,
     SkillOwnershipError,
     SkillNameConflictError,
