@@ -7,7 +7,7 @@
 기본 ``pytest`` 실행에서는 pyproject 의 ``addopts = "-m 'not slow'"``
 로 건너뜁니다. 수동으로 실행하려면::
 
-    cd doorae-server && uv run pytest -m slow tests/test_e2e_real_conversation.py
+    cd anygarden-server && uv run pytest -m slow tests/test_e2e_real_conversation.py
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ import pytest
 import pytest_asyncio
 from starlette.testclient import TestClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent, AgentToken, Base, Participant, Project, Room, User,
 )
 
@@ -43,7 +43,7 @@ def call_codex(prompt: str) -> str:
     under its default ``workspace-write`` sandbox rejects any write
     whose target falls outside the walked-up project root, so we put
     the temp file inside the current working directory (which is the
-    pytest runner's cwd — ``doorae-server/`` — and therefore inside
+    pytest runner's cwd — ``anygarden-server/`` — and therefore inside
     the monorepo project root that codex discovers via ``.git``
     upward traversal). ``tempfile.NamedTemporaryFile`` default is
     ``/tmp``, which is outside every plausible project root and
@@ -53,7 +53,7 @@ def call_codex(prompt: str) -> str:
         mode="w",
         suffix=".txt",
         delete=False,
-        prefix="doorae-e2e-",
+        prefix="anygarden-e2e-",
         dir=str(Path.cwd()),
     ) as f:
         out_path = f.name
@@ -73,7 +73,7 @@ def call_codex(prompt: str) -> str:
 
 @pytest_asyncio.fixture()
 async def env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="WARNING",
@@ -85,7 +85,7 @@ async def env():
         await conn.run_sync(Base.metadata.create_all)
 
     async with sf() as db:
-        user = User(email="alice@doorae.io", password_hash="x", is_admin=True)
+        user = User(email="alice@anygarden.io", password_hash="x", is_admin=True)
         db.add(user)
         await db.flush()
 
@@ -156,7 +156,7 @@ class TestRealConversation:
                         url += f"?since_seq={user_seq}"
 
                     with tc.websocket_connect(
-                        url, subprotocols=["doorae.v1", f"bearer.{user_jwt}"],
+                        url, subprotocols=["anygarden.v1", f"bearer.{user_jwt}"],
                     ) as ws:
                         welcome = json.loads(ws.receive_text())
                         assert welcome["type"] == "welcome"
@@ -193,7 +193,7 @@ class TestRealConversation:
                         url += f"?since_seq={agent_seq}"
 
                     with tc.websocket_connect(
-                        url, subprotocols=["doorae.v1", f"bearer.{agent_tok}"],
+                        url, subprotocols=["anygarden.v1", f"bearer.{agent_tok}"],
                     ) as ws:
                         welcome = json.loads(ws.receive_text())
                         assert welcome["type"] == "welcome"

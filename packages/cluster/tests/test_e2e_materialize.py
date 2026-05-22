@@ -27,8 +27,8 @@ import pytest_asyncio
 from sqlalchemy import delete, select
 from unittest.mock import AsyncMock
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     AgentFile,
     Base,
@@ -39,10 +39,10 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
-from doorae_machine.spawner import SpawnManifest, Spawner
+from anygarden_machine.spawner import SpawnManifest, Spawner
 
 
 class FakeWS:
@@ -121,11 +121,11 @@ async def pipeline(tmp_path: Path):
     await bus.register(machine.id, fake_ws)
 
     # Machine-side spawner with an isolated materialize root so we
-    # don't touch the developer's real ~/.doorae/agents/.
+    # don't touch the developer's real ~/.anygarden/agents/.
     spawner = Spawner(
         on_stopped=AsyncMock(),
         on_crashed=AsyncMock(),
-        agent_dirs_root=tmp_path / "doorae" / "agents",
+        agent_dirs_root=tmp_path / "anygarden" / "agents",
     )
 
     async def make_agent(

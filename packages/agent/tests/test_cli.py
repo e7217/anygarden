@@ -1,4 +1,4 @@
-"""Tests for CLI entry points (doorae-agent, doorae-client)."""
+"""Tests for CLI entry points (anygarden-agent, anygarden-client)."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from doorae_agent.cli import agent_main, client_main
-from doorae_agent.integrations import ENGINES, get_adapter
-from doorae_agent.profile.loader import load_profile
-from doorae_agent.profile.schema import AgentProfile
+from anygarden_agent.cli import agent_main, client_main
+from anygarden_agent.integrations import ENGINES, get_adapter
+from anygarden_agent.profile.loader import load_profile
+from anygarden_agent.profile.schema import AgentProfile
 
 
 class TestAgentCLI:
     def test_agent_help(self) -> None:
-        """doorae-agent --help exits cleanly and shows engine choices."""
+        """anygarden-agent --help exits cleanly and shows engine choices."""
         runner = CliRunner()
         result = runner.invoke(agent_main, ["--help"])
         assert result.exit_code == 0
@@ -28,7 +28,7 @@ class TestAgentCLI:
 
 class TestClientCLI:
     def test_client_help(self) -> None:
-        """doorae-client --help exits cleanly."""
+        """anygarden-client --help exits cleanly."""
         runner = CliRunner()
         result = runner.invoke(client_main, ["--help"])
         assert result.exit_code == 0

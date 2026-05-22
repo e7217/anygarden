@@ -1,4 +1,4 @@
-"""Unit tests for :class:`doorae.llm_gateway.supervisor.LLMGatewaySupervisor` (#197).
+"""Unit tests for :class:`anygarden.llm_gateway.supervisor.LLMGatewaySupervisor` (#197).
 
 Six scenarios cover the state machine's observable behaviour — spawn,
 health-failure, crash auto-respawn, backoff exhaustion, admin restart,
@@ -9,7 +9,7 @@ the defaults at construction time.
 The supervisor does not touch the network or the filesystem — it
 consumes a ``spawn_fn`` (subprocess-exec substitute) and a
 ``health_probe`` (HTTP-health substitute), both injected at construction.
-Production wiring lives in ``doorae.app`` where these are bound to
+Production wiring lives in ``anygarden.app`` where these are bound to
 ``asyncio.create_subprocess_exec`` and an ``httpx.AsyncClient``.
 """
 
@@ -19,7 +19,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from doorae.llm_gateway.supervisor import (
+from anygarden.llm_gateway.supervisor import (
     GatewayState,
     LLMGatewaySupervisor,
     _SpawnParams,
@@ -28,8 +28,8 @@ from doorae.llm_gateway.supervisor import (
 
 def _make_params() -> _SpawnParams:
     return _SpawnParams(
-        config_path=Path("/tmp/doorae-test-litellm.yaml"),
-        child_env={"DOORAE_LITELLM_TEST_KEY": "val"},
+        config_path=Path("/tmp/anygarden-test-litellm.yaml"),
+        child_env={"ANYGARDEN_LITELLM_TEST_KEY": "val"},
         master_key="sk-test-master",
         port=4001,
     )

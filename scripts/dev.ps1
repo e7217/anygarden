@@ -9,35 +9,35 @@
 
 $ErrorActionPreference = "Stop"
 
-$DevPort = if ($env:DOORAE_PORT) { $env:DOORAE_PORT } else { "8001" }
-$env:DOORAE_PORT = $DevPort
+$DevPort = if ($env:ANYGARDEN_PORT) { $env:ANYGARDEN_PORT } else { "8001" }
+$env:ANYGARDEN_PORT = $DevPort
 
 Push-Location $PSScriptRoot/..
 try {
-    Write-Host "[doorae] alembic upgrade head" -ForegroundColor Cyan
-    uv run --package doorae alembic -c packages/cluster/alembic.ini upgrade head
+    Write-Host "[anygarden] alembic upgrade head" -ForegroundColor Cyan
+    uv run --package anygarden alembic -c packages/cluster/alembic.ini upgrade head
 
-    Write-Host "[doorae] starting backend on http://127.0.0.1:$DevPort" -ForegroundColor Cyan
+    Write-Host "[anygarden] starting backend on http://127.0.0.1:$DevPort" -ForegroundColor Cyan
     $backend = Start-Process -PassThru -NoNewWindow -FilePath "uv" `
         -ArgumentList @(
-            "run", "--package", "doorae",
-            "uvicorn", "doorae.app:create_app", "--factory",
+            "run", "--package", "anygarden",
+            "uvicorn", "anygarden.app:create_app", "--factory",
             "--reload", "--host", "0.0.0.0", "--port", $DevPort,
             "--log-level", "debug"
         )
 
     Push-Location packages/cluster/frontend
     try {
-        Write-Host "[doorae] npm install" -ForegroundColor Cyan
+        Write-Host "[anygarden] npm install" -ForegroundColor Cyan
         npm install --silent
-        Write-Host "[doorae] starting frontend dev server" -ForegroundColor Cyan
+        Write-Host "[anygarden] starting frontend dev server" -ForegroundColor Cyan
         # Foreground so Ctrl+C reaches Vite first; the finally block
         # below cleans up the backend.
         npm run dev
     } finally {
         Pop-Location
         if (-not $backend.HasExited) {
-            Write-Host "[doorae] stopping backend (pid=$($backend.Id))" -ForegroundColor Yellow
+            Write-Host "[anygarden] stopping backend (pid=$($backend.Id))" -ForegroundColor Yellow
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
         }
     }

@@ -120,11 +120,11 @@ export default function RoomArtifactsDialog({
       const eventRoomId = detail?.artifact?.room_id ?? detail?.room_id
       if (eventRoomId === roomId) void refresh()
     }
-    window.addEventListener('doorae:room_artifact:added', handler)
-    window.addEventListener('doorae:room_artifact:removed', handler)
+    window.addEventListener('anygarden:room_artifact:added', handler)
+    window.addEventListener('anygarden:room_artifact:removed', handler)
     return () => {
-      window.removeEventListener('doorae:room_artifact:added', handler)
-      window.removeEventListener('doorae:room_artifact:removed', handler)
+      window.removeEventListener('anygarden:room_artifact:added', handler)
+      window.removeEventListener('anygarden:room_artifact:removed', handler)
     }
   }, [open, roomId, refresh])
 

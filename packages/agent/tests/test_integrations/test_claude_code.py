@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator
 
 import pytest
 
-from doorae_agent.integrations.claude_code import (
+from anygarden_agent.integrations.claude_code import (
     ClaudeCodeAdapter,
     integrate_with_claude_code,
 )
@@ -277,7 +277,7 @@ class TestIntegrateWithClaudeCode:
     async def test_integrate_registers_handler(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Bot")
         assert len(client._message_handlers) == 0
@@ -305,14 +305,14 @@ class TestHandoffTool:
     ) -> None:
         """Orchestrator → options carry an ``mcp_servers`` entry under
         the ``handoff`` key (#319 — name disambiguated from the cluster's
-        HTTP doorae entry the spawner writes into ``.mcp.json``).
+        HTTP anygarden entry the spawner writes into ``.mcp.json``).
 
         ``allowed_tools`` is intentionally *not* set so the cluster's
-        doorae HTTP MCP (``mark_task_status`` etc.) and any admin-attached
+        anygarden HTTP MCP (``mark_task_status`` etc.) and any admin-attached
         third-party MCP server (e.g. GitHub) remain reachable from the
         orchestrator turn.
         """
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -326,9 +326,9 @@ class TestHandoffTool:
         opts = fake_sdk[-1]["options"].kwargs
         assert "mcp_servers" in opts
         assert "handoff" in opts["mcp_servers"]
-        # #319 — the cluster's HTTP doorae MCP must NOT be shadowed by
+        # #319 — the cluster's HTTP anygarden MCP must NOT be shadowed by
         # an in-process server reusing the same name.
-        assert "doorae" not in opts["mcp_servers"]
+        assert "anygarden" not in opts["mcp_servers"]
         # #319 — no narrow whitelist; cluster + admin MCP entries
         # autoload from ``.mcp.json`` and need to stay reachable.
         assert "allowed_tools" not in opts
@@ -339,7 +339,7 @@ class TestHandoffTool:
     ) -> None:
         """Worker agent in an orchestrator room → no ``mcp_servers``
         stamp. The tool is strictly orchestrator-scoped."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Worker")
         client._agent_id = "agent-beta"  # not the orchestrator
@@ -375,7 +375,7 @@ class TestHandoffTool:
         with the ``[HANDOFF] <@user:pid> reason`` marker. The server
         picks this up and updates ``Room.next_speaker_participant_id``
         (tested separately in cluster suite)."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -431,7 +431,7 @@ class TestHandoffTool:
     ) -> None:
         """Tool called without a participant id → tool returns an
         ``is_error`` MCP response so the LLM can retry."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -474,7 +474,7 @@ class TestOrchestratorRosterPrompt:
         rather than as a live ``<@user:uuid>`` routing token (#288).
         The LLM still has the UUID for ``handoff_to`` calls but no
         copyable token to spray across prose."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -532,7 +532,7 @@ class TestOrchestratorRosterPrompt:
         """Worker agents don't get roster stamping — their prompt
         remains verbatim from construction. This keeps the roster
         strictly scoped to the agent that can actually use it."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Worker")
         client._agent_id = "agent-beta"
@@ -563,7 +563,7 @@ class TestOrchestratorRosterPrompt:
         still receive the roster as a standalone prompt — we don't
         want the CLAUDE.md-driven default path to silently skip the
         roster."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -596,7 +596,7 @@ class TestOrchestratorRosterPrompt:
         """Pre-#221 servers don't stamp the roster — the adapter must
         still produce a workable prompt without it. Roster absence
         should not inject a stray "Room participants:" header."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -617,7 +617,7 @@ class TestOrchestratorRosterPrompt:
         """Issue #271 — peers carrying a ``description`` get an em-dash
         suffix so the LLM can route on intent. Peers without one fall
         back to the legacy "name only" line for backwards compatibility."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -665,7 +665,7 @@ class TestOrchestratorRosterPrompt:
         """#271 — the REST layer caps incoming description at 200, but
         we double-cap on the runtime side too. Newlines fold to spaces
         so a single line stays a single line in the prompt."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -703,7 +703,7 @@ class TestOrchestratorRosterPrompt:
         """Issue #279 — a collaborative agent that is *not* the room's
         orchestrator still receives the roster, plus a peer-mention
         usage hint paragraph that solo agents never see."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Buddy")
         client._agent_id = "agent-buddy"
@@ -768,7 +768,7 @@ class TestOrchestratorRosterPrompt:
         """Issue #279 — solo agents that aren't the orchestrator must
         receive the prompt byte-for-byte identical to pre-#279, with
         no roster and no collaborative hint."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Solo")
         client._agent_id = "agent-solo"
@@ -800,7 +800,7 @@ class TestOrchestratorRosterPrompt:
         """Issue #279 — when an agent is both the orchestrator and
         collaborative, the roster + collaborative hint must coexist
         with the handoff_to MCP wiring (mcp_servers stays populated)."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -848,7 +848,7 @@ class TestRosterRoutingVsReference:
     async def test_roster_assembly_emits_no_real_routing_tokens(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
@@ -1010,7 +1010,7 @@ class TestIngestContext:
         adapter = ClaudeCodeAdapter()
         await adapter.start()
 
-        from doorae_agent.integrations.claude_code import _PENDING_CONTEXT_MAX
+        from anygarden_agent.integrations.claude_code import _PENDING_CONTEXT_MAX
 
         for i in range(_PENDING_CONTEXT_MAX + 2):
             await adapter.ingest_context({
@@ -1058,7 +1058,7 @@ class TestIngestContext:
         own. This is the property the #74 fix is ultimately shipping
         — one `[취합 결과]` broadcast feeds all listeners' context
         without N duplicate responses."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Bot")
         # Prime the client with a participant id so decide_policy's

@@ -1,4 +1,4 @@
-"""Shared fixtures for doorae-machine tests."""
+"""Shared fixtures for anygarden-machine tests."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from doorae_machine.protocol.frames import SyncDesiredStateFrame
+from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
 
 @pytest.fixture

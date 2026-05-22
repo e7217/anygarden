@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from doorae.ws.manager import ConnectionManager
-from doorae.ws.protocol import TaskUpdateOut
+from anygarden.ws.manager import ConnectionManager
+from anygarden.ws.protocol import TaskUpdateOut
 
 
 class _FakeWS:
@@ -132,7 +132,7 @@ async def test_subscribe_without_user_id_still_works_for_room_broadcast() -> Non
     ws = _FakeWS()
     await mgr.subscribe("r", "p", ws)
     # Room broadcast still reaches them.
-    from doorae.ws.protocol import TypingOut
+    from anygarden.ws.protocol import TypingOut
 
     await mgr.broadcast(
         "r", TypingOut(room_id="r", participant_id="p", is_typing=True)

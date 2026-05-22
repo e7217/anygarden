@@ -10,10 +10,10 @@ dev: migrate           ## Run server + frontend concurrently (dev mode, migratin
 	$(MAKE) -j2 server-dev frontend
 
 server:                 ## Run backend server
-	uv run doorae-server
+	uv run anygarden-server
 
 server-dev:             ## Run backend server in dev mode (reload, port 8001)
-	DOORAE_PORT=$(DEV_PORT) uv run uvicorn doorae.app:create_app --factory --reload --host 0.0.0.0 --port $(DEV_PORT) --log-level debug --ws-ping-interval 60 --ws-ping-timeout 600
+	ANYGARDEN_PORT=$(DEV_PORT) uv run uvicorn anygarden.app:create_app --factory --reload --host 0.0.0.0 --port $(DEV_PORT) --log-level debug --ws-ping-interval 60 --ws-ping-timeout 600
 
 frontend:               ## Run frontend dev server
 	cd frontend && npm install --silent && npm run dev
@@ -22,7 +22,7 @@ test:                   ## Run backend tests
 	uv run pytest -v
 
 lint:                   ## Run linter
-	uv run ruff check doorae tests
+	uv run ruff check anygarden tests
 
 migrate:                ## Run alembic migrations
 	uv run alembic upgrade head

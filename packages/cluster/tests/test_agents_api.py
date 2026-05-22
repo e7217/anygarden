@@ -9,11 +9,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     ActivityLog,
     Agent,
     AgentFile,
@@ -25,13 +25,13 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
 async def agents_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -277,7 +277,7 @@ class TestAgentsAPI:
         is_dm=True room, so an orphan DM surfaces as a ghost entry
         the admin can never clear.
         """
-        from doorae.db.models import Room as RoomModel
+        from anygarden.db.models import Room as RoomModel
 
         client = agents_env["client"]
         token = agents_env["token"]
@@ -350,7 +350,7 @@ class TestAgentsAPI:
     @pytest.mark.asyncio
     async def test_non_admin_cannot_add_agent_to_room(self, agents_env) -> None:
         """Regular users must not be able to join an agent to a room."""
-        from doorae.db.models import Project, Room
+        from anygarden.db.models import Project, Room
 
         client = agents_env["client"]
         admin_token = agents_env["token"]
@@ -388,7 +388,7 @@ class TestAgentsAPI:
         """Removing an agent from a room that has its messages must not
         raise IntegrityError. The messages should remain (participant_id NULL).
         """
-        from doorae.db.models import Message, Participant, Project, Room
+        from anygarden.db.models import Message, Participant, Project, Room
 
         client = agents_env["client"]
         admin_token = agents_env["token"]
@@ -497,7 +497,7 @@ class TestAgentsAPI:
         only re-dispatched for ``actual_state in (idle, stopped,
         crashed)`` — leaving ``pending`` in a silent dead-end.
         """
-        from doorae.db.models import Project, Room
+        from anygarden.db.models import Project, Room
 
         client = agents_env["client"]
         token = agents_env["token"]
@@ -569,7 +569,7 @@ class TestAgentsAPI:
         in-flight agent process kept its original ``--room`` set and
         was invisible in the new room forever.
         """
-        from doorae.db.models import Project, Room
+        from anygarden.db.models import Project, Room
 
         client = agents_env["client"]
         token = agents_env["token"]
@@ -658,7 +658,7 @@ class TestAgentActivityEndpoint:
     async def test_activity_endpoint_exposes_request_id(
         self, agents_env
     ) -> None:
-        from doorae.db.models import ActivityLog
+        from anygarden.db.models import ActivityLog
 
         client = agents_env["client"]
         token = agents_env["token"]

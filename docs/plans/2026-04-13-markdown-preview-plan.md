@@ -14,28 +14,28 @@
 
 | File | Action | Responsibility |
 |---|---|---|
-| `doorae-server/frontend/package.json` | Modify | `react-markdown`, `remark-gfm` 의존성 추가 |
-| `doorae-server/frontend/src/components/MarkdownContent.tsx` | Create | 마크다운 → React 렌더링 컴포넌트 (커스텀 컴포넌트 매핑) |
-| `doorae-server/frontend/src/components/MessageBubble.tsx` | Modify | plain text `<p>` → `<MarkdownContent>` 교체 |
-| `doorae-server/frontend/src/index.css` | Modify | 마크다운 요소 타이포그래피 스타일 추가 |
+| `anygarden-server/frontend/package.json` | Modify | `react-markdown`, `remark-gfm` 의존성 추가 |
+| `anygarden-server/frontend/src/components/MarkdownContent.tsx` | Create | 마크다운 → React 렌더링 컴포넌트 (커스텀 컴포넌트 매핑) |
+| `anygarden-server/frontend/src/components/MessageBubble.tsx` | Modify | plain text `<p>` → `<MarkdownContent>` 교체 |
+| `anygarden-server/frontend/src/index.css` | Modify | 마크다운 요소 타이포그래피 스타일 추가 |
 
 ---
 
 ### Task 1: Install Dependencies
 
 **Files:**
-- Modify: `doorae-server/frontend/package.json`
+- Modify: `anygarden-server/frontend/package.json`
 
 - [ ] **Step 1: Install react-markdown and remark-gfm**
 
 ```bash
-cd doorae-server/frontend && npm install react-markdown remark-gfm
+cd anygarden-server/frontend && npm install react-markdown remark-gfm
 ```
 
 - [ ] **Step 2: Verify TypeScript resolves the packages**
 
 ```bash
-cd doorae-server/frontend && npx tsc --noEmit 2>&1 | head -20
+cd anygarden-server/frontend && npx tsc --noEmit 2>&1 | head -20
 ```
 
 Expected: No errors related to `react-markdown` or `remark-gfm`.
@@ -47,7 +47,7 @@ Expected: No errors related to `react-markdown` or `remark-gfm`.
 마크다운 요소의 스타일을 DESIGN.md 팔레트에 맞춰 정의한다. MarkdownContent 컴포넌트보다 먼저 작성하여 렌더링 시 즉시 스타일이 적용되게 한다.
 
 **Files:**
-- Modify: `doorae-server/frontend/src/index.css` (파일 끝에 추가)
+- Modify: `anygarden-server/frontend/src/index.css` (파일 끝에 추가)
 
 - [ ] **Step 1: Add markdown prose styles to index.css**
 
@@ -209,7 +209,7 @@ Expected: No errors related to `react-markdown` or `remark-gfm`.
 - [ ] **Step 2: Verify build still compiles**
 
 ```bash
-cd doorae-server/frontend && npx tsc --noEmit
+cd anygarden-server/frontend && npx tsc --noEmit
 ```
 
 Expected: No errors.
@@ -219,7 +219,7 @@ Expected: No errors.
 ### Task 3: Create MarkdownContent Component
 
 **Files:**
-- Create: `doorae-server/frontend/src/components/MarkdownContent.tsx`
+- Create: `anygarden-server/frontend/src/components/MarkdownContent.tsx`
 
 - [ ] **Step 1: Create MarkdownContent.tsx**
 
@@ -255,7 +255,7 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
 - [ ] **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd doorae-server/frontend && npx tsc --noEmit
+cd anygarden-server/frontend && npx tsc --noEmit
 ```
 
 Expected: No errors.
@@ -265,7 +265,7 @@ Expected: No errors.
 ### Task 4: Integrate into MessageBubble
 
 **Files:**
-- Modify: `doorae-server/frontend/src/components/MessageBubble.tsx`
+- Modify: `anygarden-server/frontend/src/components/MessageBubble.tsx`
 
 - [ ] **Step 1: Replace plain text with MarkdownContent**
 
@@ -302,7 +302,7 @@ The "other" message (line 58-60):
 - [ ] **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd doorae-server/frontend && npx tsc --noEmit
+cd anygarden-server/frontend && npx tsc --noEmit
 ```
 
 Expected: No errors.
@@ -310,10 +310,10 @@ Expected: No errors.
 - [ ] **Step 3: Verify Vite build succeeds**
 
 ```bash
-cd doorae-server/frontend && npm run build
+cd anygarden-server/frontend && npm run build
 ```
 
-Expected: Build succeeds, output in `doorae-server/doorae/static/`.
+Expected: Build succeeds, output in `anygarden-server/anygarden/static/`.
 
 ---
 
@@ -322,13 +322,13 @@ Expected: Build succeeds, output in `doorae-server/doorae/static/`.
 - [ ] **Step 1: Start backend server**
 
 ```bash
-cd doorae-server && uv run doorae-server --host 0.0.0.0 --port 8001 &
+cd anygarden-server && uv run anygarden-server --host 0.0.0.0 --port 8001 &
 ```
 
 - [ ] **Step 2: Start Vite dev server**
 
 ```bash
-cd doorae-server/frontend && npm run dev
+cd anygarden-server/frontend && npm run dev
 ```
 
 - [ ] **Step 3: Test markdown rendering in the chat UI**
@@ -345,7 +345,7 @@ Open `http://localhost:5173` in a browser. Join a room and send test messages:
    ```
    ````
 4. **List**: `- item 1\n- item 2\n- item 3`
-5. **Link**: `Check [Doorae](https://example.com)`
+5. **Link**: `Check [Anygarden](https://example.com)`
 6. **Table**: `| A | B |\n|---|---|\n| 1 | 2 |`
 7. **Blockquote**: `> This is a quote`
 8. **Plain text** (no markdown): `Hello, this is a normal message` — should look identical to before.

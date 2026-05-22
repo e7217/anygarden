@@ -7,7 +7,7 @@ import inspect
 
 import pytest
 
-from doorae_agent.protocol import frames as sdk_frames
+from anygarden_agent.protocol import frames as sdk_frames
 
 
 class TestProtocolCompat:

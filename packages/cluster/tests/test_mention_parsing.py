@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from doorae.orchestration.rules import parse_mentions
+from anygarden.orchestration.rules import parse_mentions
 
 
 def test_parse_id_based_user_mention():

@@ -1,6 +1,6 @@
 // Unified response gate for incoming messages.
 //
-// Ported from ``packages/agent/doorae_agent/integrations/base.py``:
+// Ported from ``packages/agent/anygarden_agent/integrations/base.py``:
 // ``should_respond``. The rules are unchanged — every comment on the
 // Python side applies here too. Keep the two in lock-step: the Python
 // version has the canonical test suite (``test_should_respond.py``)

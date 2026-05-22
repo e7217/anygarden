@@ -1,14 +1,14 @@
 // JWT subprotocol for authenticating the agent WS connection.
 //
 // The server expects two subprotocol tokens:
-//   Sec-WebSocket-Protocol: doorae.v1, bearer.<token>
+//   Sec-WebSocket-Protocol: anygarden.v1, bearer.<token>
 //
-// Mirrors packages/agent/doorae_agent/protocol/versioning.py. Kept tiny
+// Mirrors packages/agent/anygarden_agent/protocol/versioning.py. Kept tiny
 // on purpose so the server can evolve the scheme without dragging the
 // WS client refactor along.
 
 export const PROTOCOL_VERSION = "v1";
-export const SUBPROTOCOL = "doorae.v1";
+export const SUBPROTOCOL = "anygarden.v1";
 
 /**
  * Build the subprotocol list that `ws.connect` uses for bearer auth.

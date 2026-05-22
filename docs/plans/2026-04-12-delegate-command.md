@@ -52,7 +52,7 @@
 
 ## 변경 대상
 
-### 서버 (doorae-server)
+### 서버 (anygarden-server)
 
 **`rooms/router.py`** — 서브룸 이름 검색 엔드포인트 추가:
 ```
@@ -61,7 +61,7 @@ GET /api/v1/rooms/{room_id}/sub-rooms?name={name}
 - parent_room_id = room_id, name = query param 으로 필터
 - 200: RoomOut (첫 매치) 또는 404
 
-### SDK (doorae-sdk)
+### SDK (anygarden-sdk)
 
 **`client.py`** — REST 헬퍼:
 ```python

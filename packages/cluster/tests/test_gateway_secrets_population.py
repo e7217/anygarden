@@ -1,7 +1,7 @@
 """Tests for build_engine_secrets (#359).
 
 The matrix this locks down is the engine guard — we have to make
-absolutely sure that flipping ``DOORAE_LLM_GATEWAY_ENABLED=true`` does
+absolutely sure that flipping ``ANYGARDEN_LLM_GATEWAY_ENABLED=true`` does
 NOT inject ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` into the spawn
 frame for claude-code / codex / gemini-cli agents, because those
 provider env names are SDK-wide standards and would silently
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae.scheduler.gateway_secrets import build_engine_secrets
+from anygarden.scheduler.gateway_secrets import build_engine_secrets
 
 
 class TestEngineGuard:
@@ -108,7 +108,7 @@ class TestActivationGuards:
 
 class TestUrlNormalisation:
     def test_trailing_slash_is_stripped(self) -> None:
-        # Operators sometimes set DOORAE_CLUSTER_EXTERNAL_URL with a
+        # Operators sometimes set ANYGARDEN_CLUSTER_EXTERNAL_URL with a
         # trailing slash from copy-paste. The result has to stay
         # ``/api/v1/llm/v1`` (no double slash) so the agent SDK's URL
         # join doesn't produce a 404.

@@ -2,7 +2,7 @@
 """
 멀티프로세스 E2E: 서버 + 데몬 + 에이전트(자동 spawn) + 5턴 대화
 
-Usage: cd doorae-server && uv run python scripts/e2e_multiprocess.py
+Usage: cd anygarden-server && uv run python scripts/e2e_multiprocess.py
 """
 import asyncio, json, os, secrets, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
@@ -10,25 +10,25 @@ from pathlib import Path
 async def run():
     import httpx, websockets
 
-    db_dir = tempfile.mkdtemp(prefix="doorae-e2e-")
+    db_dir = tempfile.mkdtemp(prefix="anygarden-e2e-")
     db_path = Path(db_dir) / "e2e.db"
     jwt_secret = secrets.token_urlsafe(32)
     port = 18744
     base, ws_base = f"http://127.0.0.1:{port}", f"ws://127.0.0.1:{port}"
     procs = []
 
-    # doorae-agent가 SDK venv에 설치되어 있으므로 PATH에 추가
-    sdk_bin = str(Path(__file__).resolve().parent.parent.parent / "doorae-sdk" / ".venv" / "bin")
+    # anygarden-agent가 SDK venv에 설치되어 있으므로 PATH에 추가
+    sdk_bin = str(Path(__file__).resolve().parent.parent.parent / "anygarden-sdk" / ".venv" / "bin")
     env = {**os.environ,
         "PATH": f"{sdk_bin}:{os.environ.get('PATH', '')}",
-        "DOORAE_DB_URL": f"sqlite+aiosqlite:///{db_path}",
-        "DOORAE_JWT_SECRET": jwt_secret, "DOORAE_LOG_LEVEL": "WARNING",
-        "DOORAE_HOST": "127.0.0.1", "DOORAE_PORT": str(port)}
+        "ANYGARDEN_DB_URL": f"sqlite+aiosqlite:///{db_path}",
+        "ANYGARDEN_JWT_SECRET": jwt_secret, "ANYGARDEN_LOG_LEVEL": "WARNING",
+        "ANYGARDEN_HOST": "127.0.0.1", "ANYGARDEN_PORT": str(port)}
 
     try:
         # ① 서버 기동
         server = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "doorae.app:create_app",
+            [sys.executable, "-m", "uvicorn", "anygarden.app:create_app",
              "--factory", "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         procs.append(server)
@@ -41,20 +41,20 @@ async def run():
                 await asyncio.sleep(0.5)
             else: sys.exit("서버 시작 실패")
 
-        print(f"\n{'='*65}\n  Doorae 멀티프로세스 E2E\n{'='*65}")
+        print(f"\n{'='*65}\n  Anygarden 멀티프로세스 E2E\n{'='*65}")
         print(f"  ✓ ① 서버 기동 (pid={server.pid})")
 
         # DB 접근용
-        from doorae.db.engine import build_engine, build_session_factory
-        from doorae.db.models import Base, User, Project, Room, Participant
-        from doorae.auth.jwt import create_user_token
+        from anygarden.db.engine import build_engine, build_session_factory
+        from anygarden.db.models import Base, User, Project, Room, Participant
+        from anygarden.auth.jwt import create_user_token
         engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
         sf = build_session_factory(engine)
         await asyncio.sleep(1)
 
         # ② 유저 생성
         async with sf() as db:
-            user = User(email="alice@doorae.io", password_hash="x", is_admin=True)
+            user = User(email="alice@anygarden.io", password_hash="x", is_admin=True)
             db.add(user); await db.commit(); await db.refresh(user)
             user_jwt = create_user_token(user.id, user.email, True, secret=jwt_secret)
         headers = {"Authorization": f"Bearer {user_jwt}"}
@@ -73,8 +73,8 @@ async def run():
         # ④ 데몬 프로세스 기동
         daemon_code = f'''
 import asyncio, sys
-sys.path.insert(0, "{Path(__file__).resolve().parent.parent.parent / "doorae-machine"}")
-from doorae_machine.daemon import MachineDaemon
+sys.path.insert(0, "{Path(__file__).resolve().parent.parent.parent / "anygarden-machine"}")
+from anygarden_machine.daemon import MachineDaemon
 asyncio.run(MachineDaemon(
     server_url="{ws_base}/ws/machines/{machine_id}",
     machine_id="{machine_id}", machine_token="{machine_token}", max_agents=4,
@@ -121,7 +121,7 @@ asyncio.run(MachineDaemon(
             await asyncio.sleep(2)
             async with sf() as db:
                 from sqlalchemy import select
-                from doorae.db.models import Agent
+                from anygarden.db.models import Agent
                 r = await db.execute(select(Agent).where(Agent.id == agent_id))
                 a = r.scalar_one_or_none()
                 if a and a.actual_state == "running":
@@ -149,7 +149,7 @@ asyncio.run(MachineDaemon(
 
         async with websockets.connect(
             f"{ws_base}/ws/rooms/{room_id}",
-            subprotocols=[websockets.Subprotocol("doorae.v1"),
+            subprotocols=[websockets.Subprotocol("anygarden.v1"),
                           websockets.Subprotocol(f"bearer.{user_jwt}")],
         ) as user_ws:
             for turn in range(5):

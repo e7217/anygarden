@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner
+from anygarden_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def spawner(tmp_path: Path) -> Spawner:
 
     ``agent_dirs_root`` is redirected at ``tmp_path`` so the spawner's
     materialize step doesn't leak files into the developer's real
-    ``~/.doorae/agents/`` directory when tests run.
+    ``~/.anygarden/agents/`` directory when tests run.
     """
     return Spawner(
         on_stopped=AsyncMock(),
@@ -65,7 +65,7 @@ def _mock_proc(pid: int = 42) -> MagicMock:
 class TestSpawnEnvSecrets:
     """#184 follow-up: engine_secrets must NOT end up in the agent
     process env (``/proc/self/environ``). They are delivered via
-    stdin instead and the agent's ``doorae_agent.secrets`` module
+    stdin instead and the agent's ``anygarden_agent.secrets`` module
     stores them in private memory.
     """
 
@@ -104,11 +104,11 @@ class TestSpawnEnvSecrets:
             return mock_proc
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -117,9 +117,9 @@ class TestSpawnEnvSecrets:
         assert env is not None
         assert "ANTHROPIC_API_KEY" not in env
         assert "OTHER" not in env
-        # DOORAE_TOKEN (agent identity) stays in env by design —
+        # ANYGARDEN_TOKEN (agent identity) stays in env by design —
         # ``load_token`` on the agent side reads it from env.
-        assert env["DOORAE_TOKEN"] == "tok-xyz"
+        assert env["ANYGARDEN_TOKEN"] == "tok-xyz"
         # stdin PIPE must be requested so the secrets payload can be
         # written. A value of ``None`` would mean inherit, which would
         # both fail to deliver secrets and potentially leak the
@@ -168,18 +168,18 @@ class TestSpawnEnvSecrets:
         mock_proc.stdin = FakeStdin()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
         assert result.success is True
         assert close_called["flag"] is True
         # Exactly one payload, well-formed JSON with only the secrets
-        # (and nothing else — no token, no DOORAE_*, etc.)
+        # (and nothing else — no token, no ANYGARDEN_*, etc.)
         assert len(captured_stdin_writes) == 1
         payload = json.loads(captured_stdin_writes[0].decode("utf-8"))
         assert payload == {"GEMINI_API_KEY": "sk-abc"}
@@ -211,11 +211,11 @@ class TestSpawnEnvSecrets:
         mock_proc.stdin.wait_closed = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(msg)
 
@@ -238,11 +238,11 @@ class TestSpawn:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -263,11 +263,11 @@ class TestSpawn:
             return _mock_proc()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -280,7 +280,7 @@ class TestSpawn:
         ).exists()
 
     async def test_spawn_falls_back_to_uvx(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
-        """When doorae-agent is not in PATH, spawner should use uvx."""
+        """When anygarden-agent is not in PATH, spawner should use uvx."""
         mock_proc = MagicMock()
         mock_proc.pid = 50
         mock_proc.wait = AsyncMock(return_value=0)
@@ -293,11 +293,11 @@ class TestSpawn:
             return mock_proc
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value=None,  # doorae-agent NOT found
+            "anygarden_machine.spawner.shutil.which",
+            return_value=None,  # anygarden-agent NOT found
         ):
             result = await spawner.spawn(spawn_msg)
 
@@ -310,7 +310,7 @@ class TestSpawn:
         """PATH hit path: the spawn must emit
         ``agent_binary_resolved`` with source=path and the discovered
         binary path. This is the forensic trail operators rely on when
-        debugging which ``doorae-agent`` actually ran."""
+        debugging which ``anygarden-agent`` actually ran."""
         mock_proc = MagicMock()
         mock_proc.pid = 60
         mock_proc.wait = AsyncMock(return_value=0)
@@ -318,12 +318,12 @@ class TestSpawn:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
-        ), patch("doorae_machine.spawner.log") as mock_log:
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ), patch("anygarden_machine.spawner.log") as mock_log:
             await spawner.spawn(spawn_msg)
             calls = [
                 c
@@ -332,7 +332,7 @@ class TestSpawn:
             ]
             assert len(calls) == 1
             assert calls[0].kwargs["source"] == "path"
-            assert calls[0].kwargs["path"] == "/usr/local/bin/doorae-agent"
+            assert calls[0].kwargs["path"] == "/usr/local/bin/anygarden-agent"
 
     async def test_spawn_logs_agent_binary_uvx_source(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -347,12 +347,12 @@ class TestSpawn:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
+            "anygarden_machine.spawner.shutil.which",
             return_value=None,
-        ), patch("doorae_machine.spawner.log") as mock_log:
+        ), patch("anygarden_machine.spawner.log") as mock_log:
             await spawner.spawn(spawn_msg)
             calls = [
                 c
@@ -375,13 +375,13 @@ class TestSpawn:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ), patch(
-            "doorae_machine.spawner.terminate_tree"
+            "anygarden_machine.spawner.terminate_tree"
         ) as mock_terminate:
             first = await spawner.spawn(spawn_msg)
             assert first.success is True
@@ -392,7 +392,7 @@ class TestSpawn:
         mock_terminate.assert_called_with(42, timeout=KILL_TIMEOUT)
 
     async def test_spawn_passes_token_via_env(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
-        """Agent token must be passed via DOORAE_TOKEN env var, not argv."""
+        """Agent token must be passed via ANYGARDEN_TOKEN env var, not argv."""
         captured_env = {}
 
         async def mock_exec(*args, **kwargs):
@@ -405,16 +405,16 @@ class TestSpawn:
             return proc
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=mock_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        assert captured_env.get("DOORAE_TOKEN") == "secret-token-xyz"
+        assert captured_env.get("ANYGARDEN_TOKEN") == "secret-token-xyz"
 
     async def test_spawn_sets_codex_home_when_codex_overlay_present(
         self, spawner: Spawner, tmp_path: Path
@@ -422,7 +422,7 @@ class TestSpawn:
         """codex 엔진 + ``.codex/*`` 오버레이(MCP 템플릿 또는 admin
         커스텀 config) 조합에서는 ``CODEX_HOME`` 을 per-agent
         ``.codex/`` 로 리다이렉트해야 한다. 빼먹으면 codex app-server
-        가 호스트 ``~/.codex/config.toml`` 로 fallback 하고 doorae 가
+        가 호스트 ``~/.codex/config.toml`` 로 fallback 하고 anygarden 가
         쓴 MCP 오버레이가 silently 무시된다.
         """
         msg = SpawnManifest(
@@ -446,11 +446,11 @@ class TestSpawn:
             return _mock_proc()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=mock_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             result = await spawner.spawn(msg)
 
@@ -494,11 +494,11 @@ class TestSpawn:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CODEX_HOME", None)
             with patch(
-                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                "anygarden_machine.spawner.asyncio.create_subprocess_exec",
                 side_effect=mock_exec,
             ), patch(
-                "doorae_machine.spawner.shutil.which",
-                return_value="/usr/local/bin/doorae-agent",
+                "anygarden_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/anygarden-agent",
             ):
                 result = await spawner.spawn(msg)
 
@@ -536,22 +536,22 @@ class TestSpawn:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CODEX_HOME", None)
             with patch(
-                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                "anygarden_machine.spawner.asyncio.create_subprocess_exec",
                 side_effect=mock_exec,
             ), patch(
-                "doorae_machine.spawner.shutil.which",
-                return_value="/usr/local/bin/doorae-agent",
+                "anygarden_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/anygarden-agent",
             ):
                 result = await spawner.spawn(msg)
 
         assert result.success is True
         assert "CODEX_HOME" not in captured_env
 
-    async def test_spawn_typescript_runtime_uses_doorae_agent_ts_when_on_path(
+    async def test_spawn_typescript_runtime_uses_anygarden_agent_ts_when_on_path(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:
         """Issue #73 — ``runtime='typescript'`` resolves to the
-        ``doorae-agent-ts`` binary when present on PATH. The ``which``
+        ``anygarden-agent-ts`` binary when present on PATH. The ``which``
         call must target the TS binary name, not the Python one.
         """
         captured_cmd: list[str] = []
@@ -566,20 +566,20 @@ class TestSpawn:
             return proc
 
         def fake_which(name: str):
-            if name == "doorae-agent-ts":
-                return "/usr/local/bin/doorae-agent-ts"
+            if name == "anygarden-agent-ts":
+                return "/usr/local/bin/anygarden-agent-ts"
             return None
 
         spawn_msg.runtime = "typescript"
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch("doorae_machine.spawner.shutil.which", side_effect=fake_which):
+        ), patch("anygarden_machine.spawner.shutil.which", side_effect=fake_which):
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        assert captured_cmd[0] == "/usr/local/bin/doorae-agent-ts"
+        assert captured_cmd[0] == "/usr/local/bin/anygarden-agent-ts"
         # Same --engine/--name/--server contract as the Python arm.
         assert "--engine" in captured_cmd
         assert "--server" in captured_cmd
@@ -587,8 +587,8 @@ class TestSpawn:
     async def test_spawn_typescript_runtime_falls_back_to_npx(
         self, spawner: Spawner, spawn_msg: SpawnManifest
     ) -> None:
-        """Issue #73 — when ``doorae-agent-ts`` is not installed,
-        spawner falls back to ``npx -y @doorae/agent-ts``. This is the
+        """Issue #73 — when ``anygarden-agent-ts`` is not installed,
+        spawner falls back to ``npx -y @anygarden/agent-ts``. This is the
         "no local install" path on fresh machines."""
         captured_cmd: list[str] = []
 
@@ -604,10 +604,10 @@ class TestSpawn:
         spawn_msg.runtime = "typescript"
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
+            "anygarden_machine.spawner.shutil.which",
             return_value=None,  # Nothing installed
         ):
             result = await spawner.spawn(spawn_msg)
@@ -615,7 +615,7 @@ class TestSpawn:
         assert result.success is True
         assert captured_cmd[0] == "npx"
         assert captured_cmd[1] == "-y"
-        assert captured_cmd[2] == "@doorae/agent-ts"
+        assert captured_cmd[2] == "@anygarden/agent-ts"
 
     async def test_spawn_typescript_runtime_logs_binary_resolution(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -632,12 +632,12 @@ class TestSpawn:
         spawn_msg.runtime = "typescript"
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent-ts",
-        ), patch("doorae_machine.spawner.log") as mock_log:
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent-ts",
+        ), patch("anygarden_machine.spawner.log") as mock_log:
             await spawner.spawn(spawn_msg)
             calls = [
                 c
@@ -647,7 +647,7 @@ class TestSpawn:
             assert len(calls) == 1
             assert calls[0].kwargs["runtime"] == "typescript"
             assert calls[0].kwargs["source"] == "path"
-            assert calls[0].kwargs["path"] == "/usr/local/bin/doorae-agent-ts"
+            assert calls[0].kwargs["path"] == "/usr/local/bin/anygarden-agent-ts"
 
     async def test_spawn_python_runtime_still_default(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -669,23 +669,23 @@ class TestSpawn:
 
         def fake_which(name: str):
             which_calls.append(name)
-            if name == "doorae-agent":
-                return "/usr/local/bin/doorae-agent"
+            if name == "anygarden-agent":
+                return "/usr/local/bin/anygarden-agent"
             return None
 
         # Leave ``spawn_msg.runtime`` at its default.
         assert spawn_msg.runtime == "python"
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             side_effect=capture_exec,
-        ), patch("doorae_machine.spawner.shutil.which", side_effect=fake_which):
+        ), patch("anygarden_machine.spawner.shutil.which", side_effect=fake_which):
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        assert captured_cmd[0] == "/usr/local/bin/doorae-agent"
+        assert captured_cmd[0] == "/usr/local/bin/anygarden-agent"
         # The Python path must not probe for the TS binary.
-        assert "doorae-agent-ts" not in which_calls
+        assert "anygarden-agent-ts" not in which_calls
 
     async def test_spawn_profile_chmod(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """Profile temp file should be created with chmod 600."""
@@ -703,21 +703,21 @@ class TestSpawn:
         mock_proc.stdin = AsyncMock()
 
         with (
-            patch("doorae_machine.spawner.os.chmod", side_effect=track_chmod),
+            patch("anygarden_machine.spawner.os.chmod", side_effect=track_chmod),
             patch(
-                "doorae_machine.spawner.asyncio.create_subprocess_exec",
+                "anygarden_machine.spawner.asyncio.create_subprocess_exec",
                 return_value=mock_proc,
             ),
             patch(
-                "doorae_machine.spawner.shutil.which",
-                return_value="/usr/local/bin/doorae-agent",
+                "anygarden_machine.spawner.shutil.which",
+                return_value="/usr/local/bin/anygarden-agent",
             ),
         ):
             result = await spawner.spawn(spawn_msg)
 
         assert result.success is True
-        # Check that chmod 600 was called for a doorae-agent profile file
-        chmod_for_profile = [c for c in chmod_calls if "doorae-agent-" in c[0]]
+        # Check that chmod 600 was called for a anygarden-agent profile file
+        chmod_for_profile = [c for c in chmod_calls if "anygarden-agent-" in c[0]]
         assert len(chmod_for_profile) == 1
         assert chmod_for_profile[0][1] == "0o600"
 
@@ -734,11 +734,11 @@ class TestGetRunning:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
@@ -767,15 +767,15 @@ class TestKill:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
-        with patch("doorae_machine.spawner.terminate_tree") as mock_terminate:
+        with patch("anygarden_machine.spawner.terminate_tree") as mock_terminate:
             result = await spawner.kill("agent-test-001")
 
         assert result["success"] is True
@@ -793,15 +793,15 @@ class TestKill:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 
-        with patch("doorae_machine.spawner.terminate_tree") as mock_terminate:
+        with patch("anygarden_machine.spawner.terminate_tree") as mock_terminate:
             result = await spawner.kill("agent-test-001")
 
         assert result["success"] is True
@@ -827,11 +827,11 @@ class TestCleanup:
         mock_proc.stdin = AsyncMock()
 
         with patch(
-            "doorae_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
             return_value=mock_proc,
         ), patch(
-            "doorae_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/doorae-agent",
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
         ):
             await spawner.spawn(spawn_msg)
 

@@ -17,7 +17,7 @@ export interface RoomArtifact {
 }
 
 function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('doorae_token')
+  const token = localStorage.getItem('anygarden_token')
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 

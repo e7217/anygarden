@@ -18,7 +18,7 @@ import json
 
 import pytest
 
-from doorae_machine.spawner import Spawner
+from anygarden_machine.spawner import Spawner
 
 
 class TestClaudeCodeDefaultSettings:

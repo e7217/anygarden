@@ -18,8 +18,8 @@ import json
 import pytest
 from starlette.testclient import TestClient
 
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.db.models import (
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.db.models import (
     Agent,
     AgentToken,
     Participant,
@@ -66,7 +66,7 @@ class TestCollaborationModeWelcome:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -104,7 +104,7 @@ class TestCollaborationModeWelcome:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome.get("my_collaboration_mode") == "collaborative"
@@ -161,7 +161,7 @@ class TestPeerMentionStamping:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{sender_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{sender_token_plain}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(json.dumps({
@@ -223,7 +223,7 @@ class TestPeerMentionStamping:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{sender_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{sender_token_plain}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 # First peer-ask passes (depth=1).
@@ -294,7 +294,7 @@ class TestPeerMentionStamping:
             # juggling two sockets in one TestClient.
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as user_ws:
                 user_ws.receive_text()  # welcome
                 # First user message (resets budget to capacity).
@@ -306,7 +306,7 @@ class TestPeerMentionStamping:
 
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{sender_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{sender_token_plain}"],
             ) as agent_ws:
                 agent_ws.receive_text()  # welcome
                 # Drain any pre-existing replay messages until a new

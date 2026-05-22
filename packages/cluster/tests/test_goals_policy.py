@@ -1,10 +1,10 @@
-"""Pure-function unit tests for ``doorae.goals.policy`` (#302)."""
+"""Pure-function unit tests for ``anygarden.goals.policy`` (#302)."""
 
 from datetime import datetime, timezone
 
 import pytest
 
-from doorae.goals.policy import (
+from anygarden.goals.policy import (
     GOAL_FAILURE_PAUSE_THRESHOLD,
     InvalidTriggerConfig,
     MaterializeDecision,

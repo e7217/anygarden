@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from doorae_agent.integrations.gemini_cli import (
+from anygarden_agent.integrations.gemini_cli import (
     GeminiCliAdapter,
     integrate_with_gemini_cli,
 )
@@ -248,7 +248,7 @@ class TestCallGemini:
 class TestIntegrateWithGeminiCli:
     @pytest.mark.asyncio
     async def test_integrate_registers_handler(self) -> None:
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Bot")
         assert len(client._message_handlers) == 0

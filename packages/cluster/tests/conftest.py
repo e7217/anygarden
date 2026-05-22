@@ -10,24 +10,24 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.app import create_app
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base
+from anygarden.app import create_app
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base
 
 
 @pytest.fixture()
-def config() -> DooraeSettings:
+def config() -> AnygardenSettings:
     """Return a test configuration with an in-memory SQLite DB.
 
     ``mcp_secrets_key`` is pre-populated with a freshly generated
     Fernet key so #124's encryption layer stays happy during boot
     without every test having to spell it out. Tests that need to
     exercise the missing-key path should construct their own
-    ``DooraeSettings`` without this key.
+    ``AnygardenSettings`` without this key.
     """
     from cryptography.fernet import Fernet
-    return DooraeSettings(
+    return AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -36,7 +36,7 @@ def config() -> DooraeSettings:
 
 
 @pytest_asyncio.fixture()
-async def engine(config: DooraeSettings):
+async def engine(config: AnygardenSettings):
     eng = build_engine(config.db_url)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -52,7 +52,7 @@ async def db(engine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture()
-def app(config: DooraeSettings):
+def app(config: AnygardenSettings):
     """Return a FastAPI test application."""
     application = create_app(config)
     return application

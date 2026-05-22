@@ -17,12 +17,12 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.invite_token import hash_invite_token
-from doorae.auth.jwt import create_guest_token, create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.invite_token import hash_invite_token
+from anygarden.auth.jwt import create_guest_token, create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Base,
     Participant,
     Project,
@@ -36,7 +36,7 @@ from doorae.db.models import (
 
 
 @pytest_asyncio.fixture()
-async def env(config: DooraeSettings) -> AsyncIterator[dict]:
+async def env(config: AnygardenSettings) -> AsyncIterator[dict]:
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
 
@@ -44,7 +44,7 @@ async def env(config: DooraeSettings) -> AsyncIterator[dict]:
         await conn.run_sync(Base.metadata.create_all)
 
     async with session_factory() as db:
-        owner = User(email="own@doorae.io", password_hash="x")
+        owner = User(email="own@anygarden.io", password_hash="x")
         db.add(owner)
         await db.flush()
         project = Project(name="proj")

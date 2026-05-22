@@ -11,12 +11,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from doorae_agent.integrations.codex import (
+from anygarden_agent.integrations.codex import (
     CodexAdapter,
     _make_lenient_parse_notification,
     integrate_with_codex,
 )
-import doorae_agent.integrations.codex as codex_mod
+import anygarden_agent.integrations.codex as codex_mod
 
 
 def _make_fake_codex_module():
@@ -226,7 +226,7 @@ class TestIntegrateWithCodex:
     @pytest.mark.asyncio
     async def test_integrate_registers_handler(self) -> None:
         """integrate_with_codex registers a message handler on the client."""
-        from doorae_agent.client import ChatClient
+        from anygarden_agent.client import ChatClient
 
         fake_mod, options_mod, _, _ = _make_fake_codex_module()
         with _patch_codex(fake_mod, options_mod):
@@ -536,7 +536,7 @@ class TestCodexSharedContextReinjection:
                 return ""
 
         return patch(
-            "doorae_agent.integrations.base.compose_memory_suffix",
+            "anygarden_agent.integrations.base.compose_memory_suffix",
             side_effect=_fake,
         )
 

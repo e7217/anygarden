@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { apiFetch } from '@/lib/api'
 
-// Task shape mirrors `TaskOut` in packages/cluster/doorae/api/v1/tasks.py.
+// Task shape mirrors `TaskOut` in packages/cluster/anygarden/api/v1/tasks.py.
 // Phase 1 of #302 keeps the schema unchanged; the goal-derived columns
 // (#302 Phase 2 — goal_id, triggered_by, spec, started_at, finished_at,
 // agent_session_id, tokens_used, result_markdown, error, is_interesting)
@@ -50,7 +50,7 @@ export interface UseRoomTasksValue {
 /**
  * Subscribe to a room's tasks (#266 / #302).
  *
- * Owns: REST fetch + ``doorae:task:updated`` WS subscription + CRUD
+ * Owns: REST fetch + ``anygarden:task:updated`` WS subscription + CRUD
  * actions. UI components consume the returned state and never touch
  * ``apiFetch`` directly — this guarantees that Tasks rendered in the
  * legacy panel and the new right-rail section stay byte-identical and
@@ -116,8 +116,8 @@ export function useRoomTasks(
       if (detail.task.room_id && detail.task.room_id !== roomId) return
       refresh()
     }
-    window.addEventListener('doorae:task:updated', handler)
-    return () => window.removeEventListener('doorae:task:updated', handler)
+    window.addEventListener('anygarden:task:updated', handler)
+    return () => window.removeEventListener('anygarden:task:updated', handler)
   }, [roomId, refresh])
 
   const create = useCallback<UseRoomTasksValue['create']>(

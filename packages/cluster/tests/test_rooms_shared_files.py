@@ -11,11 +11,11 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -56,7 +56,7 @@ async def shared_files_env(tmp_path: Path):
     """
     from cryptography.fernet import Fernet
 
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         mcp_secrets_key=Fernet.generate_key().decode("ascii"),
@@ -382,7 +382,7 @@ class TestMembershipHooks:
 
         # Second agent on the same machine joins the room.
         async with env["session_factory"]() as db:
-            from doorae.db.models import Agent
+            from anygarden.db.models import Agent
 
             agent_b = Agent(
                 name="agent-b",
@@ -429,7 +429,7 @@ class TestMembershipHooks:
         async with env["session_factory"]() as db:
             from sqlalchemy import select
 
-            from doorae.db.models import Participant
+            from anygarden.db.models import Participant
 
             row = (
                 await db.execute(
@@ -463,13 +463,13 @@ class TestSanitize:
     names, control chars)."""
 
     def test_strips_path_components(self) -> None:
-        from doorae.rooms.shared_files import sanitize_storage_name
+        from anygarden.rooms.shared_files import sanitize_storage_name
 
         assert sanitize_storage_name("../../etc/passwd") == "passwd"
         assert sanitize_storage_name("C:\\Windows\\notes.md") == "notes.md"
 
     def test_rejects_empty_and_dotted(self) -> None:
-        from doorae.rooms.shared_files import (
+        from anygarden.rooms.shared_files import (
             InvalidFilenameError,
             sanitize_storage_name,
         )
@@ -479,6 +479,6 @@ class TestSanitize:
                 sanitize_storage_name(bad)
 
     def test_strips_control_chars(self) -> None:
-        from doorae.rooms.shared_files import sanitize_storage_name
+        from anygarden.rooms.shared_files import sanitize_storage_name
 
         assert sanitize_storage_name("spec\x00\x1b.md") == "spec.md"

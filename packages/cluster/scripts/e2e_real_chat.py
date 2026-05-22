@@ -6,7 +6,7 @@
 호스트의 codex CLI로 진짜 AI 응답 5턴 대화를 검증합니다.
 
 Usage:
-    cd doorae-server && uv run python scripts/e2e_real_chat.py
+    cd anygarden-server && uv run python scripts/e2e_real_chat.py
 """
 
 import asyncio
@@ -27,7 +27,7 @@ def call_codex(prompt: str) -> str:
     if not codex:
         sys.exit("ERROR: codex not found")
 
-    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, prefix="doorae-") as f:
+    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, prefix="anygarden-") as f:
         out = f.name
 
     r = subprocess.run(
@@ -46,20 +46,20 @@ async def run_e2e():
     import websockets
 
     # ── 1. 서버 기동 ──
-    db_dir = tempfile.mkdtemp(prefix="doorae-e2e-")
+    db_dir = tempfile.mkdtemp(prefix="anygarden-e2e-")
     db_path = Path(db_dir) / "test.db"
     jwt_secret = secrets.token_urlsafe(32)
     port = 18742
 
     env = {
         **os.environ,
-        "DOORAE_DB_URL": f"sqlite+aiosqlite:///{db_path}",
-        "DOORAE_JWT_SECRET": jwt_secret,
-        "DOORAE_LOG_LEVEL": "WARNING",
+        "ANYGARDEN_DB_URL": f"sqlite+aiosqlite:///{db_path}",
+        "ANYGARDEN_JWT_SECRET": jwt_secret,
+        "ANYGARDEN_LOG_LEVEL": "WARNING",
     }
 
     server_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "doorae.app:create_app",
+        [sys.executable, "-m", "uvicorn", "anygarden.app:create_app",
          "--factory", "--host", "127.0.0.1", "--port", str(port),
          "--log-level", "warning"],
         env=env,
@@ -87,19 +87,19 @@ async def run_e2e():
         sys.exit("ERROR: server failed to start")
 
     print("\n" + "=" * 65)
-    print("  Doorae E2E: 실제 LLM 대화 (codex CLI)")
+    print("  Anygarden E2E: 실제 LLM 대화 (codex CLI)")
     print("=" * 65)
     print(f"  서버: {base} (pid={server_proc.pid})")
 
     try:
         async with httpx.AsyncClient(base_url=base) as http:
             # ── 2. DB 직접 셋업 (SQLAlchemy) ──
-            from doorae.db.engine import build_engine, build_session_factory
-            from doorae.db.models import (
+            from anygarden.db.engine import build_engine, build_session_factory
+            from anygarden.db.models import (
                 Agent, AgentToken, Base, Participant, Project, Room, User,
             )
-            from doorae.auth.jwt import create_user_token
-            from doorae.auth.token import generate_token, hash_agent_token
+            from anygarden.auth.jwt import create_user_token
+            from anygarden.auth.token import generate_token, hash_agent_token
 
             engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
             sf = build_session_factory(engine)
@@ -108,7 +108,7 @@ async def run_e2e():
             await asyncio.sleep(1)  # 서버가 migration 완료할 시간
 
             async with sf() as db:
-                user = User(email="alice@doorae.io", password_hash="x", is_admin=True)
+                user = User(email="alice@anygarden.io", password_hash="x", is_admin=True)
                 db.add(user)
                 await db.flush()
 
@@ -137,7 +137,7 @@ async def run_e2e():
 
             await engine.dispose()
 
-            print(f"  유저: alice@doorae.io (JWT)")
+            print(f"  유저: alice@anygarden.io (JWT)")
             print(f"  에이전트: PM-Codex (codex engine, API Token)")
             print(f"  룸: main-chat ({room_id[:8]}...)")
 
@@ -185,7 +185,7 @@ async def run_e2e():
 
                 async with websockets.connect(
                     url,
-                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{token}"],
                 ) as ws:
                     # since_seq > 0이면 놓친 메시지 수신
                     if my_seq > 0:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from doorae.auth.machine_token import (
+from anygarden.auth.machine_token import (
     generate_machine_token,
     hash_machine_token,
     verify_machine_token_hash,

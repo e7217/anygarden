@@ -59,7 +59,7 @@ convention looks like.
      or a filesystem scan of a `templates/` directory.
    - (c) Fetched from a community registry (e.g. a GitHub repo of
      curated skills). Needs a trust/review story.
-   - **Recommendation:** start with (a) for the built-ins Doorae ships
+   - **Recommendation:** start with (a) for the built-ins Anygarden ships
      with, add (b) when a customer asks.
 
 2. **Variable substitution.** Some skills want to parameterize the
@@ -98,7 +98,7 @@ to know all of them.
 
 1. **Source of truth for MCP server metadata.** Same three options
    as skill templates. Start with a hardcoded list of the MCP
-   servers doorae customers commonly use (a few filesystem, git,
+   servers anygarden customers commonly use (a few filesystem, git,
    web-fetch, a handful of "SaaS-integration" ones).
 
 2. **Credential handling.** Some MCP servers need API keys
@@ -154,7 +154,7 @@ a brace is missing.
 
 2. Theme. Monaco's default dark theme clashes with DESIGN.md's
    warm neutral palette; either pick the `vs-light` theme and
-   accept the visual break, or build a custom `doorae-light`
+   accept the visual break, or build a custom `anygarden-light`
    theme that maps Monaco tokens to our CSS variables.
 
 ---
@@ -211,7 +211,7 @@ second layer where the on-disk file differs from what's in the DB.
 **Open design questions.**
 
 1. Where does the compose logic live? Today
-   `Spawner._compose_agents_md` is in `doorae-machine`. Option A:
+   `Spawner._compose_agents_md` is in `anygarden-machine`. Option A:
    move the pure-function compose to a shared package both the
    machine and the server can import. Option B: expose a server
    endpoint `POST /api/v1/agents/{id}/preview` that returns the
@@ -273,7 +273,7 @@ to see it. Slow and easy to forget.
 2. Per-engine reload semantics. See the main plan doc Open
    question #2 — each engine has a different file re-read
    cadence, so "hot-reload" is effectively "kill + respawn" for
-   every engine in Doorae today. That's fine for V1.
+   every engine in Anygarden today. That's fine for V1.
 
 ---
 

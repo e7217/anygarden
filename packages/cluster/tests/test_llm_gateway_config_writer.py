@@ -1,4 +1,4 @@
-"""Tests for :mod:`doorae.llm_gateway.config_writer` (#197).
+"""Tests for :mod:`anygarden.llm_gateway.config_writer` (#197).
 
 ``render_config`` is pure — one ``list[LLMGatewayModel]`` in, one
 yaml string out — so the tests are just input/output snapshots plus
@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import yaml
 
-from doorae.db.models import LLMGatewayModel
-from doorae.llm_gateway.config_writer import config_hash, render_config
+from anygarden.db.models import LLMGatewayModel
+from anygarden.llm_gateway.config_writer import config_hash, render_config
 
 
 def _model(
@@ -46,7 +46,7 @@ class TestRenderConfig:
         assert entry["litellm_params"]["model"] == "anthropic/claude-sonnet-4-6"
         # Key is a reference to an env var, not a value
         assert entry["litellm_params"]["api_key"] == (
-            "os.environ/DOORAE_LITELLM_ANTHROPIC_API_KEY"
+            "os.environ/ANYGARDEN_LITELLM_ANTHROPIC_API_KEY"
         )
 
     def test_general_settings_references_master_key_env(self) -> None:
@@ -54,10 +54,10 @@ class TestRenderConfig:
         parsed = yaml.safe_load(text)
 
         # general_settings.master_key must be an env reference too —
-        # the supervisor puts the actual value in DOORAE_LITELLM_MASTER_KEY
+        # the supervisor puts the actual value in ANYGARDEN_LITELLM_MASTER_KEY
         # at spawn time.
         master = parsed["general_settings"]["master_key"]
-        assert master == "os.environ/DOORAE_LITELLM_MASTER_KEY"
+        assert master == "os.environ/ANYGARDEN_LITELLM_MASTER_KEY"
         # Stateless posture — spend logs table would otherwise require
         # a Postgres schema LiteLLM migrates itself.
         assert parsed["general_settings"]["disable_spend_logs"] is True
@@ -96,7 +96,7 @@ class TestRenderConfig:
         config_writer의 기존 병합 로직(``m.extra_params`` → params
         merge)을 그대로 타고 yaml에 노출된다. ``api_key``는
         ``OLLAMA_DUMMY`` sentinel 아래 env reference로 렌더되고,
-        supervisor가 ``DOORAE_LITELLM_OLLAMA_DUMMY=sk-local``을
+        supervisor가 ``ANYGARDEN_LITELLM_OLLAMA_DUMMY=sk-local``을
         child env에 주입해 짝을 맞춘다.
         """
         text = render_config(
@@ -119,7 +119,7 @@ class TestRenderConfig:
         # admin; only the rendered yaml is corrected.
         assert params["model"] == "ollama_chat/qwen3-coder:30b"
         assert params["api_base"] == "http://10.0.0.5:11434"
-        assert params["api_key"] == "os.environ/DOORAE_LITELLM_OLLAMA_DUMMY"
+        assert params["api_key"] == "os.environ/ANYGARDEN_LITELLM_OLLAMA_DUMMY"
 
     def test_ollama_provider_rewritten_to_ollama_chat(self) -> None:
         """Legacy ``ollama/`` is rewritten to ``ollama_chat/`` at render.

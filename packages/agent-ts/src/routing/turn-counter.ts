@@ -1,6 +1,6 @@
 // Per-room agent-only turn counter.
 //
-// Ported from ``packages/agent/doorae_agent/client.py`` — specifically the
+// Ported from ``packages/agent/anygarden_agent/client.py`` — specifically the
 // ``_process_frame`` bookkeeping that prevents runaway agent-to-agent
 // loops while still letting task boundaries (``[ROOM_QUERY]`` and
 // ``[DELEGATED]``) reset the count.

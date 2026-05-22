@@ -15,7 +15,7 @@ import {
 // default on lg+ screens (where there is room for both sidebar and
 // rail) and collapses by default below 1024px (where the conversation
 // otherwise gets squeezed). Persisted user choice always wins.
-const STORAGE_KEY = 'doorae_right_sidebar_collapsed'
+const STORAGE_KEY = 'anygarden_right_sidebar_collapsed'
 const LG_BREAKPOINT_QUERY = '(min-width: 1024px)'
 
 export interface RightSidebarLayoutValue {

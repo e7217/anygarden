@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from doorae.db.models import Agent, Participant, Project, Room, User
-from doorae.presence import PresenceService
-from doorae.ws.manager import ConnectionManager
+from anygarden.db.models import Agent, Participant, Project, Room, User
+from anygarden.presence import PresenceService
+from anygarden.ws.manager import ConnectionManager
 
 
 class _FakeWS:

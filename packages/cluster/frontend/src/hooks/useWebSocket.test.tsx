@@ -34,7 +34,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   sockets = []
   localStorage.clear()
-  localStorage.setItem('doorae_token', 'token-one')
+  localStorage.setItem('anygarden_token', 'token-one')
   globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket
   globalThis.fetch = vi.fn().mockResolvedValue(
     new Response(JSON.stringify([]), {
@@ -66,7 +66,7 @@ describe('useWebSocket reconnect guards', () => {
       await Promise.resolve()
     })
 
-    expect(localStorage.getItem('doorae_token')).toBeNull()
+    expect(localStorage.getItem('anygarden_token')).toBeNull()
 
     act(() => {
       sockets[0].onclose?.(closeEvent(1006))
@@ -91,7 +91,7 @@ describe('useWebSocket reconnect guards', () => {
       await Promise.resolve()
     })
 
-    expect(localStorage.getItem('doorae_token')).toBe('token-one')
+    expect(localStorage.getItem('anygarden_token')).toBe('token-one')
 
     act(() => {
       sockets[0].onclose?.(closeEvent(1006))
@@ -105,7 +105,7 @@ describe('useWebSocket reconnect guards', () => {
     render(<Harness />)
     expect(sockets).toHaveLength(1)
 
-    localStorage.setItem('doorae_token', 'token-two')
+    localStorage.setItem('anygarden_token', 'token-two')
     act(() => {
       sockets[0].onclose?.(closeEvent(1006))
       vi.advanceTimersByTime(30_000)

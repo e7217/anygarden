@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from doorae_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
 
 
 @dataclass

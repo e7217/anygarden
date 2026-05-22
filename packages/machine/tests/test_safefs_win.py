@@ -25,7 +25,7 @@ if sys.platform != "win32":
     pytest.skip("Windows-only safefs backend tests", allow_module_level=True)
 
 
-from doorae_machine.safefs import safe_write_bytes, safe_write_text, secure_chmod  # noqa: E402
+from anygarden_machine.safefs import safe_write_bytes, safe_write_text, secure_chmod  # noqa: E402
 
 
 def _try_create_symlink(target: Path, source: Path) -> bool:

@@ -14,9 +14,9 @@ import uuid
 import pytest
 from sqlalchemy import select
 
-from doorae.db.models import ActivityLog, Agent
-from doorae.ws.handler import _persist_lifecycle_event
-from doorae.ws.protocol import LifecycleFrame
+from anygarden.db.models import ActivityLog, Agent
+from anygarden.ws.handler import _persist_lifecycle_event
+from anygarden.ws.protocol import LifecycleFrame
 
 
 async def _make_agent(db) -> Agent:

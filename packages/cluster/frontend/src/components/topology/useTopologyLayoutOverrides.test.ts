@@ -6,8 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useTopologyLayoutOverrides } from './useTopologyLayoutOverrides'
 
-const KEY_U1_GLOBAL = 'doorae_topology_layout_v1_u1_global'
-const KEY_U1_PERSONAL = 'doorae_topology_layout_v1_u1_personal'
+const KEY_U1_GLOBAL = 'anygarden_topology_layout_v1_u1_global'
+const KEY_U1_PERSONAL = 'anygarden_topology_layout_v1_u1_personal'
 
 beforeEach(() => {
   localStorage.clear()

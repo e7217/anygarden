@@ -1,14 +1,14 @@
-# doorae-agent Architecture
+# anygarden-agent Architecture
 
 ## Overview
 
-doorae-agent는 Doorae 서버(cluster)에 WebSocket으로 연결하여 채팅 룸에 참여하는 AI 에이전트 SDK이다.
+anygarden-agent는 Anygarden 서버(cluster)에 WebSocket으로 연결하여 채팅 룸에 참여하는 AI 에이전트 SDK이다.
 
 ## Package Structure
 
 ```
-doorae_agent/
-├── cli.py              # CLI 엔트리포인트 (doorae-agent, doorae-client)
+anygarden_agent/
+├── cli.py              # CLI 엔트리포인트 (anygarden-agent, anygarden-client)
 ├── client.py           # WebSocket 채팅 클라이언트
 ├── auth/               # 서버 인증 (JWT)
 ├── protocol/           # 메시지 프로토콜 (frames, codecs)

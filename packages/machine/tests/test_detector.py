@@ -7,7 +7,7 @@ import sys
 import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from doorae_machine.detector import (
+from anygarden_machine.detector import (
     _detect_binary,
     _detect_python_module,
     detect_engines,
@@ -26,9 +26,9 @@ class TestBinaryDetection:
         mock_proc.returncode = 0
 
         with (
-            patch("doorae_machine.detector.shutil.which", return_value="/usr/bin/claude-code"),
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/claude-code"),
             patch(
-                "doorae_machine.detector.asyncio.create_subprocess_exec",
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
                 return_value=mock_proc,
             ),
         ):
@@ -41,7 +41,7 @@ class TestBinaryDetection:
 
     async def test_detect_binary_not_found(self) -> None:
         """Should return None when binary is not on PATH."""
-        with patch("doorae_machine.detector.shutil.which", return_value=None):
+        with patch("anygarden_machine.detector.shutil.which", return_value=None):
             result = await _detect_binary("claude-code", "claude-code")
 
         assert result is None
@@ -52,13 +52,13 @@ class TestBinaryDetection:
         mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
 
         with (
-            patch("doorae_machine.detector.shutil.which", return_value="/usr/bin/codex"),
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/codex"),
             patch(
-                "doorae_machine.detector.asyncio.create_subprocess_exec",
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
                 return_value=mock_proc,
             ),
             patch(
-                "doorae_machine.detector.asyncio.wait_for",
+                "anygarden_machine.detector.asyncio.wait_for",
                 side_effect=asyncio.TimeoutError(),
             ),
         ):
@@ -132,7 +132,7 @@ class TestPythonModuleDetection:
         engine is reported absent and a warning is logged.
         """
         with patch(
-            "doorae_machine.detector.importlib.import_module",
+            "anygarden_machine.detector.importlib.import_module",
             side_effect=RuntimeError("circular import"),
         ):
             info = _detect_python_module("x", "fake_path", "__version__")
@@ -164,7 +164,7 @@ class TestDetectEnginesIncludesPythonModules:
             ),
             # Force binary detection to no-op so the assertion focuses
             # on the openhands path.
-            patch("doorae_machine.detector.shutil.which", return_value=None),
+            patch("anygarden_machine.detector.shutil.which", return_value=None),
         ):
             result = await detect_engines()
 
@@ -182,9 +182,9 @@ class TestDetectEnginesIncludesPythonModules:
         # Ensure neither openhands nor openhands.sdk is cached.
         with (
             patch.dict(sys.modules, {}, clear=False),
-            patch("doorae_machine.detector.shutil.which", return_value=None),
+            patch("anygarden_machine.detector.shutil.which", return_value=None),
             patch(
-                "doorae_machine.detector.importlib.import_module",
+                "anygarden_machine.detector.importlib.import_module",
                 side_effect=ImportError("simulated missing SDK"),
             ),
         ):

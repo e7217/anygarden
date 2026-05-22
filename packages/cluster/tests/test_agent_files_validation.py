@@ -1,7 +1,7 @@
 """Server-side parity of the agent-manifest path validation.
 
 This test file intentionally duplicates the cases in
-``doorae-machine/tests/test_agent_dir.py``. The two copies must stay
+``anygarden-machine/tests/test_agent_dir.py``. The two copies must stay
 equivalent — if one diverges, the other is wrong.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae.agent_files import AgentFilePathError, validate_agent_file_path
+from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
 
 
 class TestAllowedPaths:

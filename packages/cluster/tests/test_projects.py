@@ -8,18 +8,18 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.scheduler.lifecycle import AgentLifecycle
+from anygarden.app import create_app
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.lifecycle import AgentLifecycle
 
 
 @pytest_asyncio.fixture()
 async def projects_env():
     """Self-contained fixture: in-memory DB, app with state, async client."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

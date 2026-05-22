@@ -12,14 +12,14 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Project, Room, RoomSharedFile, User
-from doorae.db.repository import append_message
-from doorae.ws.manager import ConnectionManager
-from doorae.ws.protocol import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Participant, Project, Room, RoomSharedFile, User
+from anygarden.db.repository import append_message
+from anygarden.ws.manager import ConnectionManager
+from anygarden.ws.protocol import (
     ErrorOut,
     MessageOut,
     SendFrame,
@@ -32,7 +32,7 @@ from doorae.ws.protocol import (
 
 
 @pytest_asyncio.fixture()
-async def ws_env(config: DooraeSettings):
+async def ws_env(config: AnygardenSettings):
     """Set up a full app with a seeded user, room, and participant.
 
     Yields a dict with keys: app, config, user, room, participant, token.
@@ -203,7 +203,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -226,7 +226,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -251,7 +251,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -271,7 +271,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -291,7 +291,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -329,7 +329,7 @@ class TestWSEndpoint:
             with pytest.raises(Exception):
                 with client.websocket_connect(
                     f"/ws/rooms/{room_id}",
-                    subprotocols=["doorae.v1", f"bearer.{other_token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{other_token}"],
                 ) as ws:
                     ws.receive_text()
 
@@ -345,7 +345,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -364,7 +364,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -403,7 +403,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 assert json.loads(ws.receive_text())["type"] == "welcome"
                 ws.send_text(json.dumps({
@@ -465,7 +465,7 @@ class TestWSEndpoint:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 assert json.loads(ws.receive_text())["type"] == "welcome"
                 ws.send_text(json.dumps({
@@ -507,7 +507,7 @@ class TestSinceSeqRecovery:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}?since_seq=1",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -555,7 +555,7 @@ class TestPresenceBroadcast:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws1:
                 welcome1 = json.loads(ws1.receive_text())
                 assert welcome1["type"] == "welcome"
@@ -566,7 +566,7 @@ class TestPresenceBroadcast:
                 # what ws1 observes.
                 with client.websocket_connect(
                     f"/ws/rooms/{room.id}",
-                    subprotocols=["doorae.v1", f"bearer.{other_token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{other_token}"],
                 ) as ws2:
                     _ = json.loads(ws2.receive_text())  # welcome2
                     online_frame = json.loads(ws1.receive_text())
@@ -598,7 +598,7 @@ class TestWelcomeAgentId:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -611,8 +611,8 @@ class TestWelcomeAgentId:
         """Agent connections receive their agent_id in the welcome frame."""
         from starlette.testclient import TestClient
 
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
 
         app = ws_env["app"]
         sf = ws_env["session_factory"]
@@ -638,7 +638,7 @@ class TestWelcomeAgentId:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -672,7 +672,7 @@ class TestWelcomeParticipantsRoster:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -723,7 +723,7 @@ class TestWelcomeParticipantsRoster:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 roster = welcome["participants"]
@@ -738,7 +738,7 @@ class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
 
     @pytest_asyncio.fixture()
-    async def rq_env(self, config: DooraeSettings):
+    async def rq_env(self, config: AnygardenSettings):
         """Set up two rooms: source_room and target_room with representative agent."""
         engine = build_engine(config.db_url)
         sf = build_session_factory(engine)
@@ -814,7 +814,7 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{source.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -856,7 +856,7 @@ class TestRoomQueryMetadata:
 
     @pytest.mark.asyncio
     async def test_room_mention_source_name_falls_back_to_email_local_part(
-        self, config: DooraeSettings
+        self, config: AnygardenSettings
     ) -> None:
         """Issue #155 — when User has no display_name, fall back to the
         email local-part (mirrors ``rooms/router.py:290-302``)."""
@@ -910,7 +910,7 @@ class TestRoomQueryMetadata:
             with TestClient(app) as client:
                 with client.websocket_connect(
                     f"/ws/rooms/{source_room.id}",
-                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{token}"],
                 ) as ws:
                     welcome = json.loads(ws.receive_text())
                     assert welcome["type"] == "welcome"
@@ -936,8 +936,8 @@ class TestRoomQueryMetadata:
         """
         from starlette.testclient import TestClient
 
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken, Participant
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken, Participant
 
         app = rq_env["app"]
         agent = rq_env["agent"]
@@ -964,7 +964,7 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{target.id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(json.dumps({
@@ -998,7 +998,7 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{source.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(json.dumps({
@@ -1032,7 +1032,7 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{source.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 ws.send_text(json.dumps({
@@ -1066,8 +1066,8 @@ class TestRoomQueryMetadata:
 
         from starlette.testclient import TestClient
 
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
 
         app = rq_env["app"]
         token = rq_env["token"]
@@ -1089,14 +1089,14 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{target.id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token_plain}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
             ) as agent_ws:
                 agent_welcome = json.loads(agent_ws.receive_text())
                 assert agent_welcome["type"] == "welcome"
 
                 with client.websocket_connect(
                     f"/ws/rooms/{source.id}",
-                    subprotocols=["doorae.v1", f"bearer.{token}"],
+                    subprotocols=["anygarden.v1", f"bearer.{token}"],
                 ) as user_ws:
                     user_welcome = json.loads(user_ws.receive_text())
                     assert user_welcome["type"] == "welcome"
@@ -1170,7 +1170,7 @@ class TestRoomQueryMetadata:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{source.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 ws.send_text(json.dumps({
@@ -1219,7 +1219,7 @@ class TestContextWindowBroadcast:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(
@@ -1244,8 +1244,8 @@ class TestContextWindowBroadcast:
         """
         from starlette.testclient import TestClient
 
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
 
         app = ws_env["app"]
         room = ws_env["room"]
@@ -1286,7 +1286,7 @@ class TestContextWindowBroadcast:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
                 subprotocols=[
-                    "doorae.v1",
+                    "anygarden.v1",
                     f"bearer.{agent_token_plain}",
                 ],
             ) as ws:
@@ -1326,7 +1326,7 @@ class TestContextWindowBroadcast:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 ws.receive_text()
                 ws.send_text(
@@ -1359,7 +1359,7 @@ class TestContextWindowBroadcast:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 ws.receive_text()
                 ws.send_text(
@@ -1421,7 +1421,7 @@ class TestContextWindowBroadcast:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
-                subprotocols=["doorae.v1", f"bearer.{token}"],
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(
@@ -1441,8 +1441,8 @@ class TestContextWindowBroadcast:
         can cache it for ``decide_policy``."""
         from starlette.testclient import TestClient
 
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
 
         app = ws_env["app"]
         sf = ws_env["session_factory"]
@@ -1477,7 +1477,7 @@ class TestContextWindowBroadcast:
             with client.websocket_connect(
                 f"/ws/rooms/{room.id}",
                 subprotocols=[
-                    "doorae.v1",
+                    "anygarden.v1",
                     f"bearer.{agent_token_plain}",
                 ],
             ) as ws:
@@ -1505,15 +1505,15 @@ class TestContextWindowBroadcast:
 
 class TestActivityLogRequestIdCorrelation:
     @pytest_asyncio.fixture()
-    async def corr_env(self, config: DooraeSettings):
+    async def corr_env(self, config: AnygardenSettings):
         """User + agent in a shared room, plus a fresh agent WS token.
 
         Mirrors the rq_env shape but simpler: one room, one user, one
         agent. Yields all the handles tests need to drive both the
         user-send and agent-send code paths.
         """
-        from doorae.auth.token import generate_token, hash_agent_token
-        from doorae.db.models import AgentToken
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
 
         engine = build_engine(config.db_url)
         sf = build_session_factory(engine)
@@ -1587,7 +1587,7 @@ class TestActivityLogRequestIdCorrelation:
         ActivityPanel uses to tie a turn back to the user input."""
         from starlette.testclient import TestClient
 
-        from doorae.db.models import ActivityLog, Message
+        from anygarden.db.models import ActivityLog, Message
 
         app = corr_env["app"]
         user_token = corr_env["user_token"]
@@ -1598,7 +1598,7 @@ class TestActivityLogRequestIdCorrelation:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{user_token}"],
+                subprotocols=["anygarden.v1", f"bearer.{user_token}"],
             ) as ws:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
@@ -1637,7 +1637,7 @@ class TestActivityLogRequestIdCorrelation:
         message row itself is self-describing."""
         from starlette.testclient import TestClient
 
-        from doorae.db.models import Message
+        from anygarden.db.models import Message
 
         app = corr_env["app"]
         agent_token = corr_env["agent_token"]
@@ -1647,7 +1647,7 @@ class TestActivityLogRequestIdCorrelation:
         with TestClient(app) as client:
             with client.websocket_connect(
                 f"/ws/rooms/{room_id}",
-                subprotocols=["doorae.v1", f"bearer.{agent_token}"],
+                subprotocols=["anygarden.v1", f"bearer.{agent_token}"],
             ) as ws:
                 ws.receive_text()  # welcome
                 ws.send_text(json.dumps({

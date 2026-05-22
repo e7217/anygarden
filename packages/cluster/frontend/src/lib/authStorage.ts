@@ -1,8 +1,8 @@
-export const AUTH_TOKEN_KEY = 'doorae_token'
-export const PRELOGIN_TOKEN_KEY = 'doorae_token_prelogin'
-export const GUEST_FLAG_KEY = 'doorae_is_guest'
-export const GUEST_ROOM_KEY = 'doorae_guest_room_id'
-export const GUEST_DISPLAY_NAME_KEY = 'doorae_guest_display_name'
+export const AUTH_TOKEN_KEY = 'anygarden_token'
+export const PRELOGIN_TOKEN_KEY = 'anygarden_token_prelogin'
+export const GUEST_FLAG_KEY = 'anygarden_is_guest'
+export const GUEST_ROOM_KEY = 'anygarden_guest_room_id'
+export const GUEST_DISPLAY_NAME_KEY = 'anygarden_guest_display_name'
 
 const GUEST_SESSION_KEYS = [
   GUEST_FLAG_KEY,

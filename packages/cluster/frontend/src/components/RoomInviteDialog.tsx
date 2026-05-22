@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
 
-// Keep these in sync with packages/cluster/doorae/api/v1/invites.py.
+// Keep these in sync with packages/cluster/anygarden/api/v1/invites.py.
 // ``InviteCreate`` validates the same bounds server-side; enforcing
 // them here is purely for UX (so we can block disabled form
 // submission rather than waiting for a 422).

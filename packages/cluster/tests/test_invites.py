@@ -12,17 +12,17 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.api.v1.invites import (
+from anygarden.api.v1.invites import (
     _MAX_ACTIVE_INVITES_PER_ROOM,
     _CREATE_RATE_LIMIT_MAX_PER_WINDOW,
     _reset_create_rate_limit,
 )
-from doorae.app import create_app
-from doorae.auth.invite_token import verify_invite_token
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, Participant, Project, Room, RoomInviteLink, User
+from anygarden.app import create_app
+from anygarden.auth.invite_token import verify_invite_token
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, Participant, Project, Room, RoomInviteLink, User
 from sqlalchemy import select
 
 
@@ -30,7 +30,7 @@ from sqlalchemy import select
 
 
 @pytest_asyncio.fixture()
-async def env(config: DooraeSettings):
+async def env(config: AnygardenSettings):
     """Two rooms with distinct admin/owner users for cross-room tests."""
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
@@ -39,10 +39,10 @@ async def env(config: DooraeSettings):
         await conn.run_sync(Base.metadata.create_all)
 
     async with session_factory() as db:
-        owner = User(email="owner@doorae.io", password_hash="x")
-        member = User(email="member@doorae.io", password_hash="x")
-        outsider = User(email="outsider@doorae.io", password_hash="x")
-        admin = User(email="admin@doorae.io", password_hash="x", is_admin=True)
+        owner = User(email="owner@anygarden.io", password_hash="x")
+        member = User(email="member@anygarden.io", password_hash="x")
+        outsider = User(email="outsider@anygarden.io", password_hash="x")
+        admin = User(email="admin@anygarden.io", password_hash="x", is_admin=True)
         db.add_all([owner, member, outsider, admin])
         await db.flush()
 

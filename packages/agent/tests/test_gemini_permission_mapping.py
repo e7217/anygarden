@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae_agent.integrations.gemini_cli import _resolve_gemini_flags
+from anygarden_agent.integrations.gemini_cli import _resolve_gemini_flags
 
 
 class TestResolveGeminiFlags:

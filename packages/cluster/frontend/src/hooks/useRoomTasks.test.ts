@@ -39,7 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   // Unmount any hooks rendered in this test so their useEffect cleanups
-  // run — without this the ``doorae:task:updated`` listeners from prior
+  // run — without this the ``anygarden:task:updated`` listeners from prior
   // tests stack up on ``window`` and a single dispatchEvent triggers
   // every leftover instance.
   cleanup()
@@ -83,7 +83,7 @@ describe('useRoomTasks', () => {
     expect(url).toContain('?status=todo')
   })
 
-  it('refetches when doorae:task:updated fires for the same room', async () => {
+  it('refetches when anygarden:task:updated fires for the same room', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(jsonResponse(sampleTasks))
@@ -93,7 +93,7 @@ describe('useRoomTasks', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('doorae:task:updated', {
+        new CustomEvent('anygarden:task:updated', {
           detail: { task: { room_id: ROOM } },
         }),
       )
@@ -101,7 +101,7 @@ describe('useRoomTasks', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
   })
 
-  it('ignores doorae:task:updated for other rooms', async () => {
+  it('ignores anygarden:task:updated for other rooms', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(jsonResponse(sampleTasks))
@@ -111,7 +111,7 @@ describe('useRoomTasks', () => {
 
     act(() => {
       window.dispatchEvent(
-        new CustomEvent('doorae:task:updated', {
+        new CustomEvent('anygarden:task:updated', {
           detail: { task: { room_id: OTHER_ROOM } },
         }),
       )

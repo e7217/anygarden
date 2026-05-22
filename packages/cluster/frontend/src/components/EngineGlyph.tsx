@@ -2,7 +2,7 @@ import { Bot } from 'lucide-react'
 // Sub-path imports to keep @lobehub/icons tree-shakeable: only the
 // AI-engine logos we actually render are pulled into the bundle.
 // Mapping covers every engine ID in
-// packages/agent/doorae_agent/integrations/__init__.py::ENGINES
+// packages/agent/anygarden_agent/integrations/__init__.py::ENGINES
 // (claude-code, codex, gemini-cli, openhands, deep-agents, openai,
 // anthropic) plus backend-agnostic variants the UI might still see.
 import Claude from '@lobehub/icons/es/Claude'

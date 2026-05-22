@@ -1,4 +1,4 @@
-// Zod schemas mirroring ``packages/cluster/doorae/ws/protocol.py``.
+// Zod schemas mirroring ``packages/cluster/anygarden/ws/protocol.py``.
 //
 // These are direct 1:1 ports of the Pydantic v2 models the server uses.
 // Any change on the Python side must be reflected here; the TS runtime
@@ -6,7 +6,7 @@
 // boundary so drift surfaces as a parse error rather than a silent
 // miscategorised message.
 //
-// Reference: ``packages/cluster/doorae/ws/protocol.py``
+// Reference: ``packages/cluster/anygarden/ws/protocol.py``
 //
 // Naming: the Python module calls client→server frames "IncomingFrame"
 // (from the server's perspective) and server→client frames "OutgoingFrame".

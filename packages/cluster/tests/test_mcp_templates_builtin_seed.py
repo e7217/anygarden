@@ -7,11 +7,11 @@ import pytest_asyncio
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, MCPServerTemplate
-from doorae.mcp_templates import builtin as builtin_mod
-from doorae.mcp_templates.encryption import MCPSecrets
-from doorae.mcp_templates.service import MCPTemplateService
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, MCPServerTemplate
+from anygarden.mcp_templates import builtin as builtin_mod
+from anygarden.mcp_templates.encryption import MCPSecrets
+from anygarden.mcp_templates.service import MCPTemplateService
 
 
 @pytest_asyncio.fixture()

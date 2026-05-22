@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from doorae_machine.daemon import MachineDaemon, _base_url_from_machine_url
-from doorae_machine.protocol.frames import (
+from anygarden_machine.daemon import MachineDaemon, _base_url_from_machine_url
+from anygarden_machine.protocol.frames import (
     RegisterFrame,
     ReportActualStateFrame,
     SyncDesiredStateFrame,
@@ -35,9 +35,9 @@ class TestBaseUrlFromMachineUrl:
     def test_preserves_reverse_proxy_prefix(self) -> None:
         assert (
             _base_url_from_machine_url(
-                "wss://proxy.example.com/doorae/ws/machines/abc-123"
+                "wss://proxy.example.com/anygarden/ws/machines/abc-123"
             )
-            == "wss://proxy.example.com/doorae"
+            == "wss://proxy.example.com/anygarden"
         )
 
     def test_preserves_multi_segment_prefix(self) -> None:
@@ -100,7 +100,7 @@ class TestRegisterFrame:
             MagicMock(engine="claude-code", version="1.0.0", path="/usr/bin/claude-code"),
         ]
 
-        with patch("doorae_machine.daemon.detect_engines", return_value=mock_detection):
+        with patch("anygarden_machine.daemon.detect_engines", return_value=mock_detection):
             await daemon._register()
 
         assert len(sent_frames) == 1
@@ -593,7 +593,7 @@ class TestReconcileSerialization:
         }
         # Save the manifest (what _handle does) — but since the test
         # mutates state directly, use save directly too.
-        from doorae_machine.protocol.frames import SyncDesiredStateFrame
+        from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
         daemon._manifest_store.save(
             SyncDesiredStateFrame(
@@ -1194,7 +1194,7 @@ class TestReconnection:
 
         daemon._connect_and_serve = mock_connect_and_serve
 
-        with patch("doorae_machine.daemon.asyncio.sleep", new_callable=AsyncMock):
+        with patch("anygarden_machine.daemon.asyncio.sleep", new_callable=AsyncMock):
             # CancelledError is caught inside run() which drains and returns cleanly
             await daemon.run()
 
@@ -1312,7 +1312,7 @@ class TestSharedFileHandlers:
     async def test_write_creates_file(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileWriteFrame,
         )
 
@@ -1337,7 +1337,7 @@ class TestSharedFileHandlers:
         """A second write with the same sha256 must not rewrite the
         file. Observed via mtime: a rewrite would bump it."""
         import hashlib
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileWriteFrame,
         )
 
@@ -1377,7 +1377,7 @@ class TestSharedFileHandlers:
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
         import hashlib
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileWriteFrame,
         )
 
@@ -1404,7 +1404,7 @@ class TestSharedFileHandlers:
     async def test_delete_removes_file(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileDeleteFrame,
         )
 
@@ -1424,7 +1424,7 @@ class TestSharedFileHandlers:
     async def test_delete_missing_is_noop(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
-        from doorae_machine.protocol.frames import (
+        from anygarden_machine.protocol.frames import (
             AgentMemorySharedFileDeleteFrame,
         )
 
@@ -1567,7 +1567,7 @@ class TestOutboxArtifactSyncBack290:
     async def test_skips_oversize_files(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
-        from doorae_machine.daemon import ARTIFACT_MAX_BYTES
+        from anygarden_machine.daemon import ARTIFACT_MAX_BYTES
 
         agent_root = tmp_path / "a1"
         outbox = agent_root / "memory" / "outbox"

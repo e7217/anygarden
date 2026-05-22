@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
  * Per-user, per-scope topology node position overrides (#234).
  *
  * Storage layer only: loads/saves a ``{ [nodeId]: { x, y } }`` map to
- * localStorage under ``doorae_topology_layout_v1_${userId}_${scope}``.
+ * localStorage under ``anygarden_topology_layout_v1_${userId}_${scope}``.
  * The caller (``TopologyPage``) feeds the result into ``useGraphLayout``
  * so dagre-computed positions are overlaid with the user's manual edits.
  *
@@ -27,7 +27,7 @@ export interface LayoutOverridesApi {
   hasOverrides: boolean
 }
 
-const STORAGE_PREFIX = 'doorae_topology_layout_v1'
+const STORAGE_PREFIX = 'anygarden_topology_layout_v1'
 
 function keyFor(userId: string, scope: Scope): string {
   return `${STORAGE_PREFIX}_${userId}_${scope}`

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from cryptography.fernet import Fernet
 
-from doorae.mcp_templates.encryption import MCPSecrets, MCPSecretsUnavailable
+from anygarden.mcp_templates.encryption import MCPSecrets, MCPSecretsUnavailable
 
 
 class TestMCPSecretsRoundTrip:
@@ -51,7 +51,7 @@ class TestMCPSecretsInitialization:
     def test_empty_key_in_dev_warns_and_generates(self, caplog) -> None:
         import logging
 
-        caplog.set_level(logging.WARNING, logger="doorae.mcp_templates.encryption")
+        caplog.set_level(logging.WARNING, logger="anygarden.mcp_templates.encryption")
         secrets = MCPSecrets.from_config_key("", dev_mode=True)
         # Ephemeral key must actually work for round-trip.
         assert secrets.decrypt_dict(secrets.encrypt_dict({"x": "y"})) == {"x": "y"}

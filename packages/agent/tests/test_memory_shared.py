@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from doorae_agent.memory import compose_shared_context_block
+from anygarden_agent.memory import compose_shared_context_block
 
 
 class TestComposeSharedContextBlock:

@@ -12,11 +12,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Participant,
@@ -24,7 +24,7 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.rooms.service import (
+from anygarden.rooms.service import (
     PIN_ORDER_STEP,
     reorder_pinned_rooms,
     set_room_pinned,
@@ -35,7 +35,7 @@ from doorae.rooms.service import (
 
 
 @pytest_asyncio.fixture()
-async def pin_env(config: DooraeSettings):
+async def pin_env(config: AnygardenSettings):
     """Seed a user with 3 rooms they participate in + 1 agent-only room.
 
     The agent-only room is there to make sure pin operations ignore
@@ -49,8 +49,8 @@ async def pin_env(config: DooraeSettings):
 
     data: dict = {}
     async with session_factory() as db:
-        user = User(email="pin-user@doorae.io", password_hash="x")
-        other = User(email="other@doorae.io", password_hash="x")
+        user = User(email="pin-user@anygarden.io", password_hash="x")
+        other = User(email="other@anygarden.io", password_hash="x")
         db.add_all([user, other])
         await db.flush()
 

@@ -1,4 +1,4 @@
-"""Tests for ``doorae_agent.secrets`` — private engine-secret storage.
+"""Tests for ``anygarden_agent.secrets`` — private engine-secret storage.
 
 These tests verify that:
 
@@ -20,7 +20,7 @@ import os
 
 import pytest
 
-from doorae_agent import secrets
+from anygarden_agent import secrets
 
 
 @pytest.fixture(autouse=True)

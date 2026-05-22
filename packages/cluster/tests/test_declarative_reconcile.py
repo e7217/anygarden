@@ -10,9 +10,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -23,9 +23,9 @@ from doorae.db.models import (
     Room,
     User,
 )
-from doorae.auth.machine_token import generate_machine_token, hash_machine_token
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 class FakeWS:
@@ -47,7 +47,7 @@ class FakeWS:
 @pytest_asyncio.fixture()
 async def reconcile_env():
     """Set up in-memory SQLite DB with all required entities for reconcile tests."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

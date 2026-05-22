@@ -13,7 +13,7 @@ import {
 // lived inside ChatPage; hoisting it here so AdminMachinesPage and
 // TopologyPage can share the same toggle, Ctrl/Cmd+B shortcut, and
 // localStorage-backed user preference without prop drilling.
-const STORAGE_KEY = 'doorae_sidebar_collapsed'
+const STORAGE_KEY = 'anygarden_sidebar_collapsed'
 
 export interface SidebarLayoutValue {
   /** Desktop-only collapsed flag. Mobile (< md) ignores this entirely. */

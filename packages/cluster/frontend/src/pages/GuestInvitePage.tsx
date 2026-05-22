@@ -51,7 +51,7 @@ export default function GuestInvitePage() {
       }
       const data = await resp.json()
       // Single-tab architecture: the guest JWT overwrites the
-      // ``doorae_token`` slot. The storage helper keeps the legacy
+      // ``anygarden_token`` slot. The storage helper keeps the legacy
       // prelogin stash for compatibility, but normal login and guest
       // expiry paths clear it so an old token cannot be restored.
       setGuestToken({

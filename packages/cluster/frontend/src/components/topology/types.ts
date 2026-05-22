@@ -1,6 +1,6 @@
 /**
  * Types mirroring the backend ``/api/v1/graph`` payload.
- * Keep these in lock-step with ``packages/cluster/doorae/api/v1/graph.py``.
+ * Keep these in lock-step with ``packages/cluster/anygarden/api/v1/graph.py``.
  */
 
 export type NodeKind = 'user' | 'machine' | 'agent' | 'room' | 'project'

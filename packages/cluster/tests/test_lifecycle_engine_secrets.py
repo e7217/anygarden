@@ -1,7 +1,7 @@
 """Integration tests for ``_build_sync_frame`` engine_secrets (#359).
 
 Locks the matrix that the user's reported regression (#359) cared
-about: flipping ``DOORAE_LLM_GATEWAY_ENABLED=true`` populates the
+about: flipping ``ANYGARDEN_LLM_GATEWAY_ENABLED=true`` populates the
 spawn-frame env keys for openhands agents *and* leaves the three
 CLI engines untouched. The unit tests in
 ``test_gateway_secrets_population.py`` cover the helper in isolation;
@@ -16,10 +16,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentToken, Base
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentToken, Base
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
@@ -163,7 +163,7 @@ class TestGatewayDisabledLeavesFrameEmpty:
 
     @pytest.mark.asyncio
     async def test_no_cluster_url_leaves_frame_empty(self, env) -> None:
-        """No reachable doorae URL → no point emitting BASE_URL. The
+        """No reachable anygarden URL → no point emitting BASE_URL. The
         helper guards on this; this test verifies the lifecycle wires
         the guard correctly."""
         frame = await _build_frame(
@@ -220,7 +220,7 @@ class TestTokenCachedAcrossRebuilds:
         t3 = f3["engine_secrets"].get("OPENAI_API_KEY")
         assert t1 and t2 and t3
         assert t1 == t2 == t3, (
-            "_build_sync_frame must reuse the cached doorae_token; "
+            "_build_sync_frame must reuse the cached anygarden_token; "
             "minting per-call leaves orphaned rows that 401 the agent."
         )
 

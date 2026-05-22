@@ -20,10 +20,10 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from doorae.db.engine import build_session_factory
-from doorae.db.models import Agent, Goal, Participant, Room, Task, User
-from doorae.goals.policy import TASK_PICKUP_TIMEOUT_SECONDS
-from doorae.goals.scheduler import GoalScheduler
+from anygarden.db.engine import build_session_factory
+from anygarden.db.models import Agent, Goal, Participant, Room, Task, User
+from anygarden.goals.policy import TASK_PICKUP_TIMEOUT_SECONDS
+from anygarden.goals.scheduler import GoalScheduler
 
 
 def _utcnow() -> datetime:

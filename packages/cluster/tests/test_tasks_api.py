@@ -16,11 +16,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Message,
@@ -34,7 +34,7 @@ from doorae.db.models import (
 @pytest_asyncio.fixture()
 async def tasks_env() -> AsyncIterator[dict]:
     """Spin up an app + DB + room with a creator user and an assignable agent."""
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -330,7 +330,7 @@ class TestAssignedAt:
         task_id = resp.json()["id"]
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             row = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -353,7 +353,7 @@ class TestAssignedAt:
         task_id = resp.json()["id"]
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             row = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -381,7 +381,7 @@ class TestAssignedAt:
         assert resp.status_code == 200
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             row = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -407,7 +407,7 @@ class TestAssignedAt:
         task_id = create.json()["id"]
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             first = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -423,7 +423,7 @@ class TestAssignedAt:
         assert resp.status_code == 200
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             second = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -449,7 +449,7 @@ class TestAssignedAt:
         task_id = create.json()["id"]
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             before = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
@@ -464,7 +464,7 @@ class TestAssignedAt:
         assert resp.status_code == 200
 
         async with tasks_env["factory"]() as db:
-            from doorae.db.models import Task as TaskRow
+            from anygarden.db.models import Task as TaskRow
 
             after = (
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))

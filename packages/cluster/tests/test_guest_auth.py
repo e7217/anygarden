@@ -17,10 +17,10 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.dependencies import Identity, get_identity
-from doorae.auth.invite_token import hash_invite_token
-from doorae.auth.jwt import (
+from anygarden.app import create_app
+from anygarden.auth.dependencies import Identity, get_identity
+from anygarden.auth.invite_token import hash_invite_token
+from anygarden.auth.jwt import (
     GuestClaims,
     UserClaims,
     create_guest_token,
@@ -30,9 +30,9 @@ from doorae.auth.jwt import (
     verify_user_token,
     InvalidToken,
 )
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Base,
     Participant,
     Project,
@@ -101,7 +101,7 @@ class TestGuestJWTCodec:
 
 
 @pytest_asyncio.fixture()
-async def env(config: DooraeSettings) -> AsyncIterator[dict]:
+async def env(config: AnygardenSettings) -> AsyncIterator[dict]:
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
 
@@ -109,7 +109,7 @@ async def env(config: DooraeSettings) -> AsyncIterator[dict]:
         await conn.run_sync(Base.metadata.create_all)
 
     async with session_factory() as db:
-        owner = User(email="owner@doorae.io", password_hash="x")
+        owner = User(email="owner@anygarden.io", password_hash="x")
         db.add(owner)
         await db.flush()
         project = Project(name="proj")
@@ -417,7 +417,7 @@ class TestForbidGuestGate:
         always matched nothing."""
         import json
 
-        from doorae.ws.manager import ConnectionManager
+        from anygarden.ws.manager import ConnectionManager
 
         # Set up the connection manager (production initializes this
         # in the lifespan, which tests don't run).
@@ -490,8 +490,8 @@ class TestRequireRoomMemberGuestBranch:
     async def test_guest_cross_room_claim_rejected(self, env) -> None:
         """A guest JWT forged to claim the wrong room must 403 even if
         a Participant row happened to exist there."""
-        from doorae.auth.dependencies import require_room_member
-        from doorae.auth.jwt import GuestClaims
+        from anygarden.auth.dependencies import require_room_member
+        from anygarden.auth.jwt import GuestClaims
         from fastapi import HTTPException
 
         async with env["session_factory"]() as db:

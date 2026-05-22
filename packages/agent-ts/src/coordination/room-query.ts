@@ -2,7 +2,7 @@
 // cross-room mention flow.
 //
 // Ported from
-// ``packages/agent/doorae_agent/integrations/room_query.py``.
+// ``packages/agent/anygarden_agent/integrations/room_query.py``.
 //
 // When the server decorates a message with ``room_query`` metadata,
 // the representative agent of the source room forwards the question

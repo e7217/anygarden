@@ -22,8 +22,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from doorae_agent.coordination.pending_context import append_context_line
-from doorae_agent.integrations.base import (
+from anygarden_agent.coordination.pending_context import append_context_line
+from anygarden_agent.integrations.base import (
     EngineAdapter,
     ShaTrackedInjector,
     compose_referenced_files_hint,

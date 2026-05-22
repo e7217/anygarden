@@ -89,8 +89,8 @@ provider's actual emission rate.
 
 ### E — MCP exposure (regression of #352 → #354)
 
-**Setup**: attach the doorae cluster MCP server to each engine
-agent. Ask the LLM to invoke a doorae MCP tool (e.g.
+**Setup**: attach the anygarden cluster MCP server to each engine
+agent. Ask the LLM to invoke a anygarden MCP tool (e.g.
 `mark_task_status`).
 
 **What we measure**:
@@ -163,7 +163,7 @@ tradeoff explicitly.
 technical validation data. The trigger is not the A-E scenario
 matrix above; it is Anthropic's 2026-06-15 Agent SDK credit split.
 Subscription-based non-interactive `claude` usage from third-party
-orchestrators such as Doorae draws from a separate $20-$200/month
+orchestrators such as Anygarden draws from a separate $20-$200/month
 pool, with overflow billed at API rates. That cost trajectory is
 incompatible with multi-agent orchestration regardless of the
 technical comparison outcome.
@@ -195,7 +195,7 @@ the validation trajectory rather than just the final state.
   structural one. Cost is tracked separately by usage logs.
 - Operator UX (model picker, settings UI): tracked under Phase 6
   and #112 / #346 frontend work.
-- Sub-agent streaming integration (DelegateTool ↔ doorae channels):
+- Sub-agent streaming integration (DelegateTool ↔ anygarden channels):
   separate follow-up; the validation here doesn't depend on it.
 
 ## Related

@@ -8,10 +8,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentFile, AgentSkill, Base, SkillLibraryEntry
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentFile, AgentSkill, Base, SkillLibraryEntry
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
 
 
 def _approved() -> dict:

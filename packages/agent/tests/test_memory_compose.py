@@ -1,8 +1,8 @@
-"""Unit tests for ``doorae_agent.memory.compose_memory_block`` (#237)."""
+"""Unit tests for ``anygarden_agent.memory.compose_memory_block`` (#237)."""
 
 from __future__ import annotations
 
-from doorae_agent.memory import compose_memory_block
+from anygarden_agent.memory import compose_memory_block
 
 
 class TestComposeMemoryBlock:

@@ -13,16 +13,16 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, Participant, Room, Task, User
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, Participant, Room, Task, User
 
 
 @pytest_asyncio.fixture()
 async def env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -170,7 +170,7 @@ async def bulk_env():
     todo we should never sweep, while ``other`` owns its own done row to
     prove the per-agent scope.
     """
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

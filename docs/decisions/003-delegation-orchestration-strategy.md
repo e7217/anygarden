@@ -6,7 +6,7 @@
 
 ## 컨텍스트
 
-Doorae 에이전트가 메인룸에서 받은 작업을 서브룸으로 위임할 때, 오케스트레이션을 누가 얼마나 담당할지 결정해야 한다.
+Anygarden 에이전트가 메인룸에서 받은 작업을 서브룸으로 위임할 때, 오케스트레이션을 누가 얼마나 담당할지 결정해야 한다.
 
 ### 배경 분석: Claude Code 아키텍처
 
@@ -18,15 +18,15 @@ Claude Code 유출 코드 분석 (wikidocs.net/338204, github.com/ultraworkers/c
 4. **구조화된 TaskPacket**: 자연어가 아닌 `{objective, scope, acceptance_tests, escalation_policy}` 명세.
 5. **GreenContract**: 서브에이전트 결과를 LLM 이 아닌 실제 테스트로 검증.
 
-### Doorae 와의 차이
+### Anygarden 와의 차이
 
-| | Claude Code (트리) | Doorae (메시) |
+| | Claude Code (트리) | Anygarden (메시) |
 |--|---|---|
 | 토폴로지 | 부모→자식 단방향 | 룸 내 전체 브로드캐스트 |
 | 에이전트 간 대화 | 불가 | 가능 (고유 강점이자 핑퐁 리스크) |
 | 오케스트레이션 | 부모 LLM 직접 | 현재 없음 (모두 reactive) |
 
-Doorae 의 WebSocket 메시 토폴로지는 "에이전트 간 실시간 협업" 이라는 Claude Code 가 못 하는 고유 강점. 이를 살리되 안전하게 하는 전략이 필요.
+Anygarden 의 WebSocket 메시 토폴로지는 "에이전트 간 실시간 협업" 이라는 Claude Code 가 못 하는 고유 강점. 이를 살리되 안전하게 하는 전략이 필요.
 
 ## 검토한 선택지
 
@@ -66,7 +66,7 @@ Doorae 의 WebSocket 메시 토폴로지는 "에이전트 간 실시간 협업" 
 | 서브룸 전달 + 응답 대기 + 메인룸 보고 | **인프라** | delegate.py |
 | 핑퐁 방지 | **인프라** | participant_id 필터 (구현 완료) |
 | 결과 검증 v1 | **인프라** | 응답 존재 여부 + timeout |
-| 결과 검증 v2 (향후) | **인프라** + 간단한 LLM 판정 | GreenContract 의 doorae 버전 |
+| 결과 검증 v2 (향후) | **인프라** + 간단한 LLM 판정 | GreenContract 의 anygarden 버전 |
 
 ## 진화 경로
 
@@ -161,9 +161,9 @@ answering directly. Report the result back to this room.
 
 ### 채택하지 않음
 
-- **트리 토폴로지**: doorae 의 메시(룸 브로드캐스트)는 고유 강점. 에이전트 간 실시간 협업 가능성 유지.
-- **파일 기반 결과 전달**: doorae 는 WebSocket 실시간 스트림 사용. 디스크 I/O 불필요.
-- **완전한 샌드박스 격리**: doorae 의 per-agent directory + workspace-write 가 이미 충분.
+- **트리 토폴로지**: anygarden 의 메시(룸 브로드캐스트)는 고유 강점. 에이전트 간 실시간 협업 가능성 유지.
+- **파일 기반 결과 전달**: anygarden 는 WebSocket 실시간 스트림 사용. 디스크 I/O 불필요.
+- **완전한 샌드박스 격리**: anygarden 의 per-agent directory + workspace-write 가 이미 충분.
 
 ## 결과
 

@@ -25,7 +25,7 @@ Week 4에서 Machine Daemon이 서버에 연결하여 spawn 명령을 받을 수
 ## 2. 추가할 서버 파일
 
 ```
-doorae-server/doorae/
+anygarden-server/anygarden/
 ├── auth/
 │   └── machine_token.py             # [60 LOC] Machine Token 발급/검증
 ├── scheduler/
@@ -56,22 +56,22 @@ doorae-server/doorae/
   - `machine_tokens` 테이블 생성 (id, machine_id, token_hash, lookup_hint, created_at, expires_at, revoked_at)
   - `agents` 테이블: engine, placed_on_machine_id, desired_state, actual_state, pid, profile_yaml, started_at, last_heartbeat_at, last_crash_reason, restart_policy 컬럼 추가
   - 인덱스: `ix_machines_status_owner`, `ix_machine_engines_engine`, `ix_machine_tokens_hint`, `ix_agents_placed_state`
-- [ ] `doorae/db/models.py`에 `MachineEngine`, `MachineToken` 모델 추가 + `Machine`, `Agent` 모델 확장
+- [ ] `anygarden/db/models.py`에 `MachineEngine`, `MachineToken` 모델 추가 + `Machine`, `Agent` 모델 확장
 - [ ] **검증**: `alembic upgrade head` 성공 + 스키마 검증
 
 ### Phase 5B: Machine Token 인증 (Day 1 오후)
 
-- [ ] `doorae/auth/machine_token.py`:
+- [ ] `anygarden/auth/machine_token.py`:
   - `generate_machine_token() -> str` (token_urlsafe(32))
   - `verify_machine_token(raw_token, db) -> MachineToken | None` (argon2 + lookup_hint)
-- [ ] `doorae/auth/dependencies.py`에 `get_machine_identity()` 추가:
-  - `Sec-WebSocket-Protocol: doorae.v1, bearer.<machine_token>` 파싱
+- [ ] `anygarden/auth/dependencies.py`에 `get_machine_identity()` 추가:
+  - `Sec-WebSocket-Protocol: anygarden.v1, bearer.<machine_token>` 파싱
   - Machine Token 검증 → `MachineIdentity(machine_id)` 반환
 - [ ] **검증**: Machine Token 발급/검증 단위 테스트 5개
 
 ### Phase 5C: Machine 등록 REST API (Day 2 오전)
 
-- [ ] `doorae/api/v1/machines.py`:
+- [ ] `anygarden/api/v1/machines.py`:
   - `POST /api/v1/machines {name, labels}` → machine_id + machine_token 반환
   - 인증: User JWT 필요 (owner)
   - Machine 생성 + MachineToken 발급 (argon2 해시 저장, 평문 1회 반환)
@@ -82,14 +82,14 @@ doorae-server/doorae/
 
 ### Phase 5D: Machine WebSocket 핸들러 (Day 2 오후)
 
-- [ ] `doorae/scheduler/machine_bus.py`:
+- [ ] `anygarden/scheduler/machine_bus.py`:
   - `MachineBus.__init__()` — `dict[UUID, WebSocket]` 인메모리 풀
   - `register(machine_id, ws)` / `unregister(machine_id)`
   - `is_connected(machine_id) -> bool`
   - `send(machine_id, frame) -> bool`
-- [ ] `doorae/ws/machine_handler.py` (§10.8.3 코드 기반):
+- [ ] `anygarden/ws/machine_handler.py` (§10.8.3 코드 기반):
   - `@router.websocket("/ws/machines/{machine_id}")`
-  - `Sec-WebSocket-Protocol` subprotocol 인증 → `accept(subprotocol="doorae.v1")`
+  - `Sec-WebSocket-Protocol` subprotocol 인증 → `accept(subprotocol="anygarden.v1")`
   - `register` 프레임 수신 → capabilities를 `machine_engines` 테이블에 저장 + `status='online'`
   - `heartbeat` 프레임 → `daemon_last_seen_at` 갱신
   - `agent_started` / `agent_crashed` / `agent_stopped` → lifecycle 호출
@@ -98,12 +98,12 @@ doorae-server/doorae/
 
 ### Phase 5E: 스케줄러 (Day 3)
 
-- [ ] `doorae/scheduler/placement.py` (§10.7.1 코드 기반):
+- [ ] `anygarden/scheduler/placement.py` (§10.7.1 코드 기반):
   - `select_machine_for(engine, db, machine_bus, required_labels) -> Machine`
   - 필터: status='online' + engine 매칭 + 활성 연결 + max_agents 미초과 + labels
   - 선택: bin-pack (가장 적은 running agent)
   - 실패 시: `NoSuitableMachineError`
-- [ ] `doorae/scheduler/lifecycle.py` (§10.7.2 코드 기반):
+- [ ] `anygarden/scheduler/lifecycle.py` (§10.7.2 코드 기반):
   - `AgentLifecycle(db, machine_bus)`
   - `request_start(agent_id)`: Machine 선택 → agent_token 발급 → spawn_agent 전송
   - `on_agent_started(agent_id, pid)`: actual_state='running'
@@ -114,7 +114,7 @@ doorae-server/doorae/
 
 ### Phase 5F: 선언적 에이전트 생성 REST API (Day 4 오전)
 
-- [ ] `doorae/api/v1/agents.py`:
+- [ ] `anygarden/api/v1/agents.py`:
   - `POST /api/v1/agents {engine, profile, name, rooms, placement}`:
     1. Agent 레코드 생성 (desired_state='running', actual_state='pending')
     2. `lifecycle.request_start(agent_id)` 호출 → 스케줄러가 Machine 선택 + spawn
@@ -140,12 +140,12 @@ doorae-server/doorae/
 
 ### Phase 5H: Prometheus 지표 추가 + v0.2.0 릴리즈 (Day 5)
 
-- [ ] `doorae/observability/metrics.py`에 Machine 지표 2개 추가:
-  - `doorae_machines_online` (Gauge)
-  - `doorae_agents_by_state{state}` (Gauge)
-- [ ] doorae-server `__version__ = "0.2.0"`, doorae-machine `__version__ = "0.1.0"`
+- [ ] `anygarden/observability/metrics.py`에 Machine 지표 2개 추가:
+  - `anygarden_machines_online` (Gauge)
+  - `anygarden_agents_by_state{state}` (Gauge)
+- [ ] anygarden-server `__version__ = "0.2.0"`, anygarden-machine `__version__ = "0.1.0"`
 - [ ] CHANGELOG 갱신
-- [ ] v0.2.0 태그 + PyPI 배포 (doorae-server + doorae-machine)
+- [ ] v0.2.0 태그 + PyPI 배포 (anygarden-server + anygarden-machine)
 - [ ] README 빠른 시작 갱신 (Scheduled 모드 예시 포함)
 
 ---
@@ -169,7 +169,7 @@ doorae-server/doorae/
 ## 5. 완료 기준 (v0.2.0)
 
 - [ ] `POST /api/v1/machines` → Machine 등록 + machine_token 발급 동작
-- [ ] `doorae-machine register + run` → 서버에 online 상태 표시
+- [ ] `anygarden-machine register + run` → 서버에 online 상태 표시
 - [ ] `POST /api/v1/agents {engine, profile}` → 스케줄러가 Machine 선택 → Daemon이 자동 spawn
 - [ ] Agent subprocess가 서버에 독립 WebSocket 접속하여 채팅 참여
 - [ ] Agent 강제 kill 시 `restart_on_same_machine` 정책 자동 재시작
@@ -177,7 +177,7 @@ doorae-server/doorae/
 - [ ] E2E 4개 시나리오 통과
 - [ ] Locust: 50 연결 / 10 msg/s / p99 <50ms
 - [ ] 120개 테스트 통과
-- [ ] v0.2.0 태그 + PyPI 배포 (doorae-server v0.2.0 + doorae-machine v0.1.0)
+- [ ] v0.2.0 태그 + PyPI 배포 (anygarden-server v0.2.0 + anygarden-machine v0.1.0)
 
 ---
 
@@ -185,9 +185,9 @@ doorae-server/doorae/
 
 | 미포함 | 예정 시점 |
 |--------|---------|
-| TypeScript SDK (`@doorae/sdk`) | Phase 2 (Week 6-7) |
+| TypeScript SDK (`@anygarden/sdk`) | Phase 2 (Week 6-7) |
 | PyInstaller 바이너리 배포 | Phase 3 (Week 8+) |
-| `get.doorae.io` 설치 스크립트 | Phase 3 |
+| `get.anygarden.io` 설치 스크립트 | Phase 3 |
 | `reschedule` 정책 (다른 Machine으로 재배치) | v0.3.0 |
 | Federation (다중 인스턴스 연동) | Plan B/C 영역 |
 | Event Store (감사 추적) | Plan B 영역 |

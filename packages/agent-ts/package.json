@@ -1,12 +1,12 @@
 {
-  "name": "@doorae/agent-ts",
+  "name": "@anygarden/agent-ts",
   "version": "0.0.1",
-  "description": "Doorae TypeScript agent runtime — parallels the Python doorae-agent for TS-native LLM SDKs (Claude Code, Codex, Gemini CLI).",
+  "description": "Anygarden TypeScript agent runtime — parallels the Python anygarden-agent for TS-native LLM SDKs (Claude Code, Codex, Gemini CLI).",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "bin": {
-    "doorae-agent-ts": "./dist/cli.js"
+    "anygarden-agent-ts": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from doorae.ws.manager import ConnectionManager
+from anygarden.ws.manager import ConnectionManager
 
 
 class _RecordingWS:
@@ -51,7 +51,7 @@ async def test_second_subscribe_supersedes_first() -> None:
 
     assert old.closed == (4040, "superseded")
     # Only the new socket should receive subsequent broadcasts.
-    from doorae.ws.protocol import MessageOut
+    from anygarden.ws.protocol import MessageOut
     from datetime import datetime, timezone
 
     frame = MessageOut(
@@ -87,7 +87,7 @@ async def test_supersede_across_different_rooms() -> None:
     assert connected == {"p-1"}
 
     # Broadcasting to the old room should be a no-op now.
-    from doorae.ws.protocol import MessageOut
+    from anygarden.ws.protocol import MessageOut
     from datetime import datetime, timezone
 
     frame = MessageOut(
@@ -134,7 +134,7 @@ async def test_distinct_participants_coexist() -> None:
     assert a.closed is None
     assert b.closed is None
 
-    from doorae.ws.protocol import MessageOut
+    from anygarden.ws.protocol import MessageOut
     from datetime import datetime, timezone
 
     frame = MessageOut(

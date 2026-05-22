@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from doorae_agent.integrations.base import (
+from anygarden_agent.integrations.base import (
     EngineAdapter,
     MessagePolicy,
     decide_policy,
@@ -517,7 +517,7 @@ class TestCycleDetectionInDecidePolicy:
         """Build a ``_recent_msgs`` dict pre-loaded with ``times``
         copies of the given (sender, content) fingerprint."""
         from collections import deque
-        from doorae_agent.integrations.cycle_guard import hash_content
+        from anygarden_agent.integrations.cycle_guard import hash_content
 
         buf: deque = deque(maxlen=10)
         for _ in range(times):

@@ -23,14 +23,14 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
-from doorae.app import create_app
-from doorae.auth.token import generate_token, hash_agent_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, AgentSkill, AgentToken, Base, SkillLibraryEntry
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.skills_library.service import SkillLibraryService
+from anygarden.app import create_app
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentSkill, AgentToken, Base, SkillLibraryEntry
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.skills_library.service import SkillLibraryService
 
 
 async def _seed_agent_with_token(
@@ -58,7 +58,7 @@ async def _seed_agent_with_token(
 
 @pytest_asyncio.fixture()
 async def mcp_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -154,8 +154,8 @@ async def test_rpc_user_token_rejected(mcp_env):
     """Only agent tokens may access the MCP channel — a user/admin JWT
     is a different auth axis and shouldn't be able to write skills
     that would attach to an arbitrary agent."""
-    from doorae.auth.jwt import create_user_token
-    config = DooraeSettings(jwt_secret="x")
+    from anygarden.auth.jwt import create_user_token
+    config = AnygardenSettings(jwt_secret="x")
     # Use the real app's jwt_secret so decoding succeeds.
     secret = mcp_env["client"]._transport.app.state.config.jwt_secret
     jwt_token = create_user_token(
@@ -428,8 +428,8 @@ async def test_admin_promote_agent_authored_skill(mcp_env):
     skill_id = create["result"]["structuredContent"]["id"]
 
     # Seed an admin user and create a matching JWT.
-    from doorae.auth.jwt import create_user_token
-    from doorae.db.models import User
+    from anygarden.auth.jwt import create_user_token
+    from anygarden.db.models import User
     secret = client._transport.app.state.config.jwt_secret
     async with factory() as db:
         admin = User(email="admin@x.com", password_hash="h", is_admin=True)
@@ -467,7 +467,7 @@ async def test_admin_list_skills_filter_agent_authored(mcp_env):
     # One admin-registered-looking row (created directly via service,
     # since the real admin register uses GitHub fetch which we don't
     # want here).
-    from doorae.db.models import SkillLibraryEntry
+    from anygarden.db.models import SkillLibraryEntry
     async with factory() as db:
         db.add(
             SkillLibraryEntry(
@@ -483,8 +483,8 @@ async def test_admin_list_skills_filter_agent_authored(mcp_env):
         await db.commit()
 
     # Seed admin.
-    from doorae.auth.jwt import create_user_token
-    from doorae.db.models import User
+    from anygarden.auth.jwt import create_user_token
+    from anygarden.db.models import User
     secret = client._transport.app.state.config.jwt_secret
     async with factory() as db:
         admin = User(email="admin@x.com", password_hash="h", is_admin=True)

@@ -18,24 +18,24 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Agent, Base, User
-from doorae.scheduler.lifecycle import AgentLifecycle
-from doorae.scheduler.machine_bus import MachineBus
-from doorae.skills_library.github_fetcher import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, Base, User
+from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.skills_library.github_fetcher import (
     GitHubFetcher,
     GitHubRateLimitError,
     SkillFetchResult,
 )
-from doorae.skills_library.search import (
+from anygarden.skills_library.search import (
     SearchResult,
     SkillSearchError,
     search_skills,
 )
-from doorae.skills_library.service import (
+from anygarden.skills_library.service import (
     SkillLibraryService,
     StaleCheckResult,
 )
@@ -277,7 +277,7 @@ class _StaleFetcher:
 
 @pytest_asyncio.fixture()
 async def service_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -421,7 +421,7 @@ class _FakeFetcherDriver:
 
 @pytest_asyncio.fixture()
 async def api_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
@@ -499,7 +499,7 @@ async def test_search_endpoint_proxies_skills_sh(api_env, monkeypatch):
         ]
 
     monkeypatch.setattr(
-        "doorae.api.v1.skills.skills_sh_search", fake_search,
+        "anygarden.api.v1.skills.skills_sh_search", fake_search,
     )
 
     resp = await client.get(
@@ -524,7 +524,7 @@ async def test_search_endpoint_caches_for_60s(api_env, monkeypatch):
         return []
 
     monkeypatch.setattr(
-        "doorae.api.v1.skills.skills_sh_search", fake_search,
+        "anygarden.api.v1.skills.skills_sh_search", fake_search,
     )
 
     r1 = await client.get(
@@ -548,7 +548,7 @@ async def test_search_endpoint_502_on_upstream_error(api_env, monkeypatch):
         raise SkillSearchError("upstream down")
 
     monkeypatch.setattr(
-        "doorae.api.v1.skills.skills_sh_search", fake_search,
+        "anygarden.api.v1.skills.skills_sh_search", fake_search,
     )
 
     resp = await client.get(
@@ -724,7 +724,7 @@ async def test_stale_cron_populates_cache_and_cancels_cleanly(api_env):
     """Drive ``_run_skill_stale_cron`` directly with a tiny interval
     and verify it populates the cache at least once, then cancels
     without raising."""
-    from doorae.app import _run_skill_stale_cron
+    from anygarden.app import _run_skill_stale_cron
 
     app = api_env["app"]
     client: AsyncClient = api_env["client"]

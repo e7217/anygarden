@@ -1,4 +1,4 @@
-"""Unit tests for ``doorae_machine.safefs`` helpers.
+"""Unit tests for ``anygarden_machine.safefs`` helpers.
 
 The helpers centralise the ``O_NOFOLLOW`` contract: file writes that
 land inside the agent directory must refuse to follow symlinks at the
@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from doorae_machine.safefs import safe_write_bytes, safe_write_text, secure_chmod
+from anygarden_machine.safefs import safe_write_bytes, safe_write_text, secure_chmod
 
 
 class TestSafeWriteText:

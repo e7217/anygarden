@@ -8,17 +8,17 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import Base, Message, Participant, Project, Room, User
-from doorae.rooms.unread import compute_has_updates_map, mark_room_read
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Base, Message, Participant, Project, Room, User
+from anygarden.rooms.unread import compute_has_updates_map, mark_room_read
 
 
 @pytest_asyncio.fixture()
 async def unread_env():
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

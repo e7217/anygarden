@@ -5,7 +5,7 @@ import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
  * Boolean signal for "new context items arrived while the right rail
  * was closed" (#302).
  *
- * Starts ``false``. Flips to ``true`` when a ``doorae:task:updated``
+ * Starts ``false``. Flips to ``true`` when a ``anygarden:task:updated``
  * event for the active room fires *and* the rail is currently
  * collapsed. Resets to ``false`` whenever the rail flips open.
  *
@@ -37,8 +37,8 @@ export function useRightRailNotice(roomId: string | null): boolean {
       // see the change live and don't need a dot.
       if (collapsed) setHasNotice(true)
     }
-    window.addEventListener('doorae:task:updated', handler)
-    return () => window.removeEventListener('doorae:task:updated', handler)
+    window.addEventListener('anygarden:task:updated', handler)
+    return () => window.removeEventListener('anygarden:task:updated', handler)
   }, [roomId, collapsed])
 
   return hasNotice

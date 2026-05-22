@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from doorae.skills_library.github_fetcher import (
+from anygarden.skills_library.github_fetcher import (
     GitHubFetcher,
     SkillNotFoundError,
     GitHubRateLimitError,

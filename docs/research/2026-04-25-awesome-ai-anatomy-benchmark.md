@@ -1,24 +1,24 @@
-# doorae × awesome-ai-anatomy 비교 분석 보고서
+# anygarden × awesome-ai-anatomy 비교 분석 보고서
 
 > Date: 2026-04-25
 > Branch: `research/awesome-ai-anatomy-benchmark`
 > Source: NeuZhou/awesome-ai-anatomy (16 teardowns + CROSS-CUTTING.md)
 > Plan: `.tmp/plan-awesome-ai-anatomy-benchmark.md`
-> Companion: `docs/research/doorae-meta.yaml` (META_SCHEMA self-mapping)
+> Companion: `docs/research/anygarden-meta.yaml` (META_SCHEMA self-mapping)
 
 ---
 
 ## 1. 요약
 
-awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doorae와 가장 가까운 프로젝트는 **oh-my-claudecode**(Claude Code 호스트, 19-agent team)와 **oh-my-codex**(Codex CLI 호스트, 30-agent worker farm)다. 그러나 doorae는 두 프로젝트와 한 가지 결정적 차원에서 다르다 — **7개 외부 코딩 에이전트 CLI(anthropic, claude_code, codex, deep_agents, gemini_cli, openai, openhands)를 _평등하게_ 호스팅**한다. 두 비교 대상은 모두 단일 호스트 CLI에 종속된다.
+awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 anygarden와 가장 가까운 프로젝트는 **oh-my-claudecode**(Claude Code 호스트, 19-agent team)와 **oh-my-codex**(Codex CLI 호스트, 30-agent worker farm)다. 그러나 anygarden는 두 프로젝트와 한 가지 결정적 차원에서 다르다 — **7개 외부 코딩 에이전트 CLI(anthropic, claude_code, codex, deep_agents, gemini_cli, openai, openhands)를 _평등하게_ 호스팅**한다. 두 비교 대상은 모두 단일 호스트 CLI에 종속된다.
 
-이 정체성 차이는 doorae의 다른 결정도 설명한다. agent loop 본체는 외부 CLI에 위임(OpenHands처럼 1391줄 god-class를 만들지 않음), 격리는 process boundary + safefs O_NOFOLLOW(Codex CLI의 17K-line 샌드박스를 만들지 않음), 컨텍스트는 per-room policy + ingest gate(OpenHands 10 condenser 파이프라인을 만들지 않음). 11일 신생임에도 16개 중 다수가 빠진 함정(borrowed core, god-file, security-as-README, env-var-gated permission)을 의식적으로 회피한 신호가 코드에 남아 있다.
+이 정체성 차이는 anygarden의 다른 결정도 설명한다. agent loop 본체는 외부 CLI에 위임(OpenHands처럼 1391줄 god-class를 만들지 않음), 격리는 process boundary + safefs O_NOFOLLOW(Codex CLI의 17K-line 샌드박스를 만들지 않음), 컨텍스트는 per-room policy + ingest gate(OpenHands 10 condenser 파이프라인을 만들지 않음). 11일 신생임에도 16개 중 다수가 빠진 함정(borrowed core, god-file, security-as-README, env-var-gated permission)을 의식적으로 회피한 신호가 코드에 남아 있다.
 
 다만 verify 결과 **세 가지 _현재_ 위험**이 식별됐다: (1) MCP tool call audit log 부재, (2) cost/step ceiling 부재, (3) 800줄 초과 모듈 9개의 god-file 형성 임계점 접근. 다음 6개월의 핵심 결정은 이 세 위험에 대응하는 **TIER 1 액션 2개 + 코드 변경 0의 PR 정책 1개**로 압축된다.
 
-## 2. doorae 자기 매핑 요약
+## 2. anygarden 자기 매핑 요약
 
-상세는 `docs/research/doorae-meta.yaml` 참조. 주요 차원:
+상세는 `docs/research/anygarden-meta.yaml` 참조. 주요 차원:
 
 | 차원 | 값 | 비고 |
 |---|---|---|
@@ -39,7 +39,7 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 전체 추출 노트는 부록 A 참조.
 
-| 차원 | oh-my-codex | oh-my-claudecode | OpenHands | doorae |
+| 차원 | oh-my-codex | oh-my-claudecode | OpenHands | anygarden |
 |---|---|---|---|---|
 | **포지션** | Codex CLI 호스트 | Claude Code 호스트 | Agent loop owner | **멀티 엔진 호스트 (유일)** |
 | **격리** | per-task git worktree | host plugin (격리 없음) | Docker per session | subprocess + safefs |
@@ -50,7 +50,7 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 | **Context mgmt** | (없음) | (위임) | 10 condenser pipeline | per-room policy + ingest-only |
 | **Security layers** | (단일 머신 trust) | (host 의존) | 3-layer (행동 단위) | 4-layer (진입 단위) |
 
-**3개 비교의 가장 큰 분기점**: 컨텍스트 관리 책임 위치 — OpenHands는 자체 condenser 파이프라인을 가지고, doorae는 호스트로서 외부 CLI에 위임하면서 룸 단위 ingest 정책만 책임. **둘 다 정당** (멀티 에이전트 룸이라 "누가 뭘 보는가"가 압축보다 핵심 문제).
+**3개 비교의 가장 큰 분기점**: 컨텍스트 관리 책임 위치 — OpenHands는 자체 condenser 파이프라인을 가지고, anygarden는 호스트로서 외부 CLI에 위임하면서 룸 단위 ingest 정책만 책임. **둘 다 정당** (멀티 에이전트 룸이라 "누가 뭘 보는가"가 압축보다 핵심 문제).
 
 **즉시 보강 가치 큰 패턴 4개** (정밀 3개에서):
 - (OpenHands) Error-action cycle detection 추가 → cycle_guard에 ~50줄
@@ -64,20 +64,20 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 ### Cline (60K stars, providers/hooks/YOLO 영역만)
 
-| 영역 | 발견 | doorae 영향 |
+| 영역 | 발견 | anygarden 영향 |
 |---|---|---|
-| **43 providers** | 300줄 switch + provider별 클래스 폭증, 카탈로그 = 코드 | doorae 7 (LiteLLM gateway + 검증된 host CLI)가 **유지비 측면에서 합리** — 의도적 분기, doorae가 옳음 |
+| **43 providers** | 300줄 switch + provider별 클래스 폭증, 카탈로그 = 코드 | anygarden 7 (LiteLLM gateway + 검증된 host CLI)가 **유지비 측면에서 합리** — 의도적 분기, anygarden가 옳음 |
 | **Common `ApiStream` 컨트랙트** | text/reasoning/tool_calls/usage 표준 chunk | A5 후보 (S) |
 | **8 hooks system** | `.cline/hooks/` shell script auto-discovery, sandboxing 부재 | **반면교사** — 도입 전 권한 모델/서명 설계 필수, lifecycle event 표준화 후 hook 진입점 |
-| **YOLO mode** | `CommandPermissionController.ts`가 강력하지만 env-var-gated → 무력화 | **doorae #134 MCP 자동승인 재평가** — 안전판은 디폴트 ON 아니면 의미 없음 |
+| **YOLO mode** | `CommandPermissionController.ts`가 강력하지만 env-var-gated → 무력화 | **anygarden #134 MCP 자동승인 재평가** — 안전판은 디폴트 ON 아니면 의미 없음 |
 
 ### Hermes Agent (26K stars, skills/memory 영역만)
 
-| 영역 | 발견 | doorae 영향 |
+| 영역 | 발견 | anygarden 영향 |
 |---|---|---|
-| **Self-improving skills** | Voyager + Reflexion 합성, `patch` action + 보안 스캔 | **PR-style diff 제안 + 자동 스캔**을 doorae #125 위에 추가 (검토 후) |
+| **Self-improving skills** | Voyager + Reflexion 합성, `patch` action + 보안 스캔 | **PR-style diff 제안 + 자동 스캔**을 anygarden #125 위에 추가 (검토 후) |
 | **Frozen memory snapshot** | BuiltinMemoryProvider가 system prompt block을 세션 시작 시점에 동결, prompt cache hit 향상 | **A7 후보** — 단, 외부 CLI 의존 (~30 LOC) |
-| **Agent 자율 in-place patching** | (Hermes 보유) | doorae는 의도적으로 **안 가져감** — admin approve/audit 게이트와 정면 충돌 |
+| **Agent 자율 in-place patching** | (Hermes 보유) | anygarden는 의도적으로 **안 가져감** — admin approve/audit 게이트와 정면 충돌 |
 
 ## 5. 횡단 인사이트 (CROSS-CUTTING.md, 10개 프로젝트)
 
@@ -85,8 +85,8 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 ### 새 Lens 2개 (정밀 5개에서 못 본 차원)
 
-- **Lens 4 — "Loop owner ≠ Cost owner"**: doorae cycle_guard는 _structural_ 루프만 잡고 _economic_ 폭주(같은 메시지 아니지만 GPT-5에 매번 50K 토큰)는 못 잡음. 10개 중 Dify만 cost ceiling 보유. doorae는 7 어댑터 호스팅이라 단일 폭주가 룸 비용 합산으로 전이 → **Dify보다 더 절실**.
-- **Lens 5 — "Borrowed core blast radius"**: doorae는 코어 loop를 자기 소유로 OMC 함정은 피했으나 **어댑터 단위로 borrowed core가 7배**. A8 contract test가 단순 회귀가 아니라 blast radius 관리 도구.
+- **Lens 4 — "Loop owner ≠ Cost owner"**: anygarden cycle_guard는 _structural_ 루프만 잡고 _economic_ 폭주(같은 메시지 아니지만 GPT-5에 매번 50K 토큰)는 못 잡음. 10개 중 Dify만 cost ceiling 보유. anygarden는 7 어댑터 호스팅이라 단일 폭주가 룸 비용 합산으로 전이 → **Dify보다 더 절실**.
+- **Lens 5 — "Borrowed core blast radius"**: anygarden는 코어 loop를 자기 소유로 OMC 함정은 피했으나 **어댑터 단위로 borrowed core가 7배**. A8 contract test가 단순 회귀가 아니라 blast radius 관리 도구.
 
 ### 횡단에서만 떠오른 액션 6개
 
@@ -112,7 +112,7 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 #### LIFTED-1. MCP tool call audit log 신설 ← _verify로 격상_
 
-- **현재 상태**: `mcp/router.py` + `mcp/tools.py`에 `audit` 키워드 0건. doorae 측 로깅 없음. SDK 자체 로그에만 의존.
+- **현재 상태**: `mcp/router.py` + `mcp/tools.py`에 `audit` 키워드 0건. anygarden 측 로깅 없음. SDK 자체 로그에만 의존.
 - **위험**: agent가 어떤 MCP tool을 언제 호출했는지 추적 불가. 사고/오작동 발생 시 사후 분석 불가, compliance 시나리오 회피 불가.
 - **비대칭 결정적 증거**: skill 등록은 `skill_library_audits` 테이블로 모든 액션 기록(#125), 같은 도메인의 MCP tool call은 무로깅.
 - **권고**: `skill_library_audits` 패턴을 `mcp_tool_audits`로 복제. `mcp/router.py:mcp_rpc`에 wrap + 새 테이블 + alembic migration + 테스트.
@@ -146,7 +146,7 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 #### A7. Frozen system-prompt snapshot
 
-- **현재 상태**: spawner.py:50, 350~365에서 spawn 시점에 DB의 `memory_md` → `notes.md` 파일로 쓰고, 파일을 system prompt에 박는 건 **외부 CLI(claude/codex)에 위임**. doorae 자체는 anchoring 메커니즘 없음.
+- **현재 상태**: spawner.py:50, 350~365에서 spawn 시점에 DB의 `memory_md` → `notes.md` 파일로 쓰고, 파일을 system prompt에 박는 건 **외부 CLI(claude/codex)에 위임**. anygarden 자체는 anchoring 메커니즘 없음.
 - **권고**: agent integration의 system prompt 조립 부분에 불변 사본 캐시. 매 spawn마다 같은 입력 → 같은 system prompt → 외부 CLI prompt cache hit 향상.
 - **주의**: 효과는 외부 CLI의 prompt cache 동작에 의존. 도입 전 LLM gateway의 cache hit metric 측정 필요.
 - **비용**: S (~30 LOC).
@@ -199,7 +199,7 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 ## 7. 검증 노트
 
-이 보고서의 모든 doorae 측 주장은 **2026-04-25 시점 코드와 대조 검증** 완료. awesome-ai-anatomy 측 주장은 1차 인용일 뿐 — **도입 결정 시점에 원본 소스 직접 verify 필수**.
+이 보고서의 모든 anygarden 측 주장은 **2026-04-25 시점 코드와 대조 검증** 완료. awesome-ai-anatomy 측 주장은 1차 인용일 뿐 — **도입 결정 시점에 원본 소스 직접 verify 필수**.
 
 ### Phase D.5 verify 결과 요약
 
@@ -230,16 +230,16 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 ### awesome-ai-anatomy 저자 주장 중 도입 전 검증 권장
 
-- OMX "Plugin Hook SDK 1.5s timeout / SIGTERM 250ms / SIGKILL" — 실제 timeout 값이 doorae MCP 요청 분포에 적합한지
-- OMC "Heartbeat 5분 stale + 25→500ms exponential backoff" — doorae machine 데몬 환경에 적합한 임계값
-- OpenHands "487-line StuckDetector recovery 로직" — `_handle_loop_recovery_action`이 doorae에 가져갈 만큼 일반화 가능한지
+- OMX "Plugin Hook SDK 1.5s timeout / SIGTERM 250ms / SIGKILL" — 실제 timeout 값이 anygarden MCP 요청 분포에 적합한지
+- OMC "Heartbeat 5분 stale + 25→500ms exponential backoff" — anygarden machine 데몬 환경에 적합한 임계값
+- OpenHands "487-line StuckDetector recovery 로직" — `_handle_loop_recovery_action`이 anygarden에 가져갈 만큼 일반화 가능한지
 - Cline "300줄 switch는 maintainability 낙후" — 7개 어댑터 수준에서는 trade-off가 다를 수 있음
-- Hermes "Frozen snapshot이 prompt cache 30~50% 절감" — 자체 측정값 미공개, doorae가 직접 측정 후 결정
+- Hermes "Frozen snapshot이 prompt cache 30~50% 절감" — 자체 측정값 미공개, anygarden가 직접 측정 후 결정
 
 ### 보고서의 한계
 
 - awesome-ai-anatomy 16개 중 정밀 3 + 보조 2 + 횡단 분석에서 추가 5개(MiroFish, Dify, DeerFlow, Goose, Guardrails) = 10개에 한정. 나머지 6개(Browser Use, Lightpanda, MemPalace, Pi Mono, Hermes Agent와 부분 겹침, ...)는 표면만 본 상태.
-- doorae 측 verify는 _코드 grep + 핵심 파일 read_ 수준. 동시성 race, 보안 취약점, 성능 병목의 정밀 측정은 별도 작업 필요.
+- anygarden 측 verify는 _코드 grep + 핵심 파일 read_ 수준. 동시성 race, 보안 취약점, 성능 병목의 정밀 측정은 별도 작업 필요.
 - "도입 비용 S/M/L"은 LoC 기반 추정. 실제 PR 단위로는 테스트·문서·UI까지 포함해 1.5~2배 가능.
 
 ---
@@ -252,22 +252,22 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 > Key finding: "Codex CLI 위에 30 에이전트, 5-phase team pipeline, git worktree per worker, hook plugin SDK, autoresearch 자율 실험 루프"
 
 **훔칠 패턴**:
-1. **Plugin Hook SDK** — `src/hooks/extensibility/dispatcher.ts` (RUNNER_SIGKILL_GRACE_MS=250, RESULT_PREFIX="`__OMX_PLUGIN_RESULT__ `"), `loader.ts` (timeout 1500ms). 플러그인을 자식 프로세스로 spawn → stdin JSON envelope → stdout magic prefix → 1.5s timeout → SIGTERM → 250ms 유예 → SIGKILL. SDK는 tmux/log/state/omx 4 namespace로 read-only. **doorae A1 직접 참고**.
+1. **Plugin Hook SDK** — `src/hooks/extensibility/dispatcher.ts` (RUNNER_SIGKILL_GRACE_MS=250, RESULT_PREFIX="`__OMX_PLUGIN_RESULT__ `"), `loader.ts` (timeout 1500ms). 플러그인을 자식 프로세스로 spawn → stdin JSON envelope → stdout magic prefix → 1.5s timeout → SIGTERM → 250ms 유예 → SIGKILL. SDK는 tmux/log/state/omx 4 namespace로 read-only. **anygarden A1 직접 참고**.
 2. **Heuristic Task-to-Worker Allocation** — `allocation-policy.ts` `scoreWorker()` (role match +18/+12/+9, overlap *4, negative-overlap -3, load -4). LLM 호출 0회, microsecond. Specialization이 emergent.
 3. **Phase-Gated Pipeline with Bounded Fix Loops** — `orchestrator.ts` TRANSITIONS map, max fix attempts 3. `verify→fix` attempt 카운터 한도 초과 시 `failed`.
 4. **AutoResearch Loop with Keep/Discard Ledger** — `autoresearch/runtime.ts`. 매 iteration commit hash 저장 → agent 작업 → evaluator → 점수 개선 시 keep, 아니면 `git reset --hard`. trailing-noop 카운터로 stuck detection.
 
 **안티패턴**:
-- License 누락 (19K stars, GitHub API license: null) — doorae는 Apache-2.0 명시로 회피.
-- 30 agent × 5 phase 디버깅 비용 — 저자 본인 인정. doorae는 observability plan(`docs/plans/2026-04-20-agent-observability-design.md`)에 phase/turn ID를 envelope에 박는 설계 미리 반영 권장.
+- License 누락 (19K stars, GitHub API license: null) — anygarden는 Apache-2.0 명시로 회피.
+- 30 agent × 5 phase 디버깅 비용 — 저자 본인 인정. anygarden는 observability plan(`docs/plans/2026-04-20-agent-observability-design.md`)에 phase/turn ID를 envelope에 박는 설계 미리 반영 권장.
 
 **결정 분기점**:
-- Worker 격리: OMX per-task git worktree ↔ doorae subprocess+safefs. doorae 옳음(채팅 단위 협업).
-- Plugin 격리: OMX process+timeout ↔ doorae in-process MCP boundary. **A1 후보**.
-- Stuck detection 범위: OMX phase/code 단위 ↔ doorae message/turn 단위. doorae 옳음(채팅 도메인).
-- 작업 라우팅: OMX heuristic ↔ doorae 호명 기반. doorae 자동 디스패치 도입 시 OMX 패턴 참고.
+- Worker 격리: OMX per-task git worktree ↔ anygarden subprocess+safefs. anygarden 옳음(채팅 단위 협업).
+- Plugin 격리: OMX process+timeout ↔ anygarden in-process MCP boundary. **A1 후보**.
+- Stuck detection 범위: OMX phase/code 단위 ↔ anygarden message/turn 단위. anygarden 옳음(채팅 도메인).
+- 작업 라우팅: OMX heuristic ↔ anygarden 호명 기반. anygarden 자동 디스패치 도입 시 OMX 패턴 참고.
 
-**한 줄 종합**: 가장 큰 분기는 worker 격리 단위, doorae 즉시 도입은 process-isolated plugin SDK with timeout escalation.
+**한 줄 종합**: 가장 큰 분기는 worker 격리 단위, anygarden 즉시 도입은 process-isolated plugin SDK with timeout escalation.
 
 ### A.2 oh-my-claudecode
 
@@ -281,16 +281,16 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 4. **Phase Controller가 task status 분포로 phase 추론** — 명시적 FSM 없이 pending/in_progress/completed/failed 카운트. `metadata.permanentlyFailed=true`로 false-success 방지.
 
 **안티패턴**:
-- Host CLI internals에 plugin으로 강결합 — Claude Code minor release 한 번이 19-agent 시스템 전체 깨뜨릴 수 있음. doorae는 subprocess wrap이라 결합도 ↓, 다만 7 어댑터 동시 깨짐 위험 (R3).
+- Host CLI internals에 plugin으로 강결합 — Claude Code minor release 한 번이 19-agent 시스템 전체 깨뜨릴 수 있음. anygarden는 subprocess wrap이라 결합도 ↓, 다만 7 어댑터 동시 깨짐 위험 (R3).
 - JSONL 파일 IPC를 채팅에 일반화 금지 — polling 지연이 채팅 UX엔 부적합.
 
 **결정 분기점**:
-- IPC 매체: OMC 파일/JSONL+mkdir lock ↔ doorae WebSocket+machine_bus. doorae 옳음(UX 1차).
-- 모델 라우팅 위치: OMC 코드 내 정적 ↔ doorae catalog+gateway. doorae 옳음, 단 역할별 tier 권장값 보완 여지(A2).
-- Agent loop 소유권: OMC host plugin ↔ doorae 외부 CLI 위임. doorae 옳음(멀티 엔진 평등).
-- Prompt 저장소: OMC `/agents/*.md` ↔ doorae 코드/카탈로그. **재검토 가치 — admin UI에서 prompt 편집 + git 백업**.
+- IPC 매체: OMC 파일/JSONL+mkdir lock ↔ anygarden WebSocket+machine_bus. anygarden 옳음(UX 1차).
+- 모델 라우팅 위치: OMC 코드 내 정적 ↔ anygarden catalog+gateway. anygarden 옳음, 단 역할별 tier 권장값 보완 여지(A2).
+- Agent loop 소유권: OMC host plugin ↔ anygarden 외부 CLI 위임. anygarden 옳음(멀티 엔진 평등).
+- Prompt 저장소: OMC `/agents/*.md` ↔ anygarden 코드/카탈로그. **재검토 가치 — admin UI에서 prompt 편집 + git 백업**.
 
-**한 줄 종합**: 가장 큰 분기는 IPC 매체, doorae 즉시 도입은 catalog에 `recommended_tier_per_role` 컬럼.
+**한 줄 종합**: 가장 큰 분기는 IPC 매체, anygarden 즉시 도입은 catalog에 `recommended_tier_per_role` 컬럼.
 
 ### A.3 OpenHands
 
@@ -304,21 +304,21 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 4. **StuckDetector 1급 클래스 + 전용 테스트** — `controller/stuck.py` 487줄, `TestAgentControllerLoopRecovery` 409줄. 반복 액션, error→fix→error, syntax loop, interactive vs headless 분기. `StuckAnalysis` 데이터클래스 + `LoopDetectionObservation` emit + `_handle_loop_recovery_action`.
 
 **안티패턴**:
-- AgentController 1391줄 단일 클래스 (저자도 candidate for decomposition 명시). doorae는 분리되어 있어 위험 ↓.
-- V0/V1 동시 운영 + 통과한 deprecation 데드라인 (April 1, 2026). doorae는 7 어댑터로 누적 위험 — **deprecation hard date에 CI 게이트** 필요.
+- AgentController 1391줄 단일 클래스 (저자도 candidate for decomposition 명시). anygarden는 분리되어 있어 위험 ↓.
+- V0/V1 동시 운영 + 통과한 deprecation 데드라인 (April 1, 2026). anygarden는 7 어댑터로 누적 위험 — **deprecation hard date에 CI 게이트** 필요.
 
 **결정 분기점**:
-- Context 관리: OpenHands 10 condenser pipeline ↔ doorae per-room policy + ingest-only. **둘 다 정당** (멀티 에이전트 룸이 압축보다 "누가 뭘 보는가" 핵심).
-- Sandbox: OpenHands Docker per session ↔ doorae subprocess + safefs. doorae 위협 모델 적합.
-- 보안 layer 모델: OpenHands 행동 단위 3-layer ↔ doorae 진입 단위 4-layer. doorae 옳음(host 위협), 다만 행동 단위 평가 0개라 잠재 갭.
-- 어댑터 vs 자체 loop: OpenHands 6개 자체 agent ↔ doorae 7개 외부 CLI 어댑터.
+- Context 관리: OpenHands 10 condenser pipeline ↔ anygarden per-room policy + ingest-only. **둘 다 정당** (멀티 에이전트 룸이 압축보다 "누가 뭘 보는가" 핵심).
+- Sandbox: OpenHands Docker per session ↔ anygarden subprocess + safefs. anygarden 위협 모델 적합.
+- 보안 layer 모델: OpenHands 행동 단위 3-layer ↔ anygarden 진입 단위 4-layer. anygarden 옳음(host 위협), 다만 행동 단위 평가 0개라 잠재 갭.
+- 어댑터 vs 자체 loop: OpenHands 6개 자체 agent ↔ anygarden 7개 외부 CLI 어댑터.
 
 **Stuck detection 비교 (특별 주목)**:
 - **공통점**: 둘 다 retry counter 넘어 패턴 기반, 둘 다 1급 모듈로 분리.
-- **차이점**: (1) OpenHands 액션 시퀀스/에러 타입, doorae 메시지 콘텐츠 해시 — doorae 신호 가볍지만 "다른 메시지 같은 의미", "같은 에러 사이클" 미감지. (2) OpenHands 감지 후 recovery action까지, doorae brake 위주 (LIFTED-2). (3) interactive vs headless 분기 OpenHands에 있고 doorae엔 없음.
+- **차이점**: (1) OpenHands 액션 시퀀스/에러 타입, anygarden 메시지 콘텐츠 해시 — anygarden 신호 가볍지만 "다른 메시지 같은 의미", "같은 에러 사이클" 미감지. (2) OpenHands 감지 후 recovery action까지, anygarden brake 위주 (LIFTED-2). (3) interactive vs headless 분기 OpenHands에 있고 anygarden엔 없음.
 - **즉시 가져갈 한 가지**: error-action cycle 감지를 cycle_guard에 추가 (~50줄). content hash와 직교 신호.
 
-**한 줄 종합**: 가장 큰 분기는 컨텍스트 관리 책임 위치, doorae 즉시 도입은 Condensation/ingest 결정의 EventStream 화로 디버깅성 ↑.
+**한 줄 종합**: 가장 큰 분기는 컨텍스트 관리 책임 위치, anygarden 즉시 도입은 Condensation/ingest 결정의 EventStream 화로 디버깅성 ↑.
 
 ## 부록 B — 보조 2개 발췌 (전문)
 
@@ -330,20 +330,20 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 - `buildApiHandler`: 300+ line switch.
 - Plan/Act 이중 모드: factory가 `mode` 파라미터로 다른 API key·model·thinking budget.
 - 유지 비용: "competitive moat" + "각 provider distinct class with own SDK import".
-- doorae 비교: 7 vs 43, 분기 의도적. doorae 가져갈 패턴: 공통 `ApiStream` 컨트랙트(A5, S), Plan/Act 모드별 모델 분리(검토 후, M). 피할 함정: 300줄 switch + 클래스 폭증.
+- anygarden 비교: 7 vs 43, 분기 의도적. anygarden 가져갈 패턴: 공통 `ApiStream` 컨트랙트(A5, S), Plan/Act 모드별 모델 분리(검토 후, M). 피할 함정: 300줄 switch + 클래스 폭증.
 
 **2. Hooks System**
 - `src/core/hooks/`, `hook-executor.ts` (L274). 8 훅 타입 (`TaskStart`, `TaskResume`, `TaskCancel`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `Notification`). 5개 cancellable.
 - `.cline/hooks/` shell script auto-discovery, `HookFactory` config, `HookProcess` spawn, `executeHook` lifecycle + `AbortController`.
 - Context injection: cancellable hook 반환 시 `<hook_context source="HookName">...</hook_context>` 주입.
 - 안전성: VS Code 권한 실행 → 임의 코드 실행 가능, sandboxing/서명 검증 없음(저자 경고).
-- doorae 비교: lifecycle 이벤트(`scheduler/lifecycle.py`) 있으나 user-defined shell hook 부재. 가져갈 만한 훅: `UserPromptSubmit + context injection`(M, 검토 후), `PreCompact`(S, 검토 후). **도입 시점: 지금 부적절** — sandboxing 부재가 약점, 처음부터 권한 모델/서명 설계.
+- anygarden 비교: lifecycle 이벤트(`scheduler/lifecycle.py`) 있으나 user-defined shell hook 부재. 가져갈 만한 훅: `UserPromptSubmit + context injection`(M, 검토 후), `PreCompact`(S, 검토 후). **도입 시점: 지금 부적절** — sandboxing 부재가 약점, 처음부터 권한 모델/서명 설계.
 
 **3. YOLO Mode**
 - `autoApprove.ts`, 토글 `yoloModeToggled` (L229).
 - `shouldAutoApproveTool`이 모든 tool에 `[true, true]` — `execute_command` 포함, 모든 permission logic 우선 실행.
 - 안전판: `CommandPermissionController.ts`가 `CLINE_COMMAND_PERMISSIONS` 환경변수로 allow/deny glob. **저자 인용**: "the most security-conscious code in the entire codebase — and it's gated behind an environment variable that almost nobody will set" (L231).
-- doorae 비교: #134는 MCP에 한정, sandbox 유지. Cline YOLO는 shell 포함. doorae 더 보수적. **재평가 가치**: (1) 자동 승인 토글 자체를 logging/감사(LIFTED-1), (2) command/shell tool은 별도 deny-list controller로 분리(M, 검토 후).
+- anygarden 비교: #134는 MCP에 한정, sandbox 유지. Cline YOLO는 shell 포함. anygarden 더 보수적. **재평가 가치**: (1) 자동 승인 토글 자체를 logging/감사(LIFTED-1), (2) command/shell tool은 별도 deny-list controller로 분리(M, 검토 후).
 
 **한 줄 종합**: 즉시 보강은 MCP #134에 audit log + per-tool deny-list, 의도적 분기는 provider 다중성 7 vs 43.
 
@@ -355,14 +355,14 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 - `skill_manager_tool.py` 6 actions: create/edit/patch/delete/write_file/remove_file. **patch는 targeted find-and-replace** — 부분 갱신.
 - 검증 사이클: 생성/patch 직후 security scan (prompt injection 차단).
 - 개선 트리거: 사용 중 "더 나은 방법" 발견 시 자리에서 patch (Reflexion verbal feedback → 코드 수정).
-- doorae 비교: doorae #119-126은 사람 게이트(github 등록 → admin approve → audit), Hermes는 자동 사이클. **즉시 가져갈 (S, 검토 후)**: patch action의 targeted find-and-replace + post-edit security scan을 doorae admin approve 위에 "diff 제안 + 자동 스캔 후 admin 승인" 단계로. **검토 후 (M)**: 작업 종료 시 자율 트리거 자동 제안. **도입 전 결정**: admin approve와 자기 patch 충돌 → 자동 patch도 PR-style로 제안 후 admin merge가 일관성 ↑.
+- anygarden 비교: anygarden #119-126은 사람 게이트(github 등록 → admin approve → audit), Hermes는 자동 사이클. **즉시 가져갈 (S, 검토 후)**: patch action의 targeted find-and-replace + post-edit security scan을 anygarden admin approve 위에 "diff 제안 + 자동 스캔 후 admin 승인" 단계로. **검토 후 (M)**: 작업 종료 시 자율 트리거 자동 제안. **도입 전 결정**: admin approve와 자기 patch 충돌 → 자동 patch도 PR-style로 제안 후 admin merge가 일관성 ↑.
 
 **2. Frozen Memory Snapshots**
 - `BuiltinMemoryProvider`가 세션 시작 시 MEMORY.md/USER.md 읽어 system prompt block snapshot으로 고정. 세션 중 file 변경되어도 system prompt 불변.
 - 트리거: 세션 로드 시 1회 (load time).
 - 1차 목적: prompt-cache 최적화. 4K 단어 MEMORY.md에서 매 memory write마다 system prompt 재컴파일 회피.
 - 저장: in-memory snapshot (별도 영속 파일 아님, 추정).
-- doorae 비교: spawner.py:50 `memory_md` 필드 + 350~365 spawn 시 notes.md 쓰기. agent가 자유롭게 덮어씀. **system prompt 박는 건 외부 CLI 위임**. **시나리오 1 (S, 즉시)**: 멀티세션 DM(#237)에서 같은 페어 반복 spawn 시 system prompt block 안정화로 LLM gateway prompt cache hit ↑. **시나리오 2 (M, 검토 후)**: room shared files bridging(#246/#255/#257)에서 turn 중간 컨텍스트 변경 비결정성 제거.
+- anygarden 비교: spawner.py:50 `memory_md` 필드 + 350~365 spawn 시 notes.md 쓰기. agent가 자유롭게 덮어씀. **system prompt 박는 건 외부 CLI 위임**. **시나리오 1 (S, 즉시)**: 멀티세션 DM(#237)에서 같은 페어 반복 spawn 시 system prompt block 안정화로 LLM gateway prompt cache hit ↑. **시나리오 2 (M, 검토 후)**: room shared files bridging(#246/#255/#257)에서 turn 중간 컨텍스트 변경 비결정성 제거.
 - 도입 비용: ~30 LOC. 단, 외부 CLI prompt cache 동작에 의존 — 도입 전 측정 필요.
 
 **한 줄 종합**: 즉시 가져갈 것은 frozen system-prompt snapshot, 의도적으로 안 가져갈 것은 agent 자율 in-place skill patching (admin approve와 충돌).
@@ -376,13 +376,13 @@ awesome-ai-anatomy 레포의 16개 AI 에이전트 오픈소스 teardown 중 doo
 
 **Lens 4 — "Loop owner ≠ Cost owner"**
 - 근거: §6 Anti-Pattern 2 — DeerFlow/Hermes/MiroFish/OMC 모두 token tracking은 있지만 **dollar/step ceiling은 없음**. 10개 중 Dify만 execution limits (500 steps, 1200 seconds).
-- doorae 적용: cycle_guard와 KILL_TIMEOUT은 있으나 **cost-side ceiling 부재**. 7 어댑터에서 한 폭주가 룸 전체로 전이.
-- doorae 위치: deterministic layer를 가졌지만 "loop 방지"에만 쓰이고 "cost 방지"엔 안 쓰임. **2축 가드**(structural cycle + economic budget) 분리 필요.
+- anygarden 적용: cycle_guard와 KILL_TIMEOUT은 있으나 **cost-side ceiling 부재**. 7 어댑터에서 한 폭주가 룸 전체로 전이.
+- anygarden 위치: deterministic layer를 가졌지만 "loop 방지"에만 쓰이고 "cost 방지"엔 안 쓰임. **2축 가드**(structural cycle + economic budget) 분리 필요.
 
 **Lens 5 — "Borrowed core blast radius"**
 - 근거: §6 Anti-Pattern 3 "Borrowed Core, No Ownership" — MiroFish→OASIS, DeerFlow→LangGraph, OMC→Claude Code. §7 "Don't borrow your core loop".
-- doorae 적용: doorae는 코어를 자기 소유로 OMC 함정은 피했으나 어댑터 단위로 borrowed core가 7배.
-- doorae 위치: A8 contract test가 단순 회귀가 아니라 **borrowed-core blast radius 관리 도구**. host = borrowed core가 N개라는 뜻이며 N이 클수록 contract test 자동화 비중 ↑.
+- anygarden 적용: anygarden는 코어를 자기 소유로 OMC 함정은 피했으나 어댑터 단위로 borrowed core가 7배.
+- anygarden 위치: A8 contract test가 단순 회귀가 아니라 **borrowed-core blast radius 관리 도구**. host = borrowed core가 N개라는 뜻이며 N이 클수록 contract test 자동화 비중 ↑.
 
 ### 새 액션 6개
 
@@ -396,10 +396,10 @@ A9~A14는 §6 Anti-Patterns의 직접 대응:
 
 ### 새 위험 4개
 
-- **R1 God-file 형성**: 10개 중 6개 god-file 보유 (Hermes 9K, Claude Code query.ts 1.7K, OpenHands 1391). doorae는 신생이라 분기점, middleware/inspector 패턴 + PR 리뷰 체크리스트로 예방.
-- **R2 "Security as README notice" 회귀**: DeerFlow/MiroFish/Pi Mono. doorae는 강한 보안 자세에서 출발 → **회귀가 더 위험**. 신규 보안 PR에 "code enforcement evidence" 라벨 의무화.
+- **R1 God-file 형성**: 10개 중 6개 god-file 보유 (Hermes 9K, Claude Code query.ts 1.7K, OpenHands 1391). anygarden는 신생이라 분기점, middleware/inspector 패턴 + PR 리뷰 체크리스트로 예방.
+- **R2 "Security as README notice" 회귀**: DeerFlow/MiroFish/Pi Mono. anygarden는 강한 보안 자세에서 출발 → **회귀가 더 위험**. 신규 보안 PR에 "code enforcement evidence" 라벨 의무화.
 - **R3 Borrowed core blast radius**: A8 contract test를 schema fuzz로 확장.
-- **R4 Memory compression 없이 long-running room 누적**: §2 doorae "Context = custom (no condenser)". 10개 중 6개 4-layer/5-step compression 보유. Hermes 5-step 또는 Claude Code 4-layer의 lossless 단계만 먼저 도입.
+- **R4 Memory compression 없이 long-running room 누적**: §2 anygarden "Context = custom (no condenser)". 10개 중 6개 4-layer/5-step compression 보유. Hermes 5-step 또는 Claude Code 4-layer의 lossless 단계만 먼저 도입.
 
 ### 우선순위 빈도 분석
 
@@ -425,10 +425,10 @@ Python LoC top 15 (테스트/마이그레이션 제외):
    739  cluster/scheduler/lifecycle.py
    723  cluster/api/v1/skills.py
    702  cluster/api/v1/graph.py
-   696  agent/doorae_agent/client.py
+   696  agent/anygarden_agent/client.py
    695  cluster/api/v1/llm_gateway.py
    684  cluster/app.py
-   621  agent/doorae_agent/integrations/claude_code.py
+   621  agent/anygarden_agent/integrations/claude_code.py
 ```
 
 ### D.2 어댑터 contract test 현황
@@ -450,14 +450,14 @@ Python LoC top 15 (테스트/마이그레이션 제외):
 ### D.3 동시성 lock 사용 위치
 
 ```
-packages/cluster/doorae/scheduler/machine_bus.py
-packages/cluster/doorae/llm_gateway/supervisor.py
-packages/machine/doorae_machine/daemon.py
-packages/cluster/doorae/ws/manager.py
-packages/agent/doorae_agent/runtime/handler_wrapper.py
+packages/cluster/anygarden/scheduler/machine_bus.py
+packages/cluster/anygarden/llm_gateway/supervisor.py
+packages/machine/anygarden_machine/daemon.py
+packages/cluster/anygarden/ws/manager.py
+packages/agent/anygarden_agent/runtime/handler_wrapper.py
 ```
 
-`agent_dir.py`, `skills_library/service.py`에는 lock 없음 — DB transaction으로 처리(commit boundary 일관). safefs는 O_NOFOLLOW symlink 방어, atomic write 보장은 없으나 doorae 모델에선 충분.
+`agent_dir.py`, `skills_library/service.py`에는 lock 없음 — DB transaction으로 처리(commit boundary 일관). safefs는 O_NOFOLLOW symlink 방어, atomic write 보장은 없으나 anygarden 모델에선 충분.
 
 ### D.4 worklog #134 핵심 인용 (MCP 자동승인)
 

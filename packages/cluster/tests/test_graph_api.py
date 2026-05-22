@@ -14,11 +14,11 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import event
 
-from doorae.app import create_app
-from doorae.auth.jwt import create_guest_token, create_user_token
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.app import create_app
+from anygarden.auth.jwt import create_guest_token, create_user_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Agent,
     Base,
     Machine,
@@ -28,7 +28,7 @@ from doorae.db.models import (
     RoomInviteLink,
     User,
 )
-from doorae.orchestration.rules import TypingTracker
+from anygarden.orchestration.rules import TypingTracker
 
 
 @pytest_asyncio.fixture()
@@ -57,7 +57,7 @@ async def graph_env():
           a2 engine=claude, placed_on=m_bob, participates in r3 (rep.)
           a3 engine=gemini, placed_on=m_bob, participates in r4
     """
-    config = DooraeSettings(
+    config = AnygardenSettings(
         db_url="sqlite+aiosqlite://",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",

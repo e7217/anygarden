@@ -14,9 +14,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from doorae.config import DooraeSettings
-from doorae.db.engine import build_engine, build_session_factory
-from doorae.db.models import (
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import (
     Base,
     Participant,
     Project,
@@ -24,14 +24,14 @@ from doorae.db.models import (
     RoomInviteLink,
     User,
 )
-from doorae.guest.anonymize import (
+from anygarden.guest.anonymize import (
     ANON_DISPLAY_NAME,
     anonymize_expired_guests,
 )
 
 
 @pytest_asyncio.fixture()
-async def db_env(config: DooraeSettings) -> AsyncIterator[dict]:
+async def db_env(config: AnygardenSettings) -> AsyncIterator[dict]:
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
 
@@ -54,7 +54,7 @@ async def _seed_guest(
     the supplied revoked_at / expires_at timestamps. Returns the
     guest user's id for assertions."""
     async with session_factory() as db:
-        owner = User(email=f"o-{display_name}@doorae.io", password_hash="x")
+        owner = User(email=f"o-{display_name}@anygarden.io", password_hash="x")
         db.add(owner)
         await db.flush()
         project = Project(name=f"p-{display_name}")
@@ -173,7 +173,7 @@ class TestAnonymize:
         regardless of any related invite state."""
         now = datetime.now(timezone.utc)
         async with db_env["session_factory"]() as db:
-            u = User(email="u@doorae.io", password_hash="x", is_anonymous=False)
+            u = User(email="u@anygarden.io", password_hash="x", is_anonymous=False)
             db.add(u)
             await db.commit()
             await db.refresh(u)
@@ -193,5 +193,5 @@ class TestAnonymize:
                 await db.execute(select(User).where(User.id == user_id))
             ).scalar_one()
             # Registered user row unchanged — email + no display_name.
-            assert fetched.email == "u@doorae.io"
+            assert fetched.email == "u@anygarden.io"
             assert fetched.display_name is None

@@ -57,10 +57,10 @@ dev = [
 ]
 
 [project.scripts]
-doorae-server = "doorae.cli:main"
+anygarden-server = "anygarden.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["doorae"]
+packages = ["anygarden"]
 
 [tool.uv.sources]
 anygarden-machine = { workspace = true }

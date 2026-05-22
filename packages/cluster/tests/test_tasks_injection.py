@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from doorae.db.models import Agent, Participant, Room, Task, User
-from doorae.messages.service import inject_task_assignment_message
+from anygarden.db.models import Agent, Participant, Room, Task, User
+from anygarden.messages.service import inject_task_assignment_message
 
 
 async def _seed_room_with_assignee(db) -> tuple[Room, Participant, Participant]:
@@ -197,7 +197,7 @@ async def test_inject_broadcasts_message_frame_when_manager_supplied(db):
     fanout the persisted row sits silently in the DB and the agent's
     ``decide_policy`` mention path never fires (this is *the* bug
     that #314 fixes)."""
-    from doorae.ws.protocol import MessageOut
+    from anygarden.ws.protocol import MessageOut
 
     room, _, assignee = await _seed_room_with_assignee(db)
     task = Task(

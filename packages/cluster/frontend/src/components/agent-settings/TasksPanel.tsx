@@ -15,7 +15,7 @@
  * per-item trash plus a header "Clear all" backed by
  * ``DELETE /api/v1/agents/{id}/tasks?status=<done|failed>``.
  *
- * Realtime: subscribes to ``doorae:task:updated`` window events
+ * Realtime: subscribes to ``anygarden:task:updated`` window events
  * dispatched by ``useWebSocket``. We refetch the whole list on any
  * relevant event — incremental merging would shave ~10 LOC of UI
  * code without changing the user-facing latency.
@@ -169,8 +169,8 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
       if (detail.task.agent_id && detail.task.agent_id !== agentId) return
       fetchTasks()
     }
-    window.addEventListener('doorae:task:updated', handler)
-    return () => window.removeEventListener('doorae:task:updated', handler)
+    window.addEventListener('anygarden:task:updated', handler)
+    return () => window.removeEventListener('anygarden:task:updated', handler)
   }, [agentId, fetchTasks])
 
   const grouped = useMemo(() => groupTasksByStatus(tasks ?? []), [tasks])

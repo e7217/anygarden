@@ -1,13 +1,13 @@
-# @doorae/agent-ts
+# @anygarden/agent-ts
 
-Doorae TypeScript agent runtime. Parallels the Python `doorae_agent` package
+Anygarden TypeScript agent runtime. Parallels the Python `anygarden_agent` package
 for engines whose official SDK ships in TypeScript:
 
 - **Claude Code** (`@anthropic-ai/claude-agent-sdk`) — MVP target
 - Codex TS SDK — Phase 2
 - Gemini CLI SDK — Phase 2
 
-Issue: [#73](https://github.com/e7217/doorae/issues/73)
+Issue: [#73](https://github.com/e7217/anygarden/issues/73)
 
 ## Status
 
@@ -58,11 +58,11 @@ npm run lint
 ## CLI
 
 ```bash
-doorae-agent-ts --engine claude_code --name my-agent --server ws://localhost:8000
-# env: DOORAE_TOKEN=<jwt>
+anygarden-agent-ts --engine claude_code --name my-agent --server ws://localhost:8000
+# env: ANYGARDEN_TOKEN=<jwt>
 ```
 
-The CLI reads `DOORAE_TOKEN` from the environment and never accepts the
+The CLI reads `ANYGARDEN_TOKEN` from the environment and never accepts the
 token on argv — mirrors the Python runtime contract.
 
 ## Local smoke test (same room, two runtimes)
@@ -76,5 +76,5 @@ token on argv — mirrors the Python runtime contract.
    respective runtimes without interfering with each other.
 
 If the TS runtime is not installed globally, the machine daemon will
-fall back to `npx -y @doorae/agent-ts`. Check the `agent_binary_resolved`
+fall back to `npx -y @anygarden/agent-ts`. Check the `agent_binary_resolved`
 structured log line for which path was picked.
