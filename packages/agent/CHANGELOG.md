@@ -3,6 +3,21 @@
 
 ## Unreleased
 
+## v0.8.0 (2026-05-22)
+
+### ⚠ Breaking changes — full anygarden rebrand
+
+Source directory + Python module renamed to match the distribution
+name. No backward-compatibility shim.
+
+- `packages/agent/doorae_agent/` → `packages/agent/anygarden_agent/`
+- `import doorae_agent` → `import anygarden_agent`
+- CLI commands: `doorae-agent`, `doorae-client` → `anygarden-agent`,
+  `anygarden-client`
+- `DOORAE_*` environment variables → `ANYGARDEN_*`
+
+See PR #394 for the full rebrand diff.
+
 ## v0.7.1 (2026-05-21)
 
 ### Release infrastructure
