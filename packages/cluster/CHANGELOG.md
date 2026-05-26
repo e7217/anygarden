@@ -3,6 +3,33 @@
 
 ## Unreleased
 
+## v0.8.0 (2026-05-22)
+
+### ⚠ Breaking changes — full anygarden rebrand
+
+This release replaces every remaining `doorae` reference with
+`anygarden`. **No backward-compatibility shim is provided.**
+End users and operators must update:
+
+- **Python imports**: `from doorae … import X` → `from anygarden … import X`
+- **CLI commands**: `doorae-server` → `anygarden-server`
+- **Environment variables** (~30 vars): `DOORAE_*` → `ANYGARDEN_*`
+  (`DOORAE_JWT_SECRET`, `DOORAE_TOKEN`, `DOORAE_LLM_GATEWAY_*`,
+  `DOORAE_DEV`, etc.)
+- **Data directory**: `~/.doorae/` → `~/.anygarden/`
+  (jwt_secret, mcp_secrets_key, agents, machine, db all moved)
+- **SQLite default URL**: `~/.doorae/doorae.db` → `~/.anygarden/anygarden.db`
+- **Frontend**: localStorage keys (`doorae_token`, `doorae_is_guest`, …)
+  → `anygarden_*` — all existing sessions invalidated, users will need
+  to re-login.
+
+See PR #394 for the full rebrand diff.
+
+### Source layout
+
+- `packages/cluster/doorae/` → `packages/cluster/anygarden/`
+  (per-package directory rename matches the distribution name).
+
 ## v0.7.1 (2026-05-21)
 
 ### Release infrastructure

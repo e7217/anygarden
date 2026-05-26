@@ -3,6 +3,21 @@
 
 ## Unreleased
 
+## v0.8.0 (2026-05-22)
+
+### ⚠ Breaking changes — full anygarden rebrand
+
+Source directory + Python module renamed to match the distribution
+name. No backward-compatibility shim.
+
+- `packages/machine/doorae_machine/` → `packages/machine/anygarden_machine/`
+- `import doorae_machine` → `import anygarden_machine`
+- CLI command: `doorae-machine` → `anygarden-machine`
+- `DOORAE_*` environment variables → `ANYGARDEN_*`
+- Data directory: `~/.doorae/machine/` → `~/.anygarden/machine/`
+
+See PR #394 for the full rebrand diff.
+
 ## v0.7.1 (2026-05-21)
 
 ### Release infrastructure
