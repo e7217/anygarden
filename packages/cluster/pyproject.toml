@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anygarden"
-version = "0.8.0"
+version = "0.8.1"
 description = "Lightweight multi-agent chat server"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
@@ -41,6 +41,15 @@ dependencies = [
     # APScheduler; picked because the MVP scheduler is a single-instance
     # polling loop and doesn't need a persistent jobstore.
     "croniter>=2.0",
+    # #397 — runtime dependency, NOT dev-only. The server imports
+    # ``anygarden_machine.safefs.secure_chmod`` at module load
+    # (app.py, llm_gateway/bootstrap.py), so a published wheel must
+    # carry it as a hard requirement. ``[tool.uv.sources]`` below keeps
+    # local development on the sibling workspace path, but that source
+    # pin does not leak into the wheel's ``Requires-Dist`` — hence the
+    # explicit ``>=0.8`` constraint so ``pip install anygarden`` resolves
+    # it from PyPI. server/machine ship lockstep, so the floor is safe.
+    "anygarden-machine>=0.8",
 ]
 
 [project.optional-dependencies]
@@ -50,14 +59,22 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.3",
     "mypy>=1.9",
-    # Required by tests/test_e2e_materialize.py — validates the
-    # cross-package spawn-frame → materialize pipeline. Sourced from
-    # the sibling monorepo path via [tool.uv.sources] below.
-    "anygarden-machine",
 ]
 
 [project.scripts]
 anygarden-server = "anygarden.cli:main"
+
+# #398 — the built SPA lives in ``anygarden/static/`` but that path is
+# git-ignored (it is a vite build artifact, never committed). hatchling
+# skips VCS-ignored files by default, so without this the published
+# distributions ship zero static assets and ``GET /`` 404s. ``artifacts``
+# force-includes the on-disk build output into BOTH the sdist and the
+# wheel — this matters because ``uv build`` builds the wheel *from the
+# sdist*, so a wheel-only ``force-include`` fails ("Forced include not
+# found") when the sdist already dropped the assets. The release
+# pipeline must run ``npm run build`` before ``uv build``.
+[tool.hatch.build]
+artifacts = ["anygarden/static/**"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["anygarden"]
