@@ -858,6 +858,28 @@ Python 설치도 uv 설치도 필요 없음. 단일 파일 다운로드 + 실행
 | B. systemd VPS | 운영 | ~30초 | ~200MB | `systemctl --user restart anygarden-server` 후 자동 최신 |
 | C. 바이너리 | 비개발자 | <5초 | ~30MB × 3 | 재다운로드 |
 
+### 8.4.5 릴리스 (PyPI 게시)
+
+위 시나리오들은 패키지가 PyPI에 게시되어 있다고 가정한다. 게시는 **태그 푸시로 자동화**되어 있다 (`.github/workflows/release.yml`, #402). 패키지별 버전 태그를 밀면 워크플로가 빌드 → GitHub Release → **PyPI 게시(Trusted Publishing / OIDC)** 까지 수행한다. 로컬 `uv publish` 수동 게시는 더 이상 필요 없다.
+
+```bash
+# pyproject.toml의 version을 올린 뒤, 패키지별 태그를 푸시한다.
+# 태그 prefix가 게시 대상 패키지를 결정한다:
+#   anygarden-v<ver>          → packages/cluster (PyPI: anygarden)
+#   anygarden-machine-v<ver>  → packages/machine (PyPI: anygarden-machine)
+#   anygarden-agent-v<ver>    → packages/agent   (PyPI: anygarden-agent)
+git tag anygarden-machine-v0.8.1 && git push origin anygarden-machine-v0.8.1
+git tag anygarden-v0.8.1         && git push origin anygarden-v0.8.1
+```
+
+**락스텝 순서**: `anygarden`(서버)은 `anygarden-machine>=0.8`을 런타임 의존하므로, machine을 먼저(또는 동시에) 게시해야 cluster 설치 시 의존성이 즉시 해소된다.
+
+**선행 1회 작업 (저장소 owner)**: PyPI의 `anygarden` / `anygarden-machine` / `anygarden-agent` 각 프로젝트에 Trusted Publisher를 등록해야 OIDC 게시가 동작한다 — PyPI 프로젝트 → *Manage → Publishing → Add a trusted publisher*:
+
+- Owner: `e7217`, Repository: `anygarden`, Workflow: `release.yml`, Environment: (비움)
+
+미등록 상태로 태그를 밀면 `Publish to PyPI` 스텝이 실패한다. 게시 스텝은 `skip-existing: true`라 동일 태그 재실행은 안전하다.
+
 ## 8.5 관측성 (Observability)
 
 ### 8.5.1 Prometheus 지표 5개
