@@ -9,6 +9,10 @@ on:
 
 permissions:
   contents: write
+  # #402 — OIDC token for PyPI Trusted Publishing. ``id-token: write``
+  # lets the runner mint a short-lived OIDC token that PyPI exchanges
+  # for an upload grant, so no long-lived API token secret is stored.
+  id-token: write
 
 jobs:
   build-and-release:
@@ -122,3 +126,16 @@ jobs:
             ARGS+=(--notes-start-tag "${PREV_TAG}")
           fi
           gh release create "${ARGS[@]}" dist/${FILE_PREFIX}-${VERSION}*
+
+      # #402 — publish the freshly built distribution to PyPI via
+      # Trusted Publishing (OIDC). ``dist/`` holds exactly one package's
+      # sdist+wheel (uv build --package selected it), so the whole
+      # directory is safe to upload. ``skip-existing`` makes re-runs of a
+      # tag idempotent instead of failing on an already-published file.
+      # Requires a trusted publisher registered on PyPI for each project
+      # (owner e7217 / repo anygarden / workflow release.yml).
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true
