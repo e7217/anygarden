@@ -633,6 +633,16 @@ sub_agents:
 
 ## 8.4 배포 시나리오
 
+> **#396 — 통합 CLI (0.9.0+)**: 모든 컴포넌트를 단일 `anygarden` 명령어로
+> 실행한다 — `anygarden server` / `anygarden machine` / `anygarden agent` /
+> `anygarden client`. 무거운 의존성은 extra로 분리되어 역할별로 설치한다:
+> `pip install "anygarden[server]"` / `"anygarden[machine]"` /
+> `"anygarden[agent]"`. 코어 `pip install anygarden`은 디스패처(click)만
+> 설치하며, extra 미설치 시 각 서브커맨드가 설치 안내를 출력한다. 구
+> `anygarden-server` 스크립트는 한 릴리스 동안 deprecation 경고와 함께
+> 유지된다. 아래 시나리오의 예시 명령(`anygarden-server` 등)은 점진적으로
+> 통합 CLI 형태로 갱신 예정이다.
+
 ### 8.4.1 시나리오 A: 로컬 개발
 
 ```bash

@@ -141,5 +141,126 @@ def _run_server(host: str, port: int, db_url: str | None, log_level: str) -> Non
     )
 
 
+# ---------------------------------------------------------------------------
+# #396 — unified ``anygarden`` dispatcher.
+#
+# A thin click group that routes ``anygarden <server|machine|agent|client>``
+# to the matching component CLI. The heavy component packages are optional
+# extras (``anygarden[server]`` / ``[machine]`` / ``[agent]``); each
+# subcommand imports its target lazily so the bare ``anygarden`` core stays
+# light and a missing extra surfaces an actionable install hint instead of a
+# raw ImportError.
+# ---------------------------------------------------------------------------
+
+
+def _load_or_hint(extra: str, import_fn):
+    """Import a component CLI callable, or exit with an install hint.
+
+    ``import_fn`` is invoked inside a try/except so an absent optional extra
+    (e.g. ``anygarden[machine]`` not installed) maps to a clean
+    ``pip install`` instruction rather than a traceback.
+    """
+    try:
+        return import_fn()
+    except ImportError as exc:  # optional extra not installed
+        raise SystemExit(
+            f'"anygarden {extra}" requires the {extra} extra. '
+            f'Install it with:\n\n    pip install "anygarden[{extra}]"\n\n'
+            f"(import failed: {exc})"
+        )
+
+
+_PASSTHROUGH = {
+    "ignore_unknown_options": True,
+    "allow_extra_args": True,
+    "help_option_names": [],
+}
+
+
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+def dispatch() -> None:
+    """anygarden — unified CLI for the server, machine, agent, and client."""
+
+
+def _server_extra_installed() -> bool:
+    """True when the server stack (FastAPI + uvicorn) is importable.
+
+    The server CLI (``main``) lives in this module so it always imports, but
+    it only works when the ``[server]`` extra is present. Probing with
+    ``find_spec`` lets us emit the same install hint as the other
+    subcommands instead of a raw ImportError deep inside ``_run_server``.
+    """
+    import importlib.util
+
+    return all(
+        importlib.util.find_spec(mod) is not None
+        for mod in ("fastapi", "uvicorn")
+    )
+
+
+@dispatch.command(name="server", context_settings=_PASSTHROUGH, add_help_option=False)
+@click.pass_context
+def _server(ctx: click.Context) -> None:
+    """Run the chat server (requires ``anygarden[server]``)."""
+    if not _server_extra_installed():
+        raise SystemExit(
+            '"anygarden server" requires the server extra. '
+            'Install it with:\n\n    pip install "anygarden[server]"\n'
+        )
+    # ``main`` lives in this same module; FastAPI/uvicorn are imported lazily
+    # inside ``_run_server`` / ``migrate``.
+    main(args=ctx.args, prog_name="anygarden server", standalone_mode=True)
+
+
+@dispatch.command(name="machine", context_settings=_PASSTHROUGH, add_help_option=False)
+@click.pass_context
+def _machine(ctx: click.Context) -> None:
+    """Run the machine daemon (requires ``anygarden[machine]``)."""
+    machine_main = _load_or_hint(
+        "machine",
+        lambda: __import__("anygarden_machine.cli", fromlist=["main"]).main,
+    )
+    machine_main(args=ctx.args, prog_name="anygarden machine", standalone_mode=True)
+
+
+@dispatch.command(name="agent", context_settings=_PASSTHROUGH, add_help_option=False)
+@click.pass_context
+def _agent(ctx: click.Context) -> None:
+    """Run an agent (requires ``anygarden[agent]``)."""
+    agent_main = _load_or_hint(
+        "agent",
+        lambda: __import__("anygarden_agent.cli", fromlist=["agent_main"]).agent_main,
+    )
+    agent_main(args=ctx.args, prog_name="anygarden agent", standalone_mode=True)
+
+
+@dispatch.command(name="client", context_settings=_PASSTHROUGH, add_help_option=False)
+@click.pass_context
+def _client(ctx: click.Context) -> None:
+    """Run the interactive client (requires ``anygarden[agent]``)."""
+    client_main = _load_or_hint(
+        "agent",
+        lambda: __import__("anygarden_agent.cli", fromlist=["client_main"]).client_main,
+    )
+    client_main(args=ctx.args, prog_name="anygarden client", standalone_mode=True)
+
+
+def deprecated_server_main() -> None:
+    """Entry point for the legacy ``anygarden-server`` script (#396).
+
+    Kept for one release so existing systemd units / docs keep working.
+    Emits a deprecation notice to stderr, then delegates to the server CLI.
+    Routing through ``anygarden server`` does NOT hit this path, so the
+    warning only appears for the old command.
+    """
+    import sys
+
+    print(
+        "warning: 'anygarden-server' is deprecated; use 'anygarden server' instead.",
+        file=sys.stderr,
+    )
+    main()
+
+
 if __name__ == "__main__":
     main()

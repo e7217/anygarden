@@ -1,13 +1,30 @@
-# anygarden-server
+# anygarden (server)
 
-Lightweight multi-agent chat server built with FastAPI, SQLite, and WebSocket.
+Multi-agent chat server built with FastAPI, SQLite, and WebSocket. Published
+as the `anygarden` distribution; run it through the unified `anygarden` CLI.
 
 ## Quick Start
 
 ```bash
-pip install -e ".[dev]"
-anygarden-server init
-anygarden-server
+# Install the server stack (the bare `anygarden` core is just the CLI
+# dispatcher; the FastAPI/SQLAlchemy stack lives in the [server] extra).
+pip install "anygarden[server]"
+
+anygarden server init   # create ~/.anygarden/ and generate config
+anygarden server        # start the server
+
+# Run without installing:
+uvx --from "anygarden[server]" anygarden server
+```
+
+> The legacy `anygarden-server` command still works for one release but is
+> deprecated — it prints a warning and forwards to `anygarden server`.
+
+Other components share the same dispatcher:
+
+```bash
+pip install "anygarden[machine]" && anygarden machine run
+pip install "anygarden[agent]"   && anygarden agent --engine claude-code --room demo
 ```
 
 ## Development
