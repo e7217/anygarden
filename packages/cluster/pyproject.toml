@@ -4,14 +4,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anygarden"
-version = "0.8.1"
-description = "Lightweight multi-agent chat server"
+version = "0.9.0"
+description = "Multi-agent chat platform — unified CLI (server / machine / agent)"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.11"
 
+# #396 — the bare ``anygarden`` core is just the unified ``anygarden``
+# dispatcher (``anygarden.cli:dispatch``), which only needs click. The
+# heavy server stack, the machine daemon, and the agent runtime are
+# pulled in by the ``[server]`` / ``[machine]`` / ``[agent]`` extras so a
+# worker host can ``pip install "anygarden[machine]"`` without dragging in
+# FastAPI/SQLAlchemy. Each subcommand lazy-imports its target and prints an
+# install hint when the matching extra is absent.
 dependencies = [
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+# Full chat server (``anygarden server``). Everything the FastAPI app and
+# its CLI (init/migrate/run) import lives here.
+server = [
     "fastapi>=0.110,<0.120",
     "uvicorn[standard]>=0.29",
     "sqlalchemy[asyncio]>=2.0,<2.1",
@@ -24,45 +38,62 @@ dependencies = [
     "structlog>=24.1",
     "prometheus-client>=0.20",
     "alembic>=1.13",
-    "click>=8.1",
     # #124 — MCP server template catalog. Fernet (symmetric encryption)
     # for credential at-rest; tomli-w for codex ``.codex/config.toml``
-    # merging (tomllib is stdlib-read-only). Both were previously only
-    # available transitively via python-jose; pin them directly so the
-    # mcp_templates package has an explicit dependency contract.
+    # merging (tomllib is stdlib-read-only).
     "cryptography>=42",
     "tomli-w>=1.0",
-    # #197 — LiteLLM gateway config.yaml rendering. Was previously
-    # available only transitively via anygarden-machine; pinned directly
-    # now that llm_gateway/config_writer.py consumes it.
+    # #197 — LiteLLM gateway config.yaml rendering, consumed by
+    # llm_gateway/config_writer.py.
     "pyyaml>=6.0",
-    # #302 — cron parsing for the autonomous responsibility scheduler
-    # (``goals.policy.compute_next_run_at``). Tiny (~3KB) and predates
-    # APScheduler; picked because the MVP scheduler is a single-instance
-    # polling loop and doesn't need a persistent jobstore.
+    # #302 — cron parsing for the autonomous responsibility scheduler.
     "croniter>=2.0",
-    # #397 — runtime dependency, NOT dev-only. The server imports
-    # ``anygarden_machine.safefs.secure_chmod`` at module load
-    # (app.py, llm_gateway/bootstrap.py), so a published wheel must
-    # carry it as a hard requirement. ``[tool.uv.sources]`` below keeps
-    # local development on the sibling workspace path, but that source
-    # pin does not leak into the wheel's ``Requires-Dist`` — hence the
-    # explicit ``>=0.8`` constraint so ``pip install anygarden`` resolves
-    # it from PyPI. server/machine ship lockstep, so the floor is safe.
+    # #397 — the server imports ``anygarden_machine.safefs.secure_chmod``
+    # at module load (app.py, llm_gateway/bootstrap.py), so the server
+    # extra must carry the machine package. The ``>=0.8`` floor resolves
+    # from PyPI; ``[tool.uv.sources]`` below keeps local dev on the
+    # sibling workspace path without leaking into wheel metadata.
     "anygarden-machine>=0.8",
 ]
-
-[project.optional-dependencies]
+# Machine daemon only (``anygarden machine``). Kept light — no server stack.
+machine = [
+    "anygarden-machine>=0.8",
+]
+# Agent + interactive client (``anygarden agent`` / ``anygarden client``).
+agent = [
+    "anygarden-agent>=0.8",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",
     "ruff>=0.3",
     "mypy>=1.9",
+    # Exercised by the dispatcher delegation tests and the server suite.
+    "anygarden-machine>=0.8",
+    "fastapi>=0.110,<0.120",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "aiosqlite>=0.19",
+    "pydantic>=2.6,<3.0",
+    "pydantic-settings>=2.2",
+    "python-jose[cryptography]>=3.3",
+    "python-multipart>=0.0.9",
+    "argon2-cffi>=23.1",
+    "structlog>=24.1",
+    "prometheus-client>=0.20",
+    "alembic>=1.13",
+    "cryptography>=42",
+    "tomli-w>=1.0",
+    "pyyaml>=6.0",
+    "croniter>=2.0",
 ]
 
 [project.scripts]
-anygarden-server = "anygarden.cli:main"
+# #396 — single unified entry point.
+anygarden = "anygarden.cli:dispatch"
+# Deprecated alias (kept for one release; emits a deprecation warning).
+anygarden-server = "anygarden.cli:deprecated_server_main"
 
 # #398 — the built SPA lives in ``anygarden/static/`` but that path is
 # git-ignored (it is a vite build artifact, never committed). hatchling
@@ -81,6 +112,10 @@ packages = ["anygarden"]
 
 [tool.uv.sources]
 anygarden-machine = { workspace = true }
+# #396 — the ``[agent]`` extra references anygarden-agent; resolve it from
+# the sibling workspace member during local dev (the ``>=0.8`` floor in the
+# extra resolves from PyPI for published installs).
+anygarden-agent = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
