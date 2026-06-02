@@ -209,11 +209,17 @@ function ModelCard({
               ✓ OK · {testResult.duration_ms}ms
             </span>
           ) : (
-            <span className="text-red-700">
-              ✗ Failed
-              {testResult?.status_code ? ` (${testResult.status_code})` : ''}
-              {testResult?.error ? ` · ${testResult.error.slice(0, 80)}` : ''}
-            </span>
+            <div className="text-red-700">
+              <span>
+                ✗ Failed
+                {testResult?.status_code ? ` (${testResult.status_code})` : ''}
+              </span>
+              {testResult?.error && (
+                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-red-900">
+                  {testResult.error}
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}
