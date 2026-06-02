@@ -160,6 +160,35 @@ class TestStart:
         status = sup.status()
         assert status.last_error is not None
 
+    async def test_missing_binary_yields_install_hint(self) -> None:
+        """#406 — a missing litellm binary must surface an actionable hint.
+
+        ``shutil``-less environments (the ``uvx anygarden init`` path) have
+        no ``litellm[proxy]`` on PATH, so ``create_subprocess_exec`` raises
+        ``FileNotFoundError``. The supervisor must translate that into a
+        ``last_error`` that names the binary and tells the operator how to
+        install it, instead of a bare ``spawn failed: FileNotFoundError(...)``
+        repr.
+        """
+        spawn_fn = AsyncMock(side_effect=FileNotFoundError(2, "No such file"))
+        health_probe = AsyncMock(return_value=True)
+
+        sup = LLMGatewaySupervisor(
+            spawn_params_factory=_make_params,
+            spawn_fn=spawn_fn,
+            health_probe=health_probe,
+            binary="litellm",
+        )
+
+        await sup.start()
+
+        assert sup.state == GatewayState.FAILED
+        err = sup.status().last_error or ""
+        assert "litellm" in err
+        assert "uv tool install 'litellm[proxy]'" in err
+        # The health probe is never reached when spawn itself fails.
+        health_probe.assert_not_awaited()
+
 
 # ── crash handling ─────────────────────────────────────────────────────
 

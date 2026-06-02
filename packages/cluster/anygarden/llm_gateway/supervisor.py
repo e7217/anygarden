@@ -293,6 +293,20 @@ class LLMGatewaySupervisor:
 
         try:
             proc = await self._spawn_fn(params, self._binary)
+        except FileNotFoundError:
+            # #406 — the litellm binary isn't on PATH (the common
+            # ``uvx anygarden init`` case, which never runs
+            # ``uv tool install 'litellm[proxy]'``). Surface an
+            # actionable hint in last_error instead of a bare repr so the
+            # Status panel tells the operator how to fix it.
+            from anygarden.llm_gateway.binary_check import INSTALL_HINT
+
+            self._set_state(
+                GatewayState.FAILED,
+                error=f"litellm binary not found ({self._binary!r}). {INSTALL_HINT}",
+            )
+            logger.error("llm_gateway.binary_missing", binary=self._binary)
+            return
         except Exception as exc:
             self._set_state(
                 GatewayState.FAILED, error=f"spawn failed: {exc!r}"

@@ -55,6 +55,15 @@ def init(ctx: click.Context) -> None:
     else:
         click.echo(f"Config already exists at {config_file}")
 
+    # #406 — pre-flight the LLM Gateway binary. Non-fatal: users who never
+    # enable the gateway shouldn't see init fail, but those who will need
+    # to know ``litellm[proxy]`` isn't installed before they hit a silent
+    # FAILED gateway at server start.
+    from anygarden.llm_gateway.binary_check import INSTALL_HINT, litellm_available
+
+    if not litellm_available():
+        click.echo(INSTALL_HINT)
+
     click.echo("Initialization complete.")
 
 
