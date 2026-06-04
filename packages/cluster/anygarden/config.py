@@ -100,6 +100,34 @@ class AnygardenSettings(BaseSettings):
     # (e.g. ``https://chat.example.com``).
     cluster_external_url: str = ""
 
+    # #420 — OpenTelemetry tracing. Off by default: until an OTLP
+    # endpoint is configured the whole tracing path is a no-op, so the
+    # server behaves exactly as before. Enable by setting
+    # ``ANYGARDEN_OTEL_ENABLED=1`` and pointing
+    # ``ANYGARDEN_OTEL_OTLP_ENDPOINT`` at a collector / Langfuse OTLP
+    # ingress (e.g. ``https://cloud.langfuse.com/api/public/otel``).
+    otel_enabled: bool = False
+    # OTLP/HTTP traces endpoint. The exporter appends ``/v1/traces`` only
+    # when the URL has no path, mirroring the OTEL SDK convention; for
+    # Langfuse the full ``.../api/public/otel`` path is passed verbatim.
+    otel_otlp_endpoint: str = ""
+    # Comma-separated ``key=value`` pairs sent as OTLP export headers.
+    # Langfuse auth is Basic — pass it as
+    # ``Authorization=Basic <base64(public:secret)>``. Kept as a raw
+    # string so secrets never need a structured settings shape.
+    otel_otlp_headers: str = ""
+    otel_service_name: str = "anygarden-cluster"
+    # Head sampling ratio (0.0–1.0). 1.0 records every request trace.
+    otel_sampling_ratio: float = 1.0
+    # #420 — capture the LLM request/response bodies (prompt + completion)
+    # as span attributes. On by default per the design decision; turn off
+    # for deployments that must not ship prompt content to the trace
+    # backend. ``otel_enabled`` still gates everything, so off-by-default
+    # tracing means bodies are never captured until tracing is enabled.
+    otel_llm_capture_content: bool = True
+    # Per-field character cap so a multi-MB prompt can't bloat a span.
+    otel_llm_capture_max_chars: int = 8000
+
     model_config = SettingsConfigDict(env_prefix="ANYGARDEN_")
 
     def reachable_host(self) -> str:

@@ -1,0 +1,425 @@
+"""OpenTelemetry tracing for the Anygarden cluster (#420).
+
+Anygarden agents run their LLM engines as external CLI subprocesses
+(codex / claude-code / gemini), so a W3C trace context cannot be
+propagated from the cluster, through the agent, into the actual LLM
+HTTP call. We therefore *reconstruct* the request trace entirely on
+the cluster side (design "approach (i)"):
+
+    chat.request            (user message_received → response_sent)   [root]
+      └─ agent.handler      (handler_started → handler_finished)
+           └─ agent.engine_call  (engine_call_started → _finished)
+                └─ llm.generation ×N   (reverse-proxy, GenAI semconv)
+
+The four agent-side spans are rebuilt from the ``LifecycleFrame``
+events the agent already emits (the agent stays unchanged). The LLM
+generation spans are captured at the reverse proxy — the single point
+where prompt, completion, model, tokens and latency are all visible —
+and stitched onto the correct request via an in-flight map keyed by
+``agent_id`` (the only identifier the proxy can read from the caller's
+token). Because ``RoomHandlerSupervisor`` serializes handlers per
+room, a single active engine call per agent is the common case and the
+correlation is reliable; concurrent multi-room work is flagged
+``ambiguous`` rather than mis-attributed.
+
+Everything here is best-effort: when tracing is disabled (no OTLP
+endpoint) the service is a no-op, and any exporter/span error is
+swallowed so the request path is never broken.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+import structlog
+from opentelemetry import trace as ot_trace
+from opentelemetry.trace import Span, Status, StatusCode
+
+logger = structlog.get_logger(__name__)
+
+_TRACER_NAME = "anygarden.observability"
+
+# Span names — kept stable so dashboards / tests can key off them.
+SPAN_REQUEST = "chat.request"
+SPAN_HANDLER = "agent.handler"
+SPAN_ENGINE = "agent.engine_call"
+SPAN_LLM = "llm.generation"
+
+
+def parse_otlp_headers(raw: str) -> dict[str, str]:
+    """Parse ``"k1=v1,k2=v2"`` into a headers dict.
+
+    Forgiving by design: blank segments and segments without ``=`` are
+    skipped rather than raising, because a malformed header string must
+    not stop the server from booting (it only degrades export auth).
+    A value may itself contain ``=`` (e.g. base64 padding) — only the
+    first ``=`` splits.
+    """
+    headers: dict[str, str] = {}
+    for segment in raw.split(","):
+        segment = segment.strip()
+        if not segment or "=" not in segment:
+            continue
+        key, _, value = segment.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key:
+            headers[key] = value
+    return headers
+
+
+def setup_tracing(config: Any) -> Optional[Any]:
+    """Build a :class:`TracerProvider`, or ``None`` when tracing is off.
+
+    Returns ``None`` (tracing disabled) when ``otel_enabled`` is false
+    or no OTLP endpoint is set — the caller treats ``None`` as "run the
+    server exactly as before". Any import/config failure is logged and
+    downgraded to ``None`` so a bad OTEL config can never block boot.
+    """
+    if not getattr(config, "otel_enabled", False):
+        return None
+    endpoint = getattr(config, "otel_otlp_endpoint", "") or ""
+    if not endpoint:
+        logger.warning("otel.disabled", reason="otel_enabled but no otlp_endpoint")
+        return None
+    try:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+        resource = Resource.create(
+            {"service.name": getattr(config, "otel_service_name", "anygarden-cluster")}
+        )
+        ratio = float(getattr(config, "otel_sampling_ratio", 1.0))
+        provider = TracerProvider(
+            resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio))
+        )
+        exporter = OTLPSpanExporter(
+            endpoint=endpoint,
+            headers=parse_otlp_headers(getattr(config, "otel_otlp_headers", "") or ""),
+        )
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        logger.info("otel.enabled", endpoint=endpoint, sampling_ratio=ratio)
+        return provider
+    except Exception as exc:  # noqa: BLE001 — never let OTEL setup block boot
+        logger.warning("otel.setup_failed", error=str(exc))
+        return None
+
+
+@dataclass
+class _RequestTrace:
+    """Live spans for one in-flight request, keyed by ``request_id``."""
+
+    root: Span
+    created_monotonic: float
+    handler: Optional[Span] = None
+    engine_call: Optional[Span] = None
+
+
+@dataclass
+class _Inflight:
+    """An agent's currently-open engine call (for proxy correlation)."""
+
+    room_id: Optional[str]
+    request_id: str
+    engine_call_span: Span
+
+
+@dataclass
+class LLMCorrelation:
+    """Outcome of correlating a proxied LLM call to a request."""
+
+    room_id: Optional[str] = None
+    request_id: Optional[str] = None
+    mode: str = "none"  # "linked" | "ambiguous" | "none"
+    parent: Optional[Span] = field(default=None, repr=False)
+
+
+class TracingService:
+    """Facade over the tracer + span registry + in-flight map.
+
+    Stored on ``app.state.tracing``. When ``provider`` is ``None`` every
+    method is a cheap no-op, so call sites stay branch-free.
+    """
+
+    def __init__(self, provider: Optional[Any], *, capture_content: bool = True,
+                 capture_max_chars: int = 8000) -> None:
+        self._enabled = provider is not None
+        self._tracer = provider.get_tracer(_TRACER_NAME) if provider else None
+        self._capture_content = capture_content
+        self._capture_max_chars = capture_max_chars
+        self._registry: dict[str, _RequestTrace] = {}
+        self._inflight: dict[str, list[_Inflight]] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    # ── request lifecycle → spans ────────────────────────────────────
+
+    def start_request(
+        self, request_id: str, *, room_id: Optional[str], agent_id: Optional[str]
+    ) -> Optional[str]:
+        """Open the root ``chat.request`` span. Returns its trace_id hex
+        (for log correlation) or ``None`` when disabled / duplicate."""
+        if not self._enabled or not request_id:
+            return None
+        if request_id in self._registry:  # idempotent: first start wins
+            return _trace_id_hex(self._registry[request_id].root)
+        span = self._tracer.start_span(SPAN_REQUEST)
+        _set(span, "anygarden.request_id", request_id)
+        _set(span, "anygarden.room_id", room_id)
+        _set(span, "anygarden.agent_id", agent_id)
+        self._registry[request_id] = _RequestTrace(
+            root=span, created_monotonic=time.monotonic()
+        )
+        return _trace_id_hex(span)
+
+    def start_handler(self, request_id: str, *, room_id: Optional[str] = None) -> None:
+        rt = self._registry.get(request_id) if self._enabled else None
+        if rt is None or rt.handler is not None:
+            return
+        rt.handler = self._child(rt.root, SPAN_HANDLER, {"anygarden.room_id": room_id})
+
+    def start_engine_call(
+        self,
+        request_id: str,
+        *,
+        engine: Optional[str],
+        room_id: Optional[str],
+        agent_id: Optional[str],
+    ) -> None:
+        rt = self._registry.get(request_id) if self._enabled else None
+        if rt is None or rt.engine_call is not None:
+            return
+        parent = rt.handler or rt.root
+        span = self._child(
+            parent, SPAN_ENGINE, {"anygarden.engine": engine, "anygarden.room_id": room_id}
+        )
+        rt.engine_call = span
+        if agent_id and span is not None:
+            self._inflight.setdefault(agent_id, []).append(
+                _Inflight(room_id=room_id, request_id=request_id, engine_call_span=span)
+            )
+
+    def finish_engine_call(
+        self,
+        request_id: str,
+        *,
+        outcome: Optional[str],
+        duration_ms: Optional[int],
+        error: Optional[str] = None,
+        agent_id: Optional[str] = None,
+    ) -> None:
+        rt = self._registry.get(request_id) if self._enabled else None
+        self._drop_inflight(request_id, agent_id)
+        if rt is None or rt.engine_call is None:
+            return
+        self._end(rt.engine_call, outcome=outcome, duration_ms=duration_ms, error=error)
+        rt.engine_call = None
+
+    def finish_handler(
+        self,
+        request_id: str,
+        *,
+        outcome: Optional[str],
+        duration_ms: Optional[int],
+        error: Optional[str] = None,
+    ) -> None:
+        rt = self._registry.get(request_id) if self._enabled else None
+        if rt is None or rt.handler is None:
+            return
+        self._end(rt.handler, outcome=outcome, duration_ms=duration_ms, error=error)
+        rt.handler = None
+
+    def finish_request(
+        self, request_id: str, *, outcome: Optional[str] = None
+    ) -> None:
+        """Close the root span and drop the request from the registry.
+
+        Also ends any still-open child spans defensively (e.g. a
+        ``response_sent`` that races ahead of ``handler_finished``).
+        """
+        rt = self._registry.pop(request_id, None) if self._enabled else None
+        if rt is None:
+            return
+        if rt.engine_call is not None:
+            self._end(rt.engine_call, outcome=outcome, duration_ms=None)
+        if rt.handler is not None:
+            self._end(rt.handler, outcome=outcome, duration_ms=None)
+        self._end(rt.root, outcome=outcome, duration_ms=None)
+        self._drop_inflight(request_id, None)
+
+    # ── reverse-proxy LLM call → span + correlation ──────────────────
+
+    def record_llm_call(
+        self,
+        *,
+        agent_id: Optional[str],
+        model_name: str,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
+        duration_ms: int,
+        status_code: int,
+        request_body: Optional[bytes] = None,
+        response_body: Optional[bytes] = None,
+        error: Optional[str] = None,
+    ) -> LLMCorrelation:
+        """Emit an ``llm.generation`` span and report the correlation.
+
+        The returned :class:`LLMCorrelation` carries ``room_id`` so the
+        caller can stamp it onto the persisted usage row.
+        """
+        if not self._enabled:
+            return LLMCorrelation()
+        corr = self._correlate(agent_id)
+        try:
+            end_ns = time.time_ns()
+            start_ns = end_ns - max(0, duration_ms) * 1_000_000
+            ctx = ot_trace.set_span_in_context(corr.parent) if corr.parent else None
+            span = self._tracer.start_span(SPAN_LLM, context=ctx, start_time=start_ns)
+            _set(span, "gen_ai.operation.name", "chat")
+            _set(span, "gen_ai.request.model", model_name or None)
+            _set(span, "gen_ai.usage.input_tokens", prompt_tokens)
+            _set(span, "gen_ai.usage.output_tokens", completion_tokens)
+            _set(span, "anygarden.agent_id", agent_id)
+            _set(span, "anygarden.correlation", corr.mode)
+            _set(span, "anygarden.room_id", corr.room_id)
+            _set(span, "anygarden.request_id", corr.request_id)
+            _set(span, "http.response.status_code", status_code)
+            if self._capture_content:
+                if request_body:
+                    _set(span, "gen_ai.prompt", self._clip(request_body))
+                if response_body:
+                    _set(span, "gen_ai.completion", self._clip(response_body))
+            if status_code >= 400 or error:
+                span.set_status(Status(StatusCode.ERROR, (error or f"http {status_code}")[:200]))
+            span.end(end_time=end_ns)
+        except Exception as exc:  # noqa: BLE001 — span emission is best-effort
+            logger.warning("otel.llm_span_failed", error=str(exc))
+        return corr
+
+    # ── reaper ───────────────────────────────────────────────────────
+
+    def reap(self, ttl_seconds: float) -> int:
+        """End spans for requests with no terminal event past ``ttl``.
+
+        Guards against unbounded registry growth when a lifecycle frame
+        is lost. Returns the number of requests reaped.
+        """
+        if not self._enabled:
+            return 0
+        now = time.monotonic()
+        stale = [
+            rid
+            for rid, rt in self._registry.items()
+            if now - rt.created_monotonic > ttl_seconds
+        ]
+        for rid in stale:
+            rt = self._registry.pop(rid, None)
+            if rt is None:
+                continue
+            for span in (rt.engine_call, rt.handler, rt.root):
+                if span is not None:
+                    self._end(span, outcome="orphaned", duration_ms=None)
+            self._drop_inflight(rid, None)
+        return len(stale)
+
+    def shutdown(self) -> None:
+        """Close any spans still open at process shutdown."""
+        if not self._enabled:
+            return
+        for rid in list(self._registry):
+            self.finish_request(rid, outcome="orphaned")
+
+    # ── internals ────────────────────────────────────────────────────
+
+    def _correlate(self, agent_id: Optional[str]) -> LLMCorrelation:
+        entries = self._inflight.get(agent_id or "", [])
+        if len(entries) == 1:
+            e = entries[0]
+            return LLMCorrelation(
+                room_id=e.room_id,
+                request_id=e.request_id,
+                mode="linked",
+                parent=e.engine_call_span,
+            )
+        if len(entries) > 1:
+            return LLMCorrelation(mode="ambiguous")
+        return LLMCorrelation(mode="none")
+
+    def _child(
+        self, parent: Span, name: str, attrs: dict[str, Any]
+    ) -> Optional[Span]:
+        try:
+            ctx = ot_trace.set_span_in_context(parent)
+            span = self._tracer.start_span(name, context=ctx)
+            for k, v in attrs.items():
+                _set(span, k, v)
+            return span
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("otel.child_span_failed", name=name, error=str(exc))
+            return None
+
+    def _end(
+        self,
+        span: Span,
+        *,
+        outcome: Optional[str],
+        duration_ms: Optional[int],
+        error: Optional[str] = None,
+    ) -> None:
+        try:
+            _set(span, "anygarden.outcome", outcome)
+            _set(span, "anygarden.duration_ms", duration_ms)
+            if error:
+                _set(span, "anygarden.error", error[:500])
+            if outcome in ("failed", "timeout", "orphaned"):
+                span.set_status(Status(StatusCode.ERROR, str(outcome)))
+            span.end()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("otel.end_span_failed", error=str(exc))
+
+    def _drop_inflight(self, request_id: str, agent_id: Optional[str]) -> None:
+        keys = [agent_id] if agent_id else list(self._inflight)
+        for key in keys:
+            entries = self._inflight.get(key)
+            if not entries:
+                continue
+            remaining = [e for e in entries if e.request_id != request_id]
+            if remaining:
+                self._inflight[key] = remaining
+            else:
+                self._inflight.pop(key, None)
+
+    def _clip(self, body: bytes) -> str:
+        text = body.decode("utf-8", errors="replace")
+        if len(text) <= self._capture_max_chars:
+            return text
+        return text[: self._capture_max_chars - 1] + "…"
+
+
+def _set(span: Optional[Span], key: str, value: Any) -> None:
+    """Set a span attribute, skipping ``None`` (OTEL rejects null values)."""
+    if span is None or value is None:
+        return
+    try:
+        span.set_attribute(key, value)
+    except Exception:  # noqa: BLE001 — never raise from instrumentation
+        pass
+
+
+def _trace_id_hex(span: Optional[Span]) -> Optional[str]:
+    try:
+        if span is None:
+            return None
+        ctx = span.get_span_context()
+        return format(ctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001
+        return None

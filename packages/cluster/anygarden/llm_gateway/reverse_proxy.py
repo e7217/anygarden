@@ -82,11 +82,14 @@ async def _write_usage_row(
     duration_ms: int,
     status_code: int,
     error: str | None = None,
+    room_id: str | None = None,
 ) -> None:
     """Persist one usage row. Called from a FastAPI BackgroundTask.
 
     Swallows exceptions so a DB hiccup can't poison the caller — the
-    proxy has already responded by the time this runs.
+    proxy has already responded by the time this runs. ``room_id`` is
+    filled from the tracing correlation (#420) when the call could be
+    tied to a single in-flight request; it stays ``None`` otherwise.
     """
     try:
         async with session_factory() as db:
@@ -95,6 +98,7 @@ async def _write_usage_row(
                     identity_kind=identity_kind,
                     identity_id=identity_id,
                     agent_id=agent_id,
+                    room_id=room_id,
                     model_name=model_name or "",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -205,6 +209,36 @@ async def proxy(
         except (ValueError, UnicodeDecodeError):
             pass
 
+    # #420 — emit an ``llm.generation`` span and resolve which in-flight
+    # request (if any) this call belongs to. ``room_id`` from the
+    # returned correlation is stamped on the usage row. No-op (returns
+    # None) when tracing is disabled.
+    tracing = getattr(request.app.state, "tracing", None)
+    agent_id = identity.id if identity.kind == "agent" else None
+
+    def _correlate_llm(
+        *,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        duration_ms: int,
+        status_code: int,
+        response_body: bytes | None,
+        error: str | None = None,
+    ) -> str | None:
+        if tracing is None:
+            return None
+        return tracing.record_llm_call(
+            agent_id=agent_id,
+            model_name=model_name,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            duration_ms=duration_ms,
+            status_code=status_code,
+            request_body=body,
+            response_body=response_body,
+            error=error,
+        ).room_id
+
     start = time.perf_counter()
     upstream_url = f"/{path}"
 
@@ -218,18 +252,27 @@ async def proxy(
         )
     except httpx.HTTPError as exc:
         duration_ms = int((time.perf_counter() - start) * 1000)
+        room_id = _correlate_llm(
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=duration_ms,
+            status_code=502,
+            response_body=None,
+            error=f"upstream: {exc!r}"[:512],
+        )
         background.add_task(
             _write_usage_row,
             request.app.state.session_factory,
             identity_kind=identity.kind,
             identity_id=identity.id,
-            agent_id=identity.id if identity.kind == "agent" else None,
+            agent_id=agent_id,
             model_name=model_name,
             prompt_tokens=None,
             completion_tokens=None,
             duration_ms=duration_ms,
             status_code=502,
             error=f"upstream: {exc!r}"[:512],
+            room_id=room_id,
         )
         raise HTTPException(status_code=502, detail="Upstream gateway error") from exc
 
@@ -252,17 +295,25 @@ async def proxy(
         # usage parsing.
         body_bytes = upstream_resp.content
         usage = _parse_sse_chunk_for_usage(body_bytes)
+        room_id = _correlate_llm(
+            prompt_tokens=usage.prompt_tokens if usage else None,
+            completion_tokens=usage.completion_tokens if usage else None,
+            duration_ms=duration_ms,
+            status_code=upstream_resp.status_code,
+            response_body=body_bytes,
+        )
         background.add_task(
             _write_usage_row,
             request.app.state.session_factory,
             identity_kind=identity.kind,
             identity_id=identity.id,
-            agent_id=identity.id if identity.kind == "agent" else None,
+            agent_id=agent_id,
             model_name=model_name,
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
             duration_ms=duration_ms,
             status_code=upstream_resp.status_code,
+            room_id=room_id,
         )
         return Response(
             content=body_bytes,
@@ -282,17 +333,25 @@ async def proxy(
         except ValueError:
             pass
 
+    room_id = _correlate_llm(
+        prompt_tokens=usage.prompt_tokens if usage else None,
+        completion_tokens=usage.completion_tokens if usage else None,
+        duration_ms=duration_ms,
+        status_code=upstream_resp.status_code,
+        response_body=body_bytes,
+    )
     background.add_task(
         _write_usage_row,
         request.app.state.session_factory,
         identity_kind=identity.kind,
         identity_id=identity.id,
-        agent_id=identity.id if identity.kind == "agent" else None,
+        agent_id=agent_id,
         model_name=model_name,
         prompt_tokens=usage.prompt_tokens if usage else None,
         completion_tokens=usage.completion_tokens if usage else None,
         duration_ms=duration_ms,
         status_code=upstream_resp.status_code,
+        room_id=room_id,
     )
     return Response(
         content=body_bytes,
