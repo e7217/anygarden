@@ -198,6 +198,20 @@ class TestResult(BaseModel):
     error: Optional[str] = None
 
 
+class OllamaModelsRequest(BaseModel):
+    # Empty/omitted falls back to Ollama's default loopback endpoint.
+    api_base: Optional[str] = None
+
+
+class OllamaModelsResult(BaseModel):
+    # ``ok=false`` rides on a 200 (like TestResult) so the dialog can show
+    # a "couldn't reach Ollama" message inline instead of throwing — a
+    # failed probe is a normal outcome, not a server error.
+    ok: bool
+    models: list[str] = []
+    error: Optional[str] = None
+
+
 class UsageBucket(BaseModel):
     key: str
     request_count: int
@@ -407,6 +421,45 @@ async def test_model(
     return TestResult(
         ok=ok, status_code=resp.status_code, duration_ms=duration_ms, error=err
     )
+
+
+_OLLAMA_DEFAULT_BASE = "http://localhost:11434"
+
+
+@router.post("/ollama/models", response_model=OllamaModelsResult)
+async def list_ollama_models(
+    body: OllamaModelsRequest,
+    identity: Identity = Depends(get_admin_identity),  # noqa: ARG001
+) -> OllamaModelsResult:
+    """List models installed on an Ollama instance via ``GET /api/tags``.
+
+    Backend-proxied (not called from the browser) so it works when
+    ``api_base`` is a server-internal address and to dodge Ollama's
+    default CORS policy. Independent of the gateway supervisor — model
+    registration happens before Apply, so this must work even when
+    litellm isn't running.
+    """
+    base = (body.api_base or "").strip() or _OLLAMA_DEFAULT_BASE
+    url = base.rstrip("/") + "/api/tags"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+    except httpx.HTTPError as exc:
+        return OllamaModelsResult(ok=False, error=f"{exc!r}"[:256])
+    if resp.status_code != 200:
+        return OllamaModelsResult(
+            ok=False, error=f"HTTP {resp.status_code}: {resp.text[:200]}"
+        )
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        return OllamaModelsResult(ok=False, error=f"invalid JSON from Ollama: {exc!r}"[:256])
+    names = [
+        m["name"]
+        for m in data.get("models", [])
+        if isinstance(m, dict) and m.get("name")
+    ]
+    return OllamaModelsResult(ok=True, models=names)
 
 
 # ── Secrets CRUD ──────────────────────────────────────────────────────

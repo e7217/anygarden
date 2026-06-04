@@ -588,5 +588,125 @@ async def test_test_model_endpoint_pings_upstream(env) -> None:
     assert captured["auth"] == "Bearer sk-fake-master"
 
 
+# ── Ollama model discovery (#410) ──────────────────────────────────────
+
+
+def _patch_ollama_transport(monkeypatch, handler) -> None:
+    """Swap the AsyncClient the handler builds for one on a MockTransport.
+
+    The endpoint creates its own ``httpx.AsyncClient(timeout=...)`` (the
+    target Ollama is an arbitrary api_base, not the gateway's pooled
+    client), so we intercept by replacing the class the module references.
+    """
+    import anygarden.api.v1.llm_gateway as gw
+
+    real_cls = httpx.AsyncClient  # capture before patching to avoid recursion
+
+    def factory(*_args, **_kwargs):
+        return real_cls(transport=MockTransport(handler))
+
+    monkeypatch.setattr(gw.httpx, "AsyncClient", factory)
+
+
+async def test_ollama_models_success(env, monkeypatch) -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> Response:
+        seen["url"] = str(request.url)
+        return Response(
+            200, json={"models": [{"name": "gemma3:27b"}, {"name": "llama3.1:8b"}]}
+        )
+
+    _patch_ollama_transport(monkeypatch, handler)
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/ollama/models",
+            headers=_auth(env["admin_jwt"]),
+            json={"api_base": "http://ollama-host:11434"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["models"] == ["gemma3:27b", "llama3.1:8b"]
+    assert seen["url"] == "http://ollama-host:11434/api/tags"
+
+
+async def test_ollama_models_default_base_when_blank(env, monkeypatch) -> None:
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> Response:
+        seen["url"] = str(request.url)
+        return Response(200, json={"models": []})
+
+    _patch_ollama_transport(monkeypatch, handler)
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/ollama/models",
+            headers=_auth(env["admin_jwt"]),
+            json={"api_base": ""},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["models"] == []
+    assert seen["url"] == "http://localhost:11434/api/tags"
+
+
+async def test_ollama_models_connection_error(env, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> Response:
+        raise httpx.ConnectError("connection refused")
+
+    _patch_ollama_transport(monkeypatch, handler)
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/ollama/models",
+            headers=_auth(env["admin_jwt"]),
+            json={"api_base": "http://nope:11434"},
+        )
+    # A failed probe is a normal outcome: 200 with ok=false.
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["error"]
+    assert body["models"] == []
+
+
+async def test_ollama_models_non_200(env, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> Response:
+        return Response(500, text="boom")
+
+    _patch_ollama_transport(monkeypatch, handler)
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/ollama/models",
+            headers=_auth(env["admin_jwt"]),
+            json={"api_base": "http://ollama:11434"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "500" in body["error"]
+
+
+async def test_ollama_models_rejects_non_admin(env) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/ollama/models",
+            headers=_auth(env["user_jwt"]),
+            json={"api_base": "http://ollama:11434"},
+        )
+    assert resp.status_code == 403
+
+
 # Avoid unused-import noise from the test scaffolding.
 _ = (pytest, select, LLMGatewayModel)  # noqa: F841
