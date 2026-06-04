@@ -6,7 +6,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { useGatewaySecrets } from '@/hooks/useLLMGateway'
+import { useGatewaySecrets, fetchOllamaModels } from '@/hooks/useLLMGateway'
 import type { GatewayModel, ModelCreateInput } from '@/hooks/useLLMGateway'
 
 /**
@@ -84,17 +84,55 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // #410 — Ollama model discovery. Populated by the "Load models" button;
+  // selecting an entry fills upstream_model + model_name so an operator
+  // can't fat-finger the upstream id (the cause of #408).
+  const [ollamaModels, setOllamaModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [modelsError, setModelsError] = useState<string | null>(null)
 
   const isLocal = LOCAL_PROVIDERS.has(provider)
 
   const handleProviderChange = (next: string) => {
     setProvider(next)
+    // Discovered list belongs to the previous provider — clear it so a
+    // stale Ollama list can't linger after switching to, say, OpenAI.
+    setOllamaModels([])
+    setModelsError(null)
     const meta = PROVIDERS.find(p => p.id === next)
     // Only prefill upstream if the user hasn't already written one
     // that doesn't match the old prefix — don't clobber manual edits.
     if (meta && !upstream.includes('/') && meta.upstreamPrefix) {
       setUpstream(meta.upstreamPrefix)
     }
+  }
+
+  const handleLoadOllamaModels = async () => {
+    setLoadingModels(true)
+    setModelsError(null)
+    try {
+      const res = await fetchOllamaModels(apiBase.trim())
+      if (!res.ok) {
+        setModelsError(res.error || 'Could not reach Ollama.')
+        setOllamaModels([])
+      } else if (res.models.length === 0) {
+        setModelsError('No models installed — run `ollama pull <model>` and retry.')
+        setOllamaModels([])
+      } else {
+        setOllamaModels(res.models)
+      }
+    } catch (err) {
+      setModelsError(err instanceof Error ? err.message : String(err))
+      setOllamaModels([])
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  const handleSelectOllamaModel = (name: string) => {
+    if (!name) return
+    setUpstream('ollama_chat/' + name)
+    setModelName(name)
   }
 
   const handleSubmit = async () => {
@@ -251,6 +289,40 @@ export function ModelDialog({ initial, onClose, onSubmit }: Props) {
               <p className="text-[11px] text-[var(--color-foreground-muted)]">
                 Leave blank to use LiteLLM's provider default. Point this at a remote host when Ollama/vLLM runs off-server.
               </p>
+              {provider === 'ollama' && (
+                <div className="mt-1 flex flex-col gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="self-start"
+                    onClick={handleLoadOllamaModels}
+                    disabled={loadingModels}
+                  >
+                    {loadingModels ? 'Loading…' : 'Load models'}
+                  </Button>
+                  {ollamaModels.length > 0 && (
+                    <select
+                      aria-label="Installed Ollama models"
+                      defaultValue=""
+                      onChange={e => handleSelectOllamaModel(e.target.value)}
+                      className="flex h-9 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-3 text-[14px]"
+                    >
+                      <option value="" disabled>
+                        Select a model…
+                      </option>
+                      {ollamaModels.map(m => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {modelsError && (
+                    <p className="text-[11px] text-red-900">{modelsError}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

@@ -68,6 +68,12 @@ export interface TestResult {
   error: string | null
 }
 
+export interface OllamaModelsResult {
+  ok: boolean
+  models: string[]
+  error: string | null
+}
+
 export interface UsageBucket {
   key: string
   request_count: number
@@ -190,6 +196,29 @@ export function useGatewayModels() {
     remove,
     test,
   }
+}
+
+/**
+ * List models installed on an Ollama instance (#410).
+ *
+ * Standalone (not part of useGatewayModels) because ModelDialog drives it
+ * with its own local state and shouldn't trigger the hook's model-list
+ * fetch. Backend-proxied — see POST /api/v1/llm-gateway/ollama/models.
+ * Returns a structured result (ok=false on a reachable-but-failed probe);
+ * only a hard non-200 (e.g. 403) throws.
+ */
+export async function fetchOllamaModels(
+  apiBase: string
+): Promise<OllamaModelsResult> {
+  const resp = await apiFetch('/api/v1/llm-gateway/ollama/models', {
+    method: 'POST',
+    body: JSON.stringify({ api_base: apiBase || null }),
+  })
+  if (!resp.ok && resp.status !== 200) {
+    const detail = await readErrorDetail(resp)
+    throw new Error(detail)
+  }
+  return (await resp.json()) as OllamaModelsResult
 }
 
 // ── Secrets ──────────────────────────────────────────────────────────
