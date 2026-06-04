@@ -264,7 +264,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             secure_chmod(secret_file, 0o600)
 
     # Configure structured logging
-    configure_logging(config.log_level)
+    configure_logging(config.log_level, dev=config.dev)
+
+    # #420 — OpenTelemetry tracing. No-op unless ANYGARDEN_OTEL_ENABLED
+    # and an OTLP endpoint are set, so the default boot is unchanged.
+    # Tests may pre-set ``app.state.tracing`` to inject a span exporter.
+    if not getattr(app.state, "tracing", None):
+        from anygarden.observability.tracing import TracingService, setup_tracing
+
+        provider = setup_tracing(config)
+        app.state.tracer_provider = provider
+        app.state.tracing = TracingService(
+            provider,
+            capture_content=config.otel_llm_capture_content,
+            capture_max_chars=config.otel_llm_capture_max_chars,
+        )
 
     # If engine/session_factory were pre-set (e.g. by tests), reuse them.
     engine_provided = getattr(app.state, "engine", None) is not None
@@ -579,6 +593,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 name="orphan_sweeper",
             )
 
+    # #420 — span reaper: ends spans for requests whose terminal
+    # lifecycle event never arrived (a lost frame), bounding the
+    # in-memory span registry. Only runs when tracing is enabled.
+    tracing = getattr(app.state, "tracing", None)
+    if (
+        getattr(app.state, "span_reaper_task", None) is None
+        and tracing is not None
+        and tracing.enabled
+    ):
+        app.state.span_reaper_task = asyncio.create_task(
+            _run_span_reaper(app, interval_seconds=60.0, ttl_seconds=1200.0),
+            name="span_reaper",
+        )
+
     # #302 — autonomous responsibility (Goal) scheduler. Single
     # in-process polling loop; multi-replica coordination lands in
     # Phase 3 with PostgreSQL advisory locks. Tests may pre-set
@@ -609,7 +637,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # stop before the event loop tears down. ``return_exceptions``
     # via the explicit try/except keeps the shutdown path from being
     # poisoned by CancelledError or a late task exception.
-    for attr in ("skill_stale_task", "orphan_sweeper_task"):
+    for attr in ("skill_stale_task", "orphan_sweeper_task", "span_reaper_task"):
         task: asyncio.Task | None = getattr(app.state, attr, None)
         if task is not None and not task.done():
             task.cancel()
@@ -617,6 +645,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+    # #420 — flush buffered spans then close the tracer provider so the
+    # BatchSpanProcessor's queue isn't dropped on shutdown.
+    tracing = getattr(app.state, "tracing", None)
+    if tracing is not None:
+        tracing.shutdown()
+    provider = getattr(app.state, "tracer_provider", None)
+    if provider is not None and hasattr(provider, "shutdown"):
+        try:
+            provider.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
 
     # #302 — stop the goal scheduler. ``stop`` is idempotent and
     # safe to call when no scheduler ever started.
@@ -722,6 +762,41 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
             return
 
 
+async def _run_span_reaper(
+    app: FastAPI, *, interval_seconds: float, ttl_seconds: float
+) -> None:
+    """Periodically reap request traces whose terminal event never came.
+
+    Mirrors ``_run_orphan_sweeper`` but operates on the in-memory span
+    registry rather than the DB: a lost ``handler_finished`` /
+    ``response_sent`` frame would otherwise leak the live spans forever.
+    """
+    import structlog
+
+    log = structlog.get_logger("span_reaper")
+
+    try:
+        await asyncio.sleep(min(15.0, interval_seconds))
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        try:
+            tracing = getattr(app.state, "tracing", None)
+            n = tracing.reap(ttl_seconds) if tracing is not None else 0
+            if n:
+                log.info("span_reaper.reaped", count=n)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("span_reaper.error", error=str(exc))
+
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            return
+
+
 def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     """Build and return the configured FastAPI application."""
     if config is None:
@@ -752,6 +827,14 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     # isn't wired (feature flag off) so this is harmless.
     app.include_router(llm_proxy_router)
     app.include_router(llm_gateway_admin_router)
+
+    # #420 — expose the Prometheus metrics defined in
+    # ``observability.metrics`` (previously defined but never scrapeable
+    # because no endpoint mounted them). Unauthenticated by design —
+    # operators are expected to gate ``/metrics`` at the reverse proxy.
+    from prometheus_client import make_asgi_app
+
+    app.mount("/metrics", make_asgi_app())
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

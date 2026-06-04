@@ -86,6 +86,45 @@ async def _persist_lifecycle_event(
     ))
 
 
+def _apply_lifecycle_to_trace(
+    tracing: Any, *, agent_id: str, frame: LifecycleFrame
+) -> None:
+    """Translate a LifecycleFrame into OTEL span transitions (#420).
+
+    No-op when tracing is disabled or the frame carries no
+    ``request_id`` (e.g. proactive agent sends). The root span is
+    closed on ``handler_finished`` — the agent's authoritative terminal
+    event, present on every outcome including ``rejected`` — rather than
+    on ``response_sent``, which may never arrive (timeout / silent drop).
+    """
+    rid = frame.request_id
+    if tracing is None or not rid:
+        return
+    event = frame.event
+    if event == "handler_started":
+        tracing.start_handler(rid, room_id=frame.room_id)
+    elif event == "engine_call_started":
+        tracing.start_engine_call(
+            rid, engine=frame.engine, room_id=frame.room_id, agent_id=agent_id
+        )
+    elif event == "engine_call_finished":
+        tracing.finish_engine_call(
+            rid,
+            outcome=frame.outcome,
+            duration_ms=frame.duration_ms,
+            error=frame.error,
+            agent_id=agent_id,
+        )
+    elif event == "handler_finished":
+        tracing.finish_handler(
+            rid,
+            outcome=frame.outcome,
+            duration_ms=frame.duration_ms,
+            error=frame.error,
+        )
+        tracing.finish_request(rid, outcome=frame.outcome)
+
+
 def _is_ambient_candidate(
     content: str,
     metadata: dict[str, Any],
@@ -449,6 +488,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     app = websocket.app
     config: AnygardenSettings = app.state.config
     session_factory = app.state.session_factory
+    # #420 — tracing service (no-op when OTEL disabled). May be absent
+    # in minimal test app.state setups, so default to None.
+    tracing = getattr(app.state, "tracing", None)
 
     # Get manager and orchestration objects from app.state (not module globals)
     manager: ConnectionManager = app.state.connection_manager
@@ -1249,6 +1291,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                     "trigger_message_id": msg.id,
                                 },
                             ))
+                            # #420 — open the root ``chat.request`` span;
+                            # agent-side lifecycle frames extend it.
+                            if tracing is not None:
+                                tracing.start_request(
+                                    rid, room_id=room_id, agent_id=aid
+                                )
 
                     await db.commit()
                     base_metadata = msg.extra_metadata
@@ -1299,11 +1347,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # lifecycle events — drop silently rather than crash
                 # the session.
                 if identity and identity.kind == "agent":
-                    async with session_factory() as db:
-                        await _persist_lifecycle_event(
-                            db, agent_id=identity.id, frame=frame_in
+                    structlog.contextvars.bind_contextvars(
+                        request_id=frame_in.request_id
+                    )
+                    try:
+                        async with session_factory() as db:
+                            await _persist_lifecycle_event(
+                                db, agent_id=identity.id, frame=frame_in
+                            )
+                            await db.commit()
+                        # #420 — mirror the event into the OTEL span tree.
+                        _apply_lifecycle_to_trace(
+                            tracing, agent_id=identity.id, frame=frame_in
                         )
-                        await db.commit()
+                    finally:
+                        structlog.contextvars.unbind_contextvars("request_id")
                 else:
                     logger.warning(
                         "ws.lifecycle.dropped",

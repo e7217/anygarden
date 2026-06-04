@@ -48,6 +48,9 @@ server = [
     "pyyaml>=6.0",
     # #302 — cron parsing for the autonomous responsibility scheduler.
     "croniter>=2.0",
+    # #420 — OpenTelemetry tracing exported over OTLP/HTTP to Langfuse.
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
     # #397 — the server imports ``anygarden_machine.safefs.secure_chmod``
     # at module load (app.py, llm_gateway/bootstrap.py), so the server
     # extra must carry the machine package. The ``>=0.8`` floor resolves
@@ -87,6 +90,8 @@ dev = [
     "tomli-w>=1.0",
     "pyyaml>=6.0",
     "croniter>=2.0",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-http>=1.27",
 ]
 
 [project.scripts]
