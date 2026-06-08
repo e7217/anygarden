@@ -22,7 +22,11 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import (
+    EngineError,
+    EngineTimeoutError,
+    RoomHandlerSupervisor,
+)
 
 
 @dataclass
@@ -92,7 +96,9 @@ async def test_timeout_path_marks_both_events_and_notifies_user():
 
 
 @pytest.mark.asyncio
-async def test_failed_path_captures_error_without_user_notice():
+async def test_failed_path_marks_failed_and_notifies_user():
+    # #422 — a crashing turn must surface as ``failed`` AND notify the
+    # user, instead of being swallowed into a silent ``ok``.
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
 
@@ -106,9 +112,52 @@ async def test_failed_path_captures_error_without_user_notice():
     )
     assert engine_fin["outcome"] == "failed"
     assert engine_fin["error"] == "boom"
-    # No auto-reply on failure — the integration decides any user-facing
-    # fallback. Only the lifecycle trail tells us what happened.
-    assert client.sends == []
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]
+    assert client.sends[0][2] == {"request_id": "req-f"}
+
+
+@pytest.mark.asyncio
+async def test_engine_error_marks_failed_and_notifies_user():
+    # #422 — adapters raise EngineError instead of returning None; the
+    # supervisor maps it to failed + notice (same as a bare exception).
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def failing_engine():
+        raise EngineError("model 400: gpt-5.5 unsupported")
+
+    await sup.dispatch(room_id="r1", request_id="req-e", run_engine=failing_engine)
+
+    handler_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "handler_finished"
+    )
+    assert handler_fin["outcome"] == "failed"
+    assert "gpt-5.5" in handler_fin["error"]
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]
+
+
+@pytest.mark.asyncio
+async def test_engine_timeout_error_marks_timeout():
+    # #422 — an adapter-level turn timeout surfaces as ``timeout`` (not
+    # ``failed``) and notifies the user.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def timing_out_engine():
+        raise EngineTimeoutError("codex turn exceeded 600s")
+
+    await sup.dispatch(room_id="r1", request_id="req-to", run_engine=timing_out_engine)
+
+    outcomes = {
+        e["event"]: e.get("outcome")
+        for e in client.lifecycle_events
+        if e["event"] in ("engine_call_finished", "handler_finished")
+    }
+    assert outcomes["engine_call_finished"] == "timeout"
+    assert outcomes["handler_finished"] == "timeout"
+    assert client.sends and "타임아웃" in client.sends[0][1]
 
 
 @pytest.mark.asyncio
@@ -171,9 +220,11 @@ async def test_no_request_id_skips_user_metadata():
 
 
 @pytest.mark.asyncio
-async def test_empty_response_skips_send():
-    """An engine that returns '' (e.g. ambient-only turn) must not
-    be auto-sent as an empty message. Lifecycle still completes ok."""
+async def test_tracked_empty_response_is_failed_and_notifies():
+    """#422 — a *tracked* turn (request_id present = user-triggered) that
+    returns '' is a silent failure, not a no-reply. It surfaces as
+    ``failed`` and notifies the user. (This is the gpt-5.5 symptom: the
+    engine produced nothing and the user saw only silence.)"""
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
 
@@ -181,6 +232,28 @@ async def test_empty_response_skips_send():
         return ""
 
     await sup.dispatch(room_id="r1", request_id="req-empty", run_engine=run_engine)
+
+    outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert outcomes == ["failed"]
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]
+
+
+@pytest.mark.asyncio
+async def test_proactive_empty_response_stays_silent_ok():
+    """A proactive/untracked turn (request_id is None) that returns ''
+    keeps the legitimate no-reply semantics: no send, outcome ok. Only
+    these reach the supervisor empty in practice — ambient ingestion
+    flows through ingest_context, never here."""
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return ""
+
+    await sup.dispatch(room_id="r1", request_id=None, run_engine=run_engine)
 
     assert client.sends == []
     outcomes = [

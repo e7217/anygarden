@@ -12,6 +12,7 @@ from anygarden_agent.integrations.gemini_cli import (
     GeminiCliAdapter,
     integrate_with_gemini_cli,
 )
+from anygarden_agent.runtime.handler_wrapper import EngineError
 
 
 class TestGeminiCliAdapter:
@@ -81,11 +82,12 @@ class TestGeminiCliAdapter:
         async def boom(prompt: str) -> str | None:
             raise RuntimeError("oops")
 
+        # #422 — the failure now surfaces as EngineError (so the
+        # supervisor records failed + notifies) instead of a silent None,
+        # but the per-room conversation must still be rolled back.
         with patch.object(adapter, "_call_gemini", new=boom):
-            result = await adapter.on_message(
-                {"content": "Hi", "room_id": "r1"}
-            )
-        assert result is None
+            with pytest.raises(EngineError):
+                await adapter.on_message({"content": "Hi", "room_id": "r1"})
         assert adapter._conversations["r1"] == []
 
     @pytest.mark.asyncio

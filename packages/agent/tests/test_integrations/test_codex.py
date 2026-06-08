@@ -17,6 +17,7 @@ from anygarden_agent.integrations.codex import (
     integrate_with_codex,
 )
 import anygarden_agent.integrations.codex as codex_mod
+from anygarden_agent.runtime.handler_wrapper import EngineTimeoutError
 
 
 def _make_fake_codex_module():
@@ -453,11 +454,14 @@ class TestCodexTurnTimeout:
             adapter = CodexAdapter()
             await adapter.start()
 
-            result = await adapter.on_message(
-                {"content": "slow-question", "room_id": "room-1"}
-            )
+            # #422 — the timeout now surfaces as EngineTimeoutError so the
+            # supervisor records outcome=timeout and notifies the user,
+            # instead of being swallowed into a silent None.
+            with pytest.raises(EngineTimeoutError):
+                await adapter.on_message(
+                    {"content": "slow-question", "room_id": "room-1"}
+                )
 
-        assert result is None, "timeout path must not deliver a reply"
         assert "room-1" not in adapter._threads, (
             "broken thread must be evicted so the next turn starts fresh"
         )

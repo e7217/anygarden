@@ -53,7 +53,11 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter
-from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import (
+    EngineError,
+    EngineTimeoutError,
+    RoomHandlerSupervisor,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -244,10 +248,15 @@ class GeminiCliAdapter(EngineAdapter):
             # call doesn't repeat context the model never saw.
             conversation.pop()
             return None
+        except EngineError:
+            conversation.pop()
+            raise
         except Exception as exc:
             logger.error("gemini.exec_failed", error=str(exc))
             conversation.pop()
-            return None
+            # #422 — propagate so the supervisor records outcome=failed
+            # and notifies the user instead of returning None (silent).
+            raise EngineError(str(exc)) from exc
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an ``INGEST_ONLY`` message for the next active turn.
@@ -383,14 +392,17 @@ class GeminiCliAdapter(EngineAdapter):
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=_GEMINI_TIMEOUT
             )
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
             # Kill the entire process tree (gemini + child bash/npm/node).
             # Without this, proc.kill() only hits the direct child and
             # grandchildren survive as orphans.
             await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
             await proc.wait()
             logger.error("gemini.timeout", timeout=_GEMINI_TIMEOUT)
-            return None
+            # #422 — surface as timeout so the supervisor notifies the user.
+            raise EngineTimeoutError(
+                f"gemini turn exceeded {_GEMINI_TIMEOUT}s"
+            ) from exc
 
         if proc.returncode != 0:
             logger.error(

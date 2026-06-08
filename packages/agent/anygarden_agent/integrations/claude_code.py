@@ -39,7 +39,10 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter
-from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import (
+    EngineError,
+    RoomHandlerSupervisor,
+)
 
 
 # #197 — Anthropic-SDK env var names the claude-agent-sdk reads when
@@ -186,9 +189,13 @@ class ClaudeCodeAdapter(EngineAdapter):
             options = self._build_options(room_id)
             reply = await self._collect_reply(prompt, options)
             return reply
+        except EngineError:
+            raise
         except Exception as exc:
             logger.error("claude_code.query_failed", error=str(exc))
-            return None
+            # #422 — propagate so the supervisor surfaces outcome=failed
+            # and notifies the user instead of swallowing into silence.
+            raise EngineError(str(exc)) from exc
         finally:
             self._current_room_id = None
 

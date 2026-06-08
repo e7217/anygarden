@@ -22,7 +22,11 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter
-from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import (
+    EngineError,
+    EngineTimeoutError,
+    RoomHandlerSupervisor,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -415,7 +419,7 @@ class CodexAdapter(EngineAdapter):
                     ),
                     timeout=_CODEX_TURN_TIMEOUT,
                 )
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
                 abort_signal.set()
                 logger.error(
                     "codex.timeout",
@@ -425,13 +429,23 @@ class CodexAdapter(EngineAdapter):
                 # Drop the thread so the next message starts a fresh
                 # turn rather than piling onto the aborted one.
                 self._threads.pop(room_id, None)
-                return None
+                # #422 — surface as a timeout so the supervisor notifies
+                # the user instead of swallowing it into a silent ok.
+                raise EngineTimeoutError(
+                    f"codex turn exceeded {_CODEX_TURN_TIMEOUT}s"
+                ) from exc
             return response if response else None
+        except EngineError:
+            # already-classified engine failure (e.g. the timeout above)
+            self._threads.pop(room_id, None)
+            raise
         except Exception as exc:
             logger.error("codex.turn_failed", room_id=room_id, error=str(exc))
             # Remove broken thread so next message creates a fresh one
             self._threads.pop(room_id, None)
-            return None
+            # #422 — propagate so the supervisor records outcome=failed
+            # and notifies the user, instead of returning None (silent).
+            raise EngineError(str(exc)) from exc
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an ``INGEST_ONLY`` message for the next active turn.
