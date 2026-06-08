@@ -19,9 +19,24 @@ from anygarden.observability.tracing import (
     SPAN_LLM,
     SPAN_REQUEST,
     TracingService,
+    normalize_otlp_endpoint,
     parse_otlp_headers,
+    resolve_otlp_headers,
     setup_tracing,
 )
+
+
+class _Cfg:
+    """Minimal config stand-in for setup_tracing / resolve_otlp_headers."""
+
+    def __init__(self, **kw):
+        self.otel_enabled = kw.get("otel_enabled", True)
+        self.otel_otlp_endpoint = kw.get("otel_otlp_endpoint", "")
+        self.otel_otlp_headers = kw.get("otel_otlp_headers", "")
+        self.otel_langfuse_public_key = kw.get("otel_langfuse_public_key", "")
+        self.otel_langfuse_secret_key = kw.get("otel_langfuse_secret_key", "")
+        self.otel_service_name = kw.get("otel_service_name", "test-svc")
+        self.otel_sampling_ratio = kw.get("otel_sampling_ratio", 1.0)
 
 
 def _provider_with_exporter() -> tuple[TracerProvider, InMemorySpanExporter]:
@@ -45,6 +60,57 @@ def test_parse_headers_handles_blanks_and_embedded_equals():
 
 def test_parse_headers_empty():
     assert parse_otlp_headers("") == {}
+
+
+# ── normalize_otlp_endpoint ──────────────────────────────────────────
+
+
+def test_normalize_endpoint_appends_traces_path_to_base_url():
+    assert (
+        normalize_otlp_endpoint("https://host/api/public/otel")
+        == "https://host/api/public/otel/v1/traces"
+    )
+
+
+def test_normalize_endpoint_leaves_full_path_untouched():
+    assert (
+        normalize_otlp_endpoint("https://host/api/public/otel/v1/traces")
+        == "https://host/api/public/otel/v1/traces"
+    )
+
+
+def test_normalize_endpoint_strips_trailing_slash():
+    assert (
+        normalize_otlp_endpoint("http://localhost:4318/")
+        == "http://localhost:4318/v1/traces"
+    )
+
+
+# ── resolve_otlp_headers ─────────────────────────────────────────────
+
+
+def test_resolve_headers_explicit_override_wins():
+    cfg = _Cfg(
+        otel_otlp_headers="Authorization=Basic explicit",
+        otel_langfuse_public_key="pk-lf-x",
+        otel_langfuse_secret_key="sk-lf-y",
+    )
+    assert resolve_otlp_headers(cfg) == {"Authorization": "Basic explicit"}
+
+
+def test_resolve_headers_builds_basic_from_langfuse_keys():
+    import base64
+
+    cfg = _Cfg(
+        otel_langfuse_public_key="pk-lf-pub",
+        otel_langfuse_secret_key="sk-lf-sec",
+    )
+    expected = base64.b64encode(b"pk-lf-pub:sk-lf-sec").decode()
+    assert resolve_otlp_headers(cfg) == {"Authorization": f"Basic {expected}"}
+
+
+def test_resolve_headers_empty_when_nothing_configured():
+    assert resolve_otlp_headers(_Cfg()) == {}
 
 
 # ── setup_tracing ────────────────────────────────────────────────────
@@ -71,6 +137,19 @@ def test_setup_tracing_enabled_builds_provider():
         otel_sampling_ratio = 1.0
 
     provider = setup_tracing(Cfg())
+    assert provider is not None
+    provider.shutdown()
+
+
+def test_setup_tracing_with_base_url_and_langfuse_keys():
+    # Operator supplies a base URL + pk/sk (no manual /v1/traces, no
+    # hand-encoded header). setup_tracing normalizes + builds auth.
+    cfg = _Cfg(
+        otel_otlp_endpoint="https://langfuse.example/api/public/otel",
+        otel_langfuse_public_key="pk-lf-pub",
+        otel_langfuse_secret_key="sk-lf-sec",
+    )
+    provider = setup_tracing(cfg)
     assert provider is not None
     provider.shutdown()
 

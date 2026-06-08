@@ -107,15 +107,21 @@ class AnygardenSettings(BaseSettings):
     # ``ANYGARDEN_OTEL_OTLP_ENDPOINT`` at a collector / Langfuse OTLP
     # ingress (e.g. ``https://cloud.langfuse.com/api/public/otel``).
     otel_enabled: bool = False
-    # OTLP/HTTP traces endpoint. The exporter appends ``/v1/traces`` only
-    # when the URL has no path, mirroring the OTEL SDK convention; for
-    # Langfuse the full ``.../api/public/otel`` path is passed verbatim.
+    # OTLP/HTTP traces endpoint. May be a base URL — e.g. Langfuse's
+    # ``https://<host>/api/public/otel`` — because ``setup_tracing``
+    # normalizes it by appending ``/v1/traces`` when that suffix is
+    # absent (the explicit ``endpoint=`` arg the SDK receives is used
+    # verbatim, so this normalization is done by us, not the SDK).
     otel_otlp_endpoint: str = ""
-    # Comma-separated ``key=value`` pairs sent as OTLP export headers.
-    # Langfuse auth is Basic — pass it as
-    # ``Authorization=Basic <base64(public:secret)>``. Kept as a raw
-    # string so secrets never need a structured settings shape.
+    # Comma-separated ``key=value`` OTLP export headers (override). When
+    # set, this wins over the Langfuse-key convenience below. Langfuse
+    # auth is HTTP Basic — ``Authorization=Basic <base64(public:secret)>``.
     otel_otlp_headers: str = ""
+    # Langfuse convenience: when both keys are set and ``otel_otlp_headers``
+    # is empty, ``setup_tracing`` builds the Basic auth header from
+    # ``base64("<public>:<secret>")`` so operators never hand-encode it.
+    otel_langfuse_public_key: str = ""
+    otel_langfuse_secret_key: str = ""
     otel_service_name: str = "anygarden-cluster"
     # Head sampling ratio (0.0–1.0). 1.0 records every request trace.
     otel_sampling_ratio: float = 1.0
