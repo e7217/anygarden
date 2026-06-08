@@ -70,6 +70,45 @@ def parse_otlp_headers(raw: str) -> dict[str, str]:
     return headers
 
 
+_TRACES_PATH = "/v1/traces"
+
+
+def normalize_otlp_endpoint(endpoint: str) -> str:
+    """Append ``/v1/traces`` unless the URL already ends with it.
+
+    The OTLP/HTTP exporter uses an explicit ``endpoint=`` argument
+    verbatim (the ``/v1/traces`` auto-append only applies to the
+    ``OTEL_EXPORTER_OTLP_ENDPOINT`` *base* env var, which we don't use).
+    So a base URL like ``https://host/api/public/otel`` would POST to
+    the wrong path and silently 404. Normalizing here lets operators
+    pass either the base URL or the full traces path.
+    """
+    e = endpoint.rstrip("/")
+    if e.endswith(_TRACES_PATH):
+        return e
+    return e + _TRACES_PATH
+
+
+def resolve_otlp_headers(config: Any) -> dict[str, str]:
+    """OTLP export headers from explicit override or Langfuse keys.
+
+    ``otel_otlp_headers`` (raw ``k=v,k=v``) wins when set. Otherwise, if
+    both Langfuse keys are present, build HTTP Basic auth from
+    ``base64("<public>:<secret>")`` so operators don't hand-encode it.
+    """
+    raw = getattr(config, "otel_otlp_headers", "") or ""
+    if raw.strip():
+        return parse_otlp_headers(raw)
+    public = (getattr(config, "otel_langfuse_public_key", "") or "").strip()
+    secret = (getattr(config, "otel_langfuse_secret_key", "") or "").strip()
+    if public and secret:
+        import base64
+
+        token = base64.b64encode(f"{public}:{secret}".encode()).decode()
+        return {"Authorization": f"Basic {token}"}
+    return {}
+
+
 def setup_tracing(config: Any) -> Optional[Any]:
     """Build a :class:`TracerProvider`, or ``None`` when tracing is off.
 
@@ -100,12 +139,13 @@ def setup_tracing(config: Any) -> Optional[Any]:
         provider = TracerProvider(
             resource=resource, sampler=ParentBased(TraceIdRatioBased(ratio))
         )
+        traces_endpoint = normalize_otlp_endpoint(endpoint)
         exporter = OTLPSpanExporter(
-            endpoint=endpoint,
-            headers=parse_otlp_headers(getattr(config, "otel_otlp_headers", "") or ""),
+            endpoint=traces_endpoint,
+            headers=resolve_otlp_headers(config),
         )
         provider.add_span_processor(BatchSpanProcessor(exporter))
-        logger.info("otel.enabled", endpoint=endpoint, sampling_ratio=ratio)
+        logger.info("otel.enabled", endpoint=traces_endpoint, sampling_ratio=ratio)
         return provider
     except Exception as exc:  # noqa: BLE001 — never let OTEL setup block boot
         logger.warning("otel.setup_failed", error=str(exc))
