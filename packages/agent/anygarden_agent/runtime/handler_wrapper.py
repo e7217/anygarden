@@ -36,6 +36,32 @@ def _truncate(s: str, limit: int = _ERROR_MAX_CHARS) -> str:
     return s[: limit - 1] + "…"
 
 
+class EngineError(Exception):
+    """A turn failed inside an engine adapter (#422).
+
+    Adapters used to swallow turn failures (``except: return None``),
+    which the supervisor recorded as ``outcome=ok`` with an empty
+    response — a silent response loss the #420 design set out to
+    eliminate. Adapters now ``raise EngineError`` instead so the
+    supervisor surfaces ``outcome=failed`` and notifies the user.
+    """
+
+
+class EngineTimeoutError(EngineError):
+    """An adapter-level turn timeout (e.g. codex ``_CODEX_TURN_TIMEOUT``).
+
+    Mapped to ``outcome=timeout`` rather than ``failed`` so adapter
+    timeouts are indistinguishable from the supervisor's own
+    ``wait_for`` timeout in the event log.
+    """
+
+
+# User-facing notices. Kept short and tagged so the cluster can render
+# them as system messages without leaking internal error detail.
+_TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
+_FAILED_NOTICE = "⚠️ 에이전트가 응답을 생성하지 못했습니다."
+
+
 class RoomHandlerSupervisor:
     """Serialize handler invocations per-room and emit lifecycle events."""
 
@@ -99,6 +125,10 @@ class RoomHandlerSupervisor:
         except asyncio.TimeoutError:
             outcome = "timeout"
             error = f"engine exceeded {self._timeout}s"
+        except EngineTimeoutError as exc:
+            # #422 — adapter-level timeout (e.g. codex turn timeout).
+            outcome = "timeout"
+            error = _truncate(str(exc))
         except asyncio.CancelledError:
             outcome = "cancelled"
             engine_dur = int((time.monotonic() - engine_started) * 1000)
@@ -123,6 +153,18 @@ class RoomHandlerSupervisor:
             outcome = "failed"
             error = _truncate(str(exc))
 
+        # #422 — a tracked (user-triggered) turn that produced no text is
+        # a silent failure, not a legitimate no-reply. Ambient no-reply
+        # flows through ``ingest_context`` (decide_policy → INGEST_ONLY)
+        # and never reaches the supervisor, so an empty result on a turn
+        # that carries a ``request_id`` means the engine was asked to
+        # answer and didn't. Surface it as ``failed`` + a user notice
+        # rather than leaving the user staring at silence.
+        if outcome == "ok" and not response and request_id is not None:
+            outcome = "failed"
+            if error is None:
+                error = "engine produced no response"
+
         engine_dur = int((time.monotonic() - engine_started) * 1000)
         await self._client.sendLifecycle(
             room_id,
@@ -135,16 +177,20 @@ class RoomHandlerSupervisor:
         )
 
         send_metadata = {"request_id": request_id} if request_id else None
-        # Truthiness check: an empty string is a legitimate
-        # "no-reply" signal from the engine (e.g. ambient ingestion
-        # paths where the adapter deliberately returns "").
+        # ``response`` truthy → deliver it. An empty result reaches here
+        # only for proactive/untracked turns (request_id is None); those
+        # keep the legitimate "no-reply" semantics. Tracked empty turns
+        # were already reclassified to ``failed`` above. ``timeout`` and
+        # ``failed`` both notify the user so silence never reads as success.
         if response:
             await self._client.send(room_id, response, metadata=send_metadata)
         elif outcome == "timeout":
             await self._client.send(
-                room_id,
-                "⚠️ 응답이 타임아웃으로 중단되었습니다.",
-                metadata=send_metadata,
+                room_id, _TIMEOUT_NOTICE, metadata=send_metadata
+            )
+        elif outcome == "failed":
+            await self._client.send(
+                room_id, _FAILED_NOTICE, metadata=send_metadata
             )
 
         total = int((time.monotonic() - started) * 1000)

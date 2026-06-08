@@ -46,7 +46,10 @@ from anygarden_agent.integrations.base import (
     compose_session_context_suffix,
     decide_policy,
 )
-from anygarden_agent.runtime.handler_wrapper import RoomHandlerSupervisor
+from anygarden_agent.runtime.handler_wrapper import (
+    EngineError,
+    RoomHandlerSupervisor,
+)
 
 
 logger = structlog.get_logger(__name__)
@@ -303,7 +306,9 @@ class OpenHandsAdapter(EngineAdapter):
                 room_id=room_id,
                 error=str(exc),
             )
-            return None
+            # #422 — propagate so the supervisor surfaces outcome=failed
+            # and notifies the user instead of swallowing into silence.
+            raise EngineError(str(exc)) from exc
 
         # Steps 4-5: drive the agent. ``secrets_in_env`` covers the
         # SDK construction window; the actual LLM call happens inside
@@ -318,7 +323,9 @@ class OpenHandsAdapter(EngineAdapter):
                     room_id=room_id,
                     error=str(exc),
                 )
-                return None
+                # #422 — propagate so the supervisor records failed +
+                # notifies the user instead of returning None (silent).
+                raise EngineError(str(exc)) from exc
 
         # Step 6: drain captured assistant text. The capture closure
         # appends to a per-conversation list reset between turns.
