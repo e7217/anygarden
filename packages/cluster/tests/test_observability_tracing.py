@@ -218,6 +218,83 @@ def test_start_request_returns_trace_id_hex_and_is_idempotent():
     assert ts.start_request("r", room_id=None, agent_id=None) == first
 
 
+# ── A→B causal link (#431) ───────────────────────────────────────────
+
+
+def _requests_by_rid(exporter: InMemorySpanExporter) -> dict:
+    return {
+        s.attributes.get("anygarden.request_id"): s
+        for s in exporter.get_finished_spans()
+        if s.name == SPAN_REQUEST
+    }
+
+
+def test_start_request_with_parent_links_to_parent_trace():
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider)
+    # A's turn (parent) is still open when B starts — B is minted on A's
+    # response_sent, which fires before A's handler_finished closes it.
+    ts.start_request("rid-A", room_id="room-1", agent_id="agent-A")
+    parent_ctx = ts._registry["rid-A"].root.get_span_context()
+    ts.start_request(
+        "rid-B", room_id="room-1", agent_id="agent-B", parent_request_id="rid-A"
+    )
+    ts.finish_request("rid-B", outcome="ok")
+    ts.finish_request("rid-A", outcome="ok")
+
+    b = _requests_by_rid(exporter)["rid-B"]
+    # FOLLOWS_FROM: a Link to A's root, NOT a parent-child edge (A and B
+    # are independent request lifecycles, so B is its own trace).
+    assert b.parent is None
+    assert len(b.links) == 1
+    assert b.links[0].context.span_id == parent_ctx.span_id
+    assert b.links[0].context.trace_id == parent_ctx.trace_id
+    assert b.context.trace_id != parent_ctx.trace_id
+    assert b.attributes["anygarden.parent_request_id"] == "rid-A"
+    # The link must be a *typed* FOLLOWS_FROM (a bare Link is untyped and
+    # indistinguishable from child-of). #431.
+    assert b.links[0].attributes["opentracing.ref_type"] == "follows_from"
+
+
+def test_start_request_link_survives_parent_close():
+    # The link only needs the parent's span_context, which stays valid
+    # after the parent span ends — so even if A finishes first the edge
+    # is intact.
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider)
+    ts.start_request("rid-A", room_id="r", agent_id="a")
+    parent_ctx = ts._registry["rid-A"].root.get_span_context()
+    ts.start_request("rid-B", room_id="r", agent_id="b", parent_request_id="rid-A")
+    ts.finish_request("rid-A", outcome="ok")  # close parent first
+    ts.finish_request("rid-B", outcome="ok")
+    b = _requests_by_rid(exporter)["rid-B"]
+    assert len(b.links) == 1
+    assert b.links[0].context.span_id == parent_ctx.span_id
+
+
+def test_start_request_unknown_parent_skips_link_keeps_attribute():
+    # parent never started (or already reaped) → no link, but the
+    # informational attribute is still stamped (the DB parent_request_id
+    # is independent of whether tracing could resolve the parent span).
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider)
+    ts.start_request("rid-B", room_id="r", agent_id="b", parent_request_id="ghost")
+    ts.finish_request("rid-B", outcome="ok")
+    b = _requests_by_rid(exporter)["rid-B"]
+    assert len(b.links) == 0
+    assert b.attributes["anygarden.parent_request_id"] == "ghost"
+
+
+def test_start_request_without_parent_has_no_link_or_attribute():
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider)
+    ts.start_request("rid", room_id="r", agent_id="a")
+    ts.finish_request("rid", outcome="ok")
+    b = _requests_by_rid(exporter)["rid"]
+    assert len(b.links) == 0
+    assert "anygarden.parent_request_id" not in b.attributes
+
+
 # ── correlation modes ────────────────────────────────────────────────
 
 

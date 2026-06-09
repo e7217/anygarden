@@ -52,6 +52,10 @@ export default function RoomActivityDialog({
   }, [open, roomId])
 
   const { turns } = splitLogs(logs)
+  // #431 — resolve each turn's parent (the agent turn that triggered it)
+  // so the flow reads as A→B. Only turns whose parent is in this window
+  // get the "↳" marker; an off-window parent degrades to no marker.
+  const turnById = new Map(turns.map(t => [t.requestId, t]))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -75,7 +79,16 @@ export default function RoomActivityDialog({
               No activity in this room yet
             </p>
           )}
-          {turns.map(turn => (
+          {turns.map(turn => {
+            const parent = turn.parentRequestId
+              ? turnById.get(turn.parentRequestId)
+              : undefined
+            const parentLabel = parent
+              ? parent.agentId
+                ? parent.agentId.slice(0, 6)
+                : 'agent'
+              : null
+            return (
             <div
               key={turn.requestId}
               className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs"
@@ -85,6 +98,15 @@ export default function RoomActivityDialog({
                 className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${turnDotClass(turn)}`}
                 aria-label={turnLabel(turn)}
               />
+              {parentLabel && (
+                <span
+                  className="text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
+                  title={`Triggered by ${parent?.agentId ?? 'an agent'} (${turn.parentRequestId})`}
+                  data-testid="room-activity-parent"
+                >
+                  ↳ from <span className="font-mono">{parentLabel}</span>
+                </span>
+              )}
               <span
                 className="font-mono text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
                 title={turn.agentId ?? undefined}
@@ -114,7 +136,8 @@ export default function RoomActivityDialog({
                 </span>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       </DialogContent>
     </Dialog>

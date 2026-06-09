@@ -33,6 +33,10 @@ export interface Turn {
   lastTs: number
   outcome: TurnOutcome
   triggerMessageId: string | null
+  // #431 — the request_id of the turn that triggered this one (an
+  // agent A→B handoff). Null for user-triggered / unlinked turns. The
+  // room flow view resolves it to the parent agent to draw A→B.
+  parentRequestId: string | null
   agentId: string | null // #429 — owning agent (for the room-level view)
   // #425 — authoritative fields the agent already reports in
   // ``details`` but the UI previously ignored (recomputing duration
@@ -93,6 +97,11 @@ export function splitLogs(
       triggerRow && typeof triggerRow.details?.trigger_message_id === 'string'
         ? (triggerRow.details.trigger_message_id as string)
         : null
+    // #431 — the parent turn that triggered this one (A→B handoff).
+    const parentRequestId =
+      triggerRow && typeof triggerRow.details?.parent_request_id === 'string'
+        ? (triggerRow.details.parent_request_id as string)
+        : null
     // #425 — pull the authoritative fields the agent already reports.
     let finalOutcome: EngineOutcome | null = null
     let durationMs: number | null = null
@@ -123,6 +132,7 @@ export function splitLogs(
       lastTs,
       outcome: deriveOutcome(events),
       triggerMessageId,
+      parentRequestId,
       agentId,
       finalOutcome,
       durationMs,

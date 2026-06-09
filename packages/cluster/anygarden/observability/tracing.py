@@ -47,6 +47,16 @@ SPAN_HANDLER = "agent.handler"
 SPAN_ENGINE = "agent.engine_call"
 SPAN_LLM = "llm.generation"
 
+# OpenTracing's FOLLOWS_FROM reference type (#431). OTEL has no built-in
+# FOLLOWS_FROM link kind — a bare ``Link`` is untyped and a consumer
+# cannot tell it from a child-of reference — so the *causal* (vs
+# parent-child) relationship is carried on this link attribute, the
+# standard OpenTracing→OTEL bridge key. Hard-coded rather than imported
+# from ``opentelemetry.semconv._incubating`` (an unstable module) but
+# kept equal to its ``OPENTRACING_REF_TYPE`` / ``FOLLOWS_FROM`` values.
+_REF_TYPE_KEY = "opentracing.ref_type"
+_REF_TYPE_FOLLOWS_FROM = "follows_from"
+
 
 def parse_otlp_headers(raw: str) -> dict[str, str]:
     """Parse ``"k1=v1,k2=v2"`` into a headers dict.
@@ -204,18 +214,39 @@ class TracingService:
     # ── request lifecycle → spans ────────────────────────────────────
 
     def start_request(
-        self, request_id: str, *, room_id: Optional[str], agent_id: Optional[str]
+        self,
+        request_id: str,
+        *,
+        room_id: Optional[str],
+        agent_id: Optional[str],
+        parent_request_id: Optional[str] = None,
     ) -> Optional[str]:
         """Open the root ``chat.request`` span. Returns its trace_id hex
-        (for log correlation) or ``None`` when disabled / duplicate."""
+        (for log correlation) or ``None`` when disabled / duplicate.
+
+        ``parent_request_id`` (#431) ties an agent→agent turn back to the
+        turn that triggered it. When the parent's root span is still in
+        the registry — it is, because B is minted on A's ``response_sent``,
+        which fires before A's ``handler_finished`` closes A — we attach a
+        FOLLOWS_FROM :class:`Link` to it. B stays its OWN trace (not a
+        child: A and B are independent lifecycles and A's root closes
+        first), and the link records the causal edge for the backend.
+        The ``anygarden.parent_request_id`` attribute is stamped
+        regardless of whether the parent span could be resolved, since the
+        DB-side parent link is independent of tracing.
+        """
         if not self._enabled or not request_id:
             return None
         if request_id in self._registry:  # idempotent: first start wins
             return _trace_id_hex(self._registry[request_id].root)
-        span = self._tracer.start_span(SPAN_REQUEST)
+        links = self._parent_links(parent_request_id)
+        span = self._tracer.start_span(SPAN_REQUEST, links=links)
         _set(span, "anygarden.request_id", request_id)
         _set(span, "anygarden.room_id", room_id)
         _set(span, "anygarden.agent_id", agent_id)
+        # #431 — informational; the FOLLOWS_FROM Link above is what the
+        # trace backend reads, this is for our own /activity queries.
+        _set(span, "anygarden.parent_request_id", parent_request_id)
         # #425 — Langfuse groups traces sharing this magic attribute into
         # one Session, so a room's turns read as one conversation.
         _set(span, "langfuse.session.id", room_id)
@@ -223,6 +254,31 @@ class TracingService:
             root=span, created_monotonic=time.monotonic()
         )
         return _trace_id_hex(span)
+
+    def _parent_links(self, parent_request_id: Optional[str]) -> Optional[list]:
+        """Build a one-element FOLLOWS_FROM link list, or ``None`` (#431).
+
+        Returns ``None`` (not ``[]``) so the common no-parent path passes
+        ``links=None`` to ``start_span`` exactly as before. A parent that
+        isn't in the registry (never started / already reaped) degrades to
+        no link — the turn is still tracked, just without the causal edge.
+        """
+        if not parent_request_id:
+            return None
+        parent = self._registry.get(parent_request_id)
+        if parent is None:
+            return None
+        try:
+            return [
+                ot_trace.Link(
+                    parent.root.get_span_context(),
+                    # Typed FOLLOWS_FROM — a bare Link conveys no relation.
+                    attributes={_REF_TYPE_KEY: _REF_TYPE_FOLLOWS_FROM},
+                )
+            ]
+        except Exception as exc:  # noqa: BLE001 — never raise from instrumentation
+            logger.warning("otel.parent_link_failed", error=str(exc))
+            return None
 
     def start_handler(self, request_id: str, *, room_id: Optional[str] = None) -> None:
         rt = self._registry.get(request_id) if self._enabled else None

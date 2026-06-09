@@ -143,6 +143,28 @@ describe('splitLogs', () => {
     expect(byReq['rB']).toBe('agent-2')
   })
 
+  // #431 — A→B causal link: the triggering turn's id rides on
+  // message_received.details.parent_request_id.
+  it('captures parentRequestId from message_received details', () => {
+    const logs = [
+      row({
+        event_type: 'message_received',
+        request_id: 'rB',
+        timestamp: '2026-04-21T12:00:02Z',
+        details: { parent_request_id: 'rA', trigger_message_id: 'msg-1' },
+      }),
+      row({
+        event_type: 'message_received',
+        request_id: 'rA',
+        timestamp: '2026-04-21T12:00:00Z',
+      }),
+    ]
+    const { turns } = splitLogs(logs)
+    const byReq = Object.fromEntries(turns.map(t => [t.requestId, t.parentRequestId]))
+    expect(byReq['rB']).toBe('rA')
+    expect(byReq['rA']).toBeNull()
+  })
+
   // #425 — the UI now consumes the authoritative details fields.
   it('extracts engine / duration_ms / outcome / error from details', () => {
     const logs = [

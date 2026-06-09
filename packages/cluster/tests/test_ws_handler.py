@@ -1665,3 +1665,212 @@ class TestActivityLogRequestIdCorrelation:
             )).scalar_one()
             assert stored.extra_metadata is not None
             assert stored.extra_metadata["request_id"] == "rid-echo-test"
+
+
+# ── A→B causal link (#431) ───────────────────────────────────────────
+#
+# When agent A's reply nominates agent B as the next speaker, the server
+# must mint a *tracked* turn for B — and only for B, not a fan-out to the
+# whole room (that would flood ActivityLog with phantom orphans). The
+# minted ``message_received`` row carries ``parent_request_id`` (= the
+# request_id A echoed) so the flow view / trace can draw A→B.
+
+
+class TestAgentCausalLink:
+    @pytest_asyncio.fixture()
+    async def make_room(self, config: AnygardenSettings):
+        """Factory: build an app + room with N agents under a strategy.
+
+        Returns handles per test; each call gets its own in-memory DB
+        (config.db_url is ``sqlite+aiosqlite://``). Agents are added in
+        ``agent_names`` order, which is the round-robin rotation order
+        (joined_at, id), so the caller controls who index 0 / 1 are.
+        """
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
+
+        engines = []
+
+        async def _make(*, strategy: str, agent_names: list[str]):
+            engine = build_engine(config.db_url)
+            sf = build_session_factory(engine)
+            engines.append(engine)
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            tokens: dict[str, str] = {}
+            agents: dict[str, str] = {}
+            parts: dict[str, str] = {}
+            async with sf() as db:
+                project = Project(name="cl-proj")
+                db.add(project)
+                await db.flush()
+                room = Room(
+                    project_id=project.id,
+                    name="cl-room",
+                    speaker_strategy=strategy,
+                    current_speaker_index=0,
+                )
+                db.add(room)
+                await db.flush()
+                for name in agent_names:
+                    agent = Agent(
+                        name=name, engine="codex", actual_state="running"
+                    )
+                    db.add(agent)
+                    await db.flush()
+                    part = Participant(
+                        room_id=room.id, agent_id=agent.id, role="member"
+                    )
+                    db.add(part)
+                    await db.flush()
+                    tok = generate_token()
+                    th, lh = hash_agent_token(tok)
+                    db.add(AgentToken(agent_id=agent.id, token_hash=th, lookup_hint=lh))
+                    tokens[name] = tok
+                    agents[name] = agent.id
+                    parts[name] = part.id
+                await db.commit()
+                room_id = room.id
+            app = create_app(config)
+            app.state.engine = engine
+            app.state.session_factory = sf
+            return {
+                "app": app,
+                "sf": sf,
+                "room_id": room_id,
+                "tokens": tokens,
+                "agents": agents,
+                "parts": parts,
+            }
+
+        yield _make
+        for e in engines:
+            await e.dispose()
+
+    @staticmethod
+    def _agent_send(app, token: str, room_id: str, content: str, metadata=None):
+        """Connect as an agent, send one message, return its id."""
+        from starlette.testclient import TestClient
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                ws.receive_text()  # welcome
+                frame = {"type": "send", "content": content}
+                if metadata is not None:
+                    frame["metadata"] = metadata
+                ws.send_text(json.dumps(frame))
+                resp = json.loads(ws.receive_text())
+                assert resp["type"] == "message"
+                return resp["id"]
+
+    @pytest.mark.asyncio
+    async def test_nominated_agent_turn_carries_parent_request_id(
+        self, make_room
+    ) -> None:
+        """round_robin: A's send nominates B → B gets a tracked turn
+        whose ``message_received`` carries ``parent_request_id`` (A's
+        echoed id) and ``trigger_message_id`` (A's message)."""
+        from anygarden.db.models import ActivityLog
+
+        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
+        a_msg_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "over to you",
+            metadata={"request_id": "rid-A"},
+        )
+
+        async with env["sf"]() as db:
+            rows = (await db.execute(
+                select(ActivityLog).where(
+                    ActivityLog.event_type == "message_received",
+                )
+            )).scalars().all()
+            assert len(rows) == 1, "only the nominated agent gets a turn"
+            row = rows[0]
+            assert row.agent_id == env["agents"]["B"]
+            assert row.request_id and row.request_id != "rid-A"
+            assert row.room_id == env["room_id"]
+            assert row.details["parent_request_id"] == "rid-A"
+            assert row.details["trigger_message_id"] == a_msg_id
+            assert row.details["room_id"] == env["room_id"]
+
+    @pytest.mark.asyncio
+    async def test_no_next_speaker_mints_no_turn(self, make_room) -> None:
+        """mentioned_only with no mention → no nomination → no fan-out
+        (phantom orphan count stays 0)."""
+        from anygarden.db.models import ActivityLog
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "just chatter",
+            metadata={"request_id": "rid-A"},
+        )
+        async with env["sf"]() as db:
+            rows = (await db.execute(
+                select(ActivityLog).where(
+                    ActivityLog.event_type == "message_received",
+                )
+            )).scalars().all()
+            assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_forged_next_speaker_metadata_is_ignored(
+        self, make_room
+    ) -> None:
+        """An agent must not be able to forge ``next_speaker_participant_id``
+        in its outbound metadata to spuriously mint/trigger a peer's
+        turn. The fan-out keys off the server-set nomination, not the
+        inbound (agent-mutable) metadata — so a mentioned_only room with
+        no dispatcher nomination mints nothing even when the sender
+        supplies a real peer participant id."""
+        from anygarden.db.models import ActivityLog
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "trust me, B is next",
+            metadata={
+                "request_id": "rid-A",
+                "next_speaker_participant_id": env["parts"]["B"],
+            },
+        )
+        async with env["sf"]() as db:
+            rows = (await db.execute(
+                select(ActivityLog).where(
+                    ActivityLog.event_type == "message_received",
+                )
+            )).scalars().all()
+            assert rows == [], "forged next_speaker must not mint a turn"
+
+    @pytest.mark.asyncio
+    async def test_self_nomination_mints_no_turn(self, make_room) -> None:
+        """round_robin with a single agent nominates the sender itself
+        (index wraps to 0). The self-handoff guard must skip it so a
+        turn never causally links to its own author."""
+        from anygarden.db.models import ActivityLog
+
+        env = await make_room(strategy="round_robin", agent_names=["solo"])
+        self._agent_send(
+            env["app"],
+            env["tokens"]["solo"],
+            env["room_id"],
+            "thinking out loud",
+            metadata={"request_id": "rid-A"},
+        )
+        async with env["sf"]() as db:
+            rows = (await db.execute(
+                select(ActivityLog).where(
+                    ActivityLog.event_type == "message_received",
+                )
+            )).scalars().all()
+            assert rows == []
