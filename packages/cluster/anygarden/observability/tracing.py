@@ -299,6 +299,37 @@ class TracingService:
         self._end(rt.root, outcome=outcome, duration_ms=None)
         self._drop_inflight(request_id, None)
 
+    def reap_request(self, request_id: str) -> None:
+        """Close a request's spans as ``orphaned`` right now (#427).
+
+        Called by the cluster orphan sweeper so the DB ``handler_orphaned``
+        decision and the in-memory span reaper agree immediately, instead
+        of waiting out the separate reaper TTL. No-op if the request
+        already finished (not in the registry).
+        """
+        self.finish_request(request_id, outcome="orphaned")
+
+    def note_response_sent(
+        self, request_id: str, message_id: Optional[str] = None
+    ) -> None:
+        """Record the agent's delivered reply as a root-span event (#427).
+
+        The root span closes on ``handler_finished``; ``response_sent``
+        fires just before it, so the root is still open here. Lets a
+        trace show whether/when the reply actually reached the room and
+        which message carried it. No-op when disabled / already closed.
+        """
+        if not self._enabled or not request_id:
+            return
+        rt = self._registry.get(request_id)
+        if rt is None:
+            return
+        try:
+            attrs = {"message_id": message_id} if message_id else None
+            rt.root.add_event("response_sent", attributes=attrs)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("otel.note_response_sent_failed", error=str(exc))
+
     # ── reverse-proxy LLM call → span + correlation ──────────────────
 
     def record_llm_call(

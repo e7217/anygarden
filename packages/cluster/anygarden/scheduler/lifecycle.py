@@ -849,7 +849,7 @@ async def sweep_orphaned_requests(
     session_factory,
     *,
     threshold_sec: int = ORPHAN_THRESHOLD_SEC_DEFAULT,
-) -> int:
+) -> list[str]:
     """Mark stalled handlers as ``handler_orphaned``.
 
     For every ``request_id`` whose earliest ``handler_started`` is
@@ -858,8 +858,9 @@ async def sweep_orphaned_requests(
     insert a single ``handler_orphaned`` row.
 
     Idempotent by construction: the ``HAVING`` clause excludes
-    already-orphaned requests. Returns the number of new orphan
-    rows written.
+    already-orphaned requests. Returns the list of newly-orphaned
+    ``request_id``s (#427) so the caller can bump the orphan metric and
+    reap the matching in-memory spans; ``len()`` is the count.
     """
     threshold = datetime.now(timezone.utc) - timedelta(seconds=threshold_sec)
 
@@ -901,7 +902,7 @@ async def sweep_orphaned_requests(
         # pass by looking up one handler_started row per group.
         # This is fine at orphan scale — orphans are rare by design
         # (engine_timeout already closes the common case).
-        new_rows = 0
+        orphaned_ids: list[str] = []
         for req_id, agent_id, started_at in rows:
             started_row = (
                 await db.execute(
@@ -922,6 +923,7 @@ async def sweep_orphaned_requests(
                     agent_id=agent_id,
                     event_type="handler_orphaned",
                     request_id=req_id,
+                    room_id=room_id,
                     details={
                         "room_id": room_id,
                         "started_at": started_at.isoformat()
@@ -931,6 +933,6 @@ async def sweep_orphaned_requests(
                     },
                 )
             )
-            new_rows += 1
+            orphaned_ids.append(req_id)
         await db.commit()
-        return new_rows
+        return orphaned_ids

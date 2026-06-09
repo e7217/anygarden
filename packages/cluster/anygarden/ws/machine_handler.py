@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.machine_token import verify_machine_token_hash
 from anygarden.config import AnygardenSettings
 from anygarden.db.models import Machine, MachineActivityLog, MachineEngine, MachineToken
+from anygarden.observability.metrics import machines_online
 
 logger = structlog.get_logger(__name__)
 
@@ -79,6 +80,7 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
 
     # Register in bus
     await machine_bus.register(machine_id, websocket)
+    machines_online.inc()  # #427 — revive the fleet-health gauge
     logger.info("machine_ws.connected", machine_id=machine_id)
 
     try:
@@ -178,6 +180,7 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
         logger.error("machine_ws.error", machine_id=machine_id, error=str(exc))
     finally:
         await machine_bus.unregister(machine_id)
+        machines_online.dec()  # #427 — balance the connect increment
         # Mark machine offline on disconnect
         async with session_factory() as db:
             result = await db.execute(
