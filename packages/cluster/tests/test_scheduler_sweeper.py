@@ -50,7 +50,7 @@ async def test_started_without_finished_is_marked_orphaned(engine, db):
     await db.commit()
 
     n = await sweep_orphaned_requests(factory, threshold_sec=1200)
-    assert n == 1
+    assert n == [req_id]  # #427 — returns the orphaned request_ids
 
     async with factory() as s:
         events = (
@@ -91,7 +91,7 @@ async def test_finished_request_is_not_orphaned(engine, db):
     await db.commit()
 
     n = await sweep_orphaned_requests(factory, threshold_sec=1200)
-    assert n == 0
+    assert len(n) == 0  # #427 — sweep now returns the orphaned request_ids
 
     async with factory() as s:
         events = (
@@ -132,7 +132,7 @@ async def test_already_orphaned_is_not_flagged_twice(engine, db):
     await db.commit()
 
     n = await sweep_orphaned_requests(factory, threshold_sec=1200)
-    assert n == 0
+    assert len(n) == 0  # #427 — sweep now returns the orphaned request_ids
 
     async with factory() as s:
         count = (
@@ -168,7 +168,7 @@ async def test_recent_request_below_threshold_is_not_orphaned(engine, db):
     await db.commit()
 
     n = await sweep_orphaned_requests(factory, threshold_sec=1200)
-    assert n == 0
+    assert len(n) == 0  # #427 — sweep now returns the orphaned request_ids
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_null_request_id_rows_are_ignored(engine, db):
     await db.commit()
 
     n = await sweep_orphaned_requests(factory, threshold_sec=1200)
-    assert n == 0
+    assert len(n) == 0  # #427 — sweep now returns the orphaned request_ids
 
 
 def test_default_threshold_matches_design():

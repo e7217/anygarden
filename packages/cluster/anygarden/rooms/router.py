@@ -23,7 +23,9 @@ from sqlalchemy.orm import selectinload
 
 from anygarden.api.v1.invites import _require_room_admin_or_owner
 from anygarden.auth.dependencies import Identity, GuestClaims
+from anygarden.api.v1.agents import ActivityLogOut
 from anygarden.db.models import (
+    ActivityLog,
     Agent,
     Participant,
     Room,
@@ -1628,3 +1630,39 @@ async def delete_room_artifact(
             room_id,
             RoomArtifactRemovedOut(room_id=room_id, artifact_id=artifact_id),
         )
+
+
+@router.get("/{room_id}/activity", response_model=list[ActivityLogOut])
+async def get_room_activity(
+    room_id: str,
+    limit: int = 100,
+    identity: Identity = Depends(get_admin_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Recent activity for ALL agents in a room, newest first (#427).
+
+    Reads the first-class ``room_id`` column (indexed), so a per-room
+    timeline doesn't fan out across every agent's ``/agents/{id}/activity``
+    or full-scan the JSON details. Admin-gated, matching the agent
+    activity endpoint. The frontend groups rows by ``request_id`` into
+    per-turn timelines (``splitLogs``); cross-agent causal linking lands
+    in Phase 3.
+    """
+    stmt = (
+        select(ActivityLog)
+        .where(ActivityLog.room_id == room_id)
+        .order_by(ActivityLog.timestamp.desc())
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    return [
+        ActivityLogOut(
+            id=r.id,
+            agent_id=r.agent_id,
+            event_type=r.event_type,
+            timestamp=r.timestamp.isoformat(),
+            request_id=r.request_id,
+            details=r.details,
+        )
+        for r in rows
+    ]

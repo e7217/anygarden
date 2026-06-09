@@ -723,6 +723,37 @@ async def _run_skill_stale_cron(app: FastAPI, interval_seconds: float) -> None:
             return
 
 
+async def _reconcile_agents_by_state(app: FastAPI) -> None:
+    """#427 — refresh the ``agents_by_state`` gauge from a COUNT GROUP BY.
+
+    The gauge was defined but never updated (scraped a permanent 0).
+    Reconciling on the orphan-sweeper cadence (~60s) is cheap and gives
+    fleet-health panels real data without wiring every state transition.
+    """
+    from sqlalchemy import func, select
+
+    from anygarden.db.models import Agent
+    from anygarden.observability.metrics import agents_by_state
+
+    try:
+        async with app.state.session_factory() as db:
+            rows = (
+                await db.execute(
+                    select(Agent.actual_state, func.count()).group_by(
+                        Agent.actual_state
+                    )
+                )
+            ).all()
+        # Clear stale label series first so a state that dropped to zero
+        # doesn't linger at its last value.
+        agents_by_state.clear()
+        for state, count in rows:
+            if state:
+                agents_by_state.labels(state=state).set(count)
+    except Exception:  # noqa: BLE001 — metric refresh must not break the loop
+        pass
+
+
 async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     """Periodically promote stuck ``handler_started`` rows to
     ``handler_orphaned``.
@@ -735,6 +766,7 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     """
     import structlog
 
+    from anygarden.observability.metrics import agent_turns_orphaned_total
     from anygarden.scheduler.lifecycle import sweep_orphaned_requests
 
     log = structlog.get_logger("orphan_sweeper")
@@ -748,9 +780,19 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     while True:
         try:
             factory = app.state.session_factory
-            n = await sweep_orphaned_requests(factory)
-            if n:
-                log.info("orphan_sweeper.marked", count=n)
+            # #427 — sweep returns the newly-orphaned request_ids.
+            orphaned = await sweep_orphaned_requests(factory)
+            if orphaned:
+                log.info("orphan_sweeper.marked", count=len(orphaned))
+                agent_turns_orphaned_total.inc(len(orphaned))
+                # Bridge the DB decision to the in-memory span reaper so
+                # the two orphan mechanisms agree immediately (#427).
+                tracing = getattr(app.state, "tracing", None)
+                if tracing is not None:
+                    for rid in orphaned:
+                        tracing.reap_request(rid)
+            # #427 — refresh the fleet-health gauge (previously dead).
+            await _reconcile_agents_by_state(app)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

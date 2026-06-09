@@ -84,6 +84,7 @@ async def _persist_lifecycle_event(
         agent_id=agent_id,
         event_type=frame.event,
         request_id=frame.request_id,
+        room_id=frame.room_id,
         details=_lifecycle_details(frame),
     ))
 
@@ -1296,8 +1297,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             agent_id=identity.id,
                             event_type="response_sent",
                             request_id=echoed_rid,
+                            room_id=room_id,
                             details={"room_id": room_id},
                         ))
+                        # #427 — note the delivered reply on the trace
+                        # (root span is still open until handler_finished).
+                        if tracing is not None and echoed_rid:
+                            tracing.note_response_sent(echoed_rid, msg.id)
                     elif identity and identity.kind == "user":
                         agent_parts = (await db.execute(
                             select(Participant.id, Participant.agent_id).where(
@@ -1312,6 +1318,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 agent_id=aid,
                                 event_type="message_received",
                                 request_id=rid,
+                                room_id=room_id,
                                 details={
                                     "room_id": room_id,
                                     "from_participant_id": participant.id,

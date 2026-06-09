@@ -34,6 +34,15 @@ engine_call_duration_ms = Histogram(
     buckets=(100, 500, 1000, 5000, 15000, 60000, 300000),
 )
 
+# #427 Phase 2 — turns that started but never produced a terminal event
+# and were swept to ``handler_orphaned`` by the cluster. A started-but-
+# never-finished failure mode that is otherwise only visible in
+# ActivityLog; surfacing it as a counter makes it alertable.
+agent_turns_orphaned_total = Counter(
+    "anygarden_agent_turns_orphaned_total",
+    "Total number of agent turns promoted to handler_orphaned by the sweeper",
+)
+
 ws_connections_active = Gauge(
     "anygarden_ws_connections_active",
     "Number of currently active WebSocket connections",
