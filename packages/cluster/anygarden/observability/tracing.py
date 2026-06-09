@@ -216,6 +216,9 @@ class TracingService:
         _set(span, "anygarden.request_id", request_id)
         _set(span, "anygarden.room_id", room_id)
         _set(span, "anygarden.agent_id", agent_id)
+        # #425 — Langfuse groups traces sharing this magic attribute into
+        # one Session, so a room's turns read as one conversation.
+        _set(span, "langfuse.session.id", room_id)
         self._registry[request_id] = _RequestTrace(
             root=span, created_monotonic=time.monotonic()
         )
@@ -332,6 +335,8 @@ class TracingService:
             _set(span, "anygarden.correlation", corr.mode)
             _set(span, "anygarden.room_id", corr.room_id)
             _set(span, "anygarden.request_id", corr.request_id)
+            # #425 — same Langfuse session as the room's lifecycle trace.
+            _set(span, "langfuse.session.id", corr.room_id)
             _set(span, "http.response.status_code", status_code)
             if self._capture_content:
                 if request_body:
@@ -420,7 +425,10 @@ class TracingService:
             _set(span, "anygarden.duration_ms", duration_ms)
             if error:
                 _set(span, "anygarden.error", error[:500])
-            if outcome in ("failed", "timeout", "orphaned"):
+            # #425 — ``rejected`` (room busy, second concurrent dispatch)
+            # is a real failure for the user and must count as ERROR;
+            # ``cancelled`` stays non-error (deliberate interruption).
+            if outcome in ("failed", "timeout", "orphaned", "rejected"):
                 span.set_status(Status(StatusCode.ERROR, str(outcome)))
             span.end()
         except Exception as exc:  # noqa: BLE001

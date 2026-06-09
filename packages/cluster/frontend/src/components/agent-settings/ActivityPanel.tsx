@@ -29,9 +29,26 @@ interface Turn {
   lastTs: number
   outcome: TurnOutcome
   triggerMessageId: string | null
+  // #425 — authoritative fields the agent already reports in
+  // ``details`` but the UI previously ignored (recomputing duration
+  // from row timestamps and mislabelling failed turns as 'responded'
+  // because the #422 error notice is itself a response_sent).
+  finalOutcome: EngineOutcome | null // handler_finished details.outcome
+  durationMs: number | null // handler_finished details.duration_ms (authoritative)
+  engine: string | null // engine_call_* details.engine
+  roomId: string | null
+  error: string | null // failure reason, when the turn failed
 }
 
 type TurnOutcome = 'responded' | 'silent' | 'orphaned' | 'in_flight'
+type EngineOutcome = 'ok' | 'failed' | 'timeout' | 'cancelled' | 'rejected'
+
+function str(v: unknown): string | null {
+  return typeof v === 'string' ? v : null
+}
+function num(v: unknown): number | null {
+  return typeof v === 'number' ? v : null
+}
 
 function deriveOutcome(events: ActivityLog[]): TurnOutcome {
   const kinds = new Set(events.map(e => e.event_type))
@@ -71,6 +88,27 @@ export function splitLogs(
       triggerRow && typeof triggerRow.details?.trigger_message_id === 'string'
         ? (triggerRow.details.trigger_message_id as string)
         : null
+    // #425 — pull the authoritative fields the agent already reports.
+    let finalOutcome: EngineOutcome | null = null
+    let durationMs: number | null = null
+    let engine: string | null = null
+    let roomId: string | null = null
+    let error: string | null = null
+    for (const e of events) {
+      const d = e.details ?? {}
+      roomId = roomId ?? str(d.room_id)
+      if (e.event_type === 'engine_call_started' || e.event_type === 'engine_call_finished') {
+        engine = str(d.engine) ?? engine
+      }
+      if (e.event_type === 'handler_finished') {
+        finalOutcome = (str(d.outcome) as EngineOutcome | null) ?? finalOutcome
+        durationMs = num(d.duration_ms) ?? durationMs
+        error = str(d.error) ?? error
+      }
+      if (e.event_type === 'engine_call_finished') {
+        error = error ?? str(d.error)
+      }
+    }
     turns.push({
       requestId,
       events,
@@ -78,6 +116,11 @@ export function splitLogs(
       lastTs,
       outcome: deriveOutcome(events),
       triggerMessageId,
+      finalOutcome,
+      durationMs,
+      engine,
+      roomId,
+      error,
     })
   }
   // Most recent turn first.
@@ -110,6 +153,41 @@ function outcomeDotClass(outcome: TurnOutcome): string {
     case 'orphaned': return 'bg-[var(--color-destructive,#d74c4c)]'
     case 'in_flight': return 'bg-[var(--color-foreground-muted)]'
   }
+}
+
+// #425 — the agent's reported outcome is authoritative. When present it
+// wins over the event-presence heuristic (which mislabels #422 failures
+// as 'responded' since the error notice is itself a response_sent).
+export function turnLabel(turn: Turn): string {
+  const fo = turn.finalOutcome
+  if (fo) return fo === 'ok' ? 'responded' : fo
+  return outcomeLabel(turn.outcome)
+}
+
+export function turnDotClass(turn: Turn): string {
+  const fo = turn.finalOutcome
+  if (fo) {
+    if (fo === 'ok') return 'bg-[var(--color-success)]'
+    if (fo === 'cancelled') return 'bg-[var(--color-foreground-muted)]'
+    return 'bg-[var(--color-destructive,#d74c4c)]' // failed | timeout | rejected
+  }
+  return outcomeDotClass(turn.outcome)
+}
+
+// #425 — per-event one-line detail (engine / duration / outcome / error)
+// pulled from the row's details JSON; '' when the row carries nothing.
+function eventDetail(evt: ActivityLog): string {
+  const d = evt.details ?? {}
+  const parts: string[] = []
+  const engine = str(d.engine)
+  if (engine) parts.push(engine)
+  const dur = num(d.duration_ms)
+  if (dur != null) parts.push(formatDuration(dur))
+  const outcome = str(d.outcome)
+  if (outcome) parts.push(outcome)
+  const err = str(d.error)
+  if (err) parts.push(err.length > 80 ? err.slice(0, 79) + '…' : err)
+  return parts.join(' · ')
 }
 
 export default function ActivityPanel({ agentId }: Props) {
@@ -160,7 +238,9 @@ export default function ActivityPanel({ agentId }: Props) {
           <ul className="space-y-1">
             {turns.map(turn => {
               const isOpen = expanded.has(turn.requestId)
-              const duration = turn.lastTs - turn.firstTs
+              // #425 — prefer the agent's authoritative engine time;
+              // fall back to the row interval for legacy turns.
+              const duration = turn.durationMs ?? turn.lastTs - turn.firstTs
               return (
                 <li
                   key={turn.requestId}
@@ -178,8 +258,8 @@ export default function ActivityPanel({ agentId }: Props) {
                       }`}
                     />
                     <span
-                      className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${outcomeDotClass(turn.outcome)}`}
-                      aria-label={outcomeLabel(turn.outcome)}
+                      className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${turnDotClass(turn)}`}
+                      aria-label={turnLabel(turn)}
                     />
                     <span className="font-medium text-[var(--color-foreground)]">
                       {new Date(turn.firstTs).toLocaleString()}
@@ -187,8 +267,13 @@ export default function ActivityPanel({ agentId }: Props) {
                     <span className="text-[var(--color-foreground-muted)]">
                       · {formatDuration(duration)}
                     </span>
+                    {turn.engine && (
+                      <span className="text-[var(--color-foreground-muted)]">
+                        · {turn.engine}
+                      </span>
+                    )}
                     <span className="text-[var(--color-foreground-muted)]">
-                      · {outcomeLabel(turn.outcome)}
+                      · {turnLabel(turn)}
                     </span>
                     {turn.triggerMessageId && (
                       <span
@@ -201,19 +286,37 @@ export default function ActivityPanel({ agentId }: Props) {
                   </button>
                   {isOpen && (
                     <ol className="border-t border-[var(--color-border)] px-6 py-1.5 space-y-0.5">
-                      {turn.events.map(evt => (
-                        <li
-                          key={evt.id}
-                          className="flex items-center gap-2 text-[11px]"
-                        >
-                          <span className="font-mono text-[var(--color-foreground)]">
-                            {evt.event_type}
-                          </span>
-                          <span className="text-[var(--color-foreground-muted)]">
-                            {new Date(evt.timestamp).toLocaleTimeString()}
-                          </span>
+                      {turn.roomId && (
+                        <li className="text-[10px] text-[var(--color-foreground-subtle)] font-mono">
+                          room {turn.roomId}
                         </li>
-                      ))}
+                      )}
+                      {turn.events.map(evt => {
+                        const detail = eventDetail(evt)
+                        return (
+                          <li
+                            key={evt.id}
+                            className="flex items-center gap-2 text-[11px]"
+                          >
+                            <span className="font-mono text-[var(--color-foreground)]">
+                              {evt.event_type}
+                            </span>
+                            <span className="text-[var(--color-foreground-muted)]">
+                              {new Date(evt.timestamp).toLocaleTimeString()}
+                            </span>
+                            {detail && (
+                              <span className="truncate text-[var(--color-foreground-muted)]">
+                                · {detail}
+                              </span>
+                            )}
+                          </li>
+                        )
+                      })}
+                      {turn.error && (
+                        <li className="text-[11px] text-[var(--color-destructive,#d74c4c)]">
+                          error: {turn.error}
+                        </li>
+                      )}
                     </ol>
                   )}
                 </li>

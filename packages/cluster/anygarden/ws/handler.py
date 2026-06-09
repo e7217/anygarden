@@ -22,6 +22,8 @@ from anygarden.messages.references import (
     canonicalize_shared_file_references,
 )
 from anygarden.observability.metrics import (
+    agent_turns_total,
+    engine_call_duration_ms,
     guest_active,
     guest_rate_limited_total,
 )
@@ -123,6 +125,26 @@ def _apply_lifecycle_to_trace(
             error=frame.error,
         )
         tracing.finish_request(rid, outcome=frame.outcome)
+
+
+def _apply_lifecycle_to_metrics(frame: LifecycleFrame) -> None:
+    """Feed Prometheus turn metrics from a LifecycleFrame (#425).
+
+    Independent of OTEL: counts/observes whether or not tracing is
+    enabled. Labels stay bounded (outcome / engine only). Best-effort —
+    a metric error must never break the WS receive loop.
+    """
+    try:
+        if frame.event == "engine_call_finished":
+            if frame.duration_ms is not None:
+                engine_call_duration_ms.labels(
+                    engine=frame.engine or "unknown",
+                    outcome=frame.outcome or "unknown",
+                ).observe(frame.duration_ms)
+        elif frame.event == "handler_finished":
+            agent_turns_total.labels(outcome=frame.outcome or "unknown").inc()
+    except Exception as exc:  # noqa: BLE001 — metrics must not break the turn
+        logger.warning("ws.lifecycle.metric_failed", error=str(exc))
 
 
 def _is_ambient_candidate(
@@ -725,6 +747,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # -- Main receive loop --
         while True:
             raw = await websocket.receive_text()
+            # #425 — reset per-frame log context and re-bind the room as
+            # the durable correlation key for every log this frame emits.
+            # request_id (per agent) is additionally bound in the
+            # LifecycleFrame branch; user sends fan out to N request_ids
+            # so the SendFrame path correlates on room_id (+ message_id).
+            structlog.contextvars.clear_contextvars()
+            structlog.contextvars.bind_contextvars(room_id=room_id)
             try:
                 data: dict[str, Any] = json.loads(raw)
                 frame_in = parse_incoming(data)
@@ -1245,6 +1274,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         content=frame_in.content,
                         metadata=metadata or None,
                     )
+                    # #425 — bind the message id so ingest/broadcast logs
+                    # below carry it (cleared next loop iteration).
+                    structlog.contextvars.bind_contextvars(message_id=msg.id)
 
                     # Log message events for agents (same transaction).
                     # On user sends we mint a fresh ``request_id`` per
@@ -1360,6 +1392,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         _apply_lifecycle_to_trace(
                             tracing, agent_id=identity.id, frame=frame_in
                         )
+                        # #425 — turn metrics (independent of OTEL).
+                        _apply_lifecycle_to_metrics(frame_in)
                     finally:
                         structlog.contextvars.unbind_contextvars("request_id")
                 else:

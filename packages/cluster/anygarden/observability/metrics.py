@@ -2,7 +2,37 @@
 
 from __future__ import annotations
 
-from prometheus_client import Counter, Gauge
+from prometheus_client import Counter, Gauge, Histogram
+
+# ── #425 Phase 1 — turn-level observability from LifecycleFrames ──────
+#
+# These are fed from the single point where the cluster receives agent
+# LifecycleFrames (ws/handler.py), independent of OTEL being enabled.
+# Labels are deliberately BOUNDED: outcome (5 values) and engine (a
+# handful). agent_id / room_id are intentionally NOT labels — that
+# per-id breakdown lives in ActivityLog / OTEL, never in metric series
+# (it would blow up cardinality).
+
+# One increment per finished turn, labelled by terminal outcome. The
+# ``engine`` is NOT on the handler_finished frame (it lives on the
+# engine_call_* frames), so this counter is outcome-only; the
+# per-engine latency breakdown is the histogram below.
+agent_turns_total = Counter(
+    "anygarden_agent_turns_total",
+    "Total number of finished agent turns, by terminal outcome",
+    ["outcome"],  # ok | failed | timeout | cancelled | rejected
+)
+
+# Engine-call wall time as measured by the agent (frame.duration_ms),
+# observed when an engine_call_finished frame arrives (which carries
+# both engine and outcome). Buckets span sub-second to the 15-min
+# engine timeout.
+engine_call_duration_ms = Histogram(
+    "anygarden_engine_call_duration_ms",
+    "Agent engine-call duration in milliseconds",
+    ["engine", "outcome"],
+    buckets=(100, 500, 1000, 5000, 15000, 60000, 300000),
+)
 
 ws_connections_active = Gauge(
     "anygarden_ws_connections_active",

@@ -4,7 +4,7 @@
 // gets the grouping right, so we pin the pure function here.
 import { describe, it, expect } from 'vitest'
 
-import { splitLogs } from './ActivityPanel'
+import { splitLogs, turnLabel } from './ActivityPanel'
 
 interface Row {
   id: string
@@ -126,5 +126,50 @@ describe('splitLogs', () => {
     const { turns, system } = splitLogs([])
     expect(turns).toEqual([])
     expect(system).toEqual([])
+  })
+
+  // #425 — the UI now consumes the authoritative details fields.
+  it('extracts engine / duration_ms / outcome / error from details', () => {
+    const logs = [
+      row({ event_type: 'message_received', request_id: 'r1', timestamp: '2026-04-21T12:00:00Z', details: { room_id: 'room-9' } }),
+      row({ event_type: 'engine_call_started', request_id: 'r1', timestamp: '2026-04-21T12:00:01Z', details: { engine: 'codex' } }),
+      row({ event_type: 'engine_call_finished', request_id: 'r1', timestamp: '2026-04-21T12:00:02Z', details: { engine: 'codex', outcome: 'failed', duration_ms: 4200, error: 'model 400' } }),
+      row({ event_type: 'handler_finished', request_id: 'r1', timestamp: '2026-04-21T12:00:02Z', details: { outcome: 'failed', duration_ms: 4300, error: 'model 400' } }),
+    ]
+    const { turns } = splitLogs(logs)
+    const t = turns[0]
+    expect(t.engine).toBe('codex')
+    expect(t.durationMs).toBe(4300) // handler_finished is the turn time
+    expect(t.finalOutcome).toBe('failed')
+    expect(t.roomId).toBe('room-9')
+    expect(t.error).toBe('model 400')
+  })
+
+  it('labels a #422 failed turn as failed, not responded', () => {
+    // After #422 a failed turn emits an error-notice response_sent, so
+    // the event-presence heuristic would wrongly say 'responded'. The
+    // authoritative handler_finished.outcome must win.
+    const logs = [
+      row({ event_type: 'message_received', request_id: 'r1', timestamp: '2026-04-21T12:00:00Z' }),
+      row({ event_type: 'handler_started', request_id: 'r1', timestamp: '2026-04-21T12:00:01Z' }),
+      row({ event_type: 'response_sent', request_id: 'r1', timestamp: '2026-04-21T12:00:02Z' }),
+      row({ event_type: 'handler_finished', request_id: 'r1', timestamp: '2026-04-21T12:00:02Z', details: { outcome: 'failed' } }),
+    ]
+    const { turns } = splitLogs(logs)
+    expect(turns[0].outcome).toBe('responded') // legacy heuristic unchanged
+    expect(turns[0].finalOutcome).toBe('failed')
+    expect(turnLabel(turns[0])).toBe('failed') // authoritative display
+  })
+
+  it('turnLabel maps ok→responded and falls back to heuristic', () => {
+    const ok = splitLogs([
+      row({ event_type: 'handler_finished', request_id: 'r1', timestamp: '2026-04-21T12:00:00Z', details: { outcome: 'ok' } }),
+    ]).turns[0]
+    expect(turnLabel(ok)).toBe('responded')
+    const legacy = splitLogs([
+      row({ event_type: 'handler_orphaned', request_id: 'r2', timestamp: '2026-04-21T12:00:00Z' }),
+    ]).turns[0]
+    expect(legacy.finalOutcome).toBeNull()
+    expect(turnLabel(legacy)).toBe('orphaned')
   })
 })
