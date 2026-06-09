@@ -1151,6 +1151,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     ):
                         metadata["ingest_only"] = True
 
+                    # #431 — the server-authoritative next speaker for
+                    # THIS send. Captured from the dispatcher helpers'
+                    # return values (not read back from ``metadata``,
+                    # which an agent sender can forge, nor from
+                    # ``Room.next_speaker_participant_id``, which persists
+                    # a stale value across sends). Drives the agent→agent
+                    # causal fan-out below.
+                    nominated_pid: str | None = None
+
                     # Issue #159 Phase B — round_robin dispatcher.
                     # Server picks the next speaker; agents just check
                     # whether they match. Human senders reset rotation
@@ -1170,6 +1179,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         if next_info is not None:
                             new_index, next_pid = next_info
+                            nominated_pid = next_pid
                             metadata["next_speaker_participant_id"] = next_pid
                             await db.execute(
                                 sa_update(Room)
@@ -1196,7 +1206,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         if identity is not None and identity.kind == "agent"
                         else None
                     )
-                    await _apply_orchestrator_handoff(
+                    handoff_pid = await _apply_orchestrator_handoff(
                         db,
                         room_id=room_id,
                         content=frame_in.content,
@@ -1204,6 +1214,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         orchestrator_agent_id=orchestrator_agent_id,
                         sender_agent_id=sender_agent_id,
                     )
+                    if handoff_pid is not None:
+                        nominated_pid = handoff_pid
 
                     # Orchestrator fallback nominate — when the
                     # moderator emits a non-terminal message without
@@ -1233,6 +1245,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         if fallback_info is not None:
                             new_index, next_pid = fallback_info
+                            nominated_pid = next_pid
                             logger.warning(
                                 "orchestrator_fallback_nominate",
                                 room_id=room_id,
@@ -1304,6 +1317,54 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # (root span is still open until handler_finished).
                         if tracing is not None and echoed_rid:
                             tracing.note_response_sent(echoed_rid, msg.id)
+                        # #431 — A→B causal link. If the dispatcher
+                        # nominated a NEXT speaker (handoff / round-robin /
+                        # fallback) that is *another* agent, mint a tracked
+                        # turn for that one agent so the trace shows A's
+                        # reply waking B. Only the nominated agent gets a
+                        # request_id — no fan-out to the whole room — so
+                        # frequent agent chatter doesn't flood ActivityLog
+                        # with phantom orphans. ``nominated_pid`` is the
+                        # server-set value captured above, NOT read back
+                        # from ``metadata`` (an agent could forge that to
+                        # spuriously trigger/track a peer). A self-
+                        # nomination (single-agent round_robin wraps to the
+                        # sender) is skipped: a turn must not causally link
+                        # to its own author.
+                        next_pid = nominated_pid
+                        if next_pid and next_pid != participant.id:
+                            next_aid = (await db.execute(
+                                select(Participant.agent_id).where(
+                                    Participant.id == next_pid,
+                                    Participant.room_id == room_id,
+                                    Participant.agent_id.isnot(None),
+                                )
+                            )).scalar_one_or_none()
+                            if next_aid is not None:
+                                rid = str(uuid4())
+                                request_id_by_participant[next_pid] = rid
+                                db.add(ActivityLog(
+                                    agent_id=next_aid,
+                                    event_type="message_received",
+                                    request_id=rid,
+                                    room_id=room_id,
+                                    details={
+                                        "room_id": room_id,
+                                        "from_participant_id": participant.id,
+                                        "trigger_message_id": msg.id,
+                                        # #431 — the turn that triggered
+                                        # this one, so the flow view /
+                                        # trace can draw A→B.
+                                        "parent_request_id": echoed_rid,
+                                    },
+                                ))
+                                if tracing is not None:
+                                    tracing.start_request(
+                                        rid,
+                                        room_id=room_id,
+                                        agent_id=next_aid,
+                                        parent_request_id=echoed_rid,
+                                    )
                     elif identity and identity.kind == "user":
                         agent_parts = (await db.execute(
                             select(Participant.id, Participant.agent_id).where(
