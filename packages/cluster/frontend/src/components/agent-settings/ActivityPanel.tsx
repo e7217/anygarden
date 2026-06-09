@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 
-interface ActivityLog {
+export interface ActivityLog {
   id: string
   event_type: string
   timestamp: string
@@ -10,6 +10,10 @@ interface ActivityLog {
   // (start_requested / stop_requested / state_changed) that don't
   // belong to any particular request lifecycle.
   request_id: string | null
+  // #429 — which agent the row belongs to. The per-agent panel knows
+  // this implicitly; the room-level view (RoomActivityDialog) needs it
+  // to label each turn. Optional so existing callers compile unchanged.
+  agent_id?: string | null
   details: Record<string, unknown> | null
 }
 
@@ -22,13 +26,14 @@ interface Props {
 // stamped on every related ActivityLog row. We group client-side
 // because the API already exposes every field we need; a dedicated
 // turns endpoint would duplicate that logic (#222 §3.2).
-interface Turn {
+export interface Turn {
   requestId: string
   events: ActivityLog[]
   firstTs: number
   lastTs: number
   outcome: TurnOutcome
   triggerMessageId: string | null
+  agentId: string | null // #429 — owning agent (for the room-level view)
   // #425 — authoritative fields the agent already reports in
   // ``details`` but the UI previously ignored (recomputing duration
   // from row timestamps and mislabelling failed turns as 'responded'
@@ -109,6 +114,8 @@ export function splitLogs(
         error = error ?? str(d.error)
       }
     }
+    const agentId =
+      events.map(e => e.agent_id).find((a): a is string => !!a) ?? null
     turns.push({
       requestId,
       events,
@@ -116,6 +123,7 @@ export function splitLogs(
       lastTs,
       outcome: deriveOutcome(events),
       triggerMessageId,
+      agentId,
       finalOutcome,
       durationMs,
       engine,
@@ -128,7 +136,7 @@ export function splitLogs(
   return { turns, system }
 }
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.max(ms, 0)} ms`
   const s = ms / 1000
   if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`

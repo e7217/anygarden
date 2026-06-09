@@ -85,6 +85,8 @@ interface RoomHeaderProps {
    *  agent-produced artifacts without the header growing another
    *  inline icon. */
   onShowArtifacts?: () => void
+  /** #429 — admin-only room activity / multi-agent flow viewer. */
+  onShowRoomActivity?: () => void
   /** #302 — slot for the right context rail toggle button. ChatPage
    *  passes <RightRailToggle/>; the header just gives it a place to
    *  live next to the settings menu. ``undefined`` hides it (e.g.
@@ -135,6 +137,7 @@ export default function RoomHeader({
   onToggleEphemeral,
   onSearch,
   onShowArtifacts,
+  onShowRoomActivity,
   rightRailSlot,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
@@ -297,6 +300,7 @@ export default function RoomHeader({
           onManageAgents={onManageAgents}
           onSearch={onSearch}
           onShowArtifacts={onShowArtifacts}
+          onShowRoomActivity={onShowRoomActivity}
           onStopAllAgents={onStopAllAgents}
           onDeleteRoom={onDeleteRoom}
         />

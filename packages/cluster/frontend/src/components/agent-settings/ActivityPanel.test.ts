@@ -11,6 +11,7 @@ interface Row {
   event_type: string
   timestamp: string
   request_id: string | null
+  agent_id?: string | null
   details: Record<string, unknown> | null
 }
 
@@ -20,6 +21,7 @@ function row(partial: Partial<Row>): Row {
     event_type: partial.event_type ?? 'message_received',
     timestamp: partial.timestamp ?? '2026-04-21T12:00:00Z',
     request_id: partial.request_id ?? null,
+    agent_id: partial.agent_id ?? null,
     details: partial.details ?? null,
   }
 }
@@ -126,6 +128,19 @@ describe('splitLogs', () => {
     const { turns, system } = splitLogs([])
     expect(turns).toEqual([])
     expect(system).toEqual([])
+  })
+
+  // #429 — room-level view needs the owning agent per turn.
+  it('captures the owning agent_id on a turn', () => {
+    const logs = [
+      row({ event_type: 'message_received', request_id: 'rA', agent_id: 'agent-1', timestamp: '2026-04-21T12:00:00Z' }),
+      row({ event_type: 'handler_finished', request_id: 'rA', agent_id: 'agent-1', timestamp: '2026-04-21T12:00:01Z', details: { outcome: 'ok' } }),
+      row({ event_type: 'message_received', request_id: 'rB', agent_id: 'agent-2', timestamp: '2026-04-21T12:00:02Z' }),
+    ]
+    const { turns } = splitLogs(logs)
+    const byReq = Object.fromEntries(turns.map(t => [t.requestId, t.agentId]))
+    expect(byReq['rA']).toBe('agent-1')
+    expect(byReq['rB']).toBe('agent-2')
   })
 
   // #425 — the UI now consumes the authoritative details fields.
