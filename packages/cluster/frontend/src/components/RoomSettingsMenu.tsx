@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
+import { Activity, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
 
 /**
  * Overflow menu that groups the room's admin-scoped actions into a
@@ -35,6 +35,10 @@ export interface RoomSettingsMenuProps {
    *  every room member (no admin gate); kept here in the overflow
    *  menu so the header strip doesn't grow another inline icon. */
   onShowArtifacts?: () => void
+  /** #429 — admin-only room activity / multi-agent flow viewer. Gated
+   *  by the caller (passed only when ``user.is_admin``); the endpoint is
+   *  admin-only too. */
+  onShowRoomActivity?: () => void
   onStopAllAgents?: () => void
   onDeleteRoom?: () => void
 }
@@ -46,6 +50,7 @@ export default function RoomSettingsMenu({
   onManageAgents,
   onSearch,
   onShowArtifacts,
+  onShowRoomActivity,
   onStopAllAgents,
   onDeleteRoom,
 }: RoomSettingsMenuProps) {
@@ -88,6 +93,12 @@ export default function RoomSettingsMenu({
       icon: <ImageIcon className="h-4 w-4" />,
       onClick: onShowArtifacts,
       testId: 'room-menu-artifacts',
+    },
+    onShowRoomActivity && {
+      label: 'Room activity',
+      icon: <Activity className="h-4 w-4" />,
+      onClick: onShowRoomActivity,
+      testId: 'room-menu-activity',
     },
   ].filter(Boolean) as {
     label: string

@@ -6,6 +6,7 @@ import RoomHeader from '@/components/RoomHeader'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import RoomArtifactsDialog from '@/components/RoomArtifactsDialog'
+import RoomActivityDialog from '@/components/RoomActivityDialog'
 import TypingIndicator from '@/components/TypingIndicator'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
@@ -76,6 +77,7 @@ export default function ChatPage() {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
+  const [roomActivityOpen, setRoomActivityOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState(false)
@@ -539,6 +541,9 @@ export default function ChatPage() {
                 }
                 onSearch={() => setSearchOpen(true)}
                 onShowArtifacts={() => setArtifactsOpen(true)}
+                onShowRoomActivity={
+                  user?.is_admin ? () => setRoomActivityOpen(true) : undefined
+                }
                 rightRailSlot={
                   <RightRailToggle
                     roomId={selectedRoom}
@@ -594,6 +599,13 @@ export default function ChatPage() {
               open={artifactsOpen}
               onOpenChange={setArtifactsOpen}
             />
+            {user?.is_admin && (
+              <RoomActivityDialog
+                roomId={selectedRoom}
+                open={roomActivityOpen}
+                onOpenChange={setRoomActivityOpen}
+              />
+            )}
             <CreateSubRoomDialog
               parentRoomId={selectedRoom}
               parentRoomName={currentRoom.name}
