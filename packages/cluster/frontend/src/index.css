@@ -40,9 +40,21 @@
      to pop against warm neutrals, desaturated enough not to fight
      the accent. See DESIGN.md §2 "Status colors". */
   --color-status-online: #5b9e6d;
-  --color-accent-pink: #ff64c8;
-  --color-accent-purple: #391c57;
-  --color-accent-brown: #523410;
+
+  /* -- Color: avatar tones (#435) --
+     Seeded 8-tone palette read by ``lib/avatar.ts`` (FNV-1a hash → slot).
+     Each is a soft tint over white (``-N``) with a darker foreground for
+     initials (``-N-fg``). Tone 8 reuses brand blue by design. This token
+     set replaces the previously orphaned ``--color-accent-*`` family,
+     which was defined here but never referenced by the avatar palette. */
+  --color-tone-1: #efedea;                                --color-tone-1-fg: #615d59;
+  --color-tone-2: color-mix(in srgb, #2a9d99 18%, white); --color-tone-2-fg: #1d6f6c;
+  --color-tone-3: color-mix(in srgb, #1aae39 18%, white); --color-tone-3-fg: #0d7821;
+  --color-tone-4: color-mix(in srgb, #dd5b00 18%, white); --color-tone-4-fg: #a33f00;
+  --color-tone-5: color-mix(in srgb, #ff64c8 18%, white); --color-tone-5-fg: #b03c91;
+  --color-tone-6: color-mix(in srgb, #391c57 14%, white); --color-tone-6-fg: #391c57;
+  --color-tone-7: color-mix(in srgb, #523410 14%, white); --color-tone-7-fg: #523410;
+  --color-tone-8: #f2f9ff;                                --color-tone-8-fg: #005bab;
 
   /* -- Color: borders -- */
   --color-border: rgba(0, 0, 0, 0.1);                /* whisper border */
