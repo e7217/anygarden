@@ -268,7 +268,7 @@ export default function GoalForm({
       </fieldset>
 
       {error && (
-        <p role="alert" className="text-[12px] text-red-600">
+        <p role="alert" className="text-[12px] text-[var(--color-destructive)]">
           {error}
         </p>
       )}

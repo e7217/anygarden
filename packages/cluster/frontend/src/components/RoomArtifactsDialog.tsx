@@ -153,7 +153,7 @@ export default function RoomArtifactsDialog({
           </DialogDescription>
         </DialogHeader>
         {error && (
-          <p className="text-xs text-red-600" role="alert">
+          <p className="text-xs text-[var(--color-destructive)]" role="alert">
             {error}
           </p>
         )}

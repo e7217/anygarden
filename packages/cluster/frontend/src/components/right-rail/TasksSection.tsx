@@ -280,7 +280,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             column visually aligned. */}
         <button
           onClick={() => remove(task.id)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
+          className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
           aria-label={`Delete ${task.title}`}
         >
           <Trash2 className="h-3 w-3" />

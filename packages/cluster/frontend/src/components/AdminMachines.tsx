@@ -671,7 +671,7 @@ export default function AdminMachines() {
                                 title={isMachineOffline ? 'Machine is offline' : 'Stop'}
                                 disabled={isMachineOffline}
                               >
-                                <Square className="h-3.5 w-3.5 text-red-500" />
+                                <Square className="h-3.5 w-3.5 text-[var(--color-destructive)]" />
                               </Button>
                             )
                           }
@@ -744,7 +744,7 @@ export default function AdminMachines() {
                     <PauseCircle className="mr-1.5 h-3 w-3" /> Drain
                   </Button>
                   <Button variant="outline" size="sm"
-                    className="text-red-500 hover:text-red-600 border-red-200 hover:border-red-300"
+                    className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)] border-[var(--color-destructive)]/30 hover:border-[var(--color-destructive)]/50"
                     onClick={async () => {
                       if (!confirm(`Delete machine "${selectedMachine.name}"? This cannot be undone.`)) return
                       try {

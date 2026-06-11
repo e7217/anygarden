@@ -55,7 +55,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
       {error && (
         <p
           role="alert"
-          className="px-3 py-1 text-[11px] text-red-600"
+          className="px-3 py-1 text-[11px] text-[var(--color-destructive)]"
         >
           {error}
         </p>
@@ -90,7 +90,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
                 section header's right-side counter. */}
             <button
               onClick={() => handleDelete(f.id, f.filename)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
+              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
               aria-label={`Delete ${f.filename}`}
             >
               <Trash2 className="h-3 w-3" />

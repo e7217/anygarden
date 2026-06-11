@@ -203,7 +203,7 @@ export default function RoomSettingsMenu({
                   // obvious. The divider above further separates it
                   // from the safe-action group so a stray click is
                   // less likely.
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <OctagonX className="h-4 w-4" />
                   <span>Stop all agents</span>
@@ -221,7 +221,7 @@ export default function RoomSettingsMenu({
                   // this prop on the same admin/owner check the
                   // server enforces, and to prompt for confirmation
                   // before actually firing the DELETE.
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>Delete room</span>

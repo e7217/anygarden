@@ -28,8 +28,8 @@
   /* -- Color: semantic -- */
   --color-success: #1aae39;
   --color-success-soft: #2a9d99;                     /* teal */
-  --color-warning: #dd5b00;
-  --color-danger: #dd5b00;
+  --color-warning: #dd5b00;                          /* caution / attention — unchanged */
+  --color-danger: #c83a2b;                           /* destructive / delete — distinct red (#435) */
 
   /* -- Color: status (#71) --
      Status colors convey liveness/health state for stateful
@@ -60,7 +60,7 @@
   --color-secondary-foreground: rgba(0, 0, 0, 0.95);
   --color-accent: #f6f5f4;
   --color-accent-foreground: rgba(0, 0, 0, 0.95);
-  --color-destructive: #dd5b00;
+  --color-destructive: var(--color-danger);          /* shadcn alias → danger red (#435) */
   --color-destructive-foreground: #ffffff;
   --color-input: #dddddd;
   --color-ring: #097fe8;

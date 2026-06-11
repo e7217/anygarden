@@ -109,7 +109,7 @@ export default function GoalsPanel({ agentId, agentName = '' }: GoalsPanelProps)
               )}
               {g.report_room_id && <> · → room {g.report_room_id.slice(0, 8)}…</>}
               {g.consecutive_failures > 0 && (
-                <span className="ml-1 text-red-500">
+                <span className="ml-1 text-[var(--color-destructive)]">
                   · {g.consecutive_failures} fail
                 </span>
               )}
@@ -156,7 +156,7 @@ export default function GoalsPanel({ agentId, agentName = '' }: GoalsPanelProps)
               onClick={() => {
                 if (confirm(`Delete goal "${g.title}"?`)) remove(g.id)
               }}
-              className="h-6 w-6 text-red-400 hover:text-red-600"
+              className="h-6 w-6 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)]"
             >
               <Trash2 className="h-3 w-3" />
             </Button>
