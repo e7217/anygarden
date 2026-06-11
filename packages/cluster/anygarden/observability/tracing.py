@@ -315,11 +315,23 @@ class TracingService:
         duration_ms: Optional[int],
         error: Optional[str] = None,
         agent_id: Optional[str] = None,
+        prompt: Optional[str] = None,
+        completion: Optional[str] = None,
     ) -> None:
         rt = self._registry.get(request_id) if self._enabled else None
         self._drop_inflight(request_id, agent_id)
         if rt is None or rt.engine_call is None:
             return
+        # #433 — gateway-free turn I/O: the agent captured the prompt it
+        # handed the engine and the engine's reply at the run_engine
+        # boundary and shipped them on the engine_call_finished frame.
+        # Stamp them onto the engine span (same ``gen_ai.*`` keys as the
+        # proxy path) before it closes, gated by the content toggle.
+        if self._capture_content:
+            if prompt:
+                _set(rt.engine_call, "gen_ai.prompt", self._clip_text(prompt))
+            if completion:
+                _set(rt.engine_call, "gen_ai.completion", self._clip_text(completion))
         self._end(rt.engine_call, outcome=outcome, duration_ms=duration_ms, error=error)
         rt.engine_call = None
 
@@ -534,7 +546,14 @@ class TracingService:
                 self._inflight.pop(key, None)
 
     def _clip(self, body: bytes) -> str:
-        text = body.decode("utf-8", errors="replace")
+        return self._clip_text(body.decode("utf-8", errors="replace"))
+
+    def _clip_text(self, text: str) -> str:
+        """Bound a captured string to ``capture_max_chars`` (#433).
+
+        The str sibling of :meth:`_clip` — turn I/O arrives as text from
+        the agent frame rather than raw proxy bytes.
+        """
         if len(text) <= self._capture_max_chars:
             return text
         return text[: self._capture_max_chars - 1] + "…"

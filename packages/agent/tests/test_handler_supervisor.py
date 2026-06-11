@@ -25,6 +25,7 @@ import pytest
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTimeoutError,
+    EngineTurn,
     RoomHandlerSupervisor,
 )
 
@@ -71,6 +72,72 @@ async def test_ok_path_emits_four_lifecycle_events():
     handler_fin = client.lifecycle_events[3]
     assert handler_fin["outcome"] == "ok"
     assert client.sends == [("r1", "hello", {"request_id": "req-1"})]
+
+
+@pytest.mark.asyncio
+async def test_engine_turn_carries_prompt_and_completion():
+    # #433 — when run_engine returns an EngineTurn, the supervisor stamps
+    # the augmented turn input (prompt) and engine reply (completion) onto
+    # engine_call_finished so the cluster can put them on the span. The
+    # reply is still delivered to the room exactly as before.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return EngineTurn(response="the reply", prompt="augmented input")
+
+    await sup.dispatch(room_id="r1", request_id="req-io", run_engine=run_engine)
+
+    engine_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "engine_call_finished"
+    )
+    assert engine_fin["prompt"] == "augmented input"
+    assert engine_fin["completion"] == "the reply"
+    assert engine_fin["outcome"] == "ok"
+    assert client.sends == [("r1", "the reply", {"request_id": "req-io"})]
+
+
+@pytest.mark.asyncio
+async def test_engine_turn_empty_response_keeps_prompt_drops_completion():
+    # #433 × #422 — an EngineTurn with an empty response on a *tracked*
+    # turn reclassifies to failed; the captured prompt is still surfaced
+    # but completion is None (no output), and the user gets the notice.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return EngineTurn(response="", prompt="augmented input")
+
+    await sup.dispatch(room_id="r1", request_id="req-empty-io", run_engine=run_engine)
+
+    engine_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "engine_call_finished"
+    )
+    assert engine_fin["outcome"] == "failed"
+    assert engine_fin["prompt"] == "augmented input"
+    assert engine_fin.get("completion") is None
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]
+
+
+@pytest.mark.asyncio
+async def test_bare_str_return_stays_backward_compatible():
+    # A legacy run_engine returning a plain str still works; no turn-I/O
+    # fields are emitted (prompt/completion stay None → wire-excluded).
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return "plain reply"
+
+    await sup.dispatch(room_id="r1", request_id="req-s", run_engine=run_engine)
+
+    engine_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "engine_call_finished"
+    )
+    assert engine_fin.get("prompt") is None
+    assert engine_fin.get("completion") is None
+    assert client.sends == [("r1", "plain reply", {"request_id": "req-s"})]
 
 
 @pytest.mark.asyncio

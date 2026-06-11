@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable, Optional
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Optional, Union
 
 
 _ERROR_MAX_CHARS = 500
@@ -56,6 +57,40 @@ class EngineTimeoutError(EngineError):
     """
 
 
+@dataclass
+class EngineTurn:
+    """Richer engine result (#433) — gateway-free LLM turn I/O.
+
+    A ``run_engine`` callback may return this instead of a bare ``str``
+    to also surface the augmented input the adapter handed the engine
+    (``prompt``) alongside the reply (``response``). The supervisor puts
+    both on the ``engine_call_finished`` frame so the cluster can stamp
+    them onto the ``agent.engine_call`` span — no LLM gateway needed.
+
+    A plain ``str`` return stays valid (``prompt`` simply omitted), so
+    adapters/tests that don't opt in are unaffected.
+    """
+
+    response: Optional[str]
+    prompt: Optional[str] = None
+
+
+# A run_engine callback may return the bare reply (legacy) or an
+# EngineTurn carrying the turn input too (#433).
+EngineResult = Union[str, EngineTurn, None]
+
+
+def _normalize_engine_result(raw: EngineResult) -> tuple[Optional[str], Optional[str]]:
+    """Split a run_engine result into ``(response, prompt)``.
+
+    ``str``/``None`` → ``(raw, None)`` (no turn input captured);
+    ``EngineTurn`` → ``(response, prompt)``.
+    """
+    if isinstance(raw, EngineTurn):
+        return raw.response, raw.prompt
+    return raw, None
+
+
 # User-facing notices. Kept short and tagged so the cluster can render
 # them as system messages without leaking internal error detail.
 _TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
@@ -76,7 +111,7 @@ class RoomHandlerSupervisor:
         self,
         room_id: str,
         request_id: Optional[str],
-        run_engine: Callable[[], Awaitable[str]],
+        run_engine: Callable[[], Awaitable[EngineResult]],
     ) -> None:
         lock = self._room_locks.setdefault(room_id, asyncio.Lock())
         if lock.locked():
@@ -100,7 +135,7 @@ class RoomHandlerSupervisor:
         self,
         room_id: str,
         request_id: Optional[str],
-        run_engine: Callable[[], Awaitable[str]],
+        run_engine: Callable[[], Awaitable[EngineResult]],
     ) -> None:
         started = time.monotonic()
         await self._client.sendLifecycle(
@@ -118,10 +153,18 @@ class RoomHandlerSupervisor:
         outcome: str = "ok"
         error: Optional[str] = None
         response: Optional[str] = None
+        prompt: Optional[str] = None  # #433 — augmented turn input, if any
+        # #433 — turn I/O capture is opt-in: only when the adapter returns
+        # an EngineTurn (not a bare str) do we surface prompt/completion.
+        # Keeps the feature a single predictable toggle rather than
+        # half-capturing output for un-migrated adapters.
+        io_capture = False
         try:
-            response = await asyncio.wait_for(
+            raw = await asyncio.wait_for(
                 run_engine(), timeout=self._timeout
             )
+            response, prompt = _normalize_engine_result(raw)
+            io_capture = isinstance(raw, EngineTurn)
         except asyncio.TimeoutError:
             outcome = "timeout"
             error = f"engine exceeded {self._timeout}s"
@@ -174,6 +217,11 @@ class RoomHandlerSupervisor:
             duration_ms=engine_dur,
             engine=self._engine,
             error=error,
+            # #433 — gateway-free turn I/O, emitted only on an EngineTurn
+            # opt-in. ``completion`` is the reply (None on empty/failed/
+            # timeout). Both wire-excluded when None.
+            prompt=prompt if io_capture else None,
+            completion=(response if response else None) if io_capture else None,
         )
 
         send_metadata = {"request_id": request_id} if request_id else None

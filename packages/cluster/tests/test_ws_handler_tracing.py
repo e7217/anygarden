@@ -102,6 +102,36 @@ def test_frame_without_request_id_is_ignored():
     assert exporter.get_finished_spans() == ()
 
 
+def test_engine_call_finished_stamps_turn_io_on_engine_span():
+    # #433 — gateway-free turn I/O: the agent ships prompt/completion on
+    # engine_call_finished and the handler maps them onto the engine span.
+    ts, exporter = _service()
+    ts.start_request("req-1", room_id="room-1", agent_id="agent-1")
+    _apply_lifecycle_to_trace(
+        ts, agent_id="agent-1", frame=_frame("engine_call_started", engine="codex")
+    )
+    _apply_lifecycle_to_trace(
+        ts,
+        agent_id="agent-1",
+        frame=_frame(
+            "engine_call_finished",
+            engine="codex",
+            outcome="ok",
+            duration_ms=900,
+            prompt="augmented in",
+            completion="reply out",
+        ),
+    )
+    _apply_lifecycle_to_trace(
+        ts,
+        agent_id="agent-1",
+        frame=_frame("handler_finished", outcome="ok", duration_ms=950),
+    )
+    engine = [s for s in exporter.get_finished_spans() if s.name == SPAN_ENGINE][0]
+    assert engine.attributes["gen_ai.prompt"] == "augmented in"
+    assert engine.attributes["gen_ai.completion"] == "reply out"
+
+
 def test_disabled_service_mapping_is_noop():
     ts = TracingService(None)
     # Should not raise even though no request was ever started.

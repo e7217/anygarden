@@ -81,6 +81,38 @@ async def test_engine_call_finished_carries_full_details(db):
 
 
 @pytest.mark.asyncio
+async def test_turn_io_fields_are_not_persisted_to_activitylog(db):
+    # #433 — prompt/completion ride the engine_call_finished frame for
+    # tracing only; ``_lifecycle_details`` selects fields explicitly, so
+    # the ActivityLog row must stay metadata-only (no message text in DB).
+    agent = await _make_agent(db)
+    frame = LifecycleFrame(
+        request_id="req-io",
+        room_id="room-1",
+        event="engine_call_finished",
+        engine="codex",
+        outcome="ok",
+        duration_ms=10,
+        prompt="the augmented input the agent sent",
+        completion="the engine reply",
+    )
+    await _persist_lifecycle_event(db, agent_id=agent.id, frame=frame)
+    await db.commit()
+
+    row = (await db.execute(
+        select(ActivityLog).where(ActivityLog.agent_id == agent.id)
+    )).scalars().one()
+    assert "prompt" not in row.details
+    assert "completion" not in row.details
+    assert row.details == {
+        "room_id": "room-1",
+        "engine": "codex",
+        "outcome": "ok",
+        "duration_ms": 10,
+    }
+
+
+@pytest.mark.asyncio
 async def test_handler_finished_rejected_without_engine_fields(db):
     """Rejected rows carry outcome but no engine/duration/error path.
 

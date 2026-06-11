@@ -117,6 +117,9 @@ def _apply_lifecycle_to_trace(
             duration_ms=frame.duration_ms,
             error=frame.error,
             agent_id=agent_id,
+            # #433 — gateway-free turn I/O captured at the agent adapter.
+            prompt=frame.prompt,
+            completion=frame.completion,
         )
     elif event == "handler_finished":
         tracing.finish_handler(

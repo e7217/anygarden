@@ -41,6 +41,7 @@ from anygarden_agent.coordination.pending_context import (
 from anygarden_agent.integrations.base import EngineAdapter
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
+    EngineTurn,
     RoomHandlerSupervisor,
 )
 
@@ -180,6 +181,9 @@ class ClaudeCodeAdapter(EngineAdapter):
             content,
             metadata if isinstance(metadata, dict) else None,
         )
+        # #433 — stash the user-turn input handed to the engine (memory/
+        # roster ride in the system prompt via options, not here).
+        self._record_turn_input(room_id, prompt)
 
         # Issue #159 Phase C — expose the current room to the
         # ``handoff_to`` tool closure. Cleared in ``finally`` so a
@@ -597,7 +601,7 @@ async def integrate_with_claude_code(
         # #204 — supervisor-routed path; see codex.py for rationale.
         request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def run_engine() -> str:
+        async def run_engine() -> EngineTurn:
             typing_active = True
 
             async def _typing_loop() -> None:
@@ -615,11 +619,15 @@ async def integrate_with_claude_code(
                 if sid is not None and room_id:
                     adapter._sessions[room_id] = sid
                     adapter._last_session_id = None
-                return response or ""
+                # #433 — pair the reply with the stashed turn input.
+                return EngineTurn(response or "", adapter._take_turn_input(room_id))
             finally:
                 typing_active = False
                 typing_task.cancel()
                 await client.sendTyping(room_id, False)
+                # #433 — drain the stash even when on_message raised, so a
+                # failed turn never leaks/leaves a stale prompt. No-op on ok.
+                adapter._take_turn_input(room_id)
 
         await supervisor.dispatch(
             room_id=room_id,
