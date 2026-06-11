@@ -90,6 +90,20 @@
   --radius-xl: 1rem;        /* 16px — hero cards */
   --radius-pill: 9999px;    /* pill badges */
 
+  /* -- Spacing scale (#435) --
+     Named 4px-based rhythm aligned with Tailwind's own numbering, so
+     existing ``p-6`` / ``gap-4`` classes keep working while the page
+     shell and design docs refer to the named steps. ``space-6`` (24px)
+     is the canonical card / dialog / page-section padding. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
   /* -- Shadow stacks (Notion multi-layer elevation) -- */
   --shadow-whisper:
     0 1px 0 rgba(0, 0, 0, 0.02);

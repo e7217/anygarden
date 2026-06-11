@@ -1,8 +1,7 @@
 import { Component, useMemo, useState } from 'react'
 import type { Edge, Node } from '@xyflow/react'
-import { Menu, RefreshCcw, AlertTriangle } from 'lucide-react'
-import Sidebar from '@/components/Sidebar'
-import SidebarExpandButton from '@/components/SidebarExpandButton'
+import { RefreshCcw, AlertTriangle } from 'lucide-react'
+import PageShell from '@/components/PageShell'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
 import TopologyCanvas from '@/components/topology/TopologyCanvas'
@@ -131,7 +130,6 @@ function TopologySkeleton() {
  * rail + detail panel siblings.
  */
 export default function TopologyPage() {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER)
   const { user } = useAuth()
@@ -228,100 +226,79 @@ export default function TopologyPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-background)]">
-      <Sidebar
-        selectedRoom={null}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-      <SidebarExpandButton />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
-        {/* Mobile top bar */}
-        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open sidebar"
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <span className="text-[15px] font-bold tracking-tight">Topology</span>
-        </div>
-
-        {/* Desktop header */}
-        <div className="hidden h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-6 md:flex">
-          <div className="flex items-baseline gap-3">
-            <span className="text-[17px] font-bold tracking-tight text-[var(--color-foreground)]">
-              Topology
+    <PageShell title="Topology" scroll={false}>
+      {/* Desktop header */}
+      <div className="hidden h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-6 md:flex">
+        <div className="flex items-baseline gap-3">
+          <span className="text-[17px] font-bold tracking-tight text-[var(--color-foreground)]">
+            Topology
+          </span>
+          {data && (
+            <span className="text-xs text-[var(--color-foreground-muted)]">
+              {data.scope} · {data.nodes.length} nodes · {data.edges.length} edges
             </span>
-            {data && (
-              <span className="text-xs text-[var(--color-foreground-muted)]">
-                {data.scope} · {data.nodes.length} nodes · {data.edges.length} edges
-              </span>
-            )}
-          </div>
-          <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
-            <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
+          )}
+        </div>
+        <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
+          <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/* Left filter rail — hidden on mobile */}
+        <div className="hidden md:block">
+          <FilterPanel
+            filter={filter}
+            onChange={setFilter}
+            counts={counts}
+            knownEngines={knownEngines}
+            knownStates={knownStates}
+          />
         </div>
 
-        <div className="flex min-h-0 flex-1">
-          {/* Left filter rail — hidden on mobile */}
-          <div className="hidden md:block">
-            <FilterPanel
-              filter={filter}
-              onChange={setFilter}
-              counts={counts}
-              knownEngines={knownEngines}
-              knownStates={knownStates}
+        <TopologyErrorBoundary>
+          {loading && !data ? (
+            <TopologySkeleton />
+          ) : error ? (
+            <EmptyState
+              title="토폴로지를 불러오지 못했습니다"
+              message={error.message}
+              action={
+                <Button onClick={refresh}>
+                  <RefreshCcw className="h-4 w-4" /> 다시 시도
+                </Button>
+              }
             />
-          </div>
-
-          <TopologyErrorBoundary>
-            {loading && !data ? (
-              <TopologySkeleton />
-            ) : error ? (
-              <EmptyState
-                title="토폴로지를 불러오지 못했습니다"
-                message={error.message}
-                action={
-                  <Button onClick={refresh}>
-                    <RefreshCcw className="h-4 w-4" /> 다시 시도
-                  </Button>
-                }
-              />
-            ) : !data || data.nodes.length === 0 ? (
-              <EmptyState
-                title="아직 보여줄 게 없어요"
-                message="머신을 등록하거나 룸에 참여하면 여기에 그래프가 그려져요."
-              />
-            ) : (
-              <section className="flex min-w-0 flex-1">
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <TopologyCanvas
-                    nodes={layouted.nodes as Node[]}
-                    edges={layouted.edges as Edge[]}
-                    onSelect={handleSelect}
-                    selectedId={selected?.id ?? null}
-                    onPositionChange={setPosition}
-                    onResetLayout={reset}
-                    hasOverrides={hasOverrides}
-                  />
-                </div>
-                {selected && (
-                  <DetailPanel
-                    selected={selected}
-                    onClose={() => setSelected(null)}
-                    isAdmin={Boolean(user?.is_admin)}
-                  />
-                )}
-              </section>
-            )}
-          </TopologyErrorBoundary>
-        </div>
-      </main>
-    </div>
+          ) : !data || data.nodes.length === 0 ? (
+            <EmptyState
+              title="아직 보여줄 게 없어요"
+              message="머신을 등록하거나 룸에 참여하면 여기에 그래프가 그려져요."
+            />
+          ) : (
+            <section className="flex min-w-0 flex-1">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <TopologyCanvas
+                  nodes={layouted.nodes as Node[]}
+                  edges={layouted.edges as Edge[]}
+                  onSelect={handleSelect}
+                  selectedId={selected?.id ?? null}
+                  onPositionChange={setPosition}
+                  onResetLayout={reset}
+                  hasOverrides={hasOverrides}
+                />
+              </div>
+              {selected && (
+                <DetailPanel
+                  selected={selected}
+                  onClose={() => setSelected(null)}
+                  isAdmin={Boolean(user?.is_admin)}
+                />
+              )}
+            </section>
+          )}
+        </TopologyErrorBoundary>
+      </div>
+    </PageShell>
   )
 }
