@@ -272,14 +272,15 @@ export default function AdminMachines() {
     setSettingsOpen(true)
   }
 
-  const handleDeleteAgent = async (agentId: string) => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return
+  const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
+    if (!confirm('Delete this agent? This cannot be undone.')) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room (see PR #12) — refresh both the
     // per-machine detail and the sidebar DM list so the ghost entry
     // doesn't linger until a manual reload.
     if (selectedId && selectedId !== UNPLACED) fetchDetail(selectedId)
     fetchAgentDMs()
+    return true
   }
 
   // #148 Part 2 — flip the agent-side ambient opt-out. We read the
@@ -989,6 +990,26 @@ export default function AdminMachines() {
         fetchSkillPreview={fetchSkillPreview}
         fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => selectedId && fetchDetail(selectedId)}
+        onDelete={
+          settingsAgent
+            ? async () => {
+                if (await handleDeleteAgent(settingsAgent.id)) {
+                  setSettingsOpen(false)
+                  setSettingsAgentId(null)
+                }
+              }
+            : undefined
+        }
+        contextWindowOptOut={settingsAgent?.context_window_opt_out ?? false}
+        onToggleContextWindowOptOut={
+          settingsAgent
+            ? () =>
+                handleToggleContextWindowOptOut(
+                  settingsAgent.id,
+                  settingsAgent.context_window_opt_out ?? false,
+                )
+            : undefined
+        }
       />
     </div>
   )

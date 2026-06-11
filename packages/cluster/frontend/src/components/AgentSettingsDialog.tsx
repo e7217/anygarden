@@ -36,7 +36,8 @@ import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
 import TasksPanel from '@/components/agent-settings/TasksPanel'
 import GoalsPanel from '@/components/agent-settings/GoalsPanel'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, EyeOff, Trash2, Check } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import type { ReactNode } from 'react'
 
 interface Props {
@@ -75,6 +76,16 @@ interface Props {
    *  own derived state (e.g. comma-joined room names in a machine
    *  detail view). */
   onRoomsChange?: () => void
+  /** #435 — option parity with ``AgentSettingsMenu``. When supplied, a
+   *  footer surfaces the same per-agent admin actions the row menu has,
+   *  so the action set no longer differs by entry point. Each renders
+   *  only when its handler is provided ("show-when-permitted"). */
+  onDelete?: () => void
+  /** Current value of the context-window opt-out flag. Paired with
+   *  ``onToggleContextWindowOptOut``: the footer renders a check-mark
+   *  toggle when both are provided. */
+  contextWindowOptOut?: boolean
+  onToggleContextWindowOptOut?: () => void | Promise<void>
 }
 
 // Shared heading label (11px uppercase muted). Same classes are
@@ -163,10 +174,19 @@ export default function AgentSettingsDialog({
   fetchSkillPreview,
   fetchEngineCatalog,
   onRoomsChange,
+  onDelete,
+  contextWindowOptOut,
+  onToggleContextWindowOptOut,
 }: Props) {
   const machineOffline = agent?.machine_online === false
   const agentOnline = deriveAgentOnline(agent?.actual_state, { machineOffline })
   const displayState = agentStatusLabel(agent?.actual_state, { machineOffline })
+
+  // Footer option parity with AgentSettingsMenu (#435): the toggle row
+  // appears only when both the value and its handler are supplied.
+  const showContextToggle =
+    typeof contextWindowOptOut === 'boolean' &&
+    typeof onToggleContextWindowOptOut === 'function'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -255,6 +275,44 @@ export default function AgentSettingsDialog({
             </CollapsibleSection>
           </div>
         </div>
+
+        {/* Footer (#435) — per-agent admin actions, at parity with the
+            row menu so the action set no longer depends on entry point.
+            Renders only when at least one handler is supplied. */}
+        {(showContextToggle || onDelete) && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-white px-6 py-3">
+            {showContextToggle ? (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={contextWindowOptOut}
+                onClick={() => void onToggleContextWindowOptOut!()}
+                data-testid="agent-settings-context-window-opt-out"
+                className="inline-flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm text-[var(--color-foreground)] hover:bg-black/5 cursor-pointer"
+              >
+                <EyeOff className="h-4 w-4" />
+                <span>대화 맥락 공유 제외</span>
+                {contextWindowOptOut ? (
+                  <Check className="h-4 w-4 text-[var(--color-brand)]" aria-hidden="true" />
+                ) : null}
+              </button>
+            ) : (
+              <span aria-hidden="true" />
+            )}
+            {onDelete ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => onDelete()}
+                data-testid="agent-settings-delete"
+                className="text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete agent
+              </Button>
+            ) : null}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

@@ -19,9 +19,9 @@
   /* -- Color: interactive accent -- */
   --color-brand: #0075de;                            /* Notion Blue */
   --color-brand-hover: #005bab;                      /* active/pressed */
-  --color-brand-focus: #097fe8;                      /* focus ring */
+  --color-brand-focus: #0075de;                      /* = brand — one base blue (#435) */
   --color-brand-tint-bg: #f2f9ff;                    /* pill badge bg */
-  --color-brand-tint-text: #097fe8;                  /* pill badge text */
+  --color-brand-tint-text: #005bab;                  /* pill badge text — AA on tint-bg ≈5.9:1 (#435) */
   --color-brand-secondary: #213183;                  /* deep navy */
   --color-brand-light: #62aef0;                      /* link on dark */
 
@@ -75,7 +75,7 @@
   --color-destructive: var(--color-danger);          /* shadcn alias → danger red (#435) */
   --color-destructive-foreground: #ffffff;
   --color-input: #dddddd;
-  --color-ring: #097fe8;
+  --color-ring: #0075de;                             /* = brand-focus — one base blue (#435) */
 
   /* -- Typography -- */
   --font-sans: "Inter", -apple-system, system-ui, "Segoe UI", Helvetica,
@@ -83,7 +83,7 @@
 
   /* -- Radius scale -- */
   --radius: 0.25rem;        /* 4px — default for buttons/inputs */
-  --radius-xs: 0.25rem;     /* 4px */
+  --radius-xs: var(--radius); /* alias of --radius — single source for the default corner (#435) */
   --radius-sm: 0.3125rem;   /* 5px — list items, menu items */
   --radius-md: 0.5rem;      /* 8px — small cards */
   --radius-lg: 0.75rem;     /* 12px — standard cards, dialogs */
@@ -119,7 +119,7 @@
     rgba(0, 0, 0, 0.04) 0px 14px 28px,
     rgba(0, 0, 0, 0.05) 0px 23px 52px;
   --shadow-focus:
-    0 0 0 2px rgba(9, 127, 232, 0.35),
+    0 0 0 2px rgba(0, 117, 222, 0.35),   /* = brand #0075de @ 35% (#435) */
     rgba(0, 0, 0, 0.04) 0px 4px 18px;
 }
 

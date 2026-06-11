@@ -388,12 +388,10 @@ export default function Sidebar({
             : 'md:static md:z-auto md:translate-x-0 md:w-64'}
         `}
       >
-      {/* Header */}
-      <div className="flex h-14 items-center justify-between px-4">
-        <div className="flex items-center">
-          <MessageSquare className="mr-2 size-5 text-[var(--color-foreground)]" />
-          <h1 className="text-[15px] font-bold text-[var(--color-foreground)] tracking-tight">Anygarden</h1>
-        </div>
+      {/* Header — brand wordmark removed (#435): app identity lives in the
+          room switcher / breadcrumb, not a sidebar logo. The h-14 row is
+          kept for the collapse / close controls, pinned to the right. */}
+      <div className="flex h-14 items-center justify-end px-4">
         <div className="flex items-center gap-1">
           {/* Desktop collapse trigger (#106). Paired with the
               main-area floating expand button so users can toggle
@@ -1068,13 +1066,14 @@ function AgentDMListAdmin({
     setSettingsOpen(true)
   }
 
-  const handleDeleteAgent = async (agentId: string) => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return
+  const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
+    if (!confirm('Delete this agent? This cannot be undone.')) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room server-side. Refresh the sidebar
     // DM list so the row disappears immediately instead of lingering
     // until the next WS invalidate.
     fetchAgentDMs()
+    return true
   }
 
   // #148 Part 2 — flip agent-side ambient opt-out. ``updateAgent``
@@ -1335,6 +1334,26 @@ function AgentDMListAdmin({
         fetchSkillPreview={fetchSkillPreview}
         fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => { fetchAgentDMs() }}
+        onDelete={
+          settingsAgent
+            ? async () => {
+                if (await handleDeleteAgent(settingsAgent.id)) {
+                  setSettingsOpen(false)
+                  setSettingsAgentId(null)
+                }
+              }
+            : undefined
+        }
+        contextWindowOptOut={settingsAgent?.context_window_opt_out ?? false}
+        onToggleContextWindowOptOut={
+          settingsAgent
+            ? () =>
+                handleToggleContextWindowOptOut(
+                  settingsAgent.id,
+                  settingsAgent.context_window_opt_out ?? false,
+                )
+            : undefined
+        }
       />
       {/* #241 — DM rename dialog. Reuses RoomEditDialog so DM
           rename flows through the same PATCH /rooms/{id} endpoint
