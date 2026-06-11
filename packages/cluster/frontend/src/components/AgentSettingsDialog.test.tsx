@@ -217,3 +217,72 @@ describe('AgentSettingsDialog — parent state pattern (#281)', () => {
     expect(select.value).toBe('claude-opus-4-7')
   })
 })
+
+// Issue #435 — option parity with AgentSettingsMenu. The unified dialog
+// previously lacked the per-agent admin actions (delete, context-window
+// opt-out) the row menu carried, so the available actions differed by
+// entry point. A footer now mirrors the menu's "show-when-permitted"
+// handlers.
+describe('AgentSettingsDialog — option parity footer (#435)', () => {
+  it('hides the footer when no delete/toggle handlers are supplied', () => {
+    setup()
+    expect(screen.queryByTestId('agent-settings-delete')).toBeNull()
+    expect(
+      screen.queryByTestId('agent-settings-context-window-opt-out'),
+    ).toBeNull()
+  })
+
+  it('surfaces Delete and the context-window toggle at parity with the row menu', () => {
+    const onDelete = vi.fn()
+    const onToggle = vi.fn()
+    render(
+      <MemoryRouter>
+        <AgentSettingsDialog
+          agent={makeAgent()}
+          open
+          onOpenChange={vi.fn()}
+          fetchAgentFiles={vi.fn().mockResolvedValue([])}
+          updateAgent={vi.fn().mockResolvedValue(makeAgent())}
+          upsertAgentFile={vi.fn()}
+          deleteAgentFile={vi.fn()}
+          fetchEngineCatalog={vi.fn().mockResolvedValue(null)}
+          onDelete={onDelete}
+          contextWindowOptOut={false}
+          onToggleContextWindowOptOut={onToggle}
+        />
+      </MemoryRouter>,
+    )
+    const del = screen.getByTestId('agent-settings-delete')
+    expect(del).toBeInTheDocument()
+    expect(del.className).toMatch(/text-\[var\(--color-destructive\)\]/)
+    fireEvent.click(del)
+    expect(onDelete).toHaveBeenCalledTimes(1)
+
+    const toggle = screen.getByTestId('agent-settings-context-window-opt-out')
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(toggle)
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+
+  it('checks the toggle when contextWindowOptOut is true', () => {
+    render(
+      <MemoryRouter>
+        <AgentSettingsDialog
+          agent={makeAgent()}
+          open
+          onOpenChange={vi.fn()}
+          fetchAgentFiles={vi.fn().mockResolvedValue([])}
+          updateAgent={vi.fn().mockResolvedValue(makeAgent())}
+          upsertAgentFile={vi.fn()}
+          deleteAgentFile={vi.fn()}
+          fetchEngineCatalog={vi.fn().mockResolvedValue(null)}
+          contextWindowOptOut={true}
+          onToggleContextWindowOptOut={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    expect(
+      screen.getByTestId('agent-settings-context-window-opt-out'),
+    ).toHaveAttribute('aria-checked', 'true')
+  })
+})

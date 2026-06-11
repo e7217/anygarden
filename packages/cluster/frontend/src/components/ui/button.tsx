@@ -11,7 +11,7 @@ const buttonVariants = cva(
         default:
           "bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]",
         destructive:
-          "bg-[var(--color-warning)] text-white hover:bg-[var(--color-warning)]/90",
+          "bg-[var(--color-destructive)] text-white hover:bg-[var(--color-destructive)]/90",
         outline:
           "border border-[var(--color-border)] bg-[var(--color-background)] text-[var(--color-foreground)] hover:bg-[var(--color-surface-alt)]",
         secondary:

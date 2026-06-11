@@ -14,7 +14,7 @@ export default function LoginPage() {
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center bg-[var(--color-surface-alt)]">
-        <p className="text-caption">Loading...</p>
+        <p className="text-caption text-[var(--color-foreground-muted)]">Loading...</p>
       </div>
     )
   }

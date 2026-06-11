@@ -38,7 +38,7 @@ describe('AgentSettingsMenu', () => {
     )
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
     const del = screen.getByTestId('agent-menu-delete')
-    expect(del.className).toMatch(/text-red-600/)
+    expect(del.className).toMatch(/text-\[var\(--color-destructive\)\]/)
   })
 
   it('closes on Escape', () => {

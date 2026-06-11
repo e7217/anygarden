@@ -28,7 +28,7 @@ export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
         width: 320,
         flex: '0 0 320px',
         borderLeft: '1px solid rgba(0,0,0,0.1)',
-        background: '#ffffff',
+        background: 'var(--color-surface)',
         padding: 16,
         display: 'flex',
         flexDirection: 'column',

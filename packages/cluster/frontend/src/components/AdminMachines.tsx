@@ -272,14 +272,15 @@ export default function AdminMachines() {
     setSettingsOpen(true)
   }
 
-  const handleDeleteAgent = async (agentId: string) => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return
+  const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
+    if (!confirm('Delete this agent? This cannot be undone.')) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room (see PR #12) — refresh both the
     // per-machine detail and the sidebar DM list so the ghost entry
     // doesn't linger until a manual reload.
     if (selectedId && selectedId !== UNPLACED) fetchDetail(selectedId)
     fetchAgentDMs()
+    return true
   }
 
   // #148 Part 2 — flip the agent-side ambient opt-out. We read the
@@ -362,8 +363,8 @@ export default function AdminMachines() {
                   onClick={() => setSelectedId(m.id)}
                   className={`w-full text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all ${
                     selectedId === m.id
-                      ? 'bg-[#f2f9ff] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[rgba(0,0,0,0.1)] hover:shadow-[var(--shadow-card)]'
+                      ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
@@ -384,8 +385,8 @@ export default function AdminMachines() {
                   onClick={() => setSelectedId(UNPLACED)}
                   className={`w-full text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all ${
                     isUnplacedView
-                      ? 'bg-[#fff7ed] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[rgba(0,0,0,0.2)] hover:shadow-[var(--shadow-card)]'
+                      ? 'bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">Unplaced</div>
@@ -415,7 +416,7 @@ export default function AdminMachines() {
                 them again.
               </p>
             </div>
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
               {unplacedAgents.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
@@ -505,7 +506,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Info */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Info</h3>
               </div>
@@ -555,7 +556,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Agents */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">
                   Agents ({machineAgents.length})
@@ -671,7 +672,7 @@ export default function AdminMachines() {
                                 title={isMachineOffline ? 'Machine is offline' : 'Stop'}
                                 disabled={isMachineOffline}
                               >
-                                <Square className="h-3.5 w-3.5 text-red-500" />
+                                <Square className="h-3.5 w-3.5 text-[var(--color-destructive)]" />
                               </Button>
                             )
                           }
@@ -708,7 +709,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Token & Control */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Token & Control</h3>
               </div>
@@ -744,7 +745,7 @@ export default function AdminMachines() {
                     <PauseCircle className="mr-1.5 h-3 w-3" /> Drain
                   </Button>
                   <Button variant="outline" size="sm"
-                    className="text-red-500 hover:text-red-600 border-red-200 hover:border-red-300"
+                    className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)] border-[var(--color-destructive)]/30 hover:border-[var(--color-destructive)]/50"
                     onClick={async () => {
                       if (!confirm(`Delete machine "${selectedMachine.name}"? This cannot be undone.`)) return
                       try {
@@ -762,7 +763,7 @@ export default function AdminMachines() {
             </div>
 
             {/* History */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">History</h3>
               </div>
@@ -989,6 +990,26 @@ export default function AdminMachines() {
         fetchSkillPreview={fetchSkillPreview}
         fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => selectedId && fetchDetail(selectedId)}
+        onDelete={
+          settingsAgent
+            ? async () => {
+                if (await handleDeleteAgent(settingsAgent.id)) {
+                  setSettingsOpen(false)
+                  setSettingsAgentId(null)
+                }
+              }
+            : undefined
+        }
+        contextWindowOptOut={settingsAgent?.context_window_opt_out ?? false}
+        onToggleContextWindowOptOut={
+          settingsAgent
+            ? () =>
+                handleToggleContextWindowOptOut(
+                  settingsAgent.id,
+                  settingsAgent.context_window_opt_out ?? false,
+                )
+            : undefined
+        }
       />
     </div>
   )

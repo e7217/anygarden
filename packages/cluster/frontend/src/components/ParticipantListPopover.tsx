@@ -202,7 +202,7 @@ export default function ParticipantListPopover({
                   <button
                     type="button"
                     aria-label={`Remove ${p.display_name || 'participant'} from this room`}
-                    className="ml-1 rounded-[var(--radius-sm)] p-1 text-red-600 hover:bg-red-50"
+                    className="ml-1 rounded-[var(--radius-sm)] p-1 text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10"
                     onClick={() => {
                       // A native confirm keeps the component low-
                       // dependency; this is a rare destructive

@@ -177,14 +177,14 @@ function NavItem({ to, label, Icon, active, statusDot }: NavItemProps) {
 function statusDotColor(state?: string): string {
   switch (state) {
     case 'running':
-      return 'bg-emerald-500'
+      return 'bg-[var(--color-success)]/100'
     case 'starting':
     case 'restarting':
-      return 'bg-blue-500'
+      return 'bg-[var(--color-success-soft)]/100'
     case 'crashed':
-      return 'bg-amber-500'
+      return 'bg-[var(--color-warning)]/100'
     case 'failed':
-      return 'bg-red-500'
+      return 'bg-[var(--color-destructive)]/100'
     default:
       return 'bg-[rgba(0,0,0,0.25)]'
   }

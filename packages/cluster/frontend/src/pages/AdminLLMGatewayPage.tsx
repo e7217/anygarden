@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
-import Sidebar from '@/components/Sidebar'
-import SidebarExpandButton from '@/components/SidebarExpandButton'
-import { Button } from '@/components/ui/button'
-import { Menu } from 'lucide-react'
+import PageShell from '@/components/PageShell'
 import { SecondarySidebar } from '@/components/admin-llm-gateway/SecondarySidebar'
 import {
   useGatewayModels,
@@ -34,7 +31,6 @@ import {
  */
 
 export default function AdminLLMGatewayPage() {
-  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
   const [applying, setApplying] = useState(false)
   const navigate = useNavigate()
@@ -70,48 +66,27 @@ export default function AdminLLMGatewayPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-background)]">
-      <Sidebar
-        selectedRoom={null}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-      <SidebarExpandButton />
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
-        {/* Mobile top bar */}
-        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open sidebar"
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-          <span className="text-[15px] font-bold tracking-tight">LLM Gateway</span>
-        </div>
-
-        <div className="flex min-w-0 flex-1 overflow-hidden">
-          <SecondarySidebar
-            status={status}
-            pendingCount={pendingCount}
-            applying={applying}
-            onApply={handleApply}
+    <PageShell title="LLM Gateway" scroll={false}>
+      <div className="flex min-w-0 flex-1 overflow-hidden">
+        <SecondarySidebar
+          status={status}
+          pendingCount={pendingCount}
+          applying={applying}
+          onApply={handleApply}
+        />
+        <div className="flex-1 overflow-auto">
+          <Outlet
+            context={{
+              status,
+              incrementPending: () => setPendingCount(c => c + 1),
+              resetPending: () => setPendingCount(0),
+              applyBump,
+              navigateToStatus: () => navigate('/admin/llm-gateway/status'),
+            }}
           />
-          <div className="flex-1 overflow-auto">
-            <Outlet
-              context={{
-                status,
-                incrementPending: () => setPendingCount(c => c + 1),
-                resetPending: () => setPendingCount(0),
-                applyBump,
-                navigateToStatus: () => navigate('/admin/llm-gateway/status'),
-              }}
-            />
-          </div>
         </div>
-      </main>
-    </div>
+      </div>
+    </PageShell>
   )
 }
 

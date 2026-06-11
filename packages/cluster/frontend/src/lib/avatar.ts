@@ -19,60 +19,62 @@ export interface AvatarTone {
   ring: string
 }
 
-// ``color-mix`` references come from Tailwind v4's palette — same
-// function is already used elsewhere (e.g. ParticipantListPopover
-// role badges). Keeping the values inline here instead of reaching
-// for CSS variables because these are seed-driven and shouldn't be
-// themable through the theme layer.
+// Tone bg/fg now read the ``--color-tone-N`` / ``--color-tone-N-fg``
+// tokens defined in ``index.css`` ``@theme`` (#435), so the palette has
+// a single source of truth in the theme layer and the previously
+// orphaned ``--color-accent-*`` tokens are retired. ``avatar.ts`` keeps
+// only the seed→slot mapping; the colors themselves live as tokens. The
+// translucent ``ring`` stays inline (no token in the proposed diff) — it
+// is a derived focus/presence accent, not a surface color.
 const PALETTE: readonly AvatarTone[] = Object.freeze([
   // 1. warm-neutral — the "default" tone. Closest to surface-alt.
   {
-    bg: '#efedea',
-    fg: '#615d59',
+    bg: 'var(--color-tone-1)',
+    fg: 'var(--color-tone-1-fg)',
     ring: 'rgba(97,93,89,0.20)',
   },
   // 2. teal (success-soft)
   {
-    bg: 'color-mix(in srgb, #2a9d99 18%, white)',
-    fg: '#1d6f6c',
+    bg: 'var(--color-tone-2)',
+    fg: 'var(--color-tone-2-fg)',
     ring: 'rgba(42,157,153,0.25)',
   },
   // 3. green
   {
-    bg: 'color-mix(in srgb, #1aae39 18%, white)',
-    fg: '#0d7821',
+    bg: 'var(--color-tone-3)',
+    fg: 'var(--color-tone-3-fg)',
     ring: 'rgba(26,174,57,0.25)',
   },
   // 4. orange (warning accent — tinted enough that it does not
   //    read as a warning badge on its own)
   {
-    bg: 'color-mix(in srgb, #dd5b00 18%, white)',
-    fg: '#a33f00',
+    bg: 'var(--color-tone-4)',
+    fg: 'var(--color-tone-4-fg)',
     ring: 'rgba(221,91,0,0.25)',
   },
   // 5. pink (decorative)
   {
-    bg: 'color-mix(in srgb, #ff64c8 18%, white)',
-    fg: '#b03c91',
+    bg: 'var(--color-tone-5)',
+    fg: 'var(--color-tone-5-fg)',
     ring: 'rgba(255,100,200,0.25)',
   },
   // 6. purple (premium)
   {
-    bg: 'color-mix(in srgb, #391c57 14%, white)',
-    fg: '#391c57',
+    bg: 'var(--color-tone-6)',
+    fg: 'var(--color-tone-6-fg)',
     ring: 'rgba(57,28,87,0.25)',
   },
   // 7. brown (earthy)
   {
-    bg: 'color-mix(in srgb, #523410 14%, white)',
-    fg: '#523410',
+    bg: 'var(--color-tone-7)',
+    fg: 'var(--color-tone-7-fg)',
     ring: 'rgba(82,52,16,0.25)',
   },
   // 8. notion-blue — reuses the app's primary accent. Shows up
   //    roughly 1 in 8 picks so it stays special without dominating.
   {
-    bg: '#f2f9ff',
-    fg: '#005bab',
+    bg: 'var(--color-tone-8)',
+    fg: 'var(--color-tone-8-fg)',
     ring: 'rgba(0,117,222,0.25)',
   },
 ])

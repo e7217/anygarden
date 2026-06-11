@@ -388,12 +388,10 @@ export default function Sidebar({
             : 'md:static md:z-auto md:translate-x-0 md:w-64'}
         `}
       >
-      {/* Header */}
-      <div className="flex h-14 items-center justify-between px-4">
-        <div className="flex items-center">
-          <MessageSquare className="mr-2 size-5 text-[var(--color-foreground)]" />
-          <h1 className="text-[15px] font-bold text-[var(--color-foreground)] tracking-tight">Anygarden</h1>
-        </div>
+      {/* Header — brand wordmark removed (#435): app identity lives in the
+          room switcher / breadcrumb, not a sidebar logo. The h-14 row is
+          kept for the collapse / close controls, pinned to the right. */}
+      <div className="flex h-14 items-center justify-end px-4">
         <div className="flex items-center gap-1">
           {/* Desktop collapse trigger (#106). Paired with the
               main-area floating expand button so users can toggle
@@ -479,7 +477,7 @@ export default function Sidebar({
               <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-black/5 transition-colors">
                 <button
                   onClick={() => toggleProject(project.id)}
-                  className="text-nav flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
+                  className="text-sm font-medium flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
                 >
                   {expandedProjects.has(project.id)
                     ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
@@ -521,7 +519,7 @@ export default function Sidebar({
           ))}
 
           {projects.length === 0 && (
-            <p className="text-caption px-2 py-4 text-center">
+            <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
               No projects yet
             </p>
           )}
@@ -1068,13 +1066,14 @@ function AgentDMListAdmin({
     setSettingsOpen(true)
   }
 
-  const handleDeleteAgent = async (agentId: string) => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return
+  const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
+    if (!confirm('Delete this agent? This cannot be undone.')) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room server-side. Refresh the sidebar
     // DM list so the row disappears immediately instead of lingering
     // until the next WS invalidate.
     fetchAgentDMs()
+    return true
   }
 
   // #148 Part 2 — flip agent-side ambient opt-out. ``updateAgent``
@@ -1335,6 +1334,26 @@ function AgentDMListAdmin({
         fetchSkillPreview={fetchSkillPreview}
         fetchEngineCatalog={fetchEngineCatalog}
         onRoomsChange={() => { fetchAgentDMs() }}
+        onDelete={
+          settingsAgent
+            ? async () => {
+                if (await handleDeleteAgent(settingsAgent.id)) {
+                  setSettingsOpen(false)
+                  setSettingsAgentId(null)
+                }
+              }
+            : undefined
+        }
+        contextWindowOptOut={settingsAgent?.context_window_opt_out ?? false}
+        onToggleContextWindowOptOut={
+          settingsAgent
+            ? () =>
+                handleToggleContextWindowOptOut(
+                  settingsAgent.id,
+                  settingsAgent.context_window_opt_out ?? false,
+                )
+            : undefined
+        }
       />
       {/* #241 — DM rename dialog. Reuses RoomEditDialog so DM
           rename flows through the same PATCH /rooms/{id} endpoint

@@ -239,8 +239,8 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
     return (
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center bg-white px-6 py-4 text-center">
         <MessageSquare className="mb-4 h-12 w-12 text-[var(--color-foreground-subtle)] opacity-60" />
-        <p className="text-body-lg text-[var(--color-foreground)]">No messages yet</p>
-        <p className="text-caption mt-1">Start the conversation by sending a message below.</p>
+        <p className="text-lead text-[var(--color-foreground)]">No messages yet</p>
+        <p className="text-caption text-[var(--color-foreground-muted)] mt-1">Start the conversation by sending a message below.</p>
       </div>
     )
   }

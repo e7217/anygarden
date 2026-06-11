@@ -91,7 +91,7 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
                 type="button"
                 onClick={pick(onDelete)}
                 data-testid={`sidebar-project-menu-delete-${projectId}`}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 cursor-pointer"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>Delete project</span>

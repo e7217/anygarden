@@ -97,7 +97,7 @@ export function ModelsSection() {
       )}
 
       {status === 'error' && (
-        <div className="rounded-[var(--radius-md)] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-900">
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-[13px] text-[var(--color-destructive)]">
           Couldn't load models: {error}
         </div>
       )}
@@ -179,7 +179,7 @@ function ModelCard({
           className="text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
         >
           {model.enabled ? (
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+            <CheckCircle2 className="h-4 w-4 text-[var(--color-success)]" />
           ) : (
             <Circle className="h-4 w-4" />
           )}
@@ -205,17 +205,17 @@ function ModelCard({
           {testing ? (
             <span className="text-[var(--color-foreground-muted)]">Testing…</span>
           ) : testResult?.ok ? (
-            <span className="text-emerald-700">
+            <span className="text-[var(--color-success)]">
               ✓ OK · {testResult.duration_ms}ms
             </span>
           ) : (
-            <div className="text-red-700">
+            <div className="text-[var(--color-destructive)]">
               <span>
                 ✗ Failed
                 {testResult?.status_code ? ` (${testResult.status_code})` : ''}
               </span>
               {testResult?.error && (
-                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-red-900">
+                <p className="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--color-destructive)]">
                   {testResult.error}
                 </p>
               )}

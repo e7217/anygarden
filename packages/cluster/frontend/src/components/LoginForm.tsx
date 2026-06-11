@@ -41,8 +41,8 @@ export default function LoginForm() {
   return (
     <div className="w-full max-w-sm rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white p-8 shadow-card">
       <div className="mb-6 text-center">
-        <h1 className="text-display-sm mb-1 text-[var(--color-foreground)]">Anygarden</h1>
-        <p className="text-body-lg text-[var(--color-foreground-muted)]">Team collaboration platform</p>
+        <h1 className="text-title mb-1 text-[var(--color-foreground)]">Anygarden</h1>
+        <p className="text-lead text-[var(--color-foreground-muted)]">Team collaboration platform</p>
       </div>
 
       <Tabs defaultValue="login">

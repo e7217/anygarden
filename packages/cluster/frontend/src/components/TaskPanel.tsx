@@ -214,7 +214,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               ) : null}
               <button
                 onClick={() => remove(task.id)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-50 text-red-400 hover:text-red-600 transition-all"
+                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
                 title="Delete task"
               >
                 <Trash2 className="h-3.5 w-3.5" />

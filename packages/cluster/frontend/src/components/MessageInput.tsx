@@ -372,7 +372,7 @@ export default function MessageInput({
         {slashError && (
           <div
             data-testid="slash-error"
-            className="text-xs text-red-600"
+            className="text-xs text-[var(--color-destructive)]"
           >
             {slashError}
           </div>
@@ -400,7 +400,7 @@ export default function MessageInput({
               </span>
             ))}
             {uploadError && (
-              <span className="text-xs text-red-600">{uploadError}</span>
+              <span className="text-xs text-[var(--color-destructive)]">{uploadError}</span>
             )}
           </div>
         )}
