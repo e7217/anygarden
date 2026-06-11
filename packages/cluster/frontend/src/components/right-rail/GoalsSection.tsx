@@ -38,7 +38,7 @@ function statusDot(status: Goal['status']): string {
     case 'paused':
       return 'bg-[var(--color-foreground-subtle)]'
     case 'failed':
-      return 'bg-red-500'
+      return 'bg-[var(--color-destructive)]'
     default:
       return 'bg-[var(--color-foreground-subtle)]'
   }

@@ -50,7 +50,7 @@ export default function FilterPanel({
         width: 240,
         flex: '0 0 240px',
         borderRight: '1px solid rgba(0,0,0,0.1)',
-        background: '#ffffff',
+        background: 'var(--color-surface)',
         padding: 16,
         display: 'flex',
         flexDirection: 'column',
@@ -85,7 +85,7 @@ export default function FilterPanel({
             borderRadius: 4,
             fontSize: 13,
             color: TEXT_PRIMARY,
-            background: '#ffffff',
+            background: 'var(--color-surface)',
           }}
         />
       </div>
@@ -245,8 +245,8 @@ function Chip({
         letterSpacing: 0.125,
         padding: '4px 8px',
         borderRadius: 9999,
-        background: active ? '#f2f9ff' : 'rgba(0,0,0,0.05)',
-        color: active ? '#097fe8' : TEXT_PRIMARY,
+        background: active ? 'var(--color-brand-tint-bg)' : 'rgba(0,0,0,0.05)',
+        color: active ? 'var(--color-brand-tint-text)' : TEXT_PRIMARY,
         border: 'none',
         cursor: 'pointer',
         textTransform: 'capitalize',

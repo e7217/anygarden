@@ -70,14 +70,14 @@ function EmptyState({
         alignItems: 'center',
         justifyContent: 'center',
         padding: 24,
-        background: '#f6f5f4',
+        background: 'var(--color-surface-alt)',
       }}
     >
       <div
         style={{
           maxWidth: 420,
           padding: 24,
-          background: '#ffffff',
+          background: 'var(--color-surface)',
           border: '1px solid rgba(0,0,0,0.1)',
           borderRadius: 12,
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
@@ -91,7 +91,7 @@ function EmptyState({
         <AlertTriangle
           size={28}
           strokeWidth={1.5}
-          style={{ color: '#dd5b00' }}
+          style={{ color: 'var(--color-warning)' }}
           aria-hidden
         />
         <h2 style={{ fontSize: 17, fontWeight: 700, color: TEXT_PRIMARY, margin: 0 }}>
@@ -116,7 +116,7 @@ function TopologySkeleton() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#f6f5f4',
+        background: 'var(--color-surface-alt)',
       }}
     >
       <div style={{ color: TEXT_MUTED, fontSize: 13 }}>토폴로지를 불러오는 중...</div>

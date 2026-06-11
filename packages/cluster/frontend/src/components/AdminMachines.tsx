@@ -363,8 +363,8 @@ export default function AdminMachines() {
                   onClick={() => setSelectedId(m.id)}
                   className={`w-full text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all ${
                     selectedId === m.id
-                      ? 'bg-[#f2f9ff] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[rgba(0,0,0,0.1)] hover:shadow-[var(--shadow-card)]'
+                      ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
@@ -385,8 +385,8 @@ export default function AdminMachines() {
                   onClick={() => setSelectedId(UNPLACED)}
                   className={`w-full text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all ${
                     isUnplacedView
-                      ? 'bg-[#fff7ed] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[rgba(0,0,0,0.2)] hover:shadow-[var(--shadow-card)]'
+                      ? 'bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
+                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">Unplaced</div>
@@ -416,7 +416,7 @@ export default function AdminMachines() {
                 them again.
               </p>
             </div>
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
               {unplacedAgents.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
@@ -506,7 +506,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Info */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Info</h3>
               </div>
@@ -556,7 +556,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Agents */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">
                   Agents ({machineAgents.length})
@@ -709,7 +709,7 @@ export default function AdminMachines() {
             </div>
 
             {/* Token & Control */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Token & Control</h3>
               </div>
@@ -763,7 +763,7 @@ export default function AdminMachines() {
             </div>
 
             {/* History */}
-            <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">History</h3>
               </div>

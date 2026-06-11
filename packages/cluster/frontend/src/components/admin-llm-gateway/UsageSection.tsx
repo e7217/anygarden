@@ -56,7 +56,7 @@ export function UsageSection() {
       </header>
 
       {status === 'error' && (
-        <div className="mb-4 rounded-[var(--radius-md)] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-900">
+        <div className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-[13px] text-[var(--color-destructive)]">
           Couldn't load usage: {error}
         </div>
       )}

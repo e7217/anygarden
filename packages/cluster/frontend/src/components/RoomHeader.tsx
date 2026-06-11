@@ -250,7 +250,7 @@ export default function RoomHeader({
             data-testid="room-header-ephemeral-toggle"
             className={`inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
               ephemeral
-                ? 'bg-[#0075de] text-white hover:bg-[#0068c4]'
+                ? 'bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]'
                 : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
             }`}
           >

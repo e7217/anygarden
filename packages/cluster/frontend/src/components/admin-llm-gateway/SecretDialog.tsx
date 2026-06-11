@@ -97,7 +97,7 @@ export function SecretDialog({ initial, onClose, onSubmit }: Props) {
           </div>
 
           {error && (
-            <p className="rounded-[var(--radius-sm)] border border-red-200 bg-red-50 px-2 py-1 text-[12px] text-red-900">
+            <p className="rounded-[var(--radius-sm)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-2 py-1 text-[12px] text-[var(--color-destructive)]">
               {error}
             </p>
           )}

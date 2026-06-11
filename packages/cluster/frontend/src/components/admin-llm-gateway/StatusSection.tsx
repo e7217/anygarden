@@ -66,7 +66,7 @@ export function StatusSection() {
       </header>
 
       {loadState === 'error' && status === null && (
-        <div className="mb-4 rounded-[var(--radius-md)] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-900">
+        <div className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-[13px] text-[var(--color-destructive)]">
           Couldn't load status: {error}
         </div>
       )}
@@ -106,9 +106,9 @@ export function StatusSection() {
         </dl>
 
         {status?.last_error && (
-          <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-sm)] border border-red-200 bg-red-50 px-3 py-2">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-700" />
-            <p className="text-[12px] font-mono text-red-900">
+          <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-destructive)]" />
+            <p className="text-[12px] font-mono text-[var(--color-destructive)]">
               {status.last_error}
             </p>
           </div>
@@ -170,14 +170,14 @@ interface Tint { border: string; bg: string; dot: string }
 function stateTint(state: string): Tint {
   switch (state) {
     case 'running':
-      return { border: 'border-emerald-200', bg: 'bg-emerald-50/60', dot: 'bg-emerald-500' }
+      return { border: 'border-[var(--color-success)]/30', bg: 'bg-[var(--color-success)]/10', dot: 'bg-[var(--color-success)]/100' }
     case 'starting':
     case 'restarting':
-      return { border: 'border-blue-200', bg: 'bg-blue-50/60', dot: 'bg-blue-500' }
+      return { border: 'border-[var(--color-success-soft)]/30', bg: 'bg-[var(--color-success-soft)]/10', dot: 'bg-[var(--color-success-soft)]/100' }
     case 'crashed':
-      return { border: 'border-amber-200', bg: 'bg-amber-50/60', dot: 'bg-amber-500' }
+      return { border: 'border-[var(--color-warning)]/30', bg: 'bg-[var(--color-warning)]/10', dot: 'bg-[var(--color-warning)]/100' }
     case 'failed':
-      return { border: 'border-red-200', bg: 'bg-red-50/60', dot: 'bg-red-500' }
+      return { border: 'border-[var(--color-destructive)]/30', bg: 'bg-[var(--color-destructive)]/10', dot: 'bg-[var(--color-destructive)]/100' }
     default:
       return { border: 'border-[var(--color-border)]', bg: 'bg-white', dot: 'bg-[rgba(0,0,0,0.25)]' }
   }

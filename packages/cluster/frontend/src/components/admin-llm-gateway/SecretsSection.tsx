@@ -59,7 +59,7 @@ export function SecretsSection() {
       )}
 
       {status === 'error' && (
-        <div className="rounded-[var(--radius-md)] border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-900">
+        <div className="rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-[13px] text-[var(--color-destructive)]">
           Couldn't load secrets: {error}
         </div>
       )}
@@ -175,13 +175,13 @@ function renderStatusBadge(status: string | null) {
   }
   if (status === 'ok') {
     return (
-      <span className="rounded-[var(--radius-sm)] bg-emerald-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-emerald-700">
+      <span className="rounded-[var(--radius-sm)] bg-[var(--color-success)]/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-success)]">
         Valid
       </span>
     )
   }
   return (
-    <span className="rounded-[var(--radius-sm)] bg-red-50 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-red-700">
+    <span className="rounded-[var(--radius-sm)] bg-[var(--color-destructive)]/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-destructive)]">
       {status}
     </span>
   )
