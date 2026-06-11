@@ -171,6 +171,42 @@ class TestAssembleUserContent:
         assert adapter._pending_context == {}
 
 
+class TestTurnInputStash:
+    """#433 — per-room turn-input stash that the run_engine closure reads
+    back to surface the engine prompt on the engine_call_finished frame."""
+
+    def test_record_then_take_pops_the_value(self) -> None:
+        adapter = _BareAdapter()
+        adapter._record_turn_input("r1", "augmented input")
+        assert adapter._take_turn_input("r1") == "augmented input"
+        # read-once: a second take returns None (slot popped)
+        assert adapter._take_turn_input("r1") is None
+
+    def test_take_without_record_returns_none(self) -> None:
+        adapter = _BareAdapter()
+        assert adapter._take_turn_input("r1") is None
+
+    def test_per_room_isolation(self) -> None:
+        adapter = _BareAdapter()
+        adapter._record_turn_input("r1", "for r1")
+        adapter._record_turn_input("r2", "for r2")
+        assert adapter._take_turn_input("r2") == "for r2"
+        assert adapter._take_turn_input("r1") == "for r1"
+
+    def test_latest_record_overwrites(self) -> None:
+        adapter = _BareAdapter()
+        adapter._record_turn_input("r1", "old")
+        adapter._record_turn_input("r1", "new")
+        assert adapter._take_turn_input("r1") == "new"
+
+    def test_missing_room_id_or_text_is_noop(self) -> None:
+        adapter = _BareAdapter()
+        adapter._record_turn_input(None, "x")
+        adapter._record_turn_input("r1", None)
+        assert adapter._take_turn_input(None) is None
+        assert adapter._take_turn_input("r1") is None
+
+
 class TestComposeReferencedFilesHint:
     def test_empty_for_missing_references(self) -> None:
         assert compose_referenced_files_hint(None) == ""

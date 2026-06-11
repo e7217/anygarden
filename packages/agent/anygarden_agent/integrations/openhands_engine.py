@@ -48,6 +48,7 @@ from anygarden_agent.integrations.base import (
 )
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
+    EngineTurn,
     RoomHandlerSupervisor,
 )
 
@@ -297,6 +298,9 @@ class OpenHandsAdapter(EngineAdapter):
             # Order: context first, then user content — same as the
             # CLI adapters' prepend pattern (#293).
             prompt = f"{suffix}\n\n{prompt}"
+        # #433 — stash the full turn input (memory/roster + user content)
+        # handed to the engine for the run_engine closure to surface.
+        self._record_turn_input(room_id, prompt)
 
         try:
             conversation, captured = self._get_or_create_conversation(room_id)
@@ -1040,7 +1044,7 @@ async def integrate_with_openhands(
 
         request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def run_engine() -> str:
+        async def run_engine() -> EngineTurn:
             typing_active = True
 
             async def _typing_loop() -> None:
@@ -1051,11 +1055,15 @@ async def integrate_with_openhands(
             typing_task = asyncio.create_task(_typing_loop())
             try:
                 response = await adapter.on_message(msg)
-                return response or ""
+                # #433 — pair the reply with the stashed turn input.
+                return EngineTurn(response or "", adapter._take_turn_input(room_id))
             finally:
                 typing_active = False
                 typing_task.cancel()
                 await client.sendTyping(room_id, False)
+                # #433 — drain the stash even when on_message raised, so a
+                # failed turn never leaks/leaves a stale prompt. No-op on ok.
+                adapter._take_turn_input(room_id)
 
         await supervisor.dispatch(
             room_id=room_id,

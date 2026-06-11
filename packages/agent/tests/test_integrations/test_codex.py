@@ -98,6 +98,19 @@ class TestCodexAdapter:
             assert isinstance(call.kwargs.get("signal"), threading.Event)
 
     @pytest.mark.asyncio
+    async def test_on_message_stashes_turn_input_for_io_capture(self) -> None:
+        """#433 — on_message records the augmented text handed to the
+        engine so the run_engine closure can surface it as the turn's
+        prompt. With no ambient context it equals the raw content
+        (assemble_user_content short-circuits), matching run_text's arg."""
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            adapter = CodexAdapter()
+            await adapter.start()
+            await adapter.on_message({"content": "Hello", "room_id": "room-1"})
+            assert adapter._take_turn_input("room-1") == "Hello"
+
+    @pytest.mark.asyncio
     async def test_start_thread_passes_bypass_options(self) -> None:
         """Issue #134 — start_thread must receive approval_policy="never"
         and sandbox="workspace-write" so attached MCP servers can run
@@ -697,3 +710,94 @@ class TestCodexRoomConversationWrapper:
         # No memory_md cached → memory suffix path is also empty,
         # so the bare content reaches the thread untouched.
         assert turn_content == "안녕"
+
+
+class _FakeClient:
+    """Minimal ChatClient stand-in to drive the full _handle → supervisor
+    → run_engine path (#433). Records lifecycle frames so the test can
+    assert the gateway-free turn I/O lands on engine_call_finished."""
+
+    def __init__(self) -> None:
+        self._message_handlers: list = []
+        self.lifecycle: list[dict] = []
+        self.sends: list = []
+        # decide_policy surface (human DM sender → RESPOND)
+        self._my_participant_ids = {"my-pid"}
+        self._agent_name = "codexbot"
+        self._agent_id = "agent-1"
+        self._speaker_strategy = {}
+        self._orchestrator_agent_id = {}
+        self._recent_msgs = {}
+        self._context_window_opt_out = False
+        # memory/roster surface (all empty → bare content reaches engine)
+        self._memory_md = None
+        self._room_ephemeral = {}
+
+    def on_message(self, handler):
+        self._message_handlers.append(handler)
+        return handler
+
+    def is_collaborative(self, room_id) -> bool:
+        return False
+
+    def compose_roster_suffix(self, room_id, with_collaborative_hint=False) -> str:
+        return ""
+
+    async def sendLifecycle(self, room_id, request_id, event, **details):
+        self.lifecycle.append({"event": event, "request_id": request_id, **details})
+
+    async def send(self, room_id, content, metadata=None):
+        self.sends.append((room_id, content, metadata))
+
+    async def sendTyping(self, room_id, is_typing):
+        return None
+
+
+class TestCodexTurnIOIntegration:
+    """#433 — drive the real run_engine closure end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_engine_call_finished_carries_prompt_and_completion(self) -> None:
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+        with _patch_codex(fake_mod, options_mod):
+            client = _FakeClient()
+            adapter = await integrate_with_codex(client)
+            handler = client._message_handlers[-1]
+            await handler({
+                "content": "hello agent",
+                "room_id": "room-1",
+                "participant_id": "user-pid",
+                "metadata": {"request_id": "req-1"},
+            })
+
+        fin = next(e for e in client.lifecycle if e["event"] == "engine_call_finished")
+        # bare content (no ambient/memory) → prompt == raw turn input
+        assert fin["prompt"] == "hello agent"
+        assert fin["completion"] == "Hello from codex"
+        # stash drained on the success path
+        assert adapter._take_turn_input("room-1") is None
+
+    @pytest.mark.asyncio
+    async def test_failed_turn_drains_stash_and_emits_no_prompt(self) -> None:
+        # #433 — when the engine raises after the prompt was recorded, the
+        # run_engine ``finally`` must drain the stash (no memory leak, no
+        # stale prompt for a later turn), and the failed frame carries no
+        # prompt (io_capture only fires on a returned EngineTurn).
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
+        mock_thread.run_text = MagicMock(side_effect=RuntimeError("boom"))
+        with _patch_codex(fake_mod, options_mod):
+            client = _FakeClient()
+            adapter = await integrate_with_codex(client)
+            handler = client._message_handlers[-1]
+            await handler({
+                "content": "will fail",
+                "room_id": "room-1",
+                "participant_id": "user-pid",
+                "metadata": {"request_id": "req-f"},
+            })
+
+        fin = next(e for e in client.lifecycle if e["event"] == "engine_call_finished")
+        assert fin["outcome"] == "failed"
+        assert fin.get("prompt") is None
+        # CRITICAL: stash drained even though on_message raised before take.
+        assert adapter._take_turn_input("room-1") is None

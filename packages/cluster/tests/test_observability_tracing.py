@@ -338,6 +338,68 @@ def test_standalone_when_no_inflight():
     assert llm.parent is None
 
 
+# ── engine_call turn I/O capture (#433) ──────────────────────────────
+
+
+def test_finish_engine_call_stamps_prompt_and_completion():
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider, capture_content=True)
+    ts.start_request("r", room_id="rm", agent_id="a")
+    ts.start_engine_call("r", engine="codex", room_id="rm", agent_id="a")
+    ts.finish_engine_call(
+        "r", outcome="ok", duration_ms=10, agent_id="a",
+        prompt="the augmented input", completion="the reply",
+    )
+    ts.finish_request("r", outcome="ok")
+    engine = [s for s in exporter.get_finished_spans() if s.name == SPAN_ENGINE][0]
+    assert engine.attributes["gen_ai.prompt"] == "the augmented input"
+    assert engine.attributes["gen_ai.completion"] == "the reply"
+
+
+def test_finish_engine_call_omits_content_when_capture_off():
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider, capture_content=False)
+    ts.start_request("r", room_id="rm", agent_id="a")
+    ts.start_engine_call("r", engine="codex", room_id="rm", agent_id="a")
+    ts.finish_engine_call(
+        "r", outcome="ok", duration_ms=10, agent_id="a",
+        prompt="secret input", completion="secret reply",
+    )
+    ts.finish_request("r", outcome="ok")
+    engine = [s for s in exporter.get_finished_spans() if s.name == SPAN_ENGINE][0]
+    assert "gen_ai.prompt" not in engine.attributes
+    assert "gen_ai.completion" not in engine.attributes
+
+
+def test_finish_engine_call_truncates_content():
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider, capture_content=True, capture_max_chars=10)
+    ts.start_request("r", room_id="rm", agent_id="a")
+    ts.start_engine_call("r", engine="codex", room_id="rm", agent_id="a")
+    ts.finish_engine_call(
+        "r", outcome="ok", duration_ms=10, agent_id="a",
+        prompt="x" * 100, completion="y" * 100,
+    )
+    ts.finish_request("r", outcome="ok")
+    engine = [s for s in exporter.get_finished_spans() if s.name == SPAN_ENGINE][0]
+    assert len(engine.attributes["gen_ai.prompt"]) == 10
+    assert len(engine.attributes["gen_ai.completion"]) == 10
+
+
+def test_finish_engine_call_without_io_leaves_no_content():
+    # Legacy call (no prompt/completion) stamps nothing — backward
+    # compatible with pre-#433 frames.
+    provider, exporter = _provider_with_exporter()
+    ts = TracingService(provider, capture_content=True)
+    ts.start_request("r", room_id="rm", agent_id="a")
+    ts.start_engine_call("r", engine="codex", room_id="rm", agent_id="a")
+    ts.finish_engine_call("r", outcome="ok", duration_ms=10, agent_id="a")
+    ts.finish_request("r", outcome="ok")
+    engine = [s for s in exporter.get_finished_spans() if s.name == SPAN_ENGINE][0]
+    assert "gen_ai.prompt" not in engine.attributes
+    assert "gen_ai.completion" not in engine.attributes
+
+
 def test_finish_engine_call_clears_inflight():
     provider, _ = _provider_with_exporter()
     ts = TracingService(provider)

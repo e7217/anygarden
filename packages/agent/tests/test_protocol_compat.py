@@ -114,4 +114,54 @@ class TestLifecycleFrame:
         assert "duration_ms" not in payload
         assert "engine" not in payload
         assert "error" not in payload
+        assert "prompt" not in payload
+        assert "completion" not in payload
         assert payload["event"] == "handler_started"
+
+    def test_engine_call_finished_carries_prompt_and_completion(self) -> None:
+        # #433 — gateway-free turn I/O rides on engine_call_finished:
+        # the augmented input the adapter handed the engine + the reply.
+        f = sdk_frames.parse_incoming({
+            "type": "lifecycle",
+            "request_id": "req-4",
+            "room_id": "room-1",
+            "event": "engine_call_finished",
+            "engine": "codex",
+            "outcome": "ok",
+            "duration_ms": 10,
+            "prompt": "augmented user turn",
+            "completion": "the engine reply",
+        })
+        assert isinstance(f, sdk_frames.LifecycleFrame)
+        assert f.prompt == "augmented user turn"
+        assert f.completion == "the engine reply"
+        # round-trips on the wire dump
+        payload = f.model_dump(exclude_none=True)
+        assert payload["prompt"] == "augmented user turn"
+        assert payload["completion"] == "the engine reply"
+
+    def test_turn_io_wire_round_trip_agent_to_cluster(self) -> None:
+        # #433 — a true cross-package wire round-trip: the agent dumps a
+        # frame with prompt/completion and the CLUSTER's LifecycleFrame
+        # reconstructs it field-identical (the two definitions must stay
+        # compatible — same names/types/defaults).
+        import json
+
+        from anygarden.ws.protocol import LifecycleFrame as ClusterLifecycleFrame
+
+        agent_frame = sdk_frames.LifecycleFrame(
+            request_id="req-w",
+            room_id="room-1",
+            event="engine_call_finished",
+            engine="codex",
+            outcome="ok",
+            duration_ms=5,
+            prompt="the input",
+            completion="the reply",
+        )
+        wire = json.loads(agent_frame.model_dump_json(exclude_none=True))
+        cluster_frame = ClusterLifecycleFrame(**wire)
+        assert cluster_frame.prompt == "the input"
+        assert cluster_frame.completion == "the reply"
+        assert cluster_frame.event == "engine_call_finished"
+        assert cluster_frame.engine == "codex"

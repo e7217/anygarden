@@ -177,6 +177,35 @@ class EngineAdapter(ABC):
         parts.append(raw_content)
         return "\n\n".join(parts)
 
+    def _record_turn_input(self, room_id: str | None, text: str | None) -> None:
+        """Stash the augmented input handed to the engine this turn (#433).
+
+        The ``run_engine`` closure reads it back via ``_take_turn_input``
+        right after ``on_message`` returns, so the supervisor can surface
+        it on the ``engine_call_finished`` frame for gateway-free turn-I/O
+        tracing. Keyed by ``room_id`` (per-room single slot, overwritten
+        each turn). The supervisor serializes turns per room and the
+        record→take pair runs within one turn, so a concurrent turn in a
+        *different* room writes a different key and never races. Lazy dict
+        init keeps subclass ``__init__`` unchanged.
+        """
+        if not room_id or text is None:
+            return
+        buf = getattr(self, "_turn_input_buf", None)
+        if buf is None:
+            buf = {}
+            self._turn_input_buf = buf
+        buf[room_id] = text
+
+    def _take_turn_input(self, room_id: str | None) -> str | None:
+        """Pop the stashed turn input for ``room_id`` (None if absent)."""
+        if not room_id:
+            return None
+        buf = getattr(self, "_turn_input_buf", None)
+        if not buf:
+            return None
+        return buf.pop(room_id, None)
+
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Absorb a message into the engine's context without replying.
 

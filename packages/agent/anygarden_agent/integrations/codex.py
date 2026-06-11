@@ -25,6 +25,7 @@ from anygarden_agent.integrations.base import EngineAdapter
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTimeoutError,
+    EngineTurn,
     RoomHandlerSupervisor,
 )
 
@@ -398,6 +399,10 @@ class CodexAdapter(EngineAdapter):
             if prefix:
                 turn_content = f"{prefix}\n\n{turn_content}"
 
+            # #433 — stash the exact augmented text handed to the engine so
+            # the run_engine closure can surface it as the turn's prompt.
+            self._record_turn_input(room_id, turn_content)
+
             # Issue #190 — bound the turn with an explicit timeout so
             # a stuck codex call doesn't freeze the room's WS receive
             # loop indefinitely. ``threading.Event`` implements
@@ -550,7 +555,7 @@ async def integrate_with_codex(
         # no longer drives the DB log — lifecycle events do.
         request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def run_engine() -> str:
+        async def run_engine() -> EngineTurn:
             typing_active = True
 
             async def _typing_loop() -> None:
@@ -561,7 +566,9 @@ async def integrate_with_codex(
             typing_task = asyncio.create_task(_typing_loop())
             try:
                 response = await adapter.on_message(msg)
-                return response or ""
+                # #433 — pair the reply with the augmented input the
+                # adapter handed the engine (stashed inside on_message).
+                return EngineTurn(response or "", adapter._take_turn_input(room_id))
             finally:
                 typing_active = False
                 typing_task.cancel()
@@ -570,6 +577,11 @@ async def integrate_with_codex(
                 except asyncio.CancelledError:
                     pass
                 await client.sendTyping(room_id, False)
+                # #433 — drain any stash the success path didn't consume
+                # (on_message raised before the take above could run), so a
+                # failed/timed-out turn never leaks its prompt or leaves a
+                # stale one for a later turn. Idempotent on the ok path.
+                adapter._take_turn_input(room_id)
 
         await supervisor.dispatch(
             room_id=room_id,

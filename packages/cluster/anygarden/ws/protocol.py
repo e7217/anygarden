@@ -60,6 +60,12 @@ class LifecycleFrame(BaseModel):
     duration_ms: Optional[int] = None
     engine: Optional[str] = None
     error: Optional[str] = None
+    # #433 — gateway-free LLM turn I/O captured at the agent's engine
+    # adapter and stamped onto the ``agent.engine_call`` span. Consumed
+    # only by ``_apply_lifecycle_to_trace``; ``_lifecycle_details`` does
+    # not select these, so they never reach ActivityLog.
+    prompt: Optional[str] = None
+    completion: Optional[str] = None
 
 
 IncomingFrame = (

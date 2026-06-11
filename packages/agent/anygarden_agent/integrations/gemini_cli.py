@@ -56,6 +56,7 @@ from anygarden_agent.integrations.base import EngineAdapter
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTimeoutError,
+    EngineTurn,
     RoomHandlerSupervisor,
 )
 
@@ -238,6 +239,10 @@ class GeminiCliAdapter(EngineAdapter):
         # Build prompt with per-room conversation context.
         conversation.append({"role": "user", "content": turn_content})
         prompt = self._build_prompt(conversation, room_id=room_id)
+        # #433 — gemini flattens system+memory+roster+transcript into this
+        # single -p argument, so it is the fullest turn input of the four
+        # adapters. Stash it for the run_engine closure to surface.
+        self._record_turn_input(room_id, prompt)
 
         try:
             response = await self._call_gemini(prompt)
@@ -519,7 +524,7 @@ async def integrate_with_gemini_cli(
         # #204 — supervisor-routed path; see codex.py for rationale.
         request_id = (msg.get("metadata") or {}).get("request_id")
 
-        async def run_engine() -> str:
+        async def run_engine() -> EngineTurn:
             typing_active = True
 
             async def _typing_loop() -> None:
@@ -530,11 +535,15 @@ async def integrate_with_gemini_cli(
             typing_task = asyncio.create_task(_typing_loop())
             try:
                 response = await adapter.on_message(msg)
-                return response or ""
+                # #433 — pair the reply with the stashed turn input.
+                return EngineTurn(response or "", adapter._take_turn_input(room_id))
             finally:
                 typing_active = False
                 typing_task.cancel()
                 await client.sendTyping(room_id, False)
+                # #433 — drain the stash even when on_message raised, so a
+                # failed turn never leaks/leaves a stale prompt. No-op on ok.
+                adapter._take_turn_input(room_id)
 
         await supervisor.dispatch(
             room_id=room_id,

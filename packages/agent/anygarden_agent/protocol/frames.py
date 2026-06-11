@@ -65,6 +65,19 @@ class LifecycleFrame(BaseModel):
     duration_ms: Optional[int] = None
     engine: Optional[str] = None
     error: Optional[str] = None
+    # #433 — gateway-free LLM turn I/O. On ``engine_call_finished`` the
+    # supervisor may carry the augmented input the adapter handed the
+    # engine (``prompt``) and the engine's reply (``completion``) so the
+    # cluster stamps them onto the ``agent.engine_call`` span without
+    # routing through the LLM gateway. Trace-only — never persisted to
+    # ActivityLog (the cluster's ``_lifecycle_details`` selects fields).
+    # Privacy note: these travel the same internal agent↔cluster WS the
+    # reply already uses; the ``otel_llm_capture_content`` toggle is a
+    # *cluster-side span gate* (it suppresses the attribute, not the wire
+    # field). ``completion`` duplicates the posted reply; ``prompt`` is
+    # the one genuinely new payload on the wire.
+    prompt: Optional[str] = None
+    completion: Optional[str] = None
 
 
 IncomingFrame = (
