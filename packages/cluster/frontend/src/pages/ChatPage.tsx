@@ -655,10 +655,10 @@ export default function ChatPage() {
             </div>
             <div className="flex flex-1 flex-col items-center justify-center bg-[var(--color-surface-alt)] px-6 text-center">
               <MessageSquare className="mb-4 h-16 w-16 text-[var(--color-foreground-subtle)] opacity-70" />
-              <h2 className="text-body-lg text-[var(--color-foreground)]">Welcome to Anygarden</h2>
-              <p className="text-caption mt-2">Select a room from the sidebar to start chatting.</p>
+              <h2 className="text-lead text-[var(--color-foreground)]">Welcome to Anygarden</h2>
+              <p className="text-caption text-[var(--color-foreground-muted)] mt-2">Select a room from the sidebar to start chatting.</p>
               {projects.length === 0 && (
-                <p className="text-caption mt-1">Create a project first to get started.</p>
+                <p className="text-caption text-[var(--color-foreground-muted)] mt-1">Create a project first to get started.</p>
               )}
             </div>
           </>

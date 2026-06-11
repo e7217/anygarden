@@ -128,9 +128,10 @@ h1, h2, h3, .display {
   letter-spacing: -0.015em;
 }
 
-h1 { font-size: 2rem; line-height: 1.1; letter-spacing: -0.03em; }
-h2 { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.02em; }
-h3 { font-size: 1.125rem; line-height: 1.3; letter-spacing: -0.01em; }
+/* Element styles map onto the type scale: h1→title, h2→heading, h3→lead. */
+h1 { font-size: 2rem; line-height: 1.1; letter-spacing: -0.02em; }    /* title 32 */
+h2 { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; } /* heading 24 */
+h3 { font-size: 1.25rem; line-height: 1.4; letter-spacing: -0.006em; font-weight: 600; } /* lead 20 */
 
 code, pre, kbd, samp {
   font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
@@ -183,64 +184,48 @@ code, pre, kbd, samp {
   background-color: var(--color-surface-alt);
 }
 
-/* Display headline — DESIGN.md §3 */
+/* Type scale — 7 named steps (DESIGN.md §3). The earlier system ran two
+   parallel scales (h1–h3 element styles + 9 size utilities) that
+   overlapped and clustered; #435 collapses them to a single ladder:
+   display 48 · title 32 · heading 24 · lead 20 · body 16 · caption 14 ·
+   badge 12. h1→title, h2→heading, h3→lead. Utilities set size only —
+   color is applied separately so a size utility never couples the two. */
 @utility text-display {
-  font-size: 4rem;            /* 64px */
-  line-height: 1;
-  letter-spacing: -0.033em;    /* ~-2.125px */
-  font-weight: 700;
-}
-
-@utility text-display-sm {
-  font-size: 2.5rem;           /* 40px */
-  line-height: 1.1;
-  letter-spacing: -0.025em;
-  font-weight: 700;
-}
-
-@utility text-section {
   font-size: 3rem;             /* 48px */
-  line-height: 1;
-  letter-spacing: -0.031em;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
   font-weight: 700;
 }
 
-@utility text-subheading {
-  font-size: 1.625rem;         /* 26px */
-  line-height: 1.23;
-  letter-spacing: -0.024em;
+@utility text-title {
+  font-size: 2rem;             /* 32px — maps h1 */
+  line-height: 1.1;
+  letter-spacing: -0.02em;
   font-weight: 700;
 }
 
-@utility text-card-title {
-  font-size: 1.375rem;         /* 22px */
-  line-height: 1.27;
-  letter-spacing: -0.011em;
+@utility text-heading {
+  font-size: 1.5rem;           /* 24px — maps h2 */
+  line-height: 1.2;
+  letter-spacing: -0.015em;
   font-weight: 700;
 }
 
-@utility text-body-lg {
-  font-size: 1.25rem;          /* 20px */
+@utility text-lead {
+  font-size: 1.25rem;          /* 20px — maps h3 */
   line-height: 1.4;
   letter-spacing: -0.006em;
   font-weight: 600;
 }
 
-@utility text-nav {
-  font-size: 0.9375rem;        /* 15px */
-  line-height: 1.33;
-  font-weight: 600;
-}
-
 @utility text-caption {
-  font-size: 0.875rem;         /* 14px */
+  font-size: 0.875rem;         /* 14px — secondary labels, captions */
   line-height: 1.43;
   font-weight: 500;
-  color: var(--color-foreground-muted);
 }
 
 @utility text-badge {
-  font-size: 0.75rem;          /* 12px */
+  font-size: 0.75rem;          /* 12px — pill badges, micro labels */
   line-height: 1.33;
   letter-spacing: 0.008em;     /* 0.125px positive */
   font-weight: 600;

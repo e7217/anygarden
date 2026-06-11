@@ -178,7 +178,7 @@ export default function GuestRoomPage() {
               // Ghost-button hover convention (see
               // docs/history/STATUS.md — ``hover:bg-black/5
               // cursor-pointer`` applied globally to ghost buttons).
-              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
+              className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
               title="Show room participants"
               data-testid="guest-header-participants-toggle"
             >

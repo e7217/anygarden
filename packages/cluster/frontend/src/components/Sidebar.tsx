@@ -479,7 +479,7 @@ export default function Sidebar({
               <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-black/5 transition-colors">
                 <button
                   onClick={() => toggleProject(project.id)}
-                  className="text-nav flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
+                  className="text-sm font-medium flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
                 >
                   {expandedProjects.has(project.id)
                     ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
@@ -521,7 +521,7 @@ export default function Sidebar({
           ))}
 
           {projects.length === 0 && (
-            <p className="text-caption px-2 py-4 text-center">
+            <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
               No projects yet
             </p>
           )}

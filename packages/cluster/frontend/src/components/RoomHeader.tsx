@@ -189,7 +189,7 @@ export default function RoomHeader({
         ) : (
           <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
         )}
-        <h2 className="text-card-title truncate text-[var(--color-foreground)]">{roomName}</h2>
+        <h2 className="text-heading truncate text-[var(--color-foreground)]">{roomName}</h2>
       </div>
       <div className="flex shrink-0 items-center gap-2 md:gap-3">
         {participantCount !== undefined && (
@@ -200,7 +200,7 @@ export default function RoomHeader({
               // ``hover:bg-black/5 cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
               // docs/history/STATUS.md (PR #31/#32).
-              className="text-caption flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
+              className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
               title="Show room participants"
               data-testid="room-header-participants-toggle"
             >
@@ -208,7 +208,7 @@ export default function RoomHeader({
               <span>{participantCount}</span>
             </button>
           ) : (
-            <div className="text-caption flex items-center gap-1">
+            <div className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1">
               <Users className="h-4 w-4" />
               <span>{participantCount}</span>
             </div>
