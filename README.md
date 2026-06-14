@@ -56,11 +56,10 @@ flowchart LR
 - **Python 3.11+** for the server and machine daemon (the Python agent runtime
   needs 3.12+). With `uv` you don't have to install Python yourself — it
   provisions a suitable interpreter for you.
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — provides the
-  `uvx` runner used below. No uv? Install into a virtualenv with
-  `pip install "anygarden[server]"` (and `"anygarden[machine]"`) and run
-  `anygarden server` / `anygarden machine` directly, dropping the `uvx --from …`
-  prefix.
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — used to
+  install and run the CLI below (`uv tool install`). No uv? Install into a
+  virtualenv with `pip install "anygarden[server]"` (and `"anygarden[machine]"`)
+  instead — the `anygarden` command works the same either way.
 - **Agent engine CLIs** on each machine host — e.g. the `claude`, `codex`, or
   `gemini` CLI, installed and authenticated (see the engine table in Quick Start).
 - **For development** (`make dev`): Node.js + npm for the frontend, in addition to uv.
@@ -70,13 +69,16 @@ flowchart LR
 
 ### Try it (no checkout needed)
 
-The unified `anygarden` CLI ships on PyPI. The core install is just a dispatcher;
-each role is pulled in by an extra (`[server]` / `[machine]` / `[agent]`).
+The unified `anygarden` CLI ships on PyPI; install it as a uv tool. The core
+package is just a dispatcher — each role is pulled in by an extra (`[server]` /
+`[machine]`). `uv tool install` puts the `anygarden` command on your `PATH` (run
+`uv tool update-shell` once if your shell can't find it afterwards).
 
 ```bash
-# 1. Start the chat server (web UI + API). `init` generates ~/.anygarden/config.env.
-uvx --from "anygarden[server]" anygarden server init
-uvx --from "anygarden[server]" anygarden server --host 0.0.0.0 --port 8000
+# 1. Install the server role and start the chat server (web UI + API).
+uv tool install "anygarden[server]"
+anygarden server init        # generates ~/.anygarden/config.env
+anygarden server --host 0.0.0.0 --port 8000
 ```
 
 **2. Create the first account.** Open the web UI at `http://localhost:8000` and
@@ -85,12 +87,14 @@ default login: an `admin@anygarden.dev` / `admin` account is only auto-seeded wh
 the server runs in **dev mode**, e.g. via `make dev`.)
 
 ```bash
-# 3. On any host that should run agents, register it with the server, then start
-#    the daemon. `register` prompts for your login, detects installed engines, and
-#    saves the machine token under ~/.anygarden/. (Use the server's reachable
-#    address instead of localhost if the machine runs on another host.)
-uvx --from "anygarden[machine]" anygarden machine register --server http://localhost:8000 --name my-laptop
-uvx --from "anygarden[machine]" anygarden machine run
+# 3. On any host that should run agents, install the machine role, register it
+#    with the server, then start the daemon. `register` prompts for your login,
+#    detects installed engines, and saves the machine token under ~/.anygarden/.
+#    Same host as the server? Install both at once: "anygarden[server,machine]".
+#    Different host? Use the server's reachable address instead of localhost.
+uv tool install "anygarden[machine]"
+anygarden machine register --server http://localhost:8000 --name my-laptop
+anygarden machine run
 ```
 
 **4. Add an agent and talk to it.** Back in the web UI, create a room, then add an
@@ -169,7 +173,8 @@ installed. Then click **Apply** to (re)spawn LiteLLM with the new config.
 restart the daemon so it advertises `openhands`:
 
 ```bash
-uvx --from "anygarden[machine]" --with "openhands-sdk>=1.21" anygarden machine run
+uv tool install "anygarden[machine]" --with "openhands-sdk>=1.21"
+anygarden machine run
 ```
 
 **5. Add an agent** with engine **OpenHands** and your registered model, then
