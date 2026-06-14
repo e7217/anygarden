@@ -1,9 +1,24 @@
 # Anygarden
 
+[![PyPI](https://img.shields.io/pypi/v/anygarden)](https://pypi.org/project/anygarden/)
+[![CI](https://github.com/e7217/anygarden/actions/workflows/ci.yml/badge.svg)](https://github.com/e7217/anygarden/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 Anygarden is a collaborative workspace for running multiple AI coding agents as a
 team. Humans and agents share project rooms where they can chat, mention each
 other, exchange files, and hand off work while Anygarden manages routing, context,
 permissions, and agent lifecycles.
+
+**Jump to:** [Features](#features) · [Quick Start](#quick-start) · [Local LLM (Ollama)](#run-agents-on-a-local-llm-ollama) · [Documentation](#documentation) · [Contributing](#contributing)
+
+## Features
+
+- **Multiple agent engines** — Claude Code, Codex, Gemini CLI, and OpenHands, auto-detected on each machine by what's installed on `PATH`.
+- **Distributed machines** — run agents on any host (laptop, remote, GPU box); the server routes work to whichever machine is online.
+- **Human + agent rooms** — shared project rooms with chat, @-mentions, file exchange, and task hand-off between people and agents.
+- **Bring your own model** — point agents at cloud provider CLIs, or run fully local through the built-in LLM gateway (LiteLLM → Ollama).
+- **Web UI + API** — a browser UI backed by REST and WebSocket APIs.
+- **Managed agents** — Anygarden handles routing, context, permissions, and agent process lifecycles.
 
 ## How It Works
 
@@ -104,12 +119,11 @@ make setup
 make dev
 ```
 
-`make setup` installs all packages via `uv sync --all-packages` and
-configures `core.hooksPath=.githooks` so `git pull` automatically
-re-syncs the workspace after merges. Without this, `.venv/bin/*`
-can go stale after a pull and the machine daemon will silently
-fall back to PyPI-cached builds of `anygarden-agent` that lag behind
-engine-adapter fixes.
+> **Use `make setup`, not a bare `uv sync`.** It installs the workspace
+> (`uv sync --all-packages`) *and* sets `core.hooksPath=.githooks` so `git pull`
+> auto-re-syncs after merges. Without it, `.venv/bin/*` can go stale and the machine
+> daemon silently falls back to outdated PyPI builds of `anygarden-agent` that lag
+> behind engine-adapter fixes.
 
 Environment variables (`ANYGARDEN_JWT_SECRET`, `ANYGARDEN_MCP_SECRETS_KEY`,
 etc.) are all optional — see [`.env.example`](.env.example) and
@@ -178,10 +192,9 @@ the gotchas table below.
 Tip: set `LITELLM_LOG=DEBUG` before starting the server to make LiteLLM print
 full upstream errors (e.g. the exact reason behind a `400`) to the server log.
 
-Core server variables (`ANYGARDEN_JWT_SECRET`, `ANYGARDEN_MCP_SECRETS_KEY`,
-`ANYGARDEN_HOST`, `ANYGARDEN_PORT`, …) are all optional and auto-persisted in
-`~/.anygarden/` — see [`.env.example`](.env.example) and
-[`packages/cluster/README.md`](packages/cluster/README.md#environment).
+(Core server variables like `ANYGARDEN_JWT_SECRET` are optional and auto-persisted
+in `~/.anygarden/` — see [Develop](#develop-from-a-checkout) and
+[`.env.example`](.env.example).)
 
 ### Common gotchas
 
@@ -199,6 +212,18 @@ Core server variables (`ANYGARDEN_JWT_SECRET`, `ANYGARDEN_MCP_SECRETS_KEY`,
 - [`docs/runbook/`](docs/runbook) — Step-by-step operational guides (e.g. OpenHands + Ollama)
 - [`docs/plans/`](docs/plans) — Development plans and history
 - [`packages/*/docs/`](packages) — Per-package docs (architecture, operations, ADRs)
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev setup,
+the commit convention, and how to run the same checks CI runs. UI changes under
+`packages/cluster/frontend/` must follow the design system in [`DESIGN.md`](DESIGN.md).
+
+## Support
+
+Hit a snag or have a question? Check the [Common gotchas](#common-gotchas) table and
+[`docs/runbook/`](docs/runbook) first, then open an issue at
+[github.com/e7217/anygarden/issues](https://github.com/e7217/anygarden/issues).
 
 ## License
 
