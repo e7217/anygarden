@@ -56,3 +56,8 @@ packages = ["anygarden_machine"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# libtmux (transitive via openhands-tools, installed under CI's --all-extras)
+# ships a pytest plugin that applies a mark to a fixture; pytest >=8.4 turns that
+# into a hard error at plugin import, killing collection before any test runs. We
+# don't use its fixtures, so disable its autoload. (#439)
+addopts = "-p no:libtmux"

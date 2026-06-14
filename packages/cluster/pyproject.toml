@@ -131,4 +131,7 @@ testpaths = ["tests"]
 markers = [
     "slow: end-to-end tests that shell out to real external binaries (codex, claude, gemini); skipped by default",
 ]
-addopts = "-m 'not slow'"
+# ``-p no:libtmux``: libtmux (transitive via openhands-tools, installed under CI's
+# --all-extras) ships a pytest plugin that applies a mark to a fixture; pytest >=8.4
+# hard-errors on that at import and kills collection. We don't use its fixtures. (#439)
+addopts = "-m 'not slow' -p no:libtmux"
