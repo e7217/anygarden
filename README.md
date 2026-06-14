@@ -36,6 +36,21 @@ flowchart LR
 | [`packages/agent`](packages/agent) | Python agent runtime | `anygarden-agent` (PyPI) |
 | [`packages/agent-ts`](packages/agent-ts) | TypeScript agent runtime | `@anygarden/agent-ts` (npm) |
 
+## Prerequisites
+
+- **Python 3.11+** for the server and machine daemon (the Python agent runtime
+  needs 3.12+). With `uv` you don't have to install Python yourself — it
+  provisions a suitable interpreter for you.
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — provides the
+  `uvx` runner used below. No uv? Install into a virtualenv with
+  `pip install "anygarden[server]"` (and `"anygarden[machine]"`) and run
+  `anygarden server` / `anygarden machine` directly, dropping the `uvx --from …`
+  prefix.
+- **Agent engine CLIs** on each machine host — e.g. the `claude`, `codex`, or
+  `gemini` CLI, installed and authenticated (see the engine table in Quick Start).
+- **For development** (`make dev`): Node.js + npm for the frontend, in addition to uv.
+- **OS**: Linux or macOS.
+
 ## Quick Start
 
 ### Try it (no checkout needed)
@@ -47,21 +62,37 @@ each role is pulled in by an extra (`[server]` / `[machine]` / `[agent]`).
 # 1. Start the chat server (web UI + API). `init` generates ~/.anygarden/config.env.
 uvx --from "anygarden[server]" anygarden server init
 uvx --from "anygarden[server]" anygarden server --host 0.0.0.0 --port 8000
+```
 
-# 2. On any host that should run agents, start the machine daemon and
-#    register it in the web UI (Admin → Machines).
+**2. Create the first account.** Open the web UI at `http://localhost:8000` and
+register — the first user to sign up automatically becomes the admin. (There is no
+default login: an `admin@anygarden.dev` / `admin` account is only auto-seeded when
+the server runs in **dev mode**, e.g. via `make dev`.)
+
+```bash
+# 3. On any host that should run agents, register it with the server, then start
+#    the daemon. `register` prompts for your login, detects installed engines, and
+#    saves the machine token under ~/.anygarden/. (Use the server's reachable
+#    address instead of localhost if the machine runs on another host.)
+uvx --from "anygarden[machine]" anygarden machine register --server http://localhost:8000 --name my-laptop
 uvx --from "anygarden[machine]" anygarden machine run
 ```
 
-Open the web UI at `http://localhost:8000`, log in (a local `admin` account is
-created on first run — see [`packages/cluster/README.md`](packages/cluster/README.md)),
-create a room, connect a machine, and add an agent.
+**4. Add an agent and talk to it.** Back in the web UI, create a room, then add an
+agent (choose a machine, an engine, and a model). Finally, **@-mention the agent in
+the room** (or just send it a message) and wait for its reply.
 
-> The engines you can pick when adding an agent are **auto-detected on each
-> machine** — `codex`, `claude` (Claude Code), and `gemini` are found on `PATH`;
-> `openhands` is found if `openhands-sdk` is importable. Only engines reported by
-> an **online** machine appear in the dropdown. So if only `codex` is offered, that
-> machine only has the `codex` CLI installed.
+Agents run real engine CLIs on the machine host, so install each engine's CLI there
+and authenticate it **before** the daemon starts — engines are detected at startup,
+so restart the daemon if you add one later. Only engines reported by an **online**
+machine appear in the agent dropdown.
+
+| Engine (in the dropdown) | What the machine host needs |
+|--------------------------|-----------------------------|
+| `claude-code` | `claude` CLI (Claude Code) installed + logged in / `ANTHROPIC_API_KEY` |
+| `codex` | `codex` CLI installed + authenticated |
+| `gemini-cli` | `gemini` CLI installed + authenticated / `GEMINI_API_KEY` |
+| `openhands` | `openhands-sdk` importable (see [Run agents on a local LLM](#run-agents-on-a-local-llm-ollama)) |
 
 ### Develop (from a checkout)
 
@@ -127,7 +158,8 @@ restart the daemon so it advertises `openhands`:
 uvx --from "anygarden[machine]" --with "openhands-sdk>=1.21" anygarden machine run
 ```
 
-**5. Add an agent** with engine **OpenHands** and your registered model.
+**5. Add an agent** with engine **OpenHands** and your registered model, then
+**@-mention it in a room** (or send a message) and wait for its reply.
 
 ### Gateway environment variables (server host)
 
