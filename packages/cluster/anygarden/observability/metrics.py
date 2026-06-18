@@ -53,6 +53,28 @@ agents_crashed_by_sweep_total = Counter(
     "Total number of agents flipped to crashed by the stale-heartbeat sweeper",
 )
 
+# ── #455 Wave 2a — token-budget active-stop / incidents ──────────────
+#
+# ``evaluate_cost_event`` records an incident whenever a successful usage
+# row pushes a scope's observed-token SUM over a soft (warn) or hard
+# (ceiling) threshold, and — for AGENT-scope hard breaches only —
+# actively stops the agent. These counters make the breach + stop rate
+# alertable. Like the other reliability counters, scope ids are NOT
+# labels (cardinality); only the bounded ``threshold`` dimension is.
+budget_incidents_total = Counter(
+    "anygarden_budget_incidents_total",
+    "Total number of token-budget incidents recorded (new open rows)",
+    ["threshold"],  # "soft" | "hard"
+)
+
+# Agents actively stopped by the budget active-stop path (AGENT-scope
+# hard breach → request_stop + pause_reason='budget'). ROOM / GLOBAL
+# breaches are incident-only and never increment this.
+agents_stopped_by_budget_total = Counter(
+    "anygarden_agents_stopped_by_budget_total",
+    "Total number of agents stopped by the token-budget active-stop path",
+)
+
 ws_connections_active = Gauge(
     "anygarden_ws_connections_active",
     "Number of currently active WebSocket connections",

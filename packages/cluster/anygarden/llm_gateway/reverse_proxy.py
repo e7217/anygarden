@@ -33,7 +33,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.budgets.ledger import evaluate_invocation_block
+from anygarden.budgets.ledger import evaluate_cost_event, evaluate_invocation_block
 from anygarden.db.models import LLMGatewayUsage
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.llm_gateway.usage_logger import parse_json_usage, parse_stream_event
@@ -389,6 +389,19 @@ async def proxy(
             status_code=upstream_resp.status_code,
             room_id=room_id,
         )
+        # #455 (Wave 2a) — post-cost budget evaluation. Chained AFTER the
+        # usage-row write (which runs first as an earlier background task)
+        # so the window SUM the evaluator reads already includes this
+        # call. Success path only — tokens are real here; error/timeout
+        # paths skip it. Default-OFF: with no active hard-stop policy the
+        # evaluator is a no-op (no incident, no stop).
+        background.add_task(
+            evaluate_cost_event,
+            request.app.state.session_factory,
+            agent_id=agent_id,
+            room_id=room_id,
+            lifecycle=getattr(request.app.state, "agent_lifecycle", None),
+        )
         return Response(
             content=body_bytes,
             status_code=upstream_resp.status_code,
@@ -426,6 +439,16 @@ async def proxy(
         duration_ms=duration_ms,
         status_code=upstream_resp.status_code,
         room_id=room_id,
+    )
+    # #455 (Wave 2a) — post-cost budget evaluation, chained after the
+    # usage-row write so the SUM includes this call. Success path only;
+    # default-OFF makes it a no-op until a hard-stop policy is enabled.
+    background.add_task(
+        evaluate_cost_event,
+        request.app.state.session_factory,
+        agent_id=agent_id,
+        room_id=room_id,
+        lifecycle=getattr(request.app.state, "agent_lifecycle", None),
     )
     return Response(
         content=body_bytes,

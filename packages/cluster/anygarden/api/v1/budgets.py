@@ -16,16 +16,16 @@ feature behaviour-neutral until an operator deliberately switches it on).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import TokenBudgetPolicy
+from anygarden.db.models import Agent, TokenBudgetIncident, TokenBudgetPolicy
 from anygarden.dependencies import get_admin_identity, get_db
 
 router = APIRouter(prefix="/api/v1/budgets", tags=["token-budgets"])
@@ -159,3 +159,70 @@ async def delete_policy(
         raise HTTPException(status_code=404, detail="Policy not found")
     await db.delete(row)
     await db.commit()
+
+
+# ── Active-stop resume (#455, Wave 2a) ──────────────────────────────────
+
+
+class ResumeOut(BaseModel):
+    """Result of resuming a budget-paused agent."""
+
+    agent_id: str
+    incidents_resolved: int
+
+
+@router.post("/agents/{agent_id}/resume", response_model=ResumeOut)
+async def resume_agent(
+    agent_id: str,
+    request: Request,
+    identity: Identity = Depends(get_admin_identity),  # noqa: ARG001
+    db: AsyncSession = Depends(get_db),
+) -> ResumeOut:
+    """Lift a budget arrest on an agent and restart it (admin).
+
+    Reverses ``evaluate_cost_event``'s active-stop side-effects for an
+    AGENT-scope hard breach:
+
+    1. Clear ``pause_reason`` (back to NULL) so the invocation-block
+       short-circuit no longer fires for residual calls.
+    2. Resolve every *open* incident for this agent scope — stamping
+       ``resolved`` + ``resolved_at`` so the same window doesn't keep the
+       agent flagged.
+    3. ``request_start`` the agent through the normal lifecycle path
+       (placement / generation / machine sync), rather than flipping
+       desired_state by hand.
+
+    Note: an admin who resumes while the window is still over ceiling and
+    the agent keeps spending will be re-stopped by the next
+    ``evaluate_cost_event`` — that's intended; resume is "I've handled
+    it / raised the ceiling", not a permanent override.
+    """
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    agent.pause_reason = None
+
+    open_incidents = (
+        await db.execute(
+            select(TokenBudgetIncident).where(
+                TokenBudgetIncident.scope_type == "agent",
+                TokenBudgetIncident.scope_id == agent_id,
+                TokenBudgetIncident.status == "open",
+            )
+        )
+    ).scalars().all()
+    resolved_at = datetime.now(timezone.utc)
+    for incident in open_incidents:
+        incident.status = "resolved"
+        incident.resolved_at = resolved_at
+    await db.commit()
+
+    lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    if lifecycle is not None:
+        await lifecycle.request_start(agent_id)
+
+    return ResumeOut(
+        agent_id=agent_id,
+        incidents_resolved=len(open_incidents),
+    )
