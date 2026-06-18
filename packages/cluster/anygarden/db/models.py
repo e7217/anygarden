@@ -1379,3 +1379,76 @@ class LLMGatewayUsage(Base):
     # Populated only on non-2xx. Short message from upstream or proxy
     # for debug views; never user-facing.
     error: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
+
+
+# ── Token budgets (#453, reliability Wave 1d) ──────────────────────────
+#
+# A policy table on top of the measured ``LLMGatewayUsage`` stream. The
+# reverse proxy sums observed tokens over a rolling/calendar window per
+# scope and, when an *active* policy with ``hard_stop_enabled`` is over
+# its ceiling, refuses the call with 429 at the gateway chokepoint
+# (``budgets/ledger.py``). ``hard_stop_enabled`` defaults to False so
+# merging this feature is a no-op: with zero active hard-stop policies
+# the gate never fires and runtime behaviour is unchanged until an admin
+# deliberately creates and enables a policy. Active-stop / incidents /
+# pause_reason / USD cost are Wave 2 (out of scope here).
+
+
+class TokenBudgetPolicy(Base):
+    """One token-budget ceiling for a scope (global / agent / room).
+
+    ``scope_type`` selects what ``scope_id`` references:
+
+    - ``global`` — ``scope_id`` is NULL; the ceiling applies to the sum
+      of *all* gateway usage in the window.
+    - ``agent`` — ``scope_id`` is an ``agents.id``; ceiling applies to
+      that agent's usage.
+    - ``room`` — ``scope_id`` is a ``rooms.id``; ceiling applies to that
+      room's usage (best-effort at the proxy — room correlation is only
+      available when tracing resolves a single in-flight request).
+
+    Plain ``String(36)`` for ``scope_id`` with no FK: a deleted agent or
+    room should not silently drop the operator's policy, and the ledger
+    treats an orphaned ``scope_id`` as simply matching no usage rows.
+    """
+
+    __tablename__ = "token_budget_policies"
+    __table_args__ = (
+        Index(
+            "ix_token_budget_policies_scope",
+            "scope_type",
+            "scope_id",
+            "is_active",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # "global" | "agent" | "room".
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # NULL for global; agents.id / rooms.id otherwise. No FK on purpose
+    # (see class docstring).
+    scope_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    # Token ceiling for the window (prompt + completion tokens summed).
+    token_ceiling: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Soft-warn threshold as a percent of the ceiling. Informational for
+    # now (Wave 2 surfaces warnings); the hard-stop gate uses the
+    # ceiling itself.
+    warn_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=80)
+    # "rolling_24h" (now - 24h) | "calendar_day_utc" (midnight UTC).
+    window_kind: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="rolling_24h"
+    )
+    # The kill switch. Defaults False so a freshly-created policy is a
+    # no-op until the operator deliberately enables enforcement — the
+    # invariant that makes merging this PR behaviour-neutral.
+    hard_stop_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # Soft delete / disable without losing the configured ceiling.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )

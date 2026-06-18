@@ -33,6 +33,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
+from anygarden.budgets.ledger import evaluate_invocation_block
 from anygarden.db.models import LLMGatewayUsage
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.llm_gateway.usage_logger import parse_json_usage, parse_stream_event
@@ -238,6 +239,79 @@ async def proxy(
             response_body=response_body,
             error=error,
         ).room_id
+
+    # #453 (Wave 1d) — token-budget invocation-block gate. Before paying
+    # for the upstream call, consult the budget ledger: if an *active*
+    # hard-stop policy for this caller's scope is over its ceiling, refuse
+    # with 429. ``room_id`` is best-effort — resolved from tracing's
+    # in-flight map (the same correlation used post-call), which may be
+    # empty when tracing is disabled; agent + global scopes are always
+    # enforced, room only when the id is known. Default-OFF: with no
+    # active hard-stop policy ``evaluate_invocation_block`` returns None
+    # and this is a no-op, so the gate never changes behaviour until an
+    # admin enables a policy.
+    room_id_hint: str | None = None
+    if tracing is not None and agent_id is not None:
+        try:
+            room_id_hint = tracing._correlate(agent_id).room_id
+        except Exception:  # noqa: BLE001 — best-effort; never break the call
+            room_id_hint = None
+
+    try:
+        block = await evaluate_invocation_block(
+            request.app.state.session_factory,
+            agent_id=agent_id,
+            room_id=room_id_hint,
+        )
+    except Exception as exc:  # noqa: BLE001 — fail open: budget read must
+        # never take down LLM traffic. A DB hiccup degrades to "no block".
+        logger.warning("llm_gateway.budget_eval_failed", error=str(exc))
+        block = None
+
+    if block is not None:
+        # Record the refusal as a usage row (status 429) so the admin
+        # surface shows the block happened. The ``status_code < 400``
+        # filter in the ledger keeps this row out of future observed
+        # sums, so a block can't perpetuate itself.
+        background.add_task(
+            _write_usage_row,
+            request.app.state.session_factory,
+            identity_kind=identity.kind,
+            identity_id=identity.id,
+            agent_id=agent_id,
+            model_name=model_name,
+            prompt_tokens=None,
+            completion_tokens=None,
+            duration_ms=0,
+            status_code=429,
+            error=f"budget:{block.scope_type}",
+            room_id=room_id_hint,
+        )
+        logger.info(
+            "llm_gateway.invocation_blocked",
+            scope_type=block.scope_type,
+            scope_id=block.scope_id,
+            agent_id=agent_id,
+        )
+        return Response(
+            content=json.dumps(
+                {
+                    "error": {
+                        "type": "token_budget_exceeded",
+                        "message": (
+                            "LLM call refused — token budget exceeded for "
+                            f"scope '{block.scope_type}'. "
+                            "Retry after the budget window rolls over or "
+                            "ask an admin to raise the ceiling."
+                        ),
+                        "scope_type": block.scope_type,
+                    }
+                }
+            ),
+            status_code=429,
+            headers={"Retry-After": "60"},
+            media_type="application/json",
+        )
 
     start = time.perf_counter()
     upstream_url = f"/{path}"
