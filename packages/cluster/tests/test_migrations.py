@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "047"
+                assert version == "048"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -368,11 +368,13 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "047"
+                # Head moved to 048 (#463); the cost_usd column added by 047
+                # is still present after upgrading through to head.
+                assert version == "048"
             engine.dispose()
 
-            # Downgrade exactly one step (047 → 046) and confirm the column
-            # is gone and the head moved back.
+            # Downgrade two steps (head 048 → 047 → 046) and confirm the
+            # column is gone and the head moved back.
             command.downgrade(cfg, "046")
             engine = create_engine(f"sqlite:///{db_path}")
             with engine.connect() as conn:
@@ -387,6 +389,68 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 assert version == "046"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+    def test_048_agent_turn_tasks_up_and_down(self) -> None:
+        """#463 (Wave 2) — migration 048 creates ``agent_turn_tasks`` on
+        upgrade head and drops it on downgrade 048 → 047."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    )
+                }
+                assert "agent_turn_tasks" in tables
+                cols = {
+                    row[1]: row
+                    for row in conn.execute(
+                        text("PRAGMA table_info(agent_turn_tasks)")
+                    )
+                }
+                # PK on request_id, the required columns are present.
+                assert cols["request_id"][5] == 1  # pk position 1
+                assert "task_id" in cols
+                assert "redispatch_count" in cols
+                assert "created_at" in cols
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "048"
+            engine.dispose()
+
+            # Downgrade exactly one step (048 → 047): the table is gone and
+            # the head moved back.
+            command.downgrade(cfg, "047")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master WHERE type='table'"
+                        )
+                    )
+                }
+                assert "agent_turn_tasks" not in tables
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "047"
             engine.dispose()
         finally:
             try:
@@ -451,7 +515,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "047"
+                assert version == "048"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -491,7 +555,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "047"
+                assert version == "048"
             sync_engine.dispose()
         finally:
             try:
@@ -525,7 +589,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "047"
+            assert head == "048"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -627,7 +691,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "047"
+                assert version == "048"
             sync_engine.dispose()
         finally:
             try:

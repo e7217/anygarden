@@ -1209,6 +1209,60 @@ class TaskBlocker(Base):
     # cycle-guard walk reference vanished tasks.
 
 
+class AgentTurnTask(Base):
+    """The ``request_id`` ↔ ``task_id`` correlation for an assignment turn
+    (#463, reliability Wave 2 — lifecycle→Task re-dispatch bridge).
+
+    An *assignment-originated* turn is one woken by a synthetic
+    ``[TASK]`` mention injected through
+    :func:`anygarden.messages.service.inject_task_assignment_message`
+    (goal scheduler / ``create_task`` / auto-route / reassign — all funnel
+    through that single helper). That helper now mints a server-side
+    ``request_id``, stamps it onto the injected message metadata (the same
+    key the live user-send path uses), and writes one row here linking the
+    minted ``request_id`` to the Task it woke.
+
+    When the assignee agent threads that ``request_id`` back onto its
+    ``handler_finished`` LifecycleFrame and the turn ends in a terminal
+    non-ok outcome (``rejected`` / ``timeout`` / ``failed``), the WS handler
+    looks the turn up here: a hit means an assignment turn failed, so the
+    Task is returned to ``todo`` and re-dispatched once. A *miss* means a
+    live (user-send / peer-handoff) turn — those never write a row here, so
+    the bridge leaves them completely untouched (the core scope invariant).
+
+    ``redispatch_count`` is carried forward across the re-dispatch chain:
+    each re-wake mints a *fresh* ``request_id`` and writes a *new* row with
+    the incremented count, so the flip-loop is bounded by
+    ``_MAX_TASK_REDISPATCH`` (=1) even though every wake has its own
+    correlation id.
+    """
+
+    __tablename__ = "agent_turn_tasks"
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    """The minted turn correlation id. PK — the only access pattern is a
+    point lookup by ``request_id`` from the lifecycle receive path, so no
+    additional index is needed."""
+
+    task_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    """The Task this turn was woken to work on. CASCADE so deleting the
+    Task tears down its turn-correlation rows (matches the rooms→tasks /
+    task_blockers cascades)."""
+
+    redispatch_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    """How many automatic re-dispatches have happened *before* this turn.
+    0 for the original assignment; carried + incremented on each re-wake so
+    ``_MAX_TASK_REDISPATCH`` bounds the chain."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class Goal(Base):
     """A repeating responsibility owned by an agent (#302).
 
