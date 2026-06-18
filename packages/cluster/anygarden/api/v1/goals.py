@@ -20,7 +20,7 @@ scheduler isn't constantly catching ``GoalExecutionError``.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -187,11 +187,11 @@ async def create_goal(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     await _ensure_agent_in_room(db, agent_id, body.report_room_id)
 
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     next_run_at = compute_next_run_at(
         body.trigger_type,
         body.trigger_config,
-        after=datetime.utcnow().astimezone(),
+        after=datetime.now(timezone.utc),
     )
     goal = Goal(
         assignee_agent_id=agent_id,
@@ -304,7 +304,7 @@ async def update_goal(
         goal.next_run_at = compute_next_run_at(
             goal.trigger_type,
             goal.trigger_config,
-            after=datetime.utcnow().astimezone(),
+            after=datetime.now(timezone.utc),
         )
 
     await db.commit()
@@ -371,7 +371,7 @@ async def resume_goal(
         goal.next_run_at = compute_next_run_at(
             goal.trigger_type,
             goal.trigger_config,
-            after=datetime.utcnow().astimezone(),
+            after=datetime.now(timezone.utc),
         )
     await db.commit()
     await db.refresh(goal)

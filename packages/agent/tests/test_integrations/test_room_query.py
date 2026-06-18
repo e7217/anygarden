@@ -147,7 +147,7 @@ class TestExecuteRoomQuery:
         query = _make_query()
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -183,7 +183,7 @@ class TestExecuteRoomQuery:
         query = _make_query(source_participant_name=None)
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -204,7 +204,7 @@ class TestExecuteRoomQuery:
         query = _make_query(content="<#room:room-b> 내일 동탄 날씨는?")
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -221,7 +221,7 @@ class TestExecuteRoomQuery:
         query = _make_query(content="<#room:room-b>")
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -301,7 +301,7 @@ class TestExecuteRoomQuery:
         )
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -348,7 +348,7 @@ class TestExecuteRoomQuery:
         )
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -372,7 +372,7 @@ class TestExecuteRoomQuery:
         query = _make_query(content="API 의견?")
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -421,6 +421,64 @@ class TestExecuteRoomQuery:
         assert kwargs["metadata"]["ingest_only"] is True
 
     @pytest.mark.asyncio
+    async def test_chatty_agent_does_not_satisfy_count(self):
+        """#445 — completion requires N *distinct* senders.
+
+        A chatty agent (agent-d) posting twice MUST NOT satisfy
+        ``expected_count == 2`` while the silent agent (agent-e)
+        never responds. Responses are keyed by ``participant_id``
+        (last-write-wins) so two messages from the same sender
+        collapse to one entry — the collection stays at 1/2 and no
+        result is delivered until a *second distinct* sender replies.
+        """
+        client = _make_client()
+        query = _make_query(content="API 의견?")
+
+        with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
+            mock_asyncio.sleep = AsyncMock()
+            await execute_room_query(client, {}, query)
+
+        handler = client._message_handlers[0]
+        client.send.reset_mock()
+
+        # Chatty agent-d posts twice.
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-d-pid",
+            "content": "첫 번째 의견",
+        })
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-d-pid",
+            "content": "두 번째 의견 (수정)",
+        })
+        # Still only 1 distinct sender → NOT complete despite 2 msgs.
+        assert client.send.call_count == 0
+
+        # Silent agent-e finally replies → 2 distinct senders.
+        await handler({
+            "room_id": "room-b",
+            "participant_id": "agent-e-pid",
+            "content": "REST가 적합합니다",
+        })
+        assert client.send.call_count == 1
+
+        _, kwargs = client.send.call_args
+        result_meta = kwargs["metadata"]["room_query_result"]
+        assert result_meta["status"] == "completed"
+        # Two distinct senders, not three messages.
+        assert result_meta["responded"] == 2
+        assert result_meta["expected"] == 2
+        responses = result_meta["responses"]
+        assert len(responses) == 2
+        pids = {r["participant_id"] for r in responses}
+        assert pids == {"agent-d-pid", "agent-e-pid"}
+        # Last-write-wins: agent-d's entry carries the *second* msg.
+        d_entry = next(r for r in responses if r["participant_id"] == "agent-d-pid")
+        assert d_entry["content"] == "두 번째 의견 (수정)"
+
+    @pytest.mark.asyncio
     async def test_timeout_path_marks_status_timeout(self):
         """If the safety timeout fires before all responses arrive
         the result still ships with ``status="timeout"`` so the
@@ -438,7 +496,7 @@ class TestExecuteRoomQuery:
                 captured["coro"] = coro
                 return MagicMock()
 
-            mock_asyncio.get_event_loop.return_value.create_task = (
+            mock_asyncio.get_running_loop.return_value.create_task = (
                 _capture_task
             )
             mock_asyncio.sleep = AsyncMock()
@@ -484,7 +542,7 @@ class TestExecuteRoomQuery:
         query = _make_query(content="API 의견?")
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -519,7 +577,7 @@ class TestExecuteRoomQuery:
         query = _make_query(content="API 의견?")
 
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
 
@@ -560,7 +618,7 @@ class TestForwardBodyRegression:
         client = _make_client()
         query = _make_query(content="quick check")
         with patch("anygarden_agent.integrations.room_query.asyncio") as mock_asyncio:
-            mock_asyncio.get_event_loop.return_value.create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = MagicMock()
             mock_asyncio.sleep = AsyncMock()
             await execute_room_query(client, {}, query)
         args, _ = client.send.call_args

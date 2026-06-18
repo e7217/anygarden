@@ -88,6 +88,52 @@ async def test_assignee_agent_can_mark_failed(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mark_in_progress_sets_started_at(db) -> None:
+    """#445 — marking in_progress stamps ``started_at`` so the
+    execution-timeout sweeper (goals/sweeper.py) can later detect a
+    wedged task. Without this stamp the exec-timeout branch is dead
+    code for non-goal tasks."""
+    task, agent, _ = await _make_task_assigned_to(db)
+    assert task.started_at is None
+    await mark_task_status(
+        db, agent_id=agent.id, arguments={"task_id": task.id, "status": "in_progress"}
+    )
+    await db.refresh(task)
+    assert task.started_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_terminal_sets_finished_at(db) -> None:
+    """#445 — a terminal status stamps ``finished_at``."""
+    task, agent, _ = await _make_task_assigned_to(db)
+    assert task.finished_at is None
+    await mark_task_status(
+        db, agent_id=agent.id, arguments={"task_id": task.id, "status": "done"}
+    )
+    await db.refresh(task)
+    assert task.finished_at is not None
+
+
+@pytest.mark.asyncio
+async def test_started_at_not_overwritten_on_repeat(db) -> None:
+    """#445 — the is-None guard keeps the first ``started_at``
+    authoritative (e.g. a goal task whose started_at was set at
+    creation), so a second in_progress mark does not move the clock."""
+    from datetime import datetime, timedelta, timezone
+
+    task, agent, _ = await _make_task_assigned_to(db)
+    task.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    await db.flush()
+    await db.refresh(task)
+    before = task.started_at
+    await mark_task_status(
+        db, agent_id=agent.id, arguments={"task_id": task.id, "status": "in_progress"}
+    )
+    await db.refresh(task)
+    assert task.started_at == before
+
+
+@pytest.mark.asyncio
 async def test_non_assignee_is_forbidden(db) -> None:
     task, _, _ = await _make_task_assigned_to(db, agent_name="bot-A")
     intruder = Agent(name="bot-B", engine="echo")

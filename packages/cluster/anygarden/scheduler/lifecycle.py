@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import and_, case, func, select
+from sqlalchemy import and_, case, event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -186,10 +186,40 @@ class AgentLifecycle:
         so they don't trigger a mint at all. Net result: one row per
         agent per active spawn, with the plaintext stable until
         ``request_stop`` evicts.
+
+        Issue #445 — the durable cache is populated *only after* the
+        staged ``agent_tokens`` row commits. Caching eagerly (pre-#445)
+        meant a caller that never committed (``send_sync_batch``) or
+        one whose surrounding transaction rolled back left the
+        plaintext in the cache pointing at a row that was never
+        persisted. After a restart the cache is empty but the agent
+        already holds that stdin-piped token, so every gateway/MCP call
+        401s in a storm.
+
+        Two-stage cache to satisfy both invariants:
+        - *Pending* mints are stashed per-session (``Session.info``) so
+          repeated ``_build_sync_frame`` calls inside the *same*
+          uncommitted transaction reuse one token / one row (#369).
+        - On ``after_commit`` those pending tokens graduate into the
+          durable ``_token_cache``. A rollback — or a session that
+          exits without committing — never fires the listener, so the
+          durable cache mirrors the committed DB state (#445).
         """
         cached = self._token_cache.get(agent_id)
         if cached is not None:
             return cached
+
+        sync_session = db.sync_session
+        # Per-session scratch for tokens minted-but-not-yet-committed.
+        pending: dict[str, str] = sync_session.info.setdefault(
+            "_pending_anygarden_tokens", {}
+        )
+        pending_token = pending.get(agent_id)
+        if pending_token is not None:
+            # Same transaction, second acquire — reuse so we don't
+            # stage a duplicate ``agent_tokens`` row (#369 invariant).
+            return pending_token
+
         token = generate_token()
         token_hash, lookup_hint = hash_agent_token(token)
         db.add(
@@ -199,7 +229,29 @@ class AgentLifecycle:
                 lookup_hint=lookup_hint,
             )
         )
-        self._token_cache[agent_id] = token
+        pending[agent_id] = token
+
+        if not sync_session.info.get("_anygarden_token_commit_hook"):
+            # Arm the promote-on-commit hook once per session. ``once``
+            # auto-removes it safely after it fires (no mid-dispatch
+            # deque mutation). The hook drains *all* pending tokens for
+            # the session, so a single listener covers multiple agents
+            # batched into one transaction (``send_sync_batch`` /
+            # ``handle_token_request`` shapes).
+            sync_session.info["_anygarden_token_commit_hook"] = True
+
+            def _promote_pending_on_commit(session) -> None:
+                staged = session.info.pop("_pending_anygarden_tokens", {})
+                session.info.pop("_anygarden_token_commit_hook", None)
+                for aid, tok in staged.items():
+                    self._token_cache[aid] = tok
+
+            event.listen(
+                sync_session,
+                "after_commit",
+                _promote_pending_on_commit,
+                once=True,
+            )
         return token
 
     def evict_token(self, agent_id: str) -> None:
@@ -542,13 +594,22 @@ class AgentLifecycle:
 
     async def bump_generation(self, agent_id: str) -> None:
         """Increment generation and push ``sync_desired_state`` if running."""
+        frame: dict | None = None
+        target_machine_id: str | None = None
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
                 return
             agent.generation = (agent.generation or 0) + 1
-            await db.commit()
 
+            # Issue #445 — build the sync frame *before* committing, so
+            # any ``anygarden_token`` minted on a cache miss (its staged
+            # ``agent_tokens`` row) commits in the same transaction as
+            # the generation bump. Building it after the commit (the
+            # pre-#445 ordering) left a fresh mint uncommitted, so the
+            # frame carried a token the DB never persisted — and the
+            # cache, now gated on ``after_commit``, would never pick it
+            # up either, guaranteeing a 401 on the agent's next call.
             if (
                 agent.desired_state == "running"
                 and agent.placed_on_machine_id
@@ -560,13 +621,13 @@ class AgentLifecycle:
                 )
                 rooms = [row[0] for row in room_result.all()]
                 frame = await self._build_sync_frame(db, agent, rooms)
+                target_machine_id = agent.placed_on_machine_id
+
+            await db.commit()
 
         # Send outside the session context if needed.
-        if (
-            agent.desired_state == "running"
-            and agent.placed_on_machine_id
-        ):
-            await self._machine_bus.send(agent.placed_on_machine_id, frame)
+        if frame is not None and target_machine_id is not None:
+            await self._machine_bus.send(target_machine_id, frame)
 
     # ── Internal helpers ──────────────────────────────────────
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import random
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -52,6 +53,43 @@ def _is_task_init_content(content: str) -> bool:
     )
 
 
+# Issue #445 Wave 0 — terminal WS close code. The server uses 4040 to
+# signal an auth/terminal close (e.g. revoked token, agent retired):
+# unlike a transient network drop, retrying forever just hammers a
+# connection that will never succeed. The reconnect loop applies a
+# cooldown and gives up after ``_TERMINAL_GIVE_UP_ATTEMPTS`` of these.
+_TERMINAL_CLOSE_CODE = 4040
+_TERMINAL_GIVE_UP_ATTEMPTS = 3
+_TERMINAL_COOLDOWN = 5.0
+
+
+def _close_code(exc: BaseException) -> int | None:
+    """Best-effort extraction of the WS close code from a websockets
+    ``ConnectionClosed`` (or similar) exception.
+
+    Returns ``None`` when no close frame was received (e.g. an abrupt
+    socket error). ``exc.rcvd`` carries the peer's close frame in
+    websockets >= 13; the deprecated ``exc.code`` shim is avoided.
+    """
+    rcvd = getattr(exc, "rcvd", None)
+    code = getattr(rcvd, "code", None)
+    return code if isinstance(code, int) else None
+
+
+def _backoff_with_jitter(delay: float, cap: float) -> float:
+    """Return ``delay`` with additive jitter, clamped to ``[0, cap]``.
+
+    Issue #445 Wave 0 — a fleet of agents that all dropped at once
+    (server restart) would otherwise reconnect in lockstep and
+    thundering-herd the server. Full +/-25% jitter de-synchronises the
+    retries. The result never exceeds ``cap`` so the backoff stays
+    bounded, and never goes negative.
+    """
+    jitter = delay * 0.25
+    jittered = delay + random.uniform(-jitter, jitter)
+    return max(0.0, min(jittered, cap))
+
+
 class ChatClient:
     """Async WebSocket client for Anygarden chat rooms.
 
@@ -77,6 +115,16 @@ class ChatClient:
 
         # room_id -> last seen sequence number
         self._last_seq: dict[str, int] = {}
+        # Issue #445 Wave 0 — bounded per-room set of already-dispatched
+        # message seqs. ``since_seq`` recovery on reconnect can replay a
+        # frame that was already delivered live (the server may resend
+        # the boundary message), so we de-dup on seq to guarantee each
+        # message reaches the handlers exactly once. Bounded so a long-
+        # lived room can't grow this set without limit; old seqs age out
+        # via the deque and are evicted from the set in lock-step.
+        self._seen_seqs: dict[str, set[int]] = {}
+        self._seen_seq_order: dict[str, collections.deque[int]] = {}
+        self._seen_seqs_maxlen: int = 256
         # room_id -> websocket connection
         self._connections: dict[str, Any] = {}
         # room_id -> asyncio task
@@ -488,6 +536,33 @@ class ChatClient:
             self._recent_msgs[room_id] = buf
         buf.append({"sender": sender, "hash": h})
 
+    def _mark_seq_seen(self, room_id: str, seq: int) -> bool:
+        """Record ``seq`` as dispatched for ``room_id``.
+
+        Issue #445 Wave 0 — returns ``True`` if this seq was already
+        seen (caller should drop it as a replay duplicate), ``False``
+        the first time it's encountered. ``seq <= 0`` (sentinel / absent
+        seq) is never tracked so legitimately un-numbered frames always
+        dispatch. The seen set is bounded to ``_seen_seqs_maxlen`` via a
+        FIFO deque; evicting an old seq from the deque drops it from the
+        set in lock-step so memory stays bounded over a long-lived room.
+        """
+        if seq <= 0:
+            return False
+        seen = self._seen_seqs.get(room_id)
+        if seen is None:
+            seen = set()
+            self._seen_seqs[room_id] = seen
+            self._seen_seq_order[room_id] = collections.deque()
+        if seq in seen:
+            return True
+        order = self._seen_seq_order[room_id]
+        seen.add(seq)
+        order.append(seq)
+        while len(order) > self._seen_seqs_maxlen:
+            seen.discard(order.popleft())
+        return False
+
     def _consume_task_init_reset(self, room_id: str) -> bool:
         """Increment the per-room consecutive task-init counter and
         return whether the caller should still honour the reset.
@@ -610,7 +685,23 @@ class ChatClient:
             # (see claude_code.py), this makes the field authoritative.
             data.setdefault("room_id", room_id)
 
-            for handler in self._message_handlers:
+            # Issue #445 Wave 0 — seq de-dup. Bookkeeping above (turn
+            # counters, recent-message ring, _last_seq) must still run
+            # for every frame, but a seq already dispatched to the
+            # handlers must not be dispatched a second time after a
+            # reconnect replays it via ``since_seq``. Check last, right
+            # before invoking handlers, so a replayed+live duplicate
+            # reaches handlers exactly once.
+            if self._mark_seq_seen(room_id, seq):
+                logger.debug("ws.duplicate_seq_skipped", room_id=room_id, seq=seq)
+                return
+
+            # Issue #445 Wave 0 — iterate over a list() snapshot so a
+            # handler that deregisters itself mid-dispatch (one-shot
+            # delegate / room_query callbacks pop themselves off
+            # ``_message_handlers``) cannot shift the list out from under
+            # the loop and cause the following handler to be skipped.
+            for handler in list(self._message_handlers):
                 try:
                     await handler(data)
                 except Exception as exc:
@@ -720,7 +811,16 @@ class ChatClient:
     async def _room_loop(self, room_id: str) -> None:
         """Reconnection loop with exponential backoff + since_seq recovery."""
         delay = 1.0
+        # Issue #445 Wave 0 — count consecutive terminal (4040) closes.
+        # A 4040 means the server rejected this connection for an
+        # auth/lifecycle reason that won't fix itself on retry, so after
+        # a few attempts we give up instead of hammering the server.
+        terminal_attempts = 0
         while True:
+            # Per-iteration flag: did this disconnect carry a terminal
+            # 4040 close code? Reset each loop so a recovered transient
+            # error clears the terminal cooldown semantics.
+            terminal_close = False
             try:
                 since = self._last_seq.get(room_id, 0)
                 ws_url = f"{self._server_url}/ws/rooms/{room_id}"
@@ -785,7 +885,34 @@ class ChatClient:
                 websockets.exceptions.InvalidURI,
                 OSError,
             ) as exc:
-                logger.warning("ws.disconnected", room_id=room_id, error=str(exc), retry_in=delay)
+                # Issue #445 Wave 0 — a 4040 close is the server's
+                # terminal/auth signal. Don't treat it as a transient
+                # drop: keep the backoff delay growing (do NOT reset it),
+                # apply a cooldown, and give up entirely once we've seen
+                # ``_TERMINAL_GIVE_UP_ATTEMPTS`` of them in a row.
+                if _close_code(exc) == _TERMINAL_CLOSE_CODE:
+                    terminal_close = True
+                    terminal_attempts += 1
+                    if terminal_attempts >= _TERMINAL_GIVE_UP_ATTEMPTS:
+                        logger.warning(
+                            "ws.terminal_close_giving_up",
+                            room_id=room_id,
+                            code=_TERMINAL_CLOSE_CODE,
+                            attempts=terminal_attempts,
+                        )
+                        self._tasks.pop(room_id, None)
+                        return
+                    logger.warning(
+                        "ws.terminal_close",
+                        room_id=room_id,
+                        code=_TERMINAL_CLOSE_CODE,
+                        attempts=terminal_attempts,
+                        cooldown=_TERMINAL_COOLDOWN,
+                    )
+                else:
+                    logger.warning(
+                        "ws.disconnected", room_id=room_id, error=str(exc), retry_in=delay
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -796,8 +923,19 @@ class ChatClient:
             if not self._running:
                 break
 
-            # Exponential backoff
-            await asyncio.sleep(delay)
+            if terminal_close:
+                # Terminal close: cooldown before the next attempt and
+                # leave ``delay`` untouched so a subsequent transient
+                # error keeps the backoff it had already accumulated.
+                await asyncio.sleep(_TERMINAL_COOLDOWN)
+                continue
+
+            # Non-terminal disconnect clears the 4040 streak.
+            terminal_attempts = 0
+
+            # Exponential backoff with jitter to avoid a thundering herd
+            # of agents reconnecting in lockstep after a server restart.
+            await asyncio.sleep(_backoff_with_jitter(delay, self._max_reconnect_delay))
             delay = min(delay * 2, self._max_reconnect_delay)
 
     async def _get_http(self) -> httpx.AsyncClient:

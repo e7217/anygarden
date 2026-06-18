@@ -517,6 +517,49 @@ class TestSinceSeqRecovery:
                 assert r1["seq"] == 2
                 assert r2["seq"] == 3
 
+    @pytest.mark.asyncio
+    async def test_since_seq_replays_more_than_one_page(self, ws_env) -> None:
+        """Item 7 (#445): on-connect replay must page past the
+        ``replay_since_seq`` default cap (50) instead of silently
+        truncating. Seed 130 messages after the agent's ``since_seq``
+        and assert every one is replayed in seq order, not just the
+        first page.
+        """
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+        participant_id = ws_env["participant"].id
+        session_factory = ws_env["session_factory"]
+
+        # One anchor message (seq 1) marks where the agent last was;
+        # ``since_seq`` must be > 0 for the handler to replay at all.
+        # Then 130 messages (seq 2..131) land while the agent is away —
+        # far past the ``replay_since_seq`` default cap of 50.
+        missed = 130
+        async with session_factory() as db:
+            await append_message(db, room_id, participant_id, "anchor")
+            for i in range(missed):
+                await append_message(db, room_id, participant_id, f"msg-{i}")
+            await db.commit()
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}?since_seq=1",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                welcome = json.loads(ws.receive_text())
+                assert welcome["type"] == "welcome"
+                seqs = []
+                for _ in range(missed):
+                    frame = json.loads(ws.receive_text())
+                    seqs.append(frame["seq"])
+
+        # Every missed message replayed, ascending, nothing dropped at 50.
+        assert len(seqs) == missed
+        assert seqs == list(range(2, missed + 2))
+
 
 class TestPresenceBroadcast:
     """#54 — ConnectionManager must publish presence_update frames

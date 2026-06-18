@@ -17,6 +17,7 @@ the LLM couldn't read the message.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -404,7 +405,16 @@ async def mark_task_status(
             "forbidden: only the assignee agent may mark this task"
         )
 
+    now = datetime.now(timezone.utc)
     task.status = status
+    # #445 — stamp lifecycle timestamps so the execution-timeout sweeper
+    # (goals/sweeper.py) can detect wedged in_progress tasks. The is-None
+    # guard preserves a started_at already set at goal-task creation
+    # (goals/executor.py) and keeps the first transition authoritative.
+    if status == "in_progress" and task.started_at is None:
+        task.started_at = now
+    elif status in ("done", "failed") and task.finished_at is None:
+        task.finished_at = now
     await db.flush()
 
     return _ok_result(

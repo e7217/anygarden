@@ -410,12 +410,20 @@ class GeminiCliAdapter(EngineAdapter):
             ) from exc
 
         if proc.returncode != 0:
+            stderr_snippet = stderr.decode(errors="replace")[:500]
             logger.error(
                 "gemini.nonzero_exit",
                 code=proc.returncode,
-                stderr=stderr.decode(errors="replace")[:500],
+                stderr=stderr_snippet,
             )
-            return None
+            # #422 — a non-zero exit was previously swallowed as None,
+            # producing a silent lost turn. Raise so the supervisor maps
+            # it to outcome=failed and sends the failure notice regardless
+            # of request_id (on_message re-raises EngineError cleanly).
+            raise EngineError(
+                f"gemini exited with code {proc.returncode}"
+                + (f": {stderr_snippet}" if stderr_snippet.strip() else "")
+            )
 
         return self._parse_response(stdout.decode(errors="replace"))
 
@@ -540,6 +548,14 @@ async def integrate_with_gemini_cli(
             finally:
                 typing_active = False
                 typing_task.cancel()
+                # Await the cancelled task before sending the False frame so
+                # an in-flight sendTyping(True) cannot land after the False
+                # (which would leave the indicator stuck on) and the
+                # CancelledError is retrieved. Mirrors codex.py.
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
                 await client.sendTyping(room_id, False)
                 # #433 — drain the stash even when on_message raised, so a
                 # failed turn never leaks/leaves a stale prompt. No-op on ok.

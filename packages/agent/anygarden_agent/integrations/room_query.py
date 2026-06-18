@@ -162,7 +162,7 @@ async def execute_room_query(
             target_room_id=query.target_room_id,
             query_id=query.query_id,
             question=query.content,
-            responses=[],
+            responses={},
             expected_count=0,
             status="solo",
             candidates=agent_candidates,
@@ -212,7 +212,7 @@ async def _deliver_result(
     target_room_id: str,
     query_id: str,
     question: str,
-    responses: list[dict[str, str]],
+    responses: dict[str, dict[str, str]],
     expected_count: int,
     status: str,
     candidates: list[dict[str, Any]] | None = None,
@@ -224,8 +224,14 @@ async def _deliver_result(
     the same on-the-wire shape — only the ``status`` tag and
     ``responses`` payload differ. The body prefix stays
     ``[취합 결과]`` to keep ``should_respond``'s startswith path
-    intact (plan §6.1)."""
-    total = len(responses)
+    intact (plan §6.1).
+
+    ``responses`` is keyed by sender ``participant_id`` (last-write-
+    wins) so completion requires N *distinct* senders — a chatty
+    agent posting twice can't satisfy ``expected_count`` while a
+    silent peer is crowded out."""
+    response_list = list(responses.values())
+    total = len(response_list)
     missing = max(expected_count - total, 0)
     candidates = candidates or []
 
@@ -236,7 +242,10 @@ async def _deliver_result(
         header = f"[취합 결과] ({total}/{expected_count}명 응답)"
         if missing > 0:
             header += f" — {missing}명 미응답"
-        parts = [f"응답 {i}: {r['content']}" for i, r in enumerate(responses, 1)]
+        parts = [
+            f"응답 {i}: {r['content']}"
+            for i, r in enumerate(response_list, 1)
+        ]
         summary = "\n".join(parts)
         body = f"{header}\n\n질문: {question}\n\n{summary}"
 
@@ -246,7 +255,7 @@ async def _deliver_result(
         # ``expected_count`` but still listed here — the user asked
         # the room and deserves to know an agent was unreachable
         # rather than silently dropped.
-        responded_pids = {r["participant_id"] for r in responses}
+        responded_pids = set(responses.keys())
         missing_lines: list[str] = []
         for p in candidates:
             if p.get("id") in responded_pids:
@@ -276,7 +285,7 @@ async def _deliver_result(
                         "name": r.get("name", ""),
                         "content": r["content"],
                     }
-                    for r in responses
+                    for r in response_list
                 ],
             },
             # Issue #74 — tell every other listener in the source
@@ -305,7 +314,11 @@ def _register_multi_reply_callback(
     Fires synthesis when all agents respond or on timeout.
     """
     my_pids = client._my_participant_ids
-    responses: list[dict[str, str]] = []
+    # #445 — key by sender ``participant_id`` (last-write-wins) so a
+    # chatty agent posting twice can't satisfy ``expected_count``
+    # while a silent peer is crowded out. Completion requires N
+    # *distinct* senders.
+    responses: dict[str, dict[str, str]] = {}
     done = False
     candidates = agent_candidates or []
     # #153 — freeze a ``participant_id → display_name`` snapshot at
@@ -334,11 +347,11 @@ def _register_multi_reply_callback(
             return
 
         pid = sender or "unknown"
-        responses.append({
+        responses[pid] = {
             "participant_id": pid,
             "name": name_lookup.get(pid, ""),
             "content": content,
-        })
+        }
         logger.info(
             "room_query.response_collected",
             count=len(responses),
@@ -392,4 +405,4 @@ def _register_multi_reply_callback(
             )
             _detach_handler()
 
-    asyncio.get_event_loop().create_task(_cleanup())
+    asyncio.get_running_loop().create_task(_cleanup())

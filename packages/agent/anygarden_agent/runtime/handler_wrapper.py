@@ -95,6 +95,7 @@ def _normalize_engine_result(raw: EngineResult) -> tuple[Optional[str], Optional
 # them as system messages without leaking internal error detail.
 _TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
 _FAILED_NOTICE = "⚠️ 에이전트가 응답을 생성하지 못했습니다."
+_REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
 
 
 class RoomHandlerSupervisor:
@@ -122,6 +123,13 @@ class RoomHandlerSupervisor:
                 event="handler_finished",
                 outcome="rejected",
                 error=f"room busy with request_id={existing}",
+            )
+            # Symmetric with the timeout/failed paths: notify the user that
+            # their message was dropped instead of leaving them in silence.
+            await self._client.send(
+                room_id,
+                _REJECTED_NOTICE,
+                metadata={"request_id": request_id} if request_id else None,
             )
             return
         async with lock:

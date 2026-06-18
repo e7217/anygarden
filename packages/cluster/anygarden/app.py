@@ -879,8 +879,104 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     app.mount("/metrics", make_asgi_app())
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    async def healthz():
+        """Liveness/readiness probe with real dependency checks.
+
+        The server is a switchboard, not a brain — this only inspects
+        the wiring it already owns (DB connectivity, the LLM gateway
+        supervisor, and the long-running background crons). Returns 200
+        for ``ok``/``degraded`` and 503 only when a *critical*
+        dependency is down (DB unreachable, or gateway ``FAILED``).
+        Components that are intentionally off (feature flag disabled,
+        cron interval 0, tracing off) report ``disabled`` and never
+        flip the overall status.
+        """
+        from starlette.responses import JSONResponse
+
+        components: dict[str, str] = {}
+        critical_down = False
+        degraded = False
+
+        # ── DB: SELECT 1 with a short deadline so a hung pool can't
+        # wedge the probe. Unreachable DB is a critical failure. ──
+        session_factory = getattr(app.state, "session_factory", None)
+        if session_factory is None:
+            components["db"] = "disabled"
+        else:
+            async def _ping_db() -> None:
+                async with session_factory() as db:
+                    await db.execute(text("SELECT 1"))
+
+            try:
+                await asyncio.wait_for(_ping_db(), timeout=2.0)
+                components["db"] = "ok"
+            except Exception:  # noqa: BLE001 — any failure ⇒ unhealthy
+                components["db"] = "unhealthy"
+                critical_down = True
+
+        # ── LLM gateway: read the supervisor's state. FAILED is a hard
+        # failure (no path back without operator action); CRASHED is a
+        # transient self-healing state ⇒ degraded but still serving.
+        # Supervisor is None when the gateway flag is off ⇒ disabled. ──
+        supervisor = getattr(app.state, "llm_gateway_supervisor", None)
+        if supervisor is None:
+            components["gateway"] = "disabled"
+        else:
+            from anygarden.llm_gateway.supervisor import GatewayState
+
+            gw_state = supervisor.state
+            if gw_state == GatewayState.FAILED:
+                components["gateway"] = "unhealthy"
+                critical_down = True
+            elif gw_state == GatewayState.CRASHED:
+                components["gateway"] = "degraded"
+                degraded = True
+            else:
+                components["gateway"] = "ok"
+
+        # ── Background crons: each is conditionally created and may be
+        # None when disabled. A task that exists but has already
+        # finished (crashed out of its loop) is unhealthy; None means
+        # intentionally off, not a failure. These are non-critical ⇒
+        # degraded, never 503. ──
+        for label, attr in (
+            ("orphan_sweeper", "orphan_sweeper_task"),
+            ("span_reaper", "span_reaper_task"),
+            ("goal_scheduler", "goal_scheduler"),
+        ):
+            obj = getattr(app.state, attr, None)
+            if obj is None:
+                components[label] = "disabled"
+                continue
+            # ``orphan_sweeper_task`` / ``span_reaper_task`` are raw
+            # asyncio.Tasks; ``goal_scheduler`` is a GoalScheduler that
+            # wraps its loop in ``._task`` (None until ``start()``).
+            task = obj if hasattr(obj, "done") else getattr(obj, "_task", None)
+            if task is None:
+                # Scheduler object exists but its loop never started.
+                components[label] = "disabled"
+                continue
+            done = getattr(task, "done", None)
+            if callable(done) and done():
+                components[label] = "unhealthy"
+                degraded = True
+            else:
+                components[label] = "ok"
+
+        if critical_down:
+            status = "unhealthy"
+            code = 503
+        elif degraded:
+            status = "degraded"
+            code = 200
+        else:
+            status = "ok"
+            code = 200
+
+        return JSONResponse(
+            status_code=code,
+            content={"status": status, "components": components},
+        )
 
     # SPA static file serving — must be last so API routes take precedence.
     from starlette.staticfiles import StaticFiles

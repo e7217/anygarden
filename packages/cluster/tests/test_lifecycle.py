@@ -13,6 +13,7 @@ from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     Agent,
     AgentFile,
+    AgentToken,
     Base,
     Machine,
     MachineEngine,
@@ -683,6 +684,139 @@ class TestAgentLifecycle:
             agent = result.scalar_one()
             assert agent.actual_state == "stopped"
             assert agent.pid is None
+
+
+class TestAnygardenTokenCommitGate:
+    """#445 — ``_acquire_anygarden_token`` must populate the in-memory
+    cache *only after* the staged ``agent_tokens`` row commits.
+
+    Pre-#445 the cache was written eagerly (right after ``db.add``), so
+    a caller that rolled back its transaction — or one that never
+    committed at all, like ``send_sync_batch`` — left the plaintext in
+    the cache referencing a row the DB never persisted. After a restart
+    the cache is gone but the agent still holds that stdin-piped token,
+    so every gateway/MCP call 401s in a storm. The fix gates the cache
+    on the session's ``after_commit`` event.
+    """
+
+    @staticmethod
+    async def _make_agent(factory) -> str:
+        async with factory() as db:
+            agent = Agent(
+                name="tok-agent",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+            )
+            db.add(agent)
+            await db.commit()
+            return agent.id
+
+    @pytest.mark.asyncio
+    async def test_token_cached_only_after_commit(self, lifecycle_env) -> None:
+        """Mint stages the row + returns the plaintext, but the cache
+        stays empty until the surrounding transaction commits — then it
+        holds the same plaintext and the row is durable."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        agent_id = await self._make_agent(factory)
+
+        async with factory() as db:
+            token = lifecycle._acquire_anygarden_token(db, agent_id)
+            # Before commit the cache must NOT hold the token.
+            assert lifecycle._token_cache.get(agent_id) is None
+            await db.commit()
+
+        # After commit the listener fires and caches the plaintext.
+        assert lifecycle._token_cache.get(agent_id) == token
+
+        # And the row actually persisted.
+        async with factory() as db:
+            rows = (
+                await db.execute(
+                    select(AgentToken).where(AgentToken.agent_id == agent_id)
+                )
+            ).scalars().all()
+            assert len(rows) == 1
+
+    @pytest.mark.asyncio
+    async def test_token_not_cached_on_rollback(self, lifecycle_env) -> None:
+        """If the surrounding transaction rolls back, the minted token
+        must NOT be left in the cache (and no row persists)."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        agent_id = await self._make_agent(factory)
+
+        async with factory() as db:
+            lifecycle._acquire_anygarden_token(db, agent_id)
+            assert lifecycle._token_cache.get(agent_id) is None
+            await db.rollback()
+
+        # Rollback ⇒ no after_commit ⇒ cache stays clean.
+        assert lifecycle._token_cache.get(agent_id) is None
+
+        async with factory() as db:
+            rows = (
+                await db.execute(
+                    select(AgentToken).where(AgentToken.agent_id == agent_id)
+                )
+            ).scalars().all()
+            assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_token_not_cached_when_never_committed(
+        self, lifecycle_env
+    ) -> None:
+        """A read-only rebuild path (e.g. ``send_sync_batch``) that
+        exits the session without committing must not poison the cache.
+        The session-context exit rolls back the pending mint, and the
+        ``after_commit`` listener never fires."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        agent_id = await self._make_agent(factory)
+
+        async with factory() as db:
+            lifecycle._acquire_anygarden_token(db, agent_id)
+            # No commit — fall straight out of the session context.
+
+        assert lifecycle._token_cache.get(agent_id) is None
+
+        async with factory() as db:
+            rows = (
+                await db.execute(
+                    select(AgentToken).where(AgentToken.agent_id == agent_id)
+                )
+            ).scalars().all()
+            assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_returns_committed_token(
+        self, lifecycle_env
+    ) -> None:
+        """Once cached (post-commit), a second acquire returns the same
+        plaintext without staging a second row."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        agent_id = await self._make_agent(factory)
+
+        async with factory() as db:
+            first = lifecycle._acquire_anygarden_token(db, agent_id)
+            await db.commit()
+        assert lifecycle._token_cache.get(agent_id) == first
+
+        # Second acquire is a pure cache hit — no new row, same token.
+        async with factory() as db:
+            second = lifecycle._acquire_anygarden_token(db, agent_id)
+            await db.commit()
+        assert second == first
+
+        async with factory() as db:
+            rows = (
+                await db.execute(
+                    select(AgentToken).where(AgentToken.agent_id == agent_id)
+                )
+            ).scalars().all()
+            assert len(rows) == 1
 
 
 class TestSharedFilesBackfillOnRunningTransition:

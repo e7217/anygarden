@@ -289,6 +289,15 @@ async def update_task(
         task.title = body.title
     if body.status is not None:
         task.status = body.status
+        # #445 — stamp lifecycle timestamps on the status transition so
+        # the execution-timeout sweeper can catch wedged in_progress
+        # tasks. is-None guard keeps the first transition authoritative;
+        # apply_completion below still sets finished_at for goal tasks.
+        _ts = datetime.now(timezone.utc)
+        if body.status == "in_progress" and task.started_at is None:
+            task.started_at = _ts
+        elif body.status in ("done", "failed") and task.finished_at is None:
+            task.finished_at = _ts
     if body.assignee_participant_id is not None:
         task.assignee_participant_id = body.assignee_participant_id
         # #314 — refresh the pickup-timeout clock on every (re)assignment
