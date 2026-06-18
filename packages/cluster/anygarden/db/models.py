@@ -1043,8 +1043,17 @@ class Task(Base):
         # Issue #302 — Goal detail view's "recent runs" panel issues
         # ``WHERE goal_id = ? ORDER BY created_at DESC LIMIT N``. The
         # composite keeps that scan cheap even when a high-frequency
-        # Goal accumulates thousands of rows.
+        # Goal accumulates thousands of rows. Wave 1b (#449) also reuses
+        # it for the in-flight dedup probe (``WHERE goal_id = ? AND
+        # status IN ('todo','in_progress')``).
         Index("ix_tasks_goal_created", "goal_id", "created_at"),
+        # Issue #449 (Wave 1b) — exactly-once goal firing. The
+        # scheduler CAS claim + Run-now both stamp a deterministic
+        # ``idempotency_key``; this UNIQUE index makes a duplicate fire
+        # of the same slot raise IntegrityError instead of creating a
+        # second Task. NULL is multi-allowed on both SQLite and
+        # Postgres so non-goal Tasks (key NULL) never collide.
+        UniqueConstraint("idempotency_key", name="uq_tasks_idempotency_key"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1114,6 +1123,18 @@ class Task(Base):
     whether a successful run still earns a Task row. Errors are
     auto-flagged interesting; agents may opt successes in via the
     ``[INTERESTING]`` marker (Phase 3)."""
+
+    idempotency_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, default=None
+    )
+    """Issue #449 (Wave 1b) — deterministic dedup token for goal fires.
+    Stamped by ``trigger_goal`` as ``f"{goal_id}:{slot_epoch}"`` for a
+    scheduled fire (slot = the due ``next_run_at`` instant), or
+    ``f"{goal_id}:manual:{minute_bucket}"`` for a Run-now on a manual
+    goal. Backed by the ``uq_tasks_idempotency_key`` UNIQUE index so a
+    duplicate fire of the same slot raises IntegrityError. NULL for
+    manual / non-goal Tasks (multiple NULLs are allowed under a
+    nullable UNIQUE on both SQLite and Postgres)."""
 
 
 class Goal(Base):
@@ -1205,6 +1226,14 @@ class Goal(Base):
     last_run_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    """Issue #449 (Wave 1b) — the instant the scheduler last won the
+    atomic CAS claim for this goal (``UPDATE ... WHERE next_run_at <=
+    now`` matched a row). Observability / multi-replica diagnostics
+    only — the firing contract is enforced by the CAS guard +
+    ``Task.idempotency_key`` UNIQUE, not by this column."""
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=_utcnow, onupdate=_utcnow

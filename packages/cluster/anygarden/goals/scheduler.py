@@ -30,11 +30,12 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from anygarden.db.models import Goal
+from anygarden.db.models import Goal, Task
 from anygarden.goals.executor import GoalExecutionError, trigger_goal
+from anygarden.goals.policy import compute_next_run_at
 from anygarden.goals.sweeper import sweep_stuck_tasks
 
 if TYPE_CHECKING:
@@ -46,6 +47,15 @@ log = logging.getLogger(__name__)
 # time triggers (the policy floor is 60s anyway) and idle CPU usage
 # on a server with no goals registered.
 DEFAULT_POLL_INTERVAL_SECONDS: float = 30.0
+
+# #449 (Wave 1b) — stampede cap. A clock skew or a backlog (server
+# was down) can leave hundreds of goals due at once; firing them all
+# in one tick would hammer the engines. We claim at most this many
+# oldest-due goals per tick (ASC order), and the rest roll into the
+# next ~30s tick. Sizing: 25/tick × 2 ticks/min = up to 50 fires/min
+# steady-state, comfortably above a realistic active-goal count while
+# bounding the burst.
+MAX_GOALS_PER_TICK: int = 25
 
 
 def _utcnow() -> datetime:
@@ -134,24 +144,44 @@ class GoalScheduler:
                 break
 
     async def _tick(self) -> None:
-        """Find every active goal whose ``next_run_at`` is in the
-        past and fire it once. Each goal gets its own short-lived
-        session so a single bad goal can't poison the others."""
+        """Find every active goal whose ``next_run_at`` is in the past
+        and fire it *exactly once* (#449).
+
+        For each due goal we:
+        1. compute the next slot (``compute_next_run_at``) up front,
+        2. skip it if an in-flight Task (``todo`` / ``in_progress``)
+           already exists for it — in-flight dedup so a slow run does
+           not get a sibling fire,
+        3. issue an atomic guarded ``UPDATE ... WHERE next_run_at <=
+           now`` (the CAS claim). Only the writer whose UPDATE matches
+           a row (``rowcount == 1``) advances the schedule and fires;
+           concurrent ticks / replicas that lose the race see
+           ``rowcount == 0`` and move on. We use ``rowcount`` rather
+           than ``UPDATE ... RETURNING`` because it is portable across
+           SQLite and Postgres (RETURNING on UPDATE needs sqlite
+           >= 3.35; rowcount on a guarded single-row UPDATE is exact
+           on both).
+
+        Each goal gets its own commit so a single bad goal can't
+        poison the others. The per-tick cap (``MAX_GOALS_PER_TICK``)
+        bounds a backlog burst — oldest-due first, the rest roll into
+        the next tick.
+        """
         async with self._session_factory() as db:
             now = _utcnow()
             stmt = (
-                select(Goal)
+                select(Goal.id)
                 .where(Goal.status == "active", Goal.next_run_at <= now)
                 .order_by(Goal.next_run_at.asc())
+                .limit(MAX_GOALS_PER_TICK)
             )
-            due = (await db.execute(stmt)).scalars().all()
-            if not due:
+            due_ids = (await db.execute(stmt)).scalars().all()
+            if not due_ids:
                 return
-            log.debug("goal_scheduler_due", extra={"count": len(due)})
-            for goal in due:
+            log.debug("goal_scheduler_due", extra={"count": len(due_ids)})
+            for goal_id in due_ids:
                 try:
-                    await trigger_goal(db, goal, manager=self._manager)
-                    await db.commit()
+                    await self._claim_and_fire(db, goal_id, now)
                 except GoalExecutionError as exc:
                     # Pause the goal so the loop doesn't retry the
                     # same broken state every tick. The owner will
@@ -159,17 +189,91 @@ class GoalScheduler:
                     # agent / point at a different room.
                     log.warning(
                         "goal_pause_due_to_execution_error",
-                        extra={"goal_id": goal.id, "error": str(exc)},
+                        extra={"goal_id": goal_id, "error": str(exc)},
                     )
                     await db.rollback()
-                    goal.status = "paused"
-                    await db.commit()
+                    goal = await db.get(Goal, goal_id)
+                    if goal is not None:
+                        goal.status = "paused"
+                        await db.commit()
                 except Exception:  # pragma: no cover — defensive
                     log.exception(
                         "goal_trigger_unexpected_failure",
-                        extra={"goal_id": goal.id},
+                        extra={"goal_id": goal_id},
                     )
                     await db.rollback()
+
+    async def _claim_and_fire(
+        self, db: AsyncSession, goal_id: str, now: datetime
+    ) -> None:
+        """Claim one due goal via CAS and fire it. Commits on success.
+
+        No-ops (without raising) if the goal vanished, already has an
+        in-flight Task, or the CAS lost the race — the caller's outer
+        ``try`` only needs to handle the firing failure modes.
+        """
+        goal = await db.get(Goal, goal_id)
+        if goal is None or goal.status != "active" or goal.next_run_at is None:
+            return
+
+        # In-flight dedup — a goal whose previous fire is still
+        # ``todo`` / ``in_progress`` must not get a sibling. Reuses the
+        # ``ix_tasks_goal_created`` index (goal_id leading column).
+        in_flight = (
+            await db.execute(
+                select(Task.id)
+                .where(
+                    Task.goal_id == goal_id,
+                    Task.status.in_(("todo", "in_progress")),
+                )
+                .limit(1)
+            )
+        ).first()
+        if in_flight is not None:
+            log.debug("goal_skip_in_flight", extra={"goal_id": goal_id})
+            return
+
+        # The slot we are about to consume — captured BEFORE the CAS
+        # advance so it keys the idempotency token.
+        slot = goal.next_run_at
+        next_slot = compute_next_run_at(
+            goal.trigger_type, goal.trigger_config, after=now
+        )
+
+        # Atomic CAS claim. Guard on the same predicate the SELECT
+        # used; only the winner advances + fires.
+        result = await db.execute(
+            update(Goal)
+            .where(
+                Goal.id == goal_id,
+                Goal.status == "active",
+                Goal.next_run_at <= now,
+            )
+            .values(next_run_at=next_slot, last_run_at=now, claimed_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            # Lost the race (another tick / replica claimed it) or the
+            # row changed under us. Drop the stale in-session UPDATE.
+            log.debug("goal_claim_lost", extra={"goal_id": goal_id})
+            await db.rollback()
+            return
+
+        # Keep the in-session ORM object consistent with what the Core
+        # UPDATE wrote, so the ORM flush at commit doesn't clobber the
+        # CAS'd schedule with stale attribute values.
+        goal.next_run_at = next_slot
+        goal.claimed_at = now
+
+        idempotency_key = f"{goal_id}:{int(slot.timestamp())}"
+        await trigger_goal(
+            db,
+            goal,
+            trigger_source="scheduler",
+            idempotency_key=idempotency_key,
+            manager=self._manager,
+        )
+        await db.commit()
 
     async def _sweep(self) -> None:
         """Run one stuck-task sweep in its own short session (#314).
