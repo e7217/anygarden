@@ -20,6 +20,7 @@ the closest equivalent to a forceful kill.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -72,6 +73,48 @@ def terminate_tree(pid: int, *, timeout: float = 10.0) -> None:
     if alive:
         # Give the OS a brief moment to reap the killed processes.
         psutil.wait_procs(alive, timeout=1.0)
+
+
+def is_group_alive(pgid: int) -> bool:
+    """Return whether the process group *pgid* still has live members.
+
+    Used by the daemon's re-adopt path (#451): after a restart the
+    daemon reads each agent's persisted ``runtime.json`` and probes the
+    recorded process-group id to decide whether the previously-spawned
+    agent is still running (and therefore should be adopted rather than
+    re-spawned).
+
+    Because agents are spawned with ``start_new_session=True`` the group
+    id equals the agent's pid (the session/group leader). On POSIX this
+    sends the null signal to the group via ``os.killpg(pgid, 0)``:
+
+    * ``ProcessLookupError`` (ESRCH) → no such group → ``False``.
+    * ``PermissionError`` (EPERM) → the group exists but is owned by a
+      different uid → treated as alive (conservative; a live foreign
+      process is not ours to reap but it is not gone).
+    * success → at least one member is alive → ``True``.
+
+    On Windows there is no process-group liveness probe equivalent;
+    ``CREATE_NEW_PROCESS_GROUP`` groups are not addressable the same
+    way. We fall back to ``psutil.pid_exists(pgid)`` as a best-effort
+    check (re-adopt is a POSIX-first feature; the broad daemon suite
+    runs on Linux).
+    """
+    if sys.platform == "win32":
+        try:
+            return psutil.pid_exists(pgid)
+        except Exception:  # pragma: no cover — defensive, non-POSIX
+            return False
+
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Group exists but is owned by another uid — it is alive even
+        # though we cannot signal it. Conservative: report alive.
+        return True
+    return True
 
 
 def subprocess_group_kwargs() -> dict[str, object]:

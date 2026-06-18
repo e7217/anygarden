@@ -10,8 +10,9 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import Any, Callable, Coroutine, Optional
 
+import psutil
 import structlog
 
 from anygarden_machine.agent_dir import (
@@ -19,13 +20,30 @@ from anygarden_machine.agent_dir import (
     validate_agent_file_path,
     validate_agent_id,
 )
-from anygarden_machine.proc_kill import subprocess_group_kwargs, terminate_tree
+from anygarden_machine.manifest_store import ManifestStore
+from anygarden_machine.proc_kill import (
+    is_group_alive,
+    subprocess_group_kwargs,
+    terminate_tree,
+)
 from anygarden_machine.safefs import safe_write_text, secure_chmod
 from anygarden_machine.supervisor import watch_process
 
 log = structlog.get_logger()
 
 KILL_TIMEOUT = 10  # seconds to wait after SIGTERM before SIGKILL
+
+# #451 — re-adopt safety knobs.
+#   ADOPT_POLL_INTERVAL: how often the poll-based watcher probes a
+#   re-adopted process group for liveness. Adopted processes are not
+#   children of the daemon, so ``proc.wait()`` is unavailable; we poll
+#   ``is_group_alive`` instead. A few seconds of detection lag is
+#   harmless next to the unbounded zombie this replaces.
+#   ADOPT_CREATE_TIME_TOLERANCE: max delta (seconds) between the
+#   recorded ``started_at`` and the live process's ``create_time()``
+#   for the pid to be considered the *same* process (PID-recycle guard).
+ADOPT_POLL_INTERVAL = 5.0
+ADOPT_CREATE_TIME_TOLERANCE = 2.0
 
 @dataclass
 class SpawnManifest:
@@ -77,17 +95,31 @@ class SpawnManifest:
     # cluster did NOT register the self-MCP entry (e.g.
     # ``cluster_external_url`` unset, or engine has no MCP support).
     anygarden_mcp_token: str | None = None
+    # Issue #451 — desired-state generation that drove this spawn. The
+    # spawner stamps it into ``runtime.json`` so a re-adopting daemon can
+    # restore ``_running_generations[agent_id]`` after a restart and the
+    # reconcile generation gate suppresses a duplicate spawn. Defaults to
+    # 0 for callers (tests, older code paths) that don't track it.
+    generation: int = 0
 
 
 @dataclass
 class RunningAgent:
-    """Tracks a running agent subprocess."""
+    """Tracks a running agent subprocess.
+
+    ``proc`` is ``None`` for agents that were *re-adopted* after a daemon
+    restart (#451): the process outlived the daemon, so it is no longer a
+    child of this process and there is no ``asyncio.subprocess.Process``
+    handle to ``await``. Such agents are tracked by ``pid`` (== pgid,
+    since spawn uses ``start_new_session=True``) and watched via a
+    poll-based liveness loop instead of ``proc.wait()``.
+    """
 
     agent_id: str
     pid: int
     engine: str
     started_at: float
-    proc: asyncio.subprocess.Process
+    proc: Optional[asyncio.subprocess.Process]
     watch_task: asyncio.Task | None = None
     profile_path: Path | None = None
 
@@ -111,6 +143,7 @@ class Spawner:
         on_crashed: Callable[[str, int, str], Coroutine] | None = None,
         agent_server_url: str = "",
         agent_dirs_root: Path | None = None,
+        manifest_store: ManifestStore | None = None,
     ) -> None:
         self._agents: dict[str, RunningAgent] = {}
         self._on_stopped = on_stopped or self._default_on_stopped
@@ -121,6 +154,15 @@ class Spawner:
             agent_dirs_root
             if agent_dirs_root is not None
             else Path.home() / ".anygarden" / "agents"
+        )
+        # #451 — runtime.json persistence (pid/pgid/started_at/...). A
+        # dedicated store rooted at the same agent dirs; runtime.json is
+        # a separate file from the desired-state manifest and holds no
+        # secrets, so a distinct ManifestStore instance (no shared
+        # in-memory secrets cache needed) is fine. The daemon may pass
+        # its own store so reads/writes stay consistent in one process.
+        self._manifest_store = manifest_store or ManifestStore(
+            agents_root=self._agent_dirs_root
         )
         # Base URL the daemon hands to agent subprocesses (e.g. ws://host:port).
         # When empty, falls back to SpawnManifest.server_url for backwards
@@ -1057,15 +1099,45 @@ class Spawner:
                 error=str(exc),
             )
 
+        # ``start_new_session=True`` makes the child a session/group
+        # leader so pgid == pid; ``started_at`` prefers the kernel's
+        # process create_time (stable across daemon restarts and used as
+        # the PID-recycle guard on re-adopt) and falls back to wall clock
+        # if psutil can't read it (e.g. the process already exited).
+        started_at = time.time()
+        try:
+            started_at = psutil.Process(proc.pid).create_time()
+        except Exception:  # noqa: BLE001 — psutil errors fall back to wall clock
+            pass
+
         agent = RunningAgent(
             agent_id=agent_id,
             pid=proc.pid,
             engine=msg.engine,
-            started_at=time.time(),
+            started_at=started_at,
             proc=proc,
             profile_path=profile_path,
         )
         self._agents[agent_id] = agent
+
+        # #451 — persist runtime facts so a restarted daemon can re-adopt
+        # this still-live process instead of spawning a duplicate. The
+        # file holds no secrets. A write failure is non-fatal: the spawn
+        # succeeded, we just lose re-adopt for this one agent (worst case
+        # one duplicate spawn after the next daemon restart).
+        try:
+            self._manifest_store.record_runtime(
+                agent_id,
+                {
+                    "pid": proc.pid,
+                    "pgid": proc.pid,  # start_new_session=True → pgid==pid
+                    "started_at": started_at,
+                    "engine": msg.engine,
+                    "generation": msg.generation,
+                },
+            )
+        except OSError as exc:
+            log.warning("runtime_record_failed", agent_id=agent_id, error=str(exc))
 
         # Start background watcher
         agent.watch_task = asyncio.create_task(
@@ -1103,18 +1175,24 @@ class Spawner:
             return {"success": False, "error": f"Agent {agent_id} not found"}
 
         proc = agent.proc
-        if proc.returncode is not None:
+        # #451 — re-adopted agents have ``proc is None`` (the process is
+        # not a child of this daemon, so there's no asyncio handle to
+        # ``returncode``/``wait``). Skip the child-only fast path and the
+        # ``proc.wait`` drain; ``terminate_tree(agent.pid)`` still reaps
+        # the whole group because pgid == pid.
+        if proc is not None and proc.returncode is not None:
             self._cleanup(agent_id)
             return {"success": True, "note": "Process already exited"}
 
         log.info("agent_terminate_tree", agent_id=agent_id, pid=agent.pid)
         await asyncio.to_thread(terminate_tree, agent.pid, timeout=KILL_TIMEOUT)
-        try:
-            # Drain the asyncio.subprocess state machine; the process
-            # is already dead by now, so this returns immediately.
-            await proc.wait()
-        except ProcessLookupError:
-            pass
+        if proc is not None:
+            try:
+                # Drain the asyncio.subprocess state machine; the process
+                # is already dead by now, so this returns immediately.
+                await proc.wait()
+            except ProcessLookupError:
+                pass
         log.info("agent_terminated", agent_id=agent_id)
 
         self._cleanup(agent_id)
@@ -1151,6 +1229,11 @@ class Spawner:
     def _cleanup(self, agent_id: str) -> None:
         """Delete temp profile file and remove from internal state."""
         agent = self._agents.pop(agent_id, None)
+        # #451 — drop the persisted runtime record regardless of whether
+        # the agent was still tracked in memory: once an agent's lifecycle
+        # ends the stale runtime.json must not survive to mislead a future
+        # daemon restart into adopting (or re-spawning over) a dead pid.
+        self._manifest_store.clear_runtime(agent_id)
         if agent is None:
             return
         # Cancel watcher task if still running
@@ -1167,3 +1250,122 @@ class Spawner:
         for agent_id in agent_ids:
             await self.kill(agent_id)
         log.info("drain_complete", killed=len(agent_ids))
+
+    # ── Re-adopt (#451) ──────────────────────────────────────────────
+
+    def adopt(
+        self,
+        agent_id: str,
+        runtime: dict[str, Any],
+        *,
+        handle_stopped: Callable[[str, int], Coroutine] | None = None,
+        handle_crashed: Callable[[str, int, str], Coroutine] | None = None,
+    ) -> bool:
+        """Re-adopt a still-live agent process that outlived the daemon.
+
+        *runtime* is a ``runtime.json`` dict (``pid``, ``pgid``,
+        ``started_at``, ``engine``, ``generation``). Adoption proceeds
+        only when **both** liveness checks pass:
+
+        1. ``is_group_alive(pgid)`` — the recorded process group still
+           has live members.
+        2. PID-recycle guard — ``psutil.Process(pid).create_time()`` is
+           within ``ADOPT_CREATE_TIME_TOLERANCE`` of the recorded
+           ``started_at``. If psutil can't find the pid, or the create
+           time disagrees, the pid was recycled into an unrelated
+           process; we must NOT adopt it.
+
+        On success a ``RunningAgent(proc=None, ...)`` is registered in
+        ``_agents`` and a poll-based watcher is started (the process is
+        not a child, so ``proc.wait()`` is unavailable). On failure the
+        stale ``runtime.json`` is cleared and ``False`` is returned.
+
+        ``handle_stopped`` / ``handle_crashed`` default to the spawner's
+        own ``_handle_stopped`` / ``_handle_crashed`` wrappers (which run
+        the configured callbacks and then ``_cleanup``).
+        """
+        pid = runtime.get("pid")
+        pgid = runtime.get("pgid", pid)
+        recorded_started_at = runtime.get("started_at")
+        engine = runtime.get("engine", "")
+
+        if not isinstance(pid, int) or not isinstance(pgid, int):
+            log.warning("adopt_invalid_runtime", agent_id=agent_id, runtime=runtime)
+            self._manifest_store.clear_runtime(agent_id)
+            return False
+
+        # (1) Group liveness.
+        if not is_group_alive(pgid):
+            log.info("adopt_group_dead", agent_id=agent_id, pgid=pgid)
+            self._manifest_store.clear_runtime(agent_id)
+            return False
+
+        # (2) PID-recycle guard via create_time().
+        try:
+            live_create_time = psutil.Process(pid).create_time()
+        except psutil.NoSuchProcess:
+            log.info("adopt_pid_gone", agent_id=agent_id, pid=pid)
+            self._manifest_store.clear_runtime(agent_id)
+            return False
+        except psutil.Error as exc:  # AccessDenied etc. — can't verify.
+            log.warning("adopt_pid_unverifiable", agent_id=agent_id, pid=pid, error=str(exc))
+            self._manifest_store.clear_runtime(agent_id)
+            return False
+
+        if (
+            not isinstance(recorded_started_at, (int, float))
+            or abs(live_create_time - recorded_started_at)
+            > ADOPT_CREATE_TIME_TOLERANCE
+        ):
+            log.warning(
+                "adopt_pid_recycled",
+                agent_id=agent_id,
+                pid=pid,
+                recorded_started_at=recorded_started_at,
+                live_create_time=live_create_time,
+            )
+            self._manifest_store.clear_runtime(agent_id)
+            return False
+
+        agent = RunningAgent(
+            agent_id=agent_id,
+            pid=pid,
+            engine=engine,
+            started_at=float(recorded_started_at),
+            proc=None,
+        )
+        self._agents[agent_id] = agent
+
+        on_stopped = handle_stopped or self._handle_stopped
+        agent.watch_task = asyncio.create_task(
+            self._poll_watch(agent_id, pgid, on_stopped)
+        )
+
+        log.info("agent_adopted", agent_id=agent_id, pid=pid, engine=engine)
+        return True
+
+    async def _poll_watch(
+        self,
+        agent_id: str,
+        pgid: int,
+        on_stopped: Callable[[str, int], Coroutine],
+    ) -> None:
+        """Poll a re-adopted process group until it dies.
+
+        Adopted processes are not children of the daemon, so there is no
+        ``proc.wait()`` to await. We probe ``is_group_alive(pgid)`` every
+        ``ADOPT_POLL_INTERVAL`` seconds; when the group is gone we treat
+        it as a normal stop (exit code unknown → reported as 0) and run
+        ``on_stopped`` (which delegates to the callback + ``_cleanup``).
+        """
+        try:
+            while True:
+                await asyncio.sleep(ADOPT_POLL_INTERVAL)
+                if not is_group_alive(pgid):
+                    log.info("adopted_agent_exited", agent_id=agent_id, pgid=pgid)
+                    await on_stopped(agent_id, 0)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pragma: no cover — defensive
+            log.error("poll_watch_error", agent_id=agent_id, error=str(exc))

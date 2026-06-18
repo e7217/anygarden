@@ -298,6 +298,112 @@ class TestManifestStoreUpdateDesiredState:
             store.update_desired_state("no-such-agent", "stopped")
 
 
+class TestManifestStoreRuntime:
+    """#451 — runtime.json round-trip: a separate, secret-free file that
+    records the live process facts (pid/pgid/started_at/engine/generation)
+    so a restarted daemon can re-adopt still-live agents.
+    """
+
+    def _runtime(self) -> dict:
+        return {
+            "pid": 12345,
+            "pgid": 12345,
+            "started_at": 1_700_000_000.5,
+            "engine": "claude-code",
+            "generation": 7,
+        }
+
+    def test_record_then_load_round_trip(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.record_runtime("agent-001", self._runtime())
+
+        loaded = store.load_runtime("agent-001")
+        assert loaded == self._runtime()
+
+    def test_record_creates_runtime_json_at_0o600(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        path = store.record_runtime("agent-001", self._runtime())
+
+        assert path.name == "runtime.json"
+        assert path.parent == tmp_path / "agent-001"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_runtime_holds_no_secrets(self, tmp_path: Path) -> None:
+        """runtime.json must be a pure process record — no creds leak in."""
+        store = ManifestStore(agents_root=tmp_path)
+        store.record_runtime("agent-001", self._runtime())
+
+        raw = (tmp_path / "agent-001" / "runtime.json").read_text()
+        data = json.loads(raw)
+        assert set(data) == {"pid", "pgid", "started_at", "engine", "generation"}
+
+    def test_load_runtime_missing_returns_none(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        assert store.load_runtime("no-such-agent") is None
+
+    def test_load_runtime_corrupt_returns_none(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        agent_dir = tmp_path / "agent-bad"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "runtime.json").write_text("{ not json }", encoding="utf-8")
+
+        assert store.load_runtime("agent-bad") is None
+
+    def test_clear_runtime_removes_file(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.record_runtime("agent-001", self._runtime())
+        assert store.load_runtime("agent-001") is not None
+
+        store.clear_runtime("agent-001")
+
+        assert store.load_runtime("agent-001") is None
+        assert not (tmp_path / "agent-001" / "runtime.json").exists()
+
+    def test_clear_runtime_nonexistent_is_noop(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        # Must not raise.
+        store.clear_runtime("no-such-agent")
+
+    def test_clear_runtime_leaves_manifest(self, tmp_path: Path) -> None:
+        """Clearing the runtime record must not touch the desired-state
+        manifest in the same agent dir."""
+        store = ManifestStore(agents_root=tmp_path)
+        store.save(make_frame())
+        store.record_runtime("agent-001", self._runtime())
+
+        store.clear_runtime("agent-001")
+
+        assert (tmp_path / "agent-001" / "manifest.json").exists()
+        assert store.load("agent-001") is not None
+
+    def test_list_runtimes_enumerates_only_runtime_dirs(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.record_runtime("agent-a", self._runtime())
+        store.record_runtime("agent-b", self._runtime())
+        # An agent dir with only a manifest (no runtime.json) must be skipped.
+        store.save(make_frame("agent-c"))
+
+        runtimes = dict(store.list_runtimes())
+
+        assert set(runtimes) == {"agent-a", "agent-b"}
+        assert runtimes["agent-a"] == self._runtime()
+
+    def test_list_runtimes_skips_corrupt(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.record_runtime("agent-good", self._runtime())
+        bad = tmp_path / "agent-bad"
+        bad.mkdir()
+        (bad / "runtime.json").write_text("!!!", encoding="utf-8")
+
+        runtimes = dict(store.list_runtimes())
+
+        assert set(runtimes) == {"agent-good"}
+
+    def test_list_runtimes_empty_when_no_agents(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        assert store.list_runtimes() == []
+
+
 class TestManifestStoreDefaultRoot:
     """ManifestStore uses ~/.anygarden/agents by default."""
 

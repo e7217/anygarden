@@ -1641,3 +1641,113 @@ class TestOutboxArtifactSyncBack290:
 
         types = [f.get("type") for f in sent]
         assert "room_artifact_produced" not in types
+
+
+# ── #451 re-adopt on restart ──────────────────────────────────────────
+
+
+class TestReadoptRunningAgents:
+    """#451 — on (re)connect the daemon re-adopts agent processes that
+    outlived a daemon restart, restoring ``_running_generations`` BEFORE
+    the first reconcile so the generation gate suppresses duplicate
+    spawns and ``kill`` can reach the existing process group.
+    """
+
+    def _runtime(self, generation: int = 4, started_at: float = 222.0) -> dict:
+        return {
+            "pid": 555,
+            "pgid": 555,
+            "started_at": started_at,
+            "engine": "claude-code",
+            "generation": generation,
+        }
+
+    async def test_readopt_restores_generation_and_registers(
+        self, daemon: MachineDaemon
+    ) -> None:
+        daemon._manifest_store.record_runtime("agent-live", self._runtime())
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden_machine.spawner.psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        # Generation restored from runtime.json.
+        assert daemon._running_generations["agent-live"] == 4
+        # Agent registered with the spawner (proc=None adoption).
+        agent = daemon._spawner.get_running("agent-live")
+        assert agent is not None
+        assert agent.proc is None
+        if agent.watch_task is not None:
+            agent.watch_task.cancel()
+
+    async def test_readopt_then_same_generation_reconcile_does_not_spawn(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """The core invariant: after re-adopt, a reconcile at the SAME
+        generation must be a no-op (no duplicate spawn)."""
+        _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        daemon._spawner.kill = AsyncMock()
+
+        daemon._manifest_store.record_runtime(
+            "agent-live", self._runtime(generation=4)
+        )
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden_machine.spawner.psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        # Desired state arrives at the SAME generation the adopted process
+        # is already at (what the server believes after the daemon bounced).
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-live",
+                desired_state="running",
+                generation=4,
+                engine="claude-code",
+            )
+        )
+
+        await daemon._reconcile_agent("agent-live")
+
+        # Generation gate short-circuits → NO duplicate spawn, NO kill.
+        daemon._spawner.spawn.assert_not_called()
+        daemon._spawner.kill.assert_not_called()
+
+        agent = daemon._spawner.get_running("agent-live")
+        if agent is not None and agent.watch_task is not None:
+            agent.watch_task.cancel()
+
+    async def test_readopt_dead_group_clears_runtime_and_skips(
+        self, daemon: MachineDaemon
+    ) -> None:
+        daemon._manifest_store.record_runtime("agent-dead", self._runtime())
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=False
+        ):
+            await daemon._readopt_running_agents()
+
+        # Not adopted, generation not restored, stale runtime cleared.
+        assert "agent-dead" not in daemon._running_generations
+        assert daemon._spawner.get_running("agent-dead") is None
+        assert daemon._manifest_store.load_runtime("agent-dead") is None
+
+    async def test_readopt_skips_already_tracked_agent(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Idempotent across WS reconnects: an agent already tracked in
+        memory must not be re-adopted again."""
+        daemon._manifest_store.record_runtime("agent-x", self._runtime())
+        # Simulate it already being tracked (e.g. spawned this lifetime).
+        daemon._spawner.get_running = MagicMock(return_value=MagicMock())
+        adopt_spy = MagicMock(return_value=True)
+        daemon._spawner.adopt = adopt_spy
+
+        await daemon._readopt_running_agents()
+
+        adopt_spy.assert_not_called()

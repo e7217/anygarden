@@ -15,7 +15,11 @@ import time
 import psutil
 import pytest
 
-from anygarden_machine.proc_kill import subprocess_group_kwargs, terminate_tree
+from anygarden_machine.proc_kill import (
+    is_group_alive,
+    subprocess_group_kwargs,
+    terminate_tree,
+)
 
 
 def _spawn_tree() -> subprocess.Popen[bytes]:
@@ -80,6 +84,47 @@ class TestTerminateTree:
         proc.wait(timeout=5)
         # Should be a no-op, no exception.
         terminate_tree(proc.pid, timeout=0.5)
+
+
+class TestIsGroupAlive:
+    """#451 — ``is_group_alive`` probes a process group's liveness so the
+    re-adopt path can tell a still-running agent from a dead one.
+    """
+
+    def test_live_group_returns_true(self) -> None:
+        if sys.platform == "win32":
+            pytest.skip("POSIX process-group test")
+        # start_new_session=True → child is its own group leader (pgid==pid).
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            **subprocess_group_kwargs(),
+        )
+        try:
+            assert is_group_alive(proc.pid) is True
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    def test_dead_group_returns_false(self) -> None:
+        if sys.platform == "win32":
+            pytest.skip("POSIX process-group test")
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.exit(0)"],
+            **subprocess_group_kwargs(),
+        )
+        proc.wait(timeout=5)
+        # The leader has exited and there are no other members; the group
+        # is gone. Tight retry to absorb OS reap latency.
+        deadline = time.time() + 3.0
+        while time.time() < deadline and is_group_alive(proc.pid):
+            time.sleep(0.05)
+        assert is_group_alive(proc.pid) is False
+
+    def test_unlikely_pgid_returns_false(self) -> None:
+        if sys.platform == "win32":
+            pytest.skip("POSIX process-group test")
+        # A huge, almost-certainly-unused pgid must read as dead, not raise.
+        assert is_group_alive(2_000_000_000) is False
 
 
 class TestSubprocessGroupKwargs:

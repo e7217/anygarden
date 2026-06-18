@@ -193,6 +193,98 @@ class ManifestStore:
 
         return results
 
+    # ── Runtime state (#451) ─────────────────────────────────────────
+    #
+    # ``runtime.json`` is a *separate* file from the desired-state
+    # ``manifest.json`` and records the live process facts of the agent
+    # that was most recently spawned on this machine:
+    #
+    #     {pid, pgid, started_at, engine, generation}
+    #
+    # It contains **no secrets** (unlike the in-memory secrets cache that
+    # backs the manifest) so it is safe to persist verbatim. On a daemon
+    # restart ``_readopt_running_agents`` reads these to detect agent
+    # processes that outlived the daemon and re-adopt them instead of
+    # spawning duplicates. The spawner writes it on successful spawn and
+    # clears it on cleanup; the daemon clears it when a re-adopt probe
+    # finds the recorded group dead. Mode 0o600 mirrors ``save``.
+
+    def record_runtime(self, agent_id: str, runtime: dict[str, Any]) -> Path:
+        """Persist *runtime* to ``<agents_root>/<agent_id>/runtime.json``.
+
+        *runtime* is expected to carry ``pid``, ``pgid``, ``started_at``
+        (a float epoch seconds), ``engine`` and ``generation``. The dict
+        is written verbatim (no secrets belong here). The file is created
+        owner-readable only (mode 0o600).
+
+        Returns the path to the written file.
+        """
+        agent_dir = self.agents_root / agent_id
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        runtime_path = agent_dir / "runtime.json"
+        safe_write_text(
+            runtime_path,
+            json.dumps(runtime, indent=2, ensure_ascii=False),
+            mode=0o600,
+        )
+        return runtime_path
+
+    def load_runtime(self, agent_id: str) -> dict[str, Any] | None:
+        """Read ``<agents_root>/<agent_id>/runtime.json``.
+
+        Returns ``None`` if the file is absent, unreadable, or contains
+        invalid JSON. Corrupt files are logged and skipped rather than
+        raising — a bad runtime record must never crash daemon boot.
+        """
+        runtime_path = self.agents_root / agent_id / "runtime.json"
+        if not runtime_path.exists():
+            return None
+        try:
+            raw = runtime_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not read runtime %s: %s", runtime_path, exc)
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Corrupt runtime JSON at %s: %s", runtime_path, exc)
+            return None
+        if not isinstance(data, dict):
+            logger.warning("Runtime JSON at %s is not an object", runtime_path)
+            return None
+        return data
+
+    def clear_runtime(self, agent_id: str) -> None:
+        """Remove ``<agents_root>/<agent_id>/runtime.json``.
+
+        A no-op if the file does not exist. Does not touch the
+        desired-state manifest or any other file under the agent dir.
+        """
+        runtime_path = self.agents_root / agent_id / "runtime.json"
+        try:
+            runtime_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    def list_runtimes(self) -> list[tuple[str, dict[str, Any]]]:
+        """Enumerate every agent dir that has a readable ``runtime.json``.
+
+        Returns a list of ``(agent_id, runtime_dict)`` pairs. Agent dirs
+        without a runtime file, or with a corrupt one, are skipped
+        silently. Used by the daemon's re-adopt path on boot.
+        """
+        if not self.agents_root.exists():
+            return []
+
+        results: list[tuple[str, dict[str, Any]]] = []
+        for agent_dir in self.agents_root.iterdir():
+            if not agent_dir.is_dir():
+                continue
+            runtime = self.load_runtime(agent_dir.name)
+            if runtime is not None:
+                results.append((agent_dir.name, runtime))
+        return results
+
     # ── Private helpers ──────────────────────────────────────────────
 
     def _frame_to_dict(self, frame: SyncDesiredStateFrame) -> dict[str, Any]:
