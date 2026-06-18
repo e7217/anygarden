@@ -43,6 +43,7 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTurn,
     RoomHandlerSupervisor,
+    is_transient_error,
 )
 
 
@@ -199,7 +200,10 @@ class ClaudeCodeAdapter(EngineAdapter):
             logger.error("claude_code.query_failed", error=str(exc))
             # #422 — propagate so the supervisor surfaces outcome=failed
             # and notifies the user instead of swallowing into silence.
-            raise EngineError(str(exc)) from exc
+            # #457 — classify conn-reset / upstream-5xx / 429 as transient.
+            raise EngineError(
+                str(exc), transient=is_transient_error(str(exc))
+            ) from exc
         finally:
             self._current_room_id = None
 

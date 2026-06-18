@@ -55,7 +55,21 @@ class LifecycleFrame(BaseModel):
         "engine_call_finished",
     ]
     outcome: Optional[
-        Literal["ok", "failed", "timeout", "cancelled", "rejected"]
+        Literal[
+            "ok",
+            "failed",
+            "timeout",
+            "cancelled",
+            "rejected",
+            # #457 Wave 2b — MUST mirror the agent frame Literal exactly
+            # (test_protocol_compat enforces parity). ``queued`` defers a
+            # follow-up turn (durable replacement for ``rejected``);
+            # ``retrying``/``retry_exhausted`` are the opt-in transient
+            # retry (default OFF) terminal outcomes. ``event`` unchanged.
+            "queued",
+            "retrying",
+            "retry_exhausted",
+        ]
     ] = None
     duration_ms: Optional[int] = None
     engine: Optional[str] = None

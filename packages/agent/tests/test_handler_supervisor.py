@@ -27,7 +27,36 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
+    is_transient_error,
 )
+
+
+def test_engine_error_transient_flag_defaults_false():
+    # #457 — existing call sites (EngineError("msg")) keep transient=False;
+    # the flag is keyword-only so positional args still mean the message.
+    assert EngineError("boom").transient is False
+    assert EngineError("503 down", transient=True).transient is True
+
+
+@pytest.mark.parametrize(
+    "detail, expected",
+    [
+        ("HTTP 429 Too Many Requests", True),
+        ("upstream returned 503", True),
+        ("502 Bad Gateway", True),
+        ("Connection reset by peer", True),
+        ("httpx.ConnectError: connect error", True),
+        ("Read timeout while waiting", True),
+        ("model is overloaded, try again", True),
+        ("400 unsupported model gpt-5.5", False),
+        ("authentication failed: invalid api key", False),
+        ("", False),
+        # a port-like 5000 token must NOT be read as a 500 status code
+        ("listening on port 5000", False),
+    ],
+)
+def test_is_transient_error_classification(detail, expected):
+    assert is_transient_error(detail) is expected
 
 
 @dataclass
@@ -228,7 +257,11 @@ async def test_engine_timeout_error_marks_timeout():
 
 
 @pytest.mark.asyncio
-async def test_second_concurrent_dispatch_is_rejected():
+async def test_over_cap_dispatch_is_rejected():
+    # #457 — a follow-up that arrives while a turn is in flight is now
+    # QUEUED (not rejected) up to the cap. The legacy rejected path only
+    # triggers once the queue is full: with the default cap of 3, the
+    # first three follow-ups queue and the fourth is rejected.
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
 
@@ -241,25 +274,34 @@ async def test_second_concurrent_dispatch_is_rejected():
     first = asyncio.create_task(sup.dispatch("r1", "req-1", gated_engine))
     await asyncio.sleep(0.01)  # let `first` acquire the lock
 
-    await sup.dispatch("r1", "req-2", lambda: asyncio.sleep(0, result="second"))
+    # Fill the queue to cap (3) then overflow with a 4th.
+    for n in range(2, 5):  # req-2, req-3, req-4 → queued
+        await sup.dispatch("r1", f"req-{n}", lambda: asyncio.sleep(0, result="x"))
+    await sup.dispatch("r1", "req-5", lambda: asyncio.sleep(0, result="over"))
 
-    second_events = [
-        e for e in client.lifecycle_events if e["request_id"] == "req-2"
-    ]
-    assert len(second_events) == 1
-    assert second_events[0]["event"] == "handler_finished"
-    assert second_events[0]["outcome"] == "rejected"
-    assert "req-1" in second_events[0]["error"]
+    # req-2..4 queued, req-5 rejected.
+    for n in range(2, 5):
+        ev = [e for e in client.lifecycle_events if e["request_id"] == f"req-{n}"]
+        assert len(ev) == 1
+        assert ev[0]["event"] == "handler_finished"
+        assert ev[0]["outcome"] == "queued"
+
+    rejected = [e for e in client.lifecycle_events if e["request_id"] == "req-5"]
+    assert len(rejected) == 1
+    assert rejected[0]["event"] == "handler_finished"
+    assert rejected[0]["outcome"] == "rejected"
+    assert "req-1" in rejected[0]["error"]
 
     gate.set()
     await first
 
 
 @pytest.mark.asyncio
-async def test_rejected_dispatch_notifies_user():
-    # A rejected dispatch (room lock already held) must be symmetric with
-    # the timeout/failed paths: emit handler_finished(outcome=rejected) AND
-    # send the user a notice so the dropped message isn't silent.
+async def test_over_cap_dispatch_notifies_user():
+    # The over-cap rejected dispatch must stay symmetric with the
+    # timeout/failed paths: emit handler_finished(outcome=rejected) AND
+    # notify the user so the dropped message isn't silent. Queued
+    # follow-ups, by contrast, get NO notice (they will be answered).
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
 
@@ -272,20 +314,28 @@ async def test_rejected_dispatch_notifies_user():
     first = asyncio.create_task(sup.dispatch("r1", "req-1", gated_engine))
     await asyncio.sleep(0.01)  # let `first` acquire the lock
 
-    await sup.dispatch("r1", "req-2", lambda: asyncio.sleep(0, result="second"))
+    # Three queued follow-ups (no notice), then one over-cap rejection.
+    for n in range(2, 5):
+        await sup.dispatch("r1", f"req-{n}", lambda: asyncio.sleep(0, result="x"))
+    await sup.dispatch("r1", "req-over", lambda: asyncio.sleep(0, result="over"))
 
     rejected_events = [
         e
         for e in client.lifecycle_events
-        if e["request_id"] == "req-2" and e["event"] == "handler_finished"
+        if e["request_id"] == "req-over" and e["event"] == "handler_finished"
     ]
     assert len(rejected_events) == 1
     assert rejected_events[0]["outcome"] == "rejected"
 
     # The rejected request_id stamps its metadata on the notice send.
-    rejected_sends = [s for s in client.sends if s[2] == {"request_id": "req-2"}]
+    rejected_sends = [s for s in client.sends if s[2] == {"request_id": "req-over"}]
     assert len(rejected_sends) == 1
     assert "받지 못했습니다" in rejected_sends[0][1]
+    # Queued follow-ups did NOT produce a notice while the lock was held.
+    queued_sends = [
+        s for s in client.sends if s[2] in ({"request_id": f"req-{n}"} for n in range(2, 5))
+    ]
+    assert queued_sends == []
 
     gate.set()
     await first
@@ -363,3 +413,305 @@ async def test_proactive_empty_response_stays_silent_ok():
         e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
     ]
     assert outcomes == ["ok"]
+
+
+# ── #457 Wave 2b — bounded per-room queue ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_queued_followups_run_in_order_after_first_completes():
+    # While a turn runs, follow-ups are deferred (outcome=queued, no
+    # notice) and then drained FIFO by the lock holder after the first
+    # turn finishes — each producing its own real reply, in order.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    gate = asyncio.Event()
+
+    async def first_engine():
+        await gate.wait()
+        return "first"
+
+    first = asyncio.create_task(sup.dispatch("r1", "req-1", first_engine))
+    await asyncio.sleep(0.01)  # let `first` acquire the lock
+
+    # Two follow-ups arrive while the lock is held → queued, no notice yet.
+    await sup.dispatch(
+        "r1", "req-2", lambda: asyncio.sleep(0, result="second")
+    )
+    await sup.dispatch(
+        "r1", "req-3", lambda: asyncio.sleep(0, result="third")
+    )
+
+    queued = [
+        e
+        for e in client.lifecycle_events
+        if e["event"] == "handler_finished" and e.get("outcome") == "queued"
+    ]
+    assert [e["request_id"] for e in queued] == ["req-2", "req-3"]
+    # No user-facing send happened yet (gate still closed).
+    assert client.sends == []
+
+    gate.set()
+    await first
+
+    # The first reply, then the two queued follow-ups, in arrival order.
+    assert client.sends == [
+        ("r1", "first", {"request_id": "req-1"}),
+        ("r1", "second", {"request_id": "req-2"}),
+        ("r1", "third", {"request_id": "req-3"}),
+    ]
+    # Each follow-up produced a full ok lifecycle on drain.
+    ok_finished = [
+        e["request_id"]
+        for e in client.lifecycle_events
+        if e["event"] == "handler_finished" and e.get("outcome") == "ok"
+    ]
+    assert ok_finished == ["req-1", "req-2", "req-3"]
+
+
+@pytest.mark.asyncio
+async def test_serialization_invariant_no_two_runs_concurrent():
+    # The hard invariant: exactly one turn executes per room at a time,
+    # even with queued follow-ups draining. A counter tracks concurrent
+    # _run bodies; it must never exceed 1.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    concurrent = 0
+    max_concurrent = 0
+    gate = asyncio.Event()
+
+    async def make_engine(first: bool):
+        nonlocal concurrent, max_concurrent
+
+        async def engine():
+            nonlocal concurrent, max_concurrent
+            concurrent += 1
+            max_concurrent = max(max_concurrent, concurrent)
+            try:
+                if first:
+                    await gate.wait()
+                else:
+                    await asyncio.sleep(0)
+                return "ok"
+            finally:
+                concurrent -= 1
+
+        return engine
+
+    first = asyncio.create_task(
+        sup.dispatch("r1", "req-1", await make_engine(first=True))
+    )
+    await asyncio.sleep(0.01)
+    # Queue two follow-ups while the first is gated.
+    await sup.dispatch("r1", "req-2", await make_engine(first=False))
+    await sup.dispatch("r1", "req-3", await make_engine(first=False))
+
+    gate.set()
+    await first
+
+    assert max_concurrent == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_queued_item_skipped_on_drain(monkeypatch):
+    # A queued follow-up older than the TTL is skipped on drain (a late
+    # reply is worse than none): handler_finished(outcome=rejected) +
+    # a stale notice, and its run_engine never runs.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_QUEUE_ITEM_TTL_SEC", 0.0)
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    gate = asyncio.Event()
+    ran_stale = False
+
+    async def first_engine():
+        await gate.wait()
+        return "first"
+
+    async def stale_engine():
+        nonlocal ran_stale
+        ran_stale = True
+        return "should-not-run"
+
+    first = asyncio.create_task(sup.dispatch("r1", "req-1", first_engine))
+    await asyncio.sleep(0.01)
+    await sup.dispatch("r1", "req-stale", stale_engine)
+
+    # Let the enqueued_at timestamp age past the (0s) TTL.
+    await asyncio.sleep(0.001)
+    gate.set()
+    await first
+
+    assert ran_stale is False
+    stale_finished = [
+        e
+        for e in client.lifecycle_events
+        if e["request_id"] == "req-stale" and e["event"] == "handler_finished"
+    ]
+    # queued (on enqueue) + rejected (skipped on drain)
+    assert [e["outcome"] for e in stale_finished] == ["queued", "rejected"]
+    stale_sends = [s for s in client.sends if s[2] == {"request_id": "req-stale"}]
+    assert len(stale_sends) == 1
+    assert "너무 오래되어" in stale_sends[0][1]
+
+
+# ── #457 Wave 2b — transient retry (default OFF) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_default_no_retry_for_transient_failure():
+    # Default _MAX_RETRY_ATTEMPTS == 0 → a transient EngineError is NOT
+    # retried; behaviour is identical to a plain failed turn. This proves
+    # the no-behaviour-change default.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    assert hw._MAX_RETRY_ATTEMPTS == 0  # the shipped default is OFF
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    calls = 0
+
+    async def transient_engine():
+        nonlocal calls
+        calls += 1
+        raise EngineError("503 service unavailable", transient=True)
+
+    await sup.dispatch("r1", "req-1", transient_engine)
+
+    assert calls == 1  # no retry
+    outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert outcomes == ["failed"]
+    assert "retrying" not in [
+        e.get("outcome") for e in client.lifecycle_events
+    ]
+
+
+@pytest.mark.asyncio
+async def test_transient_empty_failure_retries_then_succeeds(monkeypatch):
+    # With max=1: a transient EngineError with empty output retries once
+    # then succeeds. The retry emits outcome=retrying, then the success
+    # reply is delivered.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 1)
+    monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    calls = 0
+
+    async def flaky_engine():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise EngineError("429 too many requests", transient=True)
+        return "recovered"
+
+    await sup.dispatch("r1", "req-1", flaky_engine)
+
+    assert calls == 2  # one retry
+    handler_outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    # retrying (intermediate signal) then the terminal ok.
+    assert handler_outcomes == ["retrying", "ok"]
+    assert client.sends == [("r1", "recovered", {"request_id": "req-1"})]
+
+
+@pytest.mark.asyncio
+async def test_transient_retry_exhausted_emits_outcome_and_notice(monkeypatch):
+    # With max=1: a transient EngineError that keeps failing empty
+    # exhausts the single retry → terminal outcome=retry_exhausted plus
+    # the standard failed notice.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 1)
+    monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    calls = 0
+
+    async def always_transient():
+        nonlocal calls
+        calls += 1
+        raise EngineError("502 bad gateway", transient=True)
+
+    await sup.dispatch("r1", "req-1", always_transient)
+
+    assert calls == 2  # initial + 1 retry
+    handler_outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert handler_outcomes == ["retrying", "retry_exhausted"]
+    assert len(client.sends) == 1
+    assert "생성하지 못했습니다" in client.sends[0][1]
+
+
+@pytest.mark.asyncio
+async def test_output_producing_transient_failure_does_not_retry(monkeypatch):
+    # Even with retries enabled, a transient EngineError is NOT retried
+    # when output was already produced (guard against double-posting a
+    # partial reply). Here the adapter returns a non-empty EngineTurn
+    # response, so there is nothing empty to retry.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    calls = 0
+
+    async def partial_then_ok():
+        nonlocal calls
+        calls += 1
+        # Produces output → no retry path regardless of transient flag.
+        return EngineTurn(response="partial output", prompt="in")
+
+    await sup.dispatch("r1", "req-1", partial_then_ok)
+
+    assert calls == 1  # ran exactly once, no retry
+    handler_outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert handler_outcomes == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_non_transient_failure_not_retried(monkeypatch):
+    # A non-transient EngineError (e.g. a 400 model error) is NOT retried
+    # even with retries enabled — only transient causes qualify.
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_RETRY_ATTEMPTS", 2)
+    monkeypatch.setattr(hw, "_RETRY_BACKOFF_BASE_SEC", 0.0)
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    calls = 0
+
+    async def hard_failure():
+        nonlocal calls
+        calls += 1
+        raise EngineError("400 unsupported model", transient=False)
+
+    await sup.dispatch("r1", "req-1", hard_failure)
+
+    assert calls == 1  # no retry
+    handler_outcomes = [
+        e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
+    ]
+    assert handler_outcomes == ["failed"]

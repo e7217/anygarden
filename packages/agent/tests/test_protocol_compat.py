@@ -94,7 +94,17 @@ class TestLifecycleFrame:
         assert f.engine == "codex"
 
     def test_outcome_enum_accepts_all_designed_values(self) -> None:
-        for outcome in ("ok", "failed", "timeout", "cancelled", "rejected"):
+        # #457 Wave 2b adds queued/retrying/retry_exhausted to the set.
+        for outcome in (
+            "ok",
+            "failed",
+            "timeout",
+            "cancelled",
+            "rejected",
+            "queued",
+            "retrying",
+            "retry_exhausted",
+        ):
             f = sdk_frames.LifecycleFrame(
                 request_id="r",
                 room_id="room-1",
@@ -102,6 +112,25 @@ class TestLifecycleFrame:
                 outcome=outcome,
             )
             assert f.outcome == outcome
+
+    def test_new_outcomes_round_trip_agent_to_cluster(self) -> None:
+        # #457 Wave 2b — parity guard: the cluster's mirror LifecycleFrame
+        # must accept the three new outcomes identically, or a queued/
+        # retrying/retry_exhausted frame would be rejected at the cluster.
+        import json
+
+        from anygarden.ws.protocol import LifecycleFrame as ClusterLifecycleFrame
+
+        for outcome in ("queued", "retrying", "retry_exhausted"):
+            agent_frame = sdk_frames.LifecycleFrame(
+                request_id="r-new",
+                room_id="room-1",
+                event="handler_finished",
+                outcome=outcome,
+            )
+            wire = json.loads(agent_frame.model_dump_json(exclude_none=True))
+            cluster_frame = ClusterLifecycleFrame(**wire)
+            assert cluster_frame.outcome == outcome
 
     def test_dump_excludes_none(self) -> None:
         f = sdk_frames.LifecycleFrame(
