@@ -1141,6 +1141,12 @@ class ActivityLogOut(BaseModel):
     # (start_requested / stop_requested / state_changed / ...) that
     # don't belong to any particular request lifecycle.
     request_id: str | None = None
+    # #447 — turn outcome (ok/failed/timeout/cancelled/rejected) and the
+    # engine that ran it, promoted to first-class columns so clients can
+    # filter without parsing ``details``. Null for system events and
+    # pre-#447 rows.
+    outcome: str | None = None
+    engine: str | None = None
     details: dict | None = None
 
 
@@ -1253,16 +1259,27 @@ async def bulk_delete_agent_tasks(
 async def get_agent_activity(
     agent_id: str,
     limit: int = 50,
+    outcome: Optional[str] = None,
+    engine: Optional[str] = None,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return recent activity events for an agent."""
+    """Return recent activity events for an agent.
+
+    #447 — optional ``outcome`` / ``engine`` filters hit the first-class
+    indexed columns so callers can narrow to (e.g.) failed turns without
+    parsing ``details``.
+    """
     stmt = (
         select(ActivityLog)
         .where(ActivityLog.agent_id == agent_id)
         .order_by(ActivityLog.timestamp.desc())
         .limit(limit)
     )
+    if outcome is not None:
+        stmt = stmt.where(ActivityLog.outcome == outcome)
+    if engine is not None:
+        stmt = stmt.where(ActivityLog.engine == engine)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         ActivityLogOut(
@@ -1271,6 +1288,8 @@ async def get_agent_activity(
             event_type=r.event_type,
             timestamp=r.timestamp.isoformat(),
             request_id=r.request_id,
+            outcome=r.outcome,
+            engine=r.engine,
             details=r.details,
         )
         for r in rows

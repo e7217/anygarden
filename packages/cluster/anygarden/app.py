@@ -766,10 +766,23 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     """
     import structlog
 
-    from anygarden.observability.metrics import agent_turns_orphaned_total
-    from anygarden.scheduler.lifecycle import sweep_orphaned_requests
+    from anygarden.observability.metrics import (
+        agent_turns_orphaned_total,
+        agents_crashed_by_sweep_total,
+    )
+    from anygarden.scheduler.lifecycle import (
+        sweep_orphaned_requests,
+        sweep_stale_agents,
+    )
 
     log = structlog.get_logger("orphan_sweeper")
+
+    # #447 — stale-heartbeat reaper threshold. ``0`` disables the agent
+    # reaper entirely (the orphaned-request sweep below still runs).
+    try:
+        stale_sec = int(os.environ.get("ANYGARDEN_HEARTBEAT_STALE_SEC", "120"))
+    except ValueError:
+        stale_sec = 120
 
     warmup = min(15.0, interval_seconds)
     try:
@@ -791,6 +804,13 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
                 if tracing is not None:
                     for rid in orphaned:
                         tracing.reap_request(rid)
+            # #447 — flip agents stuck ``running`` on a dead machine to
+            # ``crashed`` so bin-pack placement stops counting them.
+            if stale_sec > 0:
+                crashed = await sweep_stale_agents(factory, threshold_sec=stale_sec)
+                if crashed:
+                    log.info("orphan_sweeper.heartbeat_stale", count=crashed)
+                    agents_crashed_by_sweep_total.inc(crashed)
             # #427 — refresh the fleet-health gauge (previously dead).
             await _reconcile_agents_by_state(app)
         except asyncio.CancelledError:

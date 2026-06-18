@@ -43,6 +43,16 @@ agent_turns_orphaned_total = Counter(
     "Total number of agent turns promoted to handler_orphaned by the sweeper",
 )
 
+# #447 Wave 1a — agents flipped running→crashed by the heartbeat reaper
+# because their last_heartbeat_at went stale AND their placed machine
+# stopped being online (e.g. power loss). Without this sweep those rows
+# linger as ``running`` forever and pollute bin-pack placement; the
+# counter makes the reap rate alertable.
+agents_crashed_by_sweep_total = Counter(
+    "anygarden_agents_crashed_by_sweep_total",
+    "Total number of agents flipped to crashed by the stale-heartbeat sweeper",
+)
+
 ws_connections_active = Gauge(
     "anygarden_ws_connections_active",
     "Number of currently active WebSocket connections",

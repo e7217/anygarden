@@ -85,6 +85,10 @@ async def _persist_lifecycle_event(
         event_type=frame.event,
         request_id=frame.request_id,
         room_id=frame.room_id,
+        # #447 — promoted out of ``details`` to first-class indexed
+        # columns; still mirrored inside ``_lifecycle_details``.
+        outcome=frame.outcome,
+        engine=frame.engine,
         details=_lifecycle_details(frame),
     ))
 
