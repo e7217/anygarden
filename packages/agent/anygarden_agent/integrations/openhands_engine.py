@@ -1060,6 +1060,10 @@ async def integrate_with_openhands(
             finally:
                 typing_active = False
                 typing_task.cancel()
+                try:
+                    await typing_task
+                except asyncio.CancelledError:
+                    pass
                 await client.sendTyping(room_id, False)
                 # #433 — drain the stash even when on_message raised, so a
                 # failed turn never leaks/leaves a stale prompt. No-op on ok.

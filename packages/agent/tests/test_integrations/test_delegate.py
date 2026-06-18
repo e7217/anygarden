@@ -1,6 +1,14 @@
 """Tests for the /delegate command parsing."""
 
-from anygarden_agent.integrations.delegate import parse_delegate
+import warnings
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from anygarden_agent.integrations.delegate import (
+    _register_reply_callback,
+    parse_delegate,
+)
 
 
 class TestParseDelegate:
@@ -39,3 +47,61 @@ class TestParseDelegate:
         assert r is not None
         assert r.sub_room_name == "myroom"
         assert r.task == "do something"
+
+
+def _make_client():
+    client = MagicMock()
+    client._my_participant_ids = {"my-pid"}
+    client._message_handlers = []
+    client.send = AsyncMock()
+    return client
+
+
+class TestRegisterReplyCallback:
+    """#445 (10b) — the safety-timeout task is scheduled with
+    ``asyncio.get_running_loop().create_task`` (not the deprecated
+    ``get_event_loop``). ``_register_reply_callback`` runs inside the
+    adapter's already-running loop, so ``get_running_loop`` is the
+    correct, warning-free call."""
+
+    def test_uses_get_running_loop_not_get_event_loop(self):
+        client = _make_client()
+
+        with patch(
+            "anygarden_agent.integrations.delegate.asyncio"
+        ) as mock_asyncio:
+            create_task = MagicMock()
+            mock_asyncio.get_running_loop.return_value.create_task = create_task
+            mock_asyncio.sleep = AsyncMock()
+
+            _register_reply_callback(
+                client,
+                parent_room_id="room-a",
+                sub_room_id="room-b",
+                sub_room_name="서브룸",
+            )
+
+        # Scheduling went through get_running_loop, not get_event_loop.
+        mock_asyncio.get_running_loop.assert_called_once_with()
+        mock_asyncio.get_event_loop.assert_not_called()
+        create_task.assert_called_once()
+        # And the one-shot reply handler is registered.
+        assert len(client._message_handlers) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_deprecation_warning_inside_running_loop(self):
+        """Behavioral guard: invoked inside a real running loop the
+        registration emits no DeprecationWarning (which the deprecated
+        ``get_event_loop()`` would raise when no current loop is set)."""
+        client = _make_client()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            _register_reply_callback(
+                client,
+                parent_room_id="room-a",
+                sub_room_id="room-b",
+                sub_room_name="서브룸",
+            )
+
+        assert len(client._message_handlers) == 1

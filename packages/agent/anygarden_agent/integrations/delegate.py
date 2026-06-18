@@ -164,4 +164,4 @@ def _register_reply_callback(
             except ValueError:
                 pass
 
-    asyncio.get_event_loop().create_task(_cleanup())
+    asyncio.get_running_loop().create_task(_cleanup())

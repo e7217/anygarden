@@ -8,7 +8,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from anygarden_agent.client import ChatClient, _is_task_init_content
+from anygarden_agent.client import (
+    _TERMINAL_CLOSE_CODE,
+    _TERMINAL_GIVE_UP_ATTEMPTS,
+    ChatClient,
+    _backoff_with_jitter,
+    _close_code,
+    _is_task_init_content,
+)
 
 
 class TestChatClientInit:
@@ -795,3 +802,282 @@ class TestRecentMessagesBuffer:
         )
         assert seen
         assert seen[0].get("room_id") == "room-a"
+
+
+class TestSeqDedup:
+    """Issue #445 Wave 0 — a reconnect replays frames via ``since_seq``.
+    The server may resend a boundary message that was already delivered
+    live, so the client de-dups on seq: a message seq already dispatched
+    to the handlers must not be dispatched a second time."""
+
+    def _make_client(self) -> ChatClient:
+        return ChatClient("ws://x", token="t")
+
+    @pytest.mark.asyncio
+    async def test_duplicate_seq_dispatched_once(self) -> None:
+        """A live frame followed by a replayed frame with the same seq
+        reaches the handler exactly once."""
+        client = self._make_client()
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        frame = {
+            "type": "message",
+            "seq": 7,
+            "participant_id": "other",
+            "content": "a message long enough to be meaningful here",
+        }
+        # Live delivery.
+        await client._process_frame("room-a", dict(frame))
+        # Replay after reconnect — identical seq.
+        await client._process_frame("room-a", dict(frame))
+
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_distinct_seqs_each_dispatch(self) -> None:
+        """Different seqs are not collapsed by the de-dup."""
+        client = self._make_client()
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        for seq in (1, 2, 3):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": seq,
+                    "participant_id": "other",
+                    "content": f"distinct content number {seq} for hashing",
+                },
+            )
+        assert len(calls) == 3
+
+    @pytest.mark.asyncio
+    async def test_zero_seq_never_deduped(self) -> None:
+        """Frames with the sentinel seq=0 always dispatch (no tracking)."""
+        client = self._make_client()
+        calls: list[dict] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg)
+
+        frame = {
+            "type": "message",
+            "seq": 0,
+            "participant_id": "other",
+            "content": "unnumbered frame content long enough to hash",
+        }
+        await client._process_frame("room-a", dict(frame))
+        await client._process_frame("room-a", dict(frame))
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_seen_set_is_bounded(self) -> None:
+        """The per-room seen set is capped at ``_seen_seqs_maxlen``."""
+        client = self._make_client()
+        client._seen_seqs_maxlen = 4
+
+        @client.on_message
+        async def handler(msg):
+            pass
+
+        for seq in range(1, 11):
+            await client._process_frame(
+                "room-a",
+                {
+                    "type": "message",
+                    "seq": seq,
+                    "participant_id": "other",
+                    "content": f"bounded buffer content sample {seq} ok",
+                },
+            )
+        assert len(client._seen_seqs["room-a"]) == 4
+        # The newest seqs are retained.
+        assert 10 in client._seen_seqs["room-a"]
+        assert 1 not in client._seen_seqs["room-a"]
+
+    @pytest.mark.asyncio
+    async def test_per_room_isolation(self) -> None:
+        """Same seq in two rooms each dispatch once independently."""
+        client = self._make_client()
+        calls: list[str] = []
+
+        @client.on_message
+        async def handler(msg):
+            calls.append(msg["room_id"])
+
+        for rid in ("room-a", "room-b"):
+            await client._process_frame(
+                rid,
+                {
+                    "type": "message",
+                    "seq": 5,
+                    "participant_id": "other",
+                    "content": "shared seq across two distinct rooms ok",
+                },
+            )
+        assert sorted(calls) == ["room-a", "room-b"]
+
+
+class TestHandlerSnapshot:
+    """Issue #445 Wave 0 — handlers are iterated over a ``list()`` copy
+    so a one-shot callback that deregisters itself mid-dispatch (e.g. a
+    delegate / room_query reply handler popping itself off
+    ``_message_handlers``) cannot shift the live list and skip the
+    following handler."""
+
+    def _make_client(self) -> ChatClient:
+        return ChatClient("ws://x", token="t")
+
+    @pytest.mark.asyncio
+    async def test_self_removing_handler_does_not_skip_next(self) -> None:
+        client = self._make_client()
+        order: list[str] = []
+
+        async def first(msg):
+            order.append("first")
+            # One-shot: deregister self mid-iteration.
+            client._message_handlers.remove(first)
+
+        async def second(msg):
+            order.append("second")
+
+        client._message_handlers.append(first)
+        client._message_handlers.append(second)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other",
+                "content": "drives both handlers in a single dispatch ok",
+            },
+        )
+
+        # Without the list() snapshot, removing ``first`` shifts the
+        # index and ``second`` would be skipped.
+        assert order == ["first", "second"]
+        assert client._message_handlers == [second]
+
+
+class TestReconnectBackoff:
+    """Issue #445 Wave 0 — reconnect backoff jitter + terminal 4040
+    handling.
+
+    A full reconnect is awkward to drive end-to-end in a unit test
+    (it needs a live-ish ws), so the jitter and close-code helpers are
+    factored out and tested directly, and the 4040 give-up path is
+    exercised through ``_room_loop`` with a faked ``ws_connect`` that
+    raises a ``ConnectionClosed`` carrying a 4040 close frame."""
+
+    def test_jitter_stays_within_bounds(self) -> None:
+        """Jittered delay never goes negative and never exceeds cap."""
+        cap = 60.0
+        for base in (1.0, 2.0, 8.0, 32.0, 60.0):
+            for _ in range(200):
+                jittered = _backoff_with_jitter(base, cap)
+                assert 0.0 <= jittered <= cap
+                # Additive +/-25% jitter: stays within that band of base
+                # (also clamped to cap, which only tightens the bound).
+                assert jittered <= base * 1.25 + 1e-9
+                assert jittered >= base * 0.75 - 1e-9
+
+    def test_jitter_clamps_to_cap(self) -> None:
+        """A base already at the cap can't be pushed over it by jitter."""
+        cap = 10.0
+        for _ in range(200):
+            assert _backoff_with_jitter(cap, cap) <= cap
+
+    def test_close_code_extracts_4040(self) -> None:
+        from websockets.exceptions import ConnectionClosedError
+        from websockets.frames import Close
+
+        exc = ConnectionClosedError(Close(_TERMINAL_CLOSE_CODE, "terminal"), None)
+        assert _close_code(exc) == _TERMINAL_CLOSE_CODE
+
+    def test_close_code_none_when_no_frame(self) -> None:
+        from websockets.exceptions import ConnectionClosedError
+
+        exc = ConnectionClosedError(None, None)
+        assert _close_code(exc) is None
+
+    def test_close_code_handles_plain_exception(self) -> None:
+        assert _close_code(RuntimeError("nope")) is None
+
+    @pytest.mark.asyncio
+    async def test_4040_gives_up_after_attempts(self) -> None:
+        """A connection that keeps closing with 4040 stops retrying
+        after ``_TERMINAL_GIVE_UP_ATTEMPTS`` and drops the room task."""
+        from websockets.exceptions import ConnectionClosedError
+        from websockets.frames import Close
+
+        client = ChatClient("ws://localhost:8000", token="t")
+        client._running = True
+        # Register a fake task so we can observe the give-up cleanup.
+        client._tasks["room-1"] = MagicMock()
+
+        attempts = {"n": 0}
+
+        def fake_ws_connect(*args, **kwargs):
+            attempts["n"] += 1
+            raise ConnectionClosedError(
+                Close(_TERMINAL_CLOSE_CODE, "terminal"), None
+            )
+
+        async def no_sleep(_delay):
+            # Don't actually wait out the cooldown in the test.
+            return None
+
+        with (
+            patch("anygarden_agent.client.ws_connect", side_effect=fake_ws_connect),
+            patch("anygarden_agent.client.asyncio.sleep", side_effect=no_sleep),
+        ):
+            await client._room_loop("room-1")
+
+        # Gave up exactly at the give-up threshold, not forever.
+        assert attempts["n"] == _TERMINAL_GIVE_UP_ATTEMPTS
+        # Room task was cleaned up on give-up.
+        assert "room-1" not in client._tasks
+
+    @pytest.mark.asyncio
+    async def test_non_terminal_close_keeps_retrying(self) -> None:
+        """A non-4040 close does not trigger the terminal give-up; the
+        loop only stops because ``_running`` flips to False."""
+        from websockets.exceptions import ConnectionClosedError
+        from websockets.frames import Close
+
+        client = ChatClient("ws://localhost:8000", token="t")
+        client._running = True
+
+        attempts = {"n": 0}
+
+        def fake_ws_connect(*args, **kwargs):
+            attempts["n"] += 1
+            # Flip running off so the loop exits after one transient drop
+            # rather than spinning forever.
+            client._running = False
+            raise ConnectionClosedError(Close(1011, "going away"), None)
+
+        async def no_sleep(_delay):
+            return None
+
+        with (
+            patch("anygarden_agent.client.ws_connect", side_effect=fake_ws_connect),
+            patch("anygarden_agent.client.asyncio.sleep", side_effect=no_sleep),
+        ):
+            await client._room_loop("room-1")
+
+        # One attempt, then _running=False broke the loop — no terminal
+        # give-up path taken (that would have returned early all the same,
+        # but the room task is never registered so this asserts we reach
+        # the normal backoff branch without error).
+        assert attempts["n"] == 1

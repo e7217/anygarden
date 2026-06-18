@@ -256,6 +256,42 @@ async def test_second_concurrent_dispatch_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_rejected_dispatch_notifies_user():
+    # A rejected dispatch (room lock already held) must be symmetric with
+    # the timeout/failed paths: emit handler_finished(outcome=rejected) AND
+    # send the user a notice so the dropped message isn't silent.
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    gate = asyncio.Event()
+
+    async def gated_engine():
+        await gate.wait()
+        return "first done"
+
+    first = asyncio.create_task(sup.dispatch("r1", "req-1", gated_engine))
+    await asyncio.sleep(0.01)  # let `first` acquire the lock
+
+    await sup.dispatch("r1", "req-2", lambda: asyncio.sleep(0, result="second"))
+
+    rejected_events = [
+        e
+        for e in client.lifecycle_events
+        if e["request_id"] == "req-2" and e["event"] == "handler_finished"
+    ]
+    assert len(rejected_events) == 1
+    assert rejected_events[0]["outcome"] == "rejected"
+
+    # The rejected request_id stamps its metadata on the notice send.
+    rejected_sends = [s for s in client.sends if s[2] == {"request_id": "req-2"}]
+    assert len(rejected_sends) == 1
+    assert "받지 못했습니다" in rejected_sends[0][1]
+
+    gate.set()
+    await first
+
+
+@pytest.mark.asyncio
 async def test_long_error_is_truncated_for_log_safety():
     client = _FakeClient()
     sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)

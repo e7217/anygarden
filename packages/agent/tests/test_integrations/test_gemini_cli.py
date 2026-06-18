@@ -246,6 +246,67 @@ class TestCallGemini:
         argv = list(captured["args"])  # type: ignore[arg-type]
         assert "--skip-trust" in argv
 
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_raises_engine_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #422 — a non-zero gemini exit used to be swallowed as None,
+        # producing a silent lost turn. It must now raise EngineError
+        # (carrying the exit code + stderr snippet) so the supervisor
+        # records outcome=failed and notifies the user.
+        agent_root = tmp_path / "agent_root"
+        agent_root.mkdir(parents=True)
+        monkeypatch.chdir(agent_root)
+
+        adapter = GeminiCliAdapter()
+        adapter._gemini_path = "/usr/bin/gemini"
+
+        class FakeProc:
+            returncode = 55
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return (b"", b"folder not trusted")
+
+        async def fake_exec(*args: object, **kwargs: object) -> FakeProc:
+            return FakeProc()
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+        with pytest.raises(EngineError) as excinfo:
+            await adapter._call_gemini("hello")
+        # Exit code and stderr snippet surface in the message.
+        assert "55" in str(excinfo.value)
+        assert "folder not trusted" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_on_message_raises_engine_error_on_nonzero_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # End-to-end through on_message: a non-zero subprocess exit
+        # propagates as EngineError (not a silent None) and the per-room
+        # conversation is rolled back.
+        agent_root = tmp_path / "agent_root"
+        agent_root.mkdir(parents=True)
+        monkeypatch.chdir(agent_root)
+
+        adapter = GeminiCliAdapter()
+        adapter._gemini_path = "/usr/bin/gemini"
+
+        class FakeProc:
+            returncode = 1
+
+            async def communicate(self) -> tuple[bytes, bytes]:
+                return (b"", b"boom")
+
+        async def fake_exec(*args: object, **kwargs: object) -> FakeProc:
+            return FakeProc()
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+
+        with pytest.raises(EngineError):
+            await adapter.on_message({"content": "Hi", "room_id": "r1"})
+        assert adapter._conversations["r1"] == []
+
 
 class TestIntegrateWithGeminiCli:
     @pytest.mark.asyncio

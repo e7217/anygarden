@@ -732,21 +732,65 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
     try:
         # -- Replay missed messages --
+        #
+        # An agent that was offline for a while can miss far more than a
+        # single page of messages. A single capped ``replay_since_seq``
+        # call (limit=50) would silently drop everything past the first
+        # page on reconnect. Walk the cursor in ``PAGE_SIZE`` batches
+        # instead, advancing ``cursor`` to the last delivered seq each
+        # round, until a short (final) page arrives. ``REPLAY_CEIL`` is a
+        # hard safety bound so a pathological backlog (or a seq cursor
+        # bug) can never turn reconnect into an unbounded loop; if it's
+        # hit we log a loud truncation warning rather than dropping
+        # silently. Ordering and per-message delivery semantics are
+        # unchanged — each page is already ``seq``-ascending and the
+        # cursor only moves forward.
+        REPLAY_PAGE_SIZE = 200
+        REPLAY_CEIL = 10000
         since_seq = _extract_since_seq(websocket.scope.get("query_string", b"").decode())
         if since_seq > 0:
             async with session_factory() as db:
-                missed = await replay_since_seq(db, room_id, since_seq)
-                for msg in missed:
-                    frame = MessageOut(
-                        id=msg.id,
-                        room_id=msg.room_id,
-                        participant_id=msg.participant_id,
-                        content=msg.content,
-                        seq=msg.seq,
-                        created_at=msg.created_at,
-                        metadata=msg.extra_metadata,
+                cursor = since_seq
+                replayed = 0
+                truncated = True
+                while replayed < REPLAY_CEIL:
+                    page = await replay_since_seq(
+                        db, room_id, cursor, limit=REPLAY_PAGE_SIZE
                     )
-                    await websocket.send_text(frame.model_dump_json())
+                    if not page:
+                        truncated = False
+                        break
+                    for msg in page:
+                        frame = MessageOut(
+                            id=msg.id,
+                            room_id=msg.room_id,
+                            participant_id=msg.participant_id,
+                            content=msg.content,
+                            seq=msg.seq,
+                            created_at=msg.created_at,
+                            metadata=msg.extra_metadata,
+                        )
+                        await websocket.send_text(frame.model_dump_json())
+                        cursor = msg.seq
+                        replayed += 1
+                    if len(page) < REPLAY_PAGE_SIZE:
+                        # Short page → caught up; no more rows to replay.
+                        truncated = False
+                        break
+                else:
+                    # Loop exited via the ``while`` condition (CEIL hit)
+                    # with a full final page — there may be more.
+                    truncated = True
+                if truncated and replayed >= REPLAY_CEIL:
+                    logger.warning(
+                        "ws.replay_truncated",
+                        room_id=room_id,
+                        participant_id=participant.id,
+                        since_seq=since_seq,
+                        last_seq=cursor,
+                        replayed=replayed,
+                        ceil=REPLAY_CEIL,
+                    )
 
         # -- Main receive loop --
         while True:

@@ -13,6 +13,7 @@ E2E 시나리오 테스트: 실제 사용 흐름 검증
 
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
 import secrets
@@ -160,12 +161,18 @@ class TestE2EScenario:
 
     @pytest.mark.asyncio
     async def test_step1_server_running(self, e2e_env) -> None:
-        """서버가 정상 응답하는지 확인."""
+        """서버가 정상 응답하는지 확인 (#445 — 의존성 체크 healthz)."""
         with TestClient(e2e_env["app"]) as tc:
             resp = tc.get("/healthz")
             assert resp.status_code == 200
-            assert resp.json() == {"status": "ok"}
-            print("✓ Step 1: 서버 정상 실행")
+            body = resp.json()
+            # ok 또는 degraded(논크리티컬 크론 종료) 모두 200·정상 부팅으로 간주.
+            assert body["status"] in {"ok", "degraded"}
+            # DB는 in-memory sqlite로 reachable ⇒ ok.
+            assert body["components"]["db"] == "ok"
+            # gateway 플래그 off ⇒ supervisor None ⇒ disabled (unhealthy 아님).
+            assert body["components"]["gateway"] == "disabled"
+            print(f"✓ Step 1: 서버 정상 실행 (status={body['status']})")
 
     # ── Step 2: REST API로 머신 목록 조회 ─────────────────────────────
 
@@ -389,3 +396,121 @@ class TestE2EScenario:
                 assert replayed["seq"] == last_seq
                 assert "Before disconnect 3" in replayed["content"]
                 print(f"✓ Step 8: since_seq={last_seq-1} 재연결 → seq={replayed['seq']} 복구 확인")
+
+
+# ── #445 — 의존성 체크 healthz 핸들러 단위 테스트 ──────────────────────
+#
+# 핸들러를 격리해서 검증한다. TestClient를 ``with`` 없이 사용하면
+# lifespan(백그라운드 크론·goal scheduler)이 돌지 않으므로, ``app.state``를
+# 원하는 값으로 직접 세팅해 각 분기(DB up, 게이트웨이 FAILED, None 태스크)를
+# 정밀하게 찍어볼 수 있다.
+
+
+class _FakeSupervisor:
+    """``state`` 프로퍼티만 흉내내는 게이트웨이 슈퍼바이저 더블."""
+
+    def __init__(self, state) -> None:
+        self._state = state
+
+    @property
+    def state(self):
+        return self._state
+
+
+@pytest.fixture()
+def healthz_app():
+    """Lifespan 없이 healthz만 때리기 위한 앱 + in-memory 세션 팩토리."""
+    config = AnygardenSettings(
+        db_url="sqlite+aiosqlite://",
+        jwt_secret=secrets.token_urlsafe(32),
+        log_level="WARNING",
+    )
+    engine = build_engine(config.db_url)
+    session_factory = build_session_factory(engine)
+    app = create_app(config)
+    # lifespan을 돌리지 않으므로 healthz가 보는 의존성만 직접 주입한다.
+    app.state.session_factory = session_factory
+    return app
+
+
+class TestHealthzDependencyCheck:
+    """#445 — healthz가 실제 의존성 상태를 반영하는지 검증."""
+
+    @pytest.mark.asyncio
+    async def test_db_up_returns_200_with_components(self, healthz_app) -> None:
+        """DB reachable ⇒ 200 + components 블록 (db=ok)."""
+        # 게이트웨이/크론 미설정 ⇒ 모두 disabled, 크리티컬 다운 없음.
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["components"]["db"] == "ok"
+        assert body["components"]["gateway"] == "disabled"
+        # None 태스크는 unhealthy가 아니라 disabled.
+        assert body["components"]["orphan_sweeper"] == "disabled"
+        assert body["components"]["span_reaper"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_gateway_failed_returns_503(self, healthz_app) -> None:
+        """게이트웨이 슈퍼바이저 FAILED ⇒ 503 unhealthy."""
+        from anygarden.llm_gateway.supervisor import GatewayState
+
+        healthz_app.state.llm_gateway_supervisor = _FakeSupervisor(
+            GatewayState.FAILED
+        )
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "unhealthy"
+        assert body["components"]["gateway"] == "unhealthy"
+        # DB는 여전히 살아 있다.
+        assert body["components"]["db"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_gateway_crashed_returns_200_degraded(self, healthz_app) -> None:
+        """게이트웨이 CRASHED(일시적) ⇒ 200 degraded, 503 아님."""
+        from anygarden.llm_gateway.supervisor import GatewayState
+
+        healthz_app.state.llm_gateway_supervisor = _FakeSupervisor(
+            GatewayState.CRASHED
+        )
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["components"]["gateway"] == "degraded"
+
+    @pytest.mark.asyncio
+    async def test_none_tasks_treated_as_disabled(self, healthz_app) -> None:
+        """None인 백그라운드 태스크는 disabled로 취급(unhealthy 아님)."""
+        healthz_app.state.orphan_sweeper_task = None
+        healthz_app.state.span_reaper_task = None
+        healthz_app.state.goal_scheduler = None
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["components"]["orphan_sweeper"] == "disabled"
+        assert body["components"]["span_reaper"] == "disabled"
+        assert body["components"]["goal_scheduler"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_done_task_marks_degraded(self, healthz_app) -> None:
+        """이미 종료된(.done()=True) 태스크는 unhealthy ⇒ degraded(200)."""
+
+        async def _noop() -> None:
+            return None
+
+        task = asyncio.ensure_future(_noop())
+        await task  # 즉시 완료시켜 done()=True 상태로 만든다.
+        healthz_app.state.orphan_sweeper_task = task
+        tc = TestClient(healthz_app)
+        resp = tc.get("/healthz")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["components"]["orphan_sweeper"] == "unhealthy"
