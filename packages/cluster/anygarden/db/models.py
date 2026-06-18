@@ -321,6 +321,20 @@ class Agent(Base):
     collaboration_mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="solo", server_default=sa_text("'solo'")
     )
+    # Issue #455 (reliability Wave 2a) — why this agent is currently
+    # arrested. NULL is the normal "not paused for a special reason"
+    # state, which is what every pre-#455 row loads as (the column is
+    # nullable with no server default — no backfill needed). The only
+    # value the runtime sets today is ``'budget'``: the active-stop path
+    # flips this when a hard-stop AGENT-scope token budget is exceeded,
+    # and the invocation-block gate short-circuits a paused agent's
+    # residual LLM calls before paying for the window SUM. Admin resume
+    # clears it back to NULL. Distinct from ``desired_state == 'stopped'``
+    # because operators need to tell a *budget* arrest apart from an
+    # ordinary stop.
+    pause_reason: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")
@@ -1451,4 +1465,91 @@ class TokenBudgetPolicy(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+
+
+# ── Token-budget incidents (#455, reliability Wave 2a) ─────────────────
+#
+# Wave 1d refuses the *next* LLM call (429) once a hard-stop policy is
+# over ceiling, but a runaway agent just retries and spins forever
+# receiving 429s. Wave 2a evaluates the budget *after* each successful
+# usage row and records an ``TokenBudgetIncident`` for the breach, and —
+# for AGENT-scope hard breaches only — actively stops the offending
+# agent (``request_stop`` → desired_state=stopped → machine kills the
+# subprocess). ROOM / GLOBAL breaches record an incident only: never
+# auto-stop, because killing a whole room or fleet over one shared cap
+# would be collateral damage on innocent work — those are surfaced to an
+# operator to decide.
+#
+# Default-OFF is inherited from Wave 1d: ``evaluate_cost_event`` loads
+# the same active ``hard_stop_enabled`` policies, of which there are
+# none on a fresh DB, so no incident is ever created and no agent is
+# ever stopped until an admin deliberately enables a policy.
+
+
+class TokenBudgetIncident(Base):
+    """One recorded budget breach for a (policy, window, threshold).
+
+    Written by ``anygarden.budgets.ledger.evaluate_cost_event`` after a
+    successful usage row pushes a scope's observed-token SUM over a
+    threshold:
+
+    - ``threshold_type == 'soft'`` — observed reached
+      ``ceiling * warn_percent / 100`` but is still under the ceiling.
+      Informational only (never stops anything).
+    - ``threshold_type == 'hard'`` — observed reached the ceiling. For an
+      AGENT-scope policy this is also the row that accompanies the
+      active stop; for ROOM / GLOBAL it is incident-only.
+
+    Deduplication: at most one ``status == 'open'`` row per
+    (``policy_id``, ``window_start``, ``threshold_type``). The same
+    window is crossed by dozens of calls, so without the dedup gate the
+    table would explode with one row per over-ceiling request. Admin
+    resume marks open incidents ``resolved`` and stamps ``resolved_at``.
+
+    ``scope_type`` / ``scope_id`` are denormalized from the policy so the
+    admin surface can group incidents by scope without a join (and they
+    survive the policy being deleted). No FK on ``policy_id`` for the
+    same reason the policy carries no FK on its ``scope_id``: a deleted
+    policy must not silently erase the audit trail of breaches it caused.
+    """
+
+    __tablename__ = "token_budget_incidents"
+    __table_args__ = (
+        Index(
+            "ix_token_budget_incidents_policy_status",
+            "policy_id",
+            "status",
+        ),
+        Index(
+            "ix_token_budget_incidents_scope",
+            "scope_type",
+            "scope_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # The policy whose ceiling/warn threshold was crossed. Plain string,
+    # no FK (see class docstring) — a deleted policy keeps its history.
+    policy_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    # Denormalized from the policy: "global" | "agent" | "room".
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # NULL for global; agents.id / rooms.id otherwise.
+    scope_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    # Inclusive lower bound of the budget window the breach was observed
+    # in. Together with policy_id + threshold_type it's the dedup key.
+    window_start: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    # "soft" (warn threshold) | "hard" (ceiling).
+    threshold_type: Mapped[str] = mapped_column(String(8), nullable=False)
+    # "open" (active breach) | "resolved" (admin acknowledged / resumed).
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="open"
+    )
+    # The observed-token SUM at the moment the incident was recorded.
+    observed_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
     )
