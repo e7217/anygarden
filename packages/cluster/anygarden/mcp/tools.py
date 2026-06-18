@@ -17,19 +17,26 @@ the LLM couldn't read the message.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Participant, Room, Task
+from anygarden.db.models import Participant, Room, Task, TaskBlocker
 from anygarden.skills_library.service import (
     SkillLibraryService,
     SkillNameConflictError,
     SkillNotFoundError,
     SkillOwnershipError,
 )
+
+log = logging.getLogger(__name__)
+
+# Terminal task statuses — a blocker is "satisfied" once it reaches one of
+# these. Reused by the #459 resolve-wake hook and the cycle/blocker walks.
+TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed"})
 
 # Allowed task status values for ``mark_task_status`` (#266, #319).
 # ``failed`` (#319) joined the legal set when the goals sweeper started
@@ -187,6 +194,59 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["room_id", "title"],
+        },
+    },
+    {
+        "name": "add_task_blocker",
+        "description": (
+            "Record that one of your tasks is blocked by another task — "
+            "it must wait until the blocker reaches a terminal status "
+            "(done/failed) before it can proceed. Only the agent that "
+            "owns the dependent task's assignee participant may call "
+            "this. When the last blocker finishes, the dependent task is "
+            "automatically returned to 'todo' and you are re-notified. "
+            "Self-references and dependency cycles are rejected."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": (
+                        "The dependent task (yours) that is waiting."
+                    ),
+                },
+                "blocked_by_task_id": {
+                    "type": "string",
+                    "description": (
+                        "The prerequisite task that must finish first."
+                    ),
+                },
+            },
+            "required": ["task_id", "blocked_by_task_id"],
+        },
+    },
+    {
+        "name": "clear_task_blocker",
+        "description": (
+            "Remove a previously recorded blocker edge between two of "
+            "your tasks. Only the agent that owns the dependent task's "
+            "assignee participant may call this. Use it when a "
+            "dependency no longer applies."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The dependent task (yours).",
+                },
+                "blocked_by_task_id": {
+                    "type": "string",
+                    "description": "The prerequisite task to unlink.",
+                },
+            },
+            "required": ["task_id", "blocked_by_task_id"],
         },
     },
 ]
@@ -413,13 +473,21 @@ async def mark_task_status(
     # (goals/executor.py) and keeps the first transition authoritative.
     if status == "in_progress" and task.started_at is None:
         task.started_at = now
-    elif status in ("done", "failed") and task.finished_at is None:
+    elif status in TERMINAL_STATUSES and task.finished_at is None:
         task.finished_at = now
     await db.flush()
 
+    # #459 (Wave 2c) — resolve-wake. When this task reaches a terminal
+    # status, any task that was blocked *by* it may now be unblocked. The
+    # hook clears the satisfied edge and re-wakes dependents whose blockers
+    # are *all* terminal. Mirrors the REST path in api/v1/tasks.update_task.
+    woken: list[str] = []
+    if status in TERMINAL_STATUSES:
+        woken = await resolve_task_blockers(db, completed_task_id=task.id)
+
     return _ok_result(
         f"task {task_id} status -> {status}",
-        structured={"task_id": task_id, "status": status},
+        structured={"task_id": task_id, "status": status, "woken": woken},
     )
 
 
@@ -551,3 +619,316 @@ async def create_task(
             "status": task.status,
         },
     )
+
+
+# ── task_blockers (#459, Wave 2c) ───────────────────────────────────
+
+
+async def _resolve_assigned_task(
+    db: AsyncSession, *, agent_id: str, task_id: str
+) -> tuple[Task | None, dict[str, Any] | None]:
+    """Look up *task_id* and confirm *agent_id* owns its assignee.
+
+    Returns ``(task, None)`` on success, or ``(None, error_result)`` shaped
+    like :func:`_error_result`. Mirrors ``mark_task_status``'s assignee-only
+    authorization so an agent can only manage blocker edges on tasks it is
+    actually responsible for.
+    """
+    task = (
+        await db.execute(select(Task).where(Task.id == task_id))
+    ).scalar_one_or_none()
+    if task is None:
+        return None, _error_result(f"task not found: {task_id}")
+    if not task.assignee_participant_id:
+        return None, _error_result(
+            "forbidden: task has no assignee — it cannot be managed by anyone"
+        )
+    assignee = (
+        await db.execute(
+            select(Participant).where(
+                Participant.id == task.assignee_participant_id
+            )
+        )
+    ).scalar_one_or_none()
+    if assignee is None or assignee.agent_id != agent_id:
+        return None, _error_result(
+            "forbidden: only the assignee agent may manage this task's blockers"
+        )
+    return task, None
+
+
+async def _is_transitively_blocked_by(
+    db: AsyncSession, *, root: str, candidate: str
+) -> bool:
+    """Return True iff *root* is (transitively) blocked by *candidate*.
+
+    Walks the ``task_blockers`` graph from *root* over its
+    ``blocked_by_task_id`` edges (BFS), bounded by a visited set so a
+    pre-existing cycle in the data cannot loop forever. Used by
+    ``add_task_blocker`` to reject an edge ``task_id -> blocked_by`` when
+    ``blocked_by`` already depends on ``task_id`` — which would close a
+    cycle and leave both tasks blocked forever.
+    """
+    visited: set[str] = set()
+    frontier: list[str] = [root]
+    while frontier:
+        current = frontier.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        rows = (
+            await db.execute(
+                select(TaskBlocker.blocked_by_task_id).where(
+                    TaskBlocker.task_id == current
+                )
+            )
+        ).scalars().all()
+        for nxt in rows:
+            if nxt == candidate:
+                return True
+            if nxt not in visited:
+                frontier.append(nxt)
+    return False
+
+
+async def add_task_blocker(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Record that ``task_id`` is blocked by ``blocked_by_task_id``.
+
+    Authorization: assignee-only on ``task_id`` (the dependent), same as
+    ``mark_task_status``. Rejects self-reference and any edge that would
+    close a dependency cycle (transitive guard). The insert is idempotent —
+    re-adding an existing edge succeeds without error.
+    """
+    task_id = arguments.get("task_id")
+    blocked_by = arguments.get("blocked_by_task_id")
+    if not task_id:
+        return _error_result("missing required argument: task_id")
+    if not blocked_by:
+        return _error_result("missing required argument: blocked_by_task_id")
+    if task_id == blocked_by:
+        return _error_result(
+            "a task cannot block itself (task_id == blocked_by_task_id)"
+        )
+
+    task, err = await _resolve_assigned_task(
+        db, agent_id=agent_id, task_id=task_id
+    )
+    if err is not None:
+        return err
+
+    blocker = (
+        await db.execute(select(Task).where(Task.id == blocked_by))
+    ).scalar_one_or_none()
+    if blocker is None:
+        return _error_result(f"blocker task not found: {blocked_by}")
+
+    # Cycle guard: if the prospective blocker already (transitively)
+    # depends on this task, adding ``task_id -> blocked_by`` would close a
+    # cycle (A→B→A) and neither could ever clear. Reject at add time.
+    if await _is_transitively_blocked_by(db, root=blocked_by, candidate=task_id):
+        return _error_result(
+            "rejected: this edge would create a dependency cycle "
+            f"({task_id} <-> {blocked_by})"
+        )
+
+    # Idempotent insert — the composite PK makes a duplicate a no-op.
+    existing = (
+        await db.execute(
+            select(TaskBlocker).where(
+                TaskBlocker.task_id == task_id,
+                TaskBlocker.blocked_by_task_id == blocked_by,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(TaskBlocker(task_id=task_id, blocked_by_task_id=blocked_by))
+        await db.flush()
+
+    return _ok_result(
+        f"task {task_id} now blocked by {blocked_by}",
+        structured={"task_id": task_id, "blocked_by_task_id": blocked_by},
+    )
+
+
+async def clear_task_blocker(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Delete the ``task_id`` -> ``blocked_by_task_id`` blocker edge.
+
+    Authorization: assignee-only on ``task_id`` (the dependent). Removing a
+    non-existent edge is a no-op success (idempotent).
+    """
+    task_id = arguments.get("task_id")
+    blocked_by = arguments.get("blocked_by_task_id")
+    if not task_id:
+        return _error_result("missing required argument: task_id")
+    if not blocked_by:
+        return _error_result("missing required argument: blocked_by_task_id")
+
+    _task, err = await _resolve_assigned_task(
+        db, agent_id=agent_id, task_id=task_id
+    )
+    if err is not None:
+        return err
+
+    result = await db.execute(
+        delete(TaskBlocker).where(
+            TaskBlocker.task_id == task_id,
+            TaskBlocker.blocked_by_task_id == blocked_by,
+        )
+    )
+    await db.flush()
+    return _ok_result(
+        f"blocker {blocked_by} cleared from task {task_id}",
+        structured={
+            "task_id": task_id,
+            "blocked_by_task_id": blocked_by,
+            "removed": bool(result.rowcount),
+        },
+    )
+
+
+async def resolve_task_blockers(
+    db: AsyncSession,
+    *,
+    completed_task_id: str,
+) -> list[str]:
+    """Resolve-wake hook for a task that just reached a terminal status.
+
+    Called from BOTH terminal paths (``mark_task_status`` here and
+    ``api/v1/tasks.update_task``) after the status write + flush. For each
+    dependent that was blocked by ``completed_task_id``:
+
+    1. delete the now-satisfied ``(dependent, completed)`` edge;
+    2. check the dependent's *remaining* blockers — if every one of them is
+       terminal (done/failed), the dependent is fully unblocked;
+    3. only then (and only if the dependent is currently in a waiting state —
+       ``blocked``/``todo``/``failed``) return it to ``todo``, refresh
+       ``assigned_at``, and re-inject its assignment mention so the assignee
+       agent wakes through the existing mention path.
+
+    "Wake only when ALL blockers are cleared" (plan §3.2): waking on a
+    partial release would re-activate a task still stuck behind other
+    prerequisites. Returns the list of woken dependent task ids (for tests
+    and observability). Bounded + resilient — a single dependent failing to
+    wake is logged and does not abort the rest.
+    """
+    # Reverse lookup — every dependent that names this task as a blocker.
+    dependent_ids = (
+        await db.execute(
+            select(TaskBlocker.task_id).where(
+                TaskBlocker.blocked_by_task_id == completed_task_id
+            )
+        )
+    ).scalars().all()
+
+    if not dependent_ids:
+        return []
+
+    log.info(
+        "resolve_task_blockers: task %s terminal — %d dependent(s) to check",
+        completed_task_id,
+        len(dependent_ids),
+    )
+
+    # Lazy import — avoids a top-level cycle between mcp/tools and
+    # messages/service (the latter imports anygarden.db.models).
+    from anygarden.messages.service import inject_task_assignment_message
+
+    woken: list[str] = []
+    for dep_id in dependent_ids:
+        try:
+            # 1. Drop the satisfied edge.
+            await db.execute(
+                delete(TaskBlocker).where(
+                    TaskBlocker.task_id == dep_id,
+                    TaskBlocker.blocked_by_task_id == completed_task_id,
+                )
+            )
+            await db.flush()
+
+            # 2. Any remaining blocker still pending? Join the dependent's
+            # remaining blocker edges to their blocker tasks' status.
+            remaining = (
+                await db.execute(
+                    select(Task.status)
+                    .join(
+                        TaskBlocker,
+                        TaskBlocker.blocked_by_task_id == Task.id,
+                    )
+                    .where(TaskBlocker.task_id == dep_id)
+                )
+            ).scalars().all()
+            if any(s not in TERMINAL_STATUSES for s in remaining):
+                # Still blocked by something unfinished — do not wake.
+                continue
+
+            # 3. Fully unblocked. Wake the dependent if it is in a waiting
+            # state and still has an agent assignee to notify.
+            dep = (
+                await db.execute(select(Task).where(Task.id == dep_id))
+            ).scalar_one_or_none()
+            if dep is None:
+                continue
+            if dep.status not in ("blocked", "todo", "failed"):
+                # Already moving (in_progress) or done — leave it alone.
+                continue
+            if not dep.assignee_participant_id:
+                # No assignee to wake; just normalize the status.
+                dep.status = "todo"
+                await db.flush()
+                continue
+
+            assignee = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.id == dep.assignee_participant_id
+                    )
+                )
+            ).scalar_one_or_none()
+
+            dep.status = "todo"
+            dep.assigned_at = datetime.now(timezone.utc)
+            await db.flush()
+
+            # Human assignees don't auto-execute (mirrors api/v1/tasks
+            # ``_maybe_inject``): only re-wake agents.
+            if assignee is not None and assignee.agent_id is not None:
+                room = (
+                    await db.execute(
+                        select(Room).where(Room.id == dep.room_id)
+                    )
+                ).scalar_one_or_none()
+                if room is not None:
+                    await inject_task_assignment_message(
+                        db,
+                        room=room,
+                        task=dep,
+                        sender_participant_id=dep.assignee_participant_id,
+                        event="reassigned",
+                    )
+            woken.append(dep_id)
+        except Exception:  # pragma: no cover — defence in depth
+            log.exception(
+                "resolve_task_blockers: failed to process dependent %s "
+                "(blocker %s); continuing",
+                dep_id,
+                completed_task_id,
+            )
+
+    if woken:
+        log.info(
+            "resolve_task_blockers: woke %d dependent(s) after %s: %s",
+            len(woken),
+            completed_task_id,
+            woken,
+        )
+    return woken

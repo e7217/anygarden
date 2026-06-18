@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     JSON,
     LargeBinary,
+    PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
@@ -1149,6 +1150,63 @@ class Task(Base):
     duplicate fire of the same slot raises IntegrityError. NULL for
     manual / non-goal Tasks (multiple NULLs are allowed under a
     nullable UNIQUE on both SQLite and Postgres)."""
+
+
+class TaskBlocker(Base):
+    """A first-class "this task is blocked by that task" dependency edge
+    (#459, reliability Wave 2c).
+
+    Before this relation a blocked Task carried no record of *what* it was
+    waiting on, so when its blocker finished the dependent stayed inert
+    until the goals sweeper timed it out or a human re-routed it manually.
+    A blocker row links ``task_id`` (the dependent that is waiting) to
+    ``blocked_by_task_id`` (the prerequisite that must reach a terminal
+    status first). A Task may be blocked by many others (many-to-many),
+    which is why this is a relation table rather than a single
+    ``blocked_by`` column on :class:`Task`.
+
+    When ``blocked_by_task_id`` transitions to ``done`` / ``failed`` the
+    resolve-wake hook (``mark_task_status`` + ``api/v1/tasks.update_task``)
+    deletes the satisfied edge and, once *all* of the dependent's blockers
+    are terminal, returns the dependent to ``todo`` and re-injects a
+    ``task_assignment`` mention so its assignee agent wakes up again.
+    """
+
+    __tablename__ = "task_blockers"
+    __table_args__ = (
+        # Composite PK = the edge identity. A duplicate (task_id,
+        # blocked_by_task_id) insert raises IntegrityError, which the
+        # ``add_task_blocker`` handler treats as idempotent success.
+        PrimaryKeyConstraint(
+            "task_id", "blocked_by_task_id", name="pk_task_blockers"
+        ),
+        # The resolve-wake reverse lookup is ``WHERE blocked_by_task_id =
+        # :just_completed``; the PK's leading column is ``task_id`` so it
+        # can't serve that scan. A dedicated index keeps it cheap.
+        Index("ix_task_blockers_blocked_by", "blocked_by_task_id"),
+    )
+
+    task_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    """The dependent task that is waiting (the one to wake when cleared)."""
+
+    blocked_by_task_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    """The prerequisite task that must finish first."""
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+    # CASCADE on both FKs so deleting either endpoint task tears down its
+    # blocker edges automatically — matches how the rest of this codebase
+    # leans on ``ondelete='CASCADE'`` (rooms→tasks, agents→tokens) rather
+    # than app-level cleanup, and avoids dangling edges that would make the
+    # cycle-guard walk reference vanished tasks.
 
 
 class Goal(Base):

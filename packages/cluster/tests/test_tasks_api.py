@@ -470,3 +470,72 @@ class TestAssignedAt:
                 await db.execute(select(TaskRow).where(TaskRow.id == task_id))
             ).scalar_one()
             assert after.assigned_at == t1
+
+
+class TestRestResolveWake:
+    """#459 (Wave 2c) — the REST ``PUT /tasks/{id}`` terminal transition
+    must run the same resolve-wake hook as the MCP ``mark_task_status``
+    path: a task blocked by the just-completed one is returned to ``todo``
+    and re-injected as a mention."""
+
+    @pytest.mark.asyncio
+    async def test_marking_blocker_done_via_rest_wakes_dependent(
+        self, tasks_env
+    ) -> None:
+        from anygarden.db.models import Task as TaskRow
+        from anygarden.db.models import TaskBlocker
+
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        a_pid = tasks_env["agent_a_p_id"]
+
+        # Create a blocker task and a dependent task (both agent-assigned).
+        blocker_resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "blocker", "assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        dep_resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "dependent", "assignee_participant_id": a_pid},
+            headers=_auth(tasks_env["token"]),
+        )
+        blocker_id = blocker_resp.json()["id"]
+        dep_id = dep_resp.json()["id"]
+
+        # Wire the edge directly (no REST add endpoint) and park the
+        # dependent in ``blocked``.
+        async with tasks_env["factory"]() as db:
+            db.add(TaskBlocker(task_id=dep_id, blocked_by_task_id=blocker_id))
+            dep_row = (
+                await db.execute(select(TaskRow).where(TaskRow.id == dep_id))
+            ).scalar_one()
+            dep_row.status = "blocked"
+            await db.commit()
+
+        msgs_before = await _count_task_messages(tasks_env["factory"], room.id)
+
+        # Mark the blocker done via REST — resolve-wake should fire.
+        resp = await client.put(
+            f"/api/v1/tasks/{blocker_id}",
+            json={"status": "done"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+
+        async with tasks_env["factory"]() as db:
+            dep_after = (
+                await db.execute(select(TaskRow).where(TaskRow.id == dep_id))
+            ).scalar_one()
+            assert dep_after.status == "todo"
+            # Satisfied edge cleared.
+            edges = (
+                await db.execute(
+                    select(TaskBlocker).where(TaskBlocker.task_id == dep_id)
+                )
+            ).scalars().all()
+            assert edges == []
+
+        # A fresh re-wake mention was injected for the dependent.
+        msgs_after = await _count_task_messages(tasks_env["factory"], room.id)
+        assert msgs_after == msgs_before + 1

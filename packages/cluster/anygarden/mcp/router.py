@@ -19,7 +19,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 
 from anygarden.mcp.auth import resolve_agent_id
-from anygarden.mcp.tools import TOOL_SCHEMAS, call_tool, create_task, mark_task_status
+from anygarden.mcp.tools import (
+    TOOL_SCHEMAS,
+    add_task_blocker,
+    call_tool,
+    clear_task_blocker,
+    create_task,
+    mark_task_status,
+)
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
 
@@ -141,17 +148,92 @@ async def mcp_rpc(request: Request) -> dict[str, Any]:
                                 )
                             )
                         ).scalar_one_or_none()
-                    await db.commit()
-                    if task_obj is not None:
-                        manager = getattr(
-                            request.app.state, "connection_manager", None
+                    # #459 — resolve-wake may have returned dependent
+                    # tasks to ``todo`` + injected fresh assignment
+                    # mentions. Snapshot them (and their newest mention
+                    # message) BEFORE commit so the WS fanout can wake the
+                    # dependents' assignees live, mirroring create_task.
+                    structured = tool_result.get("structuredContent") or {}
+                    woken_ids = structured.get("woken") or []
+                    woken_payloads: list[tuple[Any, Any, Any]] = []
+                    if woken_ids:
+                        from anygarden.db.models import (
+                            Message as _Message,
                         )
+
+                        for w_id in woken_ids:
+                            w_task = (
+                                await db.execute(
+                                    _sa_select(_Task).where(_Task.id == w_id)
+                                )
+                            ).scalar_one_or_none()
+                            if w_task is None:
+                                continue
+                            w_room = (
+                                await db.execute(
+                                    _sa_select(_Room).where(
+                                        _Room.id == w_task.room_id
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                            # The newest task_assignment mention for this
+                            # dependent (just injected by the hook).
+                            w_msgs = (
+                                await db.execute(
+                                    _sa_select(_Message)
+                                    .where(_Message.room_id == w_task.room_id)
+                                    .order_by(_Message.seq.desc())
+                                    .limit(5)
+                                )
+                            ).scalars().all()
+                            w_msg = None
+                            for m in w_msgs:
+                                meta = m.extra_metadata or {}
+                                ta = meta.get("task_assignment")
+                                if ta and ta.get("task_id") == w_task.id:
+                                    w_msg = m
+                                    break
+                            woken_payloads.append((w_task, w_room, w_msg))
+
+                    await db.commit()
+                    manager = getattr(
+                        request.app.state, "connection_manager", None
+                    )
+                    if task_obj is not None:
                         await _fanout_task_event(
                             db,
                             manager=manager,
                             event="updated",
                             task=task_obj,
                             room_name=room_obj.name if room_obj else "",
+                        )
+                    # Broadcast each woken dependent: the synthetic mention
+                    # frame (so the assignee agent wakes) + a task.updated
+                    # frame (so the 1차/2차 task views reflect todo again).
+                    for w_task, w_room, w_msg in woken_payloads:
+                        if manager is not None and w_msg is not None:
+                            from anygarden.ws.protocol import (
+                                MessageOut as _MessageOut,
+                            )
+
+                            await manager.broadcast(
+                                w_task.room_id,
+                                _MessageOut(
+                                    id=w_msg.id,
+                                    room_id=w_msg.room_id,
+                                    participant_id=w_msg.participant_id,
+                                    content=w_msg.content,
+                                    seq=w_msg.seq,
+                                    created_at=w_msg.created_at,
+                                    metadata=w_msg.extra_metadata,
+                                ),
+                            )
+                        await _fanout_task_event(
+                            db,
+                            manager=manager,
+                            event="updated",
+                            task=w_task,
+                            room_name=w_room.name if w_room else "",
                         )
             return _jsonrpc_ok(req_id, tool_result)
 
@@ -248,6 +330,27 @@ async def mcp_rpc(request: Request) -> dict[str, Any]:
                             task=task_obj,
                             room_name=room_obj.name if room_obj else "",
                         )
+            return _jsonrpc_ok(req_id, tool_result)
+
+        # ``add_task_blocker`` / ``clear_task_blocker`` (#459, Wave 2c) —
+        # main-DB tools that mutate the task_blockers relation. They carry
+        # no WS fanout of their own (the dependent only wakes when its
+        # blocker later reaches terminal, which flows through the
+        # ``mark_task_status`` branch above). Same session lifecycle so the
+        # commit persists the edge.
+        if name in ("add_task_blocker", "clear_task_blocker"):
+            session_factory = request.app.state.session_factory
+            async with session_factory() as db:
+                handler = (
+                    add_task_blocker
+                    if name == "add_task_blocker"
+                    else clear_task_blocker
+                )
+                tool_result = await handler(
+                    db, agent_id=agent_id, arguments=arguments
+                )
+                if not tool_result.get("isError"):
+                    await db.commit()
             return _jsonrpc_ok(req_id, tool_result)
 
         service = _service(request)
