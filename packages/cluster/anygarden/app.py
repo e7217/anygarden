@@ -29,6 +29,7 @@ from anygarden.api.v1.skills import router as skills_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
 from anygarden.api.v1.projects import router as projects_router
 from anygarden.api.v1.llm_gateway import router as llm_gateway_admin_router
+from anygarden.api.v1.budgets import router as budgets_router
 from anygarden.llm_gateway.reverse_proxy import router as llm_proxy_router
 from anygarden.mcp import router as mcp_rpc_router
 from anygarden.auth.routes import router as auth_router
@@ -889,6 +890,11 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     # isn't wired (feature flag off) so this is harmless.
     app.include_router(llm_proxy_router)
     app.include_router(llm_gateway_admin_router)
+    # #453 — token-budget policy admin CRUD. The gate these policies
+    # drive defaults OFF (hard_stop_enabled=False), so registering this
+    # router cannot change runtime behaviour until an admin enables a
+    # policy.
+    app.include_router(budgets_router)
 
     # #420 — expose the Prometheus metrics defined in
     # ``observability.metrics`` (previously defined but never scrapeable
