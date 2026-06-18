@@ -307,6 +307,22 @@ async def update_task(
 
     await db.flush()
 
+    # #459 (Wave 2c) — resolve-wake. When this REST update flips the task
+    # into a terminal status, run the same dependency-resolution hook the
+    # MCP ``mark_task_status`` path uses so tasks blocked *by* this one get
+    # returned to ``todo`` + re-woken once all their blockers are terminal.
+    woken_blocker_ids: list[str] = []
+    if (
+        body.status is not None
+        and body.status in ("done", "failed")
+        and previous_status != body.status
+    ):
+        from anygarden.mcp.tools import resolve_task_blockers
+
+        woken_blocker_ids = await resolve_task_blockers(
+            db, completed_task_id=task.id
+        )
+
     # #302 — materialize hook for goal-derived tasks. When the agent
     # marks a goal-derived task as ``done`` or ``failed``, run the
     # policy: increment/reset failure counter, optionally pause the
@@ -348,6 +364,36 @@ async def update_task(
             await db.execute(select(Room).where(Room.id == task.room_id))
         ).scalar_one_or_none()
 
+    # #459 — snapshot the resolve-wake dependents (task + room + the
+    # freshly-injected assignment mention) BEFORE commit so the WS fanout
+    # can wake their assignees live, mirroring the MCP router path.
+    woken_payloads: list[tuple[Task, Optional[Room], Optional[Message]]] = []
+    for w_id in woken_blocker_ids:
+        w_task = (
+            await db.execute(select(Task).where(Task.id == w_id))
+        ).scalar_one_or_none()
+        if w_task is None:
+            continue
+        w_room = (
+            await db.execute(select(Room).where(Room.id == w_task.room_id))
+        ).scalar_one_or_none()
+        w_msg = (
+            await db.execute(
+                select(Message)
+                .where(Message.room_id == w_task.room_id)
+                .order_by(Message.seq.desc())
+                .limit(5)
+            )
+        ).scalars().all()
+        w_match: Optional[Message] = None
+        for m in w_msg:
+            meta = m.extra_metadata or {}
+            ta = meta.get("task_assignment")
+            if ta and ta.get("task_id") == w_task.id:
+                w_match = m
+                break
+        woken_payloads.append((w_task, w_room, w_match))
+
     # Snapshot pre-commit so the WS frame can survive a delete on the
     # silent-success path. ``_to_out`` reads attributes that detach
     # after ``db.delete`` + ``commit`` — building the WS payload from
@@ -360,6 +406,19 @@ async def update_task(
     if injected is not None and manager is not None:
         await db.refresh(injected)
         await manager.broadcast(task.room_id, _message_to_frame(injected))
+
+    # #459 — broadcast each woken dependent: its mention frame (wakes the
+    # assignee agent) + a task.updated frame (so task views show todo).
+    for w_task, w_room, w_match in woken_payloads:
+        if manager is not None and w_match is not None:
+            await manager.broadcast(w_task.room_id, _message_to_frame(w_match))
+        await fanout_task_event(
+            db,
+            manager=manager,
+            event="updated",
+            task=w_task,
+            room_name=w_room.name if w_room else "",
+        )
 
     if task_was_deleted:
         # Treat the silent-success delete as a regular task delete on
