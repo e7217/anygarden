@@ -18,8 +18,8 @@ import structlog
 
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
-    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Participant, Room,
-    SkillLibraryEntry,
+    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Machine,
+    Participant, Room, SkillLibraryEntry,
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
 from anygarden.scheduler.machine_bus import MachineBus
@@ -997,3 +997,79 @@ async def sweep_orphaned_requests(
             orphaned_ids.append(req_id)
         await db.commit()
         return orphaned_ids
+
+
+# ── #447 Wave 1a — agent heartbeat reaper ────────────────────────────
+
+
+#: Default age at which an agent reporting ``actual_state == "running"``
+#: but whose ``last_heartbeat_at`` has gone silent is promoted to
+#: ``crashed`` — *provided* its placed machine is also not online. Two
+#: minutes matches the daemon's default report cadence plus slack;
+#: overridable per call for tests and via the
+#: ``ANYGARDEN_HEARTBEAT_STALE_SEC`` env var at the call site.
+STALE_HEARTBEAT_SEC_DEFAULT = 120
+
+
+async def sweep_stale_agents(
+    session_factory,
+    *,
+    threshold_sec: int = STALE_HEARTBEAT_SEC_DEFAULT,
+) -> int:
+    """Flip agents stuck ``running`` on a dead machine to ``crashed``.
+
+    A machine that loses power never sends a final ``report_actual_state``,
+    so its agents linger at ``actual_state == "running"`` forever and keep
+    polluting bin-pack placement (placement counts ``running``). This
+    sweep reaps them on a **dual gate**: the agent's ``last_heartbeat_at``
+    is older than *threshold_sec* AND the machine it is placed on is not
+    ``online``. Both must hold — a stale heartbeat alone could just be a
+    slow report from a live machine.
+
+    CRITICAL GUARD: only ``actual_state == "running"`` rows with a
+    non-NULL ``last_heartbeat_at`` are eligible. ``last_heartbeat_at`` is
+    only stamped on the running transition (see
+    ``handle_report_actual_state``), so a ``starting`` agent mid-spawn
+    legitimately has a NULL/old heartbeat and must never be reaped here.
+
+    For each matched agent: set ``actual_state = "crashed"``, record a
+    short ``last_crash_reason``, and add a ``state_changed`` ActivityLog
+    row recording ``from``/``to``/``reason``. Returns the count of agents
+    crashed so the caller can bump the sweep metric. Idempotent: once an
+    agent is ``crashed`` it no longer matches the ``running`` filter.
+    """
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=threshold_sec)
+
+    async with session_factory() as db:
+        stmt = (
+            select(Agent)
+            .join(Machine, Agent.placed_on_machine_id == Machine.id)
+            .where(
+                Agent.actual_state == "running",
+                Agent.last_heartbeat_at.isnot(None),
+                Agent.last_heartbeat_at < threshold,
+                Agent.placed_on_machine_id.isnot(None),
+                Machine.status != "online",
+            )
+        )
+        agents = (await db.execute(stmt)).scalars().all()
+
+        for agent in agents:
+            old_state = agent.actual_state
+            agent.actual_state = "crashed"
+            agent.last_crash_reason = "heartbeat_stale"
+            db.add(
+                ActivityLog(
+                    agent_id=agent.id,
+                    event_type="state_changed",
+                    details={
+                        "from": old_state,
+                        "to": "crashed",
+                        "reason": "heartbeat_stale",
+                        "threshold_sec": threshold_sec,
+                    },
+                )
+            )
+
+        await db.commit()
+        return len(agents)

@@ -967,6 +967,11 @@ class ActivityLog(Base):
         # #427 — per-room activity timelines (the /rooms/{id}/activity
         # endpoint) query by room; an index keeps that off a full scan.
         Index("ix_activity_logs_room_ts", "room_id", "timestamp"),
+        # #447 — turn outcome / engine promoted out of ``details`` to
+        # first-class indexed columns so the reaper and outcome-filtered
+        # activity queries don't full-scan + json_extract.
+        Index("ix_activity_logs_outcome_ts", "outcome", "timestamp"),
+        Index("ix_activity_logs_room_outcome", "room_id", "outcome"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -984,6 +989,17 @@ class ActivityLog(Base):
     # rows have no room.
     room_id: Mapped[Optional[str]] = mapped_column(
         String(36), nullable=True, default=None
+    )
+    # #447 — turn outcome (ok/failed/timeout/cancelled/rejected) and the
+    # engine that ran it, promoted out of ``details`` JSON to first-class
+    # indexed columns. Nullable: system events (start/stop/state_changed)
+    # and pre-#447 rows carry no outcome/engine; forward-only (no
+    # backfill — legacy ``details`` has no consistent signal).
+    outcome: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None
+    )
+    engine: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None
     )
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
 

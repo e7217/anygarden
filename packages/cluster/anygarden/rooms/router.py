@@ -1636,6 +1636,8 @@ async def delete_room_artifact(
 async def get_room_activity(
     room_id: str,
     limit: int = 100,
+    outcome: str | None = None,
+    engine: str | None = None,
     identity: Identity = Depends(get_admin_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1654,6 +1656,13 @@ async def get_room_activity(
         .order_by(ActivityLog.timestamp.desc())
         .limit(limit)
     )
+    # #447 — optional outcome/engine filters use the first-class indexed
+    # columns (ix_activity_logs_room_outcome), so an outcome-narrowed
+    # per-room timeline stays off a json_extract scan.
+    if outcome is not None:
+        stmt = stmt.where(ActivityLog.outcome == outcome)
+    if engine is not None:
+        stmt = stmt.where(ActivityLog.engine == engine)
     rows = (await db.execute(stmt)).scalars().all()
     return [
         ActivityLogOut(
@@ -1662,6 +1671,8 @@ async def get_room_activity(
             event_type=r.event_type,
             timestamp=r.timestamp.isoformat(),
             request_id=r.request_id,
+            outcome=r.outcome,
+            engine=r.engine,
             details=r.details,
         )
         for r in rows

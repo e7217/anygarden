@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
+    ActivityLog,
     Agent,
     AgentFile,
     AgentToken,
@@ -22,7 +24,7 @@ from anygarden.db.models import (
     Room,
     User,
 )
-from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.lifecycle import AgentLifecycle, sweep_stale_agents
 from anygarden.scheduler.machine_bus import MachineBus
 
 
@@ -1006,3 +1008,186 @@ class TestSharedFilesBackfillOnRunningTransition:
         frames = [json.loads(s) for s in fake_ws.sent]
         writes = [f for f in frames if f.get("type") == "agent_memory_shared_file_write"]
         assert writes == []
+
+
+class TestSweepStaleAgents:
+    """#447 Wave 1a — heartbeat reaper for agents stuck ``running`` on a
+    dead/offline machine.
+
+    Dual gate: ``last_heartbeat_at`` older than threshold AND the placed
+    machine is not ``online``. The starting-agent guard is the load-
+    bearing safety property — a spawning agent has a NULL/old heartbeat
+    and must never be reaped.
+    """
+
+    async def _make_offline_machine(self, factory, user) -> str:
+        async with factory() as db:
+            machine = Machine(
+                name="dead-machine",
+                hostname="host-dead",
+                owner_user_id=user.id,
+                status="offline",
+                max_agents=5,
+            )
+            db.add(machine)
+            await db.commit()
+            return machine.id
+
+    @pytest.mark.asyncio
+    async def test_running_stale_on_offline_machine_is_crashed(
+        self, lifecycle_env
+    ) -> None:
+        factory = lifecycle_env["factory"]
+        user = lifecycle_env["user"]
+        offline_id = await self._make_offline_machine(factory, user)
+
+        stale = datetime.now(timezone.utc) - timedelta(seconds=300)
+        async with factory() as db:
+            agent = Agent(
+                name="stale-running",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=offline_id,
+                last_heartbeat_at=stale,
+                pid=4242,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        n = await sweep_stale_agents(factory, threshold_sec=120)
+        assert n == 1
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "crashed"
+            assert agent.last_crash_reason == "heartbeat_stale"
+
+            logs = (
+                await db.execute(
+                    select(ActivityLog).where(
+                        ActivityLog.agent_id == agent_id,
+                        ActivityLog.event_type == "state_changed",
+                    )
+                )
+            ).scalars().all()
+            assert len(logs) == 1
+            details = logs[0].details
+            assert details["from"] == "running"
+            assert details["to"] == "crashed"
+            assert details["reason"] == "heartbeat_stale"
+
+    @pytest.mark.asyncio
+    async def test_starting_agent_with_null_heartbeat_is_untouched(
+        self, lifecycle_env
+    ) -> None:
+        """A ``starting`` agent mid-spawn has a NULL heartbeat (it is only
+        stamped on the running transition) and must never be reaped."""
+        factory = lifecycle_env["factory"]
+        user = lifecycle_env["user"]
+        offline_id = await self._make_offline_machine(factory, user)
+
+        async with factory() as db:
+            null_hb = Agent(
+                name="starting-null-hb",
+                engine="echo",
+                desired_state="running",
+                actual_state="starting",
+                placed_on_machine_id=offline_id,
+                last_heartbeat_at=None,
+            )
+            db.add(null_hb)
+            # Also a starting agent that happens to carry an old heartbeat
+            # (e.g. a prior crash/restart cycle): still must not be reaped,
+            # because the filter only matches ``running``.
+            old_hb = Agent(
+                name="starting-old-hb",
+                engine="echo",
+                desired_state="running",
+                actual_state="starting",
+                placed_on_machine_id=offline_id,
+                last_heartbeat_at=datetime.now(timezone.utc)
+                - timedelta(seconds=600),
+            )
+            db.add(old_hb)
+            await db.commit()
+            null_id = null_hb.id
+            old_id = old_hb.id
+
+        n = await sweep_stale_agents(factory, threshold_sec=120)
+        assert n == 0
+
+        async with factory() as db:
+            for aid in (null_id, old_id):
+                agent = (
+                    await db.execute(select(Agent).where(Agent.id == aid))
+                ).scalar_one()
+                assert agent.actual_state == "starting"
+                assert agent.last_crash_reason is None
+
+    @pytest.mark.asyncio
+    async def test_running_recent_heartbeat_is_untouched(
+        self, lifecycle_env
+    ) -> None:
+        factory = lifecycle_env["factory"]
+        user = lifecycle_env["user"]
+        offline_id = await self._make_offline_machine(factory, user)
+
+        recent = datetime.now(timezone.utc) - timedelta(seconds=10)
+        async with factory() as db:
+            agent = Agent(
+                name="fresh-running",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=offline_id,
+                last_heartbeat_at=recent,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        n = await sweep_stale_agents(factory, threshold_sec=120)
+        assert n == 0
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "running"
+
+    @pytest.mark.asyncio
+    async def test_running_stale_on_online_machine_is_untouched(
+        self, lifecycle_env
+    ) -> None:
+        """Dual gate: a stale heartbeat alone (machine still ``online``)
+        could be a slow report from a live machine — do not reap."""
+        factory = lifecycle_env["factory"]
+        # The fixture machine is ``online``.
+        online_machine = lifecycle_env["machine"]
+
+        stale = datetime.now(timezone.utc) - timedelta(seconds=300)
+        async with factory() as db:
+            agent = Agent(
+                name="stale-but-online",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=online_machine.id,
+                last_heartbeat_at=stale,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        n = await sweep_stale_agents(factory, threshold_sec=120)
+        assert n == 0
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "running"

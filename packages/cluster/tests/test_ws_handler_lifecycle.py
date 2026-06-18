@@ -48,6 +48,9 @@ async def test_handler_started_is_persisted(db):
     row = rows[0]
     assert row.event_type == "handler_started"
     assert row.request_id == "req-xyz"
+    # #447 — no outcome/engine on a started event; columns stay null.
+    assert row.outcome is None
+    assert row.engine is None
     assert row.details == {"room_id": "room-1"}
 
 
@@ -71,6 +74,9 @@ async def test_engine_call_finished_carries_full_details(db):
     )).scalars().one()
     assert row.event_type == "engine_call_finished"
     assert row.request_id == "req-1"
+    # #447 — outcome/engine promoted to first-class indexed columns.
+    assert row.outcome == "timeout"
+    assert row.engine == "codex"
     assert row.details == {
         "room_id": "room-1",
         "engine": "codex",
