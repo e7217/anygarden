@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Message, Participant, User
+from anygarden.db.models import AgentTurnTask, Message, Participant, User
 from anygarden.db.repository import append_message as _repo_append, replay_since_seq
 
 if TYPE_CHECKING:
@@ -63,6 +64,8 @@ async def inject_task_assignment_message(
     sender_participant_id: str | None,
     event: Literal["assigned", "reassigned"] = "assigned",
     manager: "ConnectionManager | None" = None,
+    request_id: str | None = None,
+    redispatch_count: int = 0,
 ) -> Message:
     """Drop a synthetic mention-bearing message into *room* announcing
     that *task* has been (re)assigned to its current assignee.
@@ -85,12 +88,39 @@ async def inject_task_assignment_message(
     ``fanout_task_event`` pattern. Without this fanout the agent never
     receives the wake-up frame even though the row sits in the DB
     (#314). ``None`` is accepted for tests / unit isolation.
+
+    ``request_id`` / ``redispatch_count`` (#463, reliability Wave 2) — the
+    lifecycle→Task re-dispatch bridge. This helper is the *single funnel*
+    for all assignment injection (goal scheduler / ``create_task`` /
+    auto-route / reassign), so it is where we correlate the turn it wakes
+    with the Task. A server-side ``request_id`` is minted here (unless the
+    caller passes one) and stamped onto ``metadata["request_id"]`` — the
+    *same key the live user-send path uses* — so the assignee agent threads
+    it onto its emitted LifecycleFrames unchanged. We also persist one
+    :class:`AgentTurnTask` row linking that ``request_id`` to ``task.id``.
+    When the turn's ``handler_finished`` frame returns a terminal non-ok
+    outcome the WS handler looks the turn up by ``request_id`` and (if the
+    Task is still unresolved) returns it to ``todo`` and re-dispatches once.
+    ``redispatch_count`` is the chain count carried forward by that
+    re-dispatch path (default 0 for the original assignment); the handler
+    increments it on each re-wake so the flip-loop stays bounded.
+
+    Live (user-send / peer-handoff) turns never call this helper, so they
+    never get an ``AgentTurnTask`` row and the bridge leaves them untouched
+    — the core scope invariant.
     """
     assignee_pid = task.assignee_participant_id
     if not assignee_pid:
         raise ValueError(
             "inject_task_assignment_message requires task.assignee_participant_id"
         )
+
+    # #463 — mint (or accept) the server-side turn correlation id and put
+    # it on the metadata under the SAME ``request_id`` key the live path
+    # uses. The assignee agent threads ``metadata.request_id`` onto its
+    # LifecycleFrames unchanged, so a terminal failure of this turn can be
+    # mapped back to ``task`` via the ``AgentTurnTask`` row written below.
+    rid = request_id or str(uuid4())
 
     metadata: dict = {
         "mentions": [{"type": "user", "id": assignee_pid}],
@@ -99,6 +129,7 @@ async def inject_task_assignment_message(
             "assignee_pid": assignee_pid,
             "event": event,
         },
+        "request_id": rid,
     }
     if sender_participant_id is None:
         metadata["system_origin"] = "task_assignment"
@@ -137,6 +168,21 @@ async def inject_task_assignment_message(
         content,
         metadata,
     )
+
+    # #463 — persist the request_id↔task correlation so the WS handler can
+    # map a terminal-non-ok ``handler_finished`` frame for this turn back to
+    # ``task`` and re-dispatch it. ``redispatch_count`` carries the chain
+    # count forward (0 for the original assignment, incremented by each
+    # re-wake) so the flip-loop is bounded. Flushed — not committed — so it
+    # shares the caller's transaction with the message row above.
+    db.add(
+        AgentTurnTask(
+            request_id=rid,
+            task_id=task.id,
+            redispatch_count=redispatch_count,
+        )
+    )
+    await db.flush()
 
     # #314 — fanout the persisted row as a ``MessageOut`` frame so the
     # agent's WS session receives the wake-up signal. Without this the

@@ -53,6 +53,19 @@ agents_crashed_by_sweep_total = Counter(
     "Total number of agents flipped to crashed by the stale-heartbeat sweeper",
 )
 
+# #463 Wave 2 — assignment turns that ended in a terminal non-ok outcome
+# (rejected / timeout / failed) and whose still-unresolved Task was
+# returned to ``todo`` and automatically re-dispatched by the
+# lifecycle→Task bridge. Labelled only by the terminal ``outcome`` that
+# triggered the re-dispatch (bounded). A bound re-dispatch that is skipped
+# because the chain count already hit ``_MAX_TASK_REDISPATCH`` does NOT
+# increment this — only an actual re-wake does.
+task_redispatched_total = Counter(
+    "anygarden_task_redispatched_total",
+    "Total number of assignment tasks re-dispatched after a terminal-non-ok turn",
+    ["outcome"],  # rejected | timeout | failed
+)
+
 # ── #455 Wave 2a — token-budget active-stop / incidents ──────────────
 #
 # ``evaluate_cost_event`` records an incident whenever a successful usage

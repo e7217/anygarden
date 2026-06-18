@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -14,7 +15,15 @@ from sqlalchemy.orm import selectinload
 
 from anygarden.auth.dependencies import Identity, get_identity, require_room_member
 from anygarden.config import AnygardenSettings
-from anygarden.db.models import ActivityLog, Agent, Participant, Room, User
+from anygarden.db.models import (
+    ActivityLog,
+    Agent,
+    AgentTurnTask,
+    Participant,
+    Room,
+    Task,
+    User,
+)
 from anygarden.db.repository import append_message, replay_since_seq
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.messages.references import (
@@ -26,6 +35,7 @@ from anygarden.observability.metrics import (
     engine_call_duration_ms,
     guest_active,
     guest_rate_limited_total,
+    task_redispatched_total,
 )
 from anygarden.ws.manager import ConnectionManager
 from anygarden.orchestration.rules import (
@@ -153,6 +163,156 @@ def _apply_lifecycle_to_metrics(frame: LifecycleFrame) -> None:
             agent_turns_total.labels(outcome=frame.outcome or "unknown").inc()
     except Exception as exc:  # noqa: BLE001 — metrics must not break the turn
         logger.warning("ws.lifecycle.metric_failed", error=str(exc))
+
+
+# #463 (reliability Wave 2) — lifecycle→Task re-dispatch bridge.
+#
+# Terminal non-ok outcomes that mean "this turn did not deliver" and so
+# should re-wake the assignment Task. ``cancelled`` is excluded: a
+# cancellation is a deliberate stop (budget active-stop / shutdown), not a
+# delivery failure, so re-dispatching it would fight the thing that
+# cancelled it. ``queued`` / ``retrying`` / ``retry_exhausted`` are the
+# Wave 2b durable-queue / transient-retry outcomes and are likewise not
+# re-dispatched here (the queue / retry path already owns them).
+_REDISPATCH_OUTCOMES = frozenset({"rejected", "timeout", "failed"})
+
+# Statuses for which a re-dispatch still makes sense — the Task has not yet
+# reached a resolved terminal state, so re-waking the assignee is useful.
+_UNRESOLVED_TASK_STATUSES = frozenset({"todo", "in_progress"})
+
+# Flip-loop bound: at most one automatic re-dispatch per assignment chain.
+# Each re-wake mints a fresh request_id and a NEW ``AgentTurnTask`` row
+# carrying ``redispatch_count + 1``, so the count is the chain depth, not a
+# per-row mutable counter. count >= MAX → leave the Task as-is for the
+# goals sweeper / a human.
+_MAX_TASK_REDISPATCH = 1
+
+
+async def _maybe_redispatch_task(
+    session_factory: Any,
+    *,
+    manager: "ConnectionManager",
+    frame: LifecycleFrame,
+) -> None:
+    """Re-dispatch a failed assignment turn's Task once (#463).
+
+    Runs ONLY on a ``handler_finished`` frame whose ``outcome`` is a
+    terminal delivery failure (``rejected`` / ``timeout`` / ``failed``).
+
+    Looks the turn up by ``frame.request_id`` in ``agent_turn_tasks``:
+
+    - **no row** → a live (user-send / peer-handoff) turn, which never
+      writes a correlation row. Do nothing — the scope invariant: the
+      bridge only ever touches assignment-originated turns.
+    - **row, count >= MAX** → already re-dispatched once. Do nothing
+      (leave the Task to the goals sweeper / a human); log it.
+    - **row, count < MAX, Task resolved (done / failed / cancelled / …)** →
+      nothing to recover. Do nothing.
+    - **row, count < MAX, Task unresolved (todo / in_progress)** → return the
+      Task to ``todo`` (assigned_at refreshed, started_at cleared, error
+      noted) and re-inject the assignment mention with
+      ``redispatch_count = found + 1`` so a *fresh* request_id + a new
+      correlation row carrying the incremented chain count is minted.
+
+    Uses its own session so a bridge failure (or a re-inject error) can
+    never roll back the ActivityLog commit that persisted the lifecycle
+    event. The whole body is defensively wrapped: re-dispatch is a
+    best-effort recovery, never a reason to break lifecycle persistence.
+    """
+    if frame.event != "handler_finished":
+        return
+    if frame.outcome not in _REDISPATCH_OUTCOMES:
+        return
+    rid = frame.request_id
+    if not rid:
+        return
+    try:
+        async with session_factory() as db:
+            mapping = await db.get(AgentTurnTask, rid)
+            if mapping is None:
+                # Live (non-assignment) turn — scope invariant: untouched.
+                return
+            if mapping.redispatch_count >= _MAX_TASK_REDISPATCH:
+                logger.info(
+                    "ws.task_redispatch.bound_reached",
+                    request_id=rid,
+                    task_id=mapping.task_id,
+                    redispatch_count=mapping.redispatch_count,
+                    outcome=frame.outcome,
+                )
+                return
+
+            task = await db.get(Task, mapping.task_id)
+            if task is None:
+                # Task was deleted (CASCADE would normally take the mapping
+                # too, but guard anyway).
+                return
+            if task.status not in _UNRESOLVED_TASK_STATUSES:
+                # Already resolved (done / failed / cancelled / blocked) —
+                # nothing to recover.
+                return
+            if not task.assignee_participant_id:
+                # No assignee to re-wake.
+                return
+
+            assignee = await db.get(Participant, task.assignee_participant_id)
+            if assignee is None or assignee.agent_id is None:
+                # Human assignees do not auto-execute (mirrors the blocker
+                # resolve-wake + api/v1/tasks ``_maybe_inject``).
+                return
+            room = await db.get(Room, task.room_id)
+            if room is None:
+                return
+
+            # Return the Task to a re-runnable state. ``started_at=None``
+            # so the exec sweeper (Wave 0) re-measures from the next
+            # in_progress; ``assigned_at=now`` refreshes the pickup-timeout
+            # clock; the error notes which terminal outcome triggered it.
+            now = datetime.now(timezone.utc)
+            task.status = "todo"
+            task.assigned_at = now
+            task.started_at = None
+            task.error = f"redispatch:{frame.outcome}"
+            await db.flush()
+
+            # Re-wake: a fresh request_id + a new AgentTurnTask carrying the
+            # incremented chain count is minted inside inject. Pass the
+            # manager so the wake-up MessageOut is broadcast. Lazy import
+            # mirrors the blocker resolve-wake path (mcp/tools) and keeps
+            # the ws↔messages module load order cycle-free.
+            from anygarden.messages.service import (
+                inject_task_assignment_message,
+            )
+
+            await inject_task_assignment_message(
+                db,
+                room=room,
+                task=task,
+                sender_participant_id=task.assignee_participant_id,
+                event="reassigned",
+                manager=manager,
+                redispatch_count=mapping.redispatch_count + 1,
+            )
+            await db.commit()
+
+        try:
+            task_redispatched_total.labels(outcome=frame.outcome).inc()
+        except Exception as exc:  # noqa: BLE001 — metric must not break the turn
+            logger.warning("ws.task_redispatch.metric_failed", error=str(exc))
+
+        logger.info(
+            "ws.task_redispatch.redispatched",
+            request_id=rid,
+            task_id=mapping.task_id,
+            new_redispatch_count=mapping.redispatch_count + 1,
+            outcome=frame.outcome,
+        )
+    except Exception as exc:  # noqa: BLE001 — bridge must not break lifecycle
+        logger.warning(
+            "ws.task_redispatch.failed",
+            request_id=rid,
+            error=str(exc),
+        )
 
 
 def _frame_carries_usage(frame: LifecycleFrame) -> bool:
@@ -1580,6 +1740,20 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 agent_id=identity.id,
                                 frame=frame_in,
                             )
+                        # #463 (Wave 2) — lifecycle→Task re-dispatch
+                        # bridge. AFTER the ActivityLog commit above: when
+                        # this terminal handler_finished frame belongs to a
+                        # mapped assignment turn (request_id↔task), return
+                        # the still-unresolved Task to ``todo`` and re-wake
+                        # the assignee once (bounded). Its own session +
+                        # defensive wrapper, so a recovery failure can never
+                        # roll back the lifecycle persistence above. Live
+                        # (unmapped) turns are left untouched.
+                        await _maybe_redispatch_task(
+                            session_factory,
+                            manager=manager,
+                            frame=frame_in,
+                        )
                     finally:
                         structlog.contextvars.unbind_contextvars("request_id")
                 else:
