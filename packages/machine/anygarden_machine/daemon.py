@@ -133,13 +133,17 @@ class MachineDaemon:
         self._draining = False
         self._ws: Any = None
 
+        self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
         self._spawner = Spawner(
             on_stopped=self._on_agent_stopped,
             on_crashed=self._on_agent_crashed,
             agent_server_url=_base_url_from_machine_url(server_url),
             agent_dirs_root=agent_dirs_root,
+            # #451 — share the daemon's ManifestStore so runtime.json
+            # reads (re-adopt) and writes (spawn/cleanup) stay consistent
+            # within one process.
+            manifest_store=self._manifest_store,
         )
-        self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
         self._crash_budgets: dict[str, CrashBudget] = {}
         self._token_futures: dict[str, asyncio.Future[str]] = {}
         self._running_generations: dict[str, int] = {}
@@ -220,6 +224,15 @@ class MachineDaemon:
 
             await self._register()
 
+            # #451 — re-adopt agent processes that outlived a daemon
+            # restart. Must run AFTER register (we're connected) and
+            # BEFORE the first report/reconcile: re-adopt restores
+            # ``_running_generations`` and ``Spawner._agents`` so the
+            # reconcile generation gate suppresses duplicate spawns and
+            # ``kill`` can reach the existing process group. Idempotent
+            # across reconnects (already-adopted agents are skipped).
+            await self._readopt_running_agents()
+
             # Send initial report so server knows which agents survived a reconnect
             await self._report_actual_state()
 
@@ -260,6 +273,46 @@ class MachineDaemon:
             machine_id=self.machine_id,
             capabilities=len(capabilities),
         )
+
+    async def _readopt_running_agents(self) -> None:
+        """Re-adopt agent processes that survived a daemon restart (#451).
+
+        Reads every persisted ``runtime.json`` (via ``ManifestStore``)
+        and, for each one whose recorded process group is still alive and
+        passes the PID-recycle guard, registers it with the spawner and
+        restores ``_running_generations[agent_id]`` to the generation
+        stamped at spawn time. Dead / recycled runtimes are cleared by
+        ``Spawner.adopt``.
+
+        Restoring ``_running_generations`` BEFORE the first reconcile is
+        what makes the generation gate (``current_gen >= generation``)
+        short-circuit instead of spawning a duplicate. Agents already
+        tracked in memory (e.g. a WS reconnect without a process restart)
+        are skipped so adopt stays idempotent.
+        """
+        adopted = 0
+        for agent_id, runtime in self._manifest_store.list_runtimes():
+            # Skip agents we already track (reconnect, not a cold start).
+            if self._spawner.get_running(agent_id) is not None:
+                continue
+
+            generation = runtime.get("generation", 0)
+            if self._spawner.adopt(
+                agent_id,
+                runtime,
+                handle_stopped=self._on_agent_stopped,
+                handle_crashed=self._on_agent_crashed,
+            ):
+                # Restore the generation reservation so the reconcile
+                # gate treats this agent as already-at-generation.
+                if isinstance(generation, int):
+                    self._running_generations[agent_id] = generation
+                else:
+                    self._running_generations[agent_id] = 0
+                adopted += 1
+
+        if adopted:
+            log.info("agents_readopted", count=adopted)
 
     async def _report_loop(self) -> None:
         """Send report_actual_state every REPORT_INTERVAL seconds."""
@@ -485,6 +538,10 @@ class MachineDaemon:
             # in-memory cache (manifest on disk strips it for the same
             # reasons engine_secrets are stripped).
             anygarden_mcp_token=self._manifest_store.get_anygarden_mcp_token(agent_id),
+            # Issue #451 — stamp the generation into runtime.json so a
+            # restarted daemon can restore ``_running_generations`` on
+            # re-adopt and the reconcile gate suppresses a duplicate spawn.
+            generation=manifest.generation,
         )
 
         result = await self._spawner.spawn(spawn_manifest)

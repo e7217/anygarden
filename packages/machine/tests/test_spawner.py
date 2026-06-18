@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from anygarden_machine.spawner import KILL_TIMEOUT, SpawnManifest, Spawner
+from anygarden_machine.spawner import (
+    KILL_TIMEOUT,
+    RunningAgent,
+    SpawnManifest,
+    Spawner,
+)
 
 
 @pytest.fixture
@@ -848,3 +853,249 @@ class TestCleanup:
         assert not profile_path.exists()
         # Agent should be removed from running list
         assert len(spawner.list_running()) == 0
+
+
+# ── #451 re-adopt ─────────────────────────────────────────────────────
+
+
+class TestKillAdoptedAgent:
+    """#451 — a re-adopted agent has ``proc=None`` (it's not a child of
+    this daemon). ``kill`` must terminate the tree by pid without
+    touching ``proc.returncode`` / ``proc.wait``.
+    """
+
+    async def test_kill_proc_none_terminates_by_pid(
+        self, spawner: Spawner
+    ) -> None:
+        spawner._agents["adopted-1"] = RunningAgent(
+            agent_id="adopted-1",
+            pid=4321,
+            engine="codex",
+            started_at=1_700_000_000.0,
+            proc=None,
+        )
+
+        with patch("anygarden_machine.spawner.terminate_tree") as mock_terminate:
+            result = await spawner.kill("adopted-1")
+
+        assert result["success"] is True
+        mock_terminate.assert_called_once_with(4321, timeout=KILL_TIMEOUT)
+        # No proc to await; agent removed from tracking.
+        assert spawner.get_running("adopted-1") is None
+
+    async def test_kill_proc_none_clears_runtime(
+        self, spawner: Spawner
+    ) -> None:
+        spawner._manifest_store.record_runtime(
+            "adopted-1",
+            {
+                "pid": 4321,
+                "pgid": 4321,
+                "started_at": 1_700_000_000.0,
+                "engine": "codex",
+                "generation": 2,
+            },
+        )
+        spawner._agents["adopted-1"] = RunningAgent(
+            agent_id="adopted-1",
+            pid=4321,
+            engine="codex",
+            started_at=1_700_000_000.0,
+            proc=None,
+        )
+
+        with patch("anygarden_machine.spawner.terminate_tree"):
+            await spawner.kill("adopted-1")
+
+        assert spawner._manifest_store.load_runtime("adopted-1") is None
+
+
+class TestAdopt:
+    """#451 — ``adopt`` registers a still-live, daemon-orphaned process
+    and rejects dead / PID-recycled records.
+    """
+
+    def _runtime(self, pid: int = 999, started_at: float = 111.0) -> dict:
+        return {
+            "pid": pid,
+            "pgid": pid,
+            "started_at": started_at,
+            "engine": "claude-code",
+            "generation": 5,
+        }
+
+    async def test_adopt_live_group_registers_agent(
+        self, spawner: Spawner
+    ) -> None:
+        runtime = self._runtime(pid=999, started_at=111.0)
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden_machine.spawner.psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.create_time.return_value = 111.0
+            ok = spawner.adopt("agent-adopt", runtime)
+
+        assert ok is True
+        agent = spawner.get_running("agent-adopt")
+        assert agent is not None
+        assert agent.pid == 999
+        assert agent.proc is None
+        assert agent.engine == "claude-code"
+        assert agent.watch_task is not None
+        # Cancel the poll watcher so the test loop closes cleanly.
+        agent.watch_task.cancel()
+
+    def test_adopt_dead_group_rejected_and_cleared(
+        self, spawner: Spawner
+    ) -> None:
+        spawner._manifest_store.record_runtime(
+            "agent-dead", self._runtime(pid=999, started_at=111.0)
+        )
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=False
+        ):
+            ok = spawner.adopt("agent-dead", self._runtime(pid=999))
+
+        assert ok is False
+        assert spawner.get_running("agent-dead") is None
+        # Stale runtime.json must be cleared so it can't mislead next boot.
+        assert spawner._manifest_store.load_runtime("agent-dead") is None
+
+    def test_adopt_pid_recycled_rejected(self, spawner: Spawner) -> None:
+        """Group is alive but ``create_time`` disagrees with the recorded
+        ``started_at`` → the pid was recycled into an unrelated process;
+        adoption must be refused.
+        """
+        spawner._manifest_store.record_runtime(
+            "agent-recycled", self._runtime(pid=999, started_at=111.0)
+        )
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden_machine.spawner.psutil.Process") as mock_proc_cls:
+            # Wildly different create_time → recycled pid.
+            mock_proc_cls.return_value.create_time.return_value = 999_999.0
+            ok = spawner.adopt(
+                "agent-recycled", self._runtime(pid=999, started_at=111.0)
+            )
+
+        assert ok is False
+        assert spawner.get_running("agent-recycled") is None
+        assert spawner._manifest_store.load_runtime("agent-recycled") is None
+
+    def test_adopt_pid_gone_rejected(self, spawner: Spawner) -> None:
+        """Group probe passes (e.g. EPERM) but the pid itself is gone →
+        psutil raises NoSuchProcess → refuse and clear.
+        """
+        import psutil
+
+        spawner._manifest_store.record_runtime(
+            "agent-gone", self._runtime(pid=999, started_at=111.0)
+        )
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch(
+            "anygarden_machine.spawner.psutil.Process",
+            side_effect=psutil.NoSuchProcess(999),
+        ):
+            ok = spawner.adopt("agent-gone", self._runtime(pid=999))
+
+        assert ok is False
+        assert spawner.get_running("agent-gone") is None
+        assert spawner._manifest_store.load_runtime("agent-gone") is None
+
+    async def test_poll_watch_fires_stopped_on_group_death(
+        self, spawner: Spawner
+    ) -> None:
+        """The poll watcher invokes the stopped handler and cleans up once
+        the adopted group dies. Patch the poll interval to ~0 so the test
+        doesn't wait the production 5s.
+        """
+        stopped = AsyncMock()
+
+        # First probe (during adopt) alive; subsequent probes dead.
+        alive_calls = iter([True, True, False])
+
+        def fake_alive(_pgid: int) -> bool:
+            try:
+                return next(alive_calls)
+            except StopIteration:
+                return False
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", side_effect=fake_alive
+        ), patch("anygarden_machine.spawner.psutil.Process") as mock_proc_cls, patch(
+            "anygarden_machine.spawner.ADOPT_POLL_INTERVAL", 0.01
+        ):
+            mock_proc_cls.return_value.create_time.return_value = 111.0
+            ok = spawner.adopt(
+                "agent-poll",
+                self._runtime(pid=999, started_at=111.0),
+                handle_stopped=stopped,
+            )
+            assert ok is True
+            agent = spawner.get_running("agent-poll")
+            assert agent is not None and agent.watch_task is not None
+            await agent.watch_task
+
+        stopped.assert_awaited_once_with("agent-poll", 0)
+
+
+class TestSpawnRecordsRuntime:
+    """#451 — a successful spawn persists runtime.json so a restarted
+    daemon can re-adopt the process.
+    """
+
+    async def test_spawn_records_runtime_json(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
+
+        spawn_msg.generation = 9
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            await spawner.spawn(spawn_msg)
+
+        runtime = spawner._manifest_store.load_runtime(spawn_msg.agent_id)
+        assert runtime is not None
+        assert runtime["pid"] == 42
+        assert runtime["pgid"] == 42  # start_new_session=True → pgid==pid
+        assert runtime["engine"] == spawn_msg.engine
+        assert runtime["generation"] == 9
+        assert isinstance(runtime["started_at"], (int, float))
+
+    async def test_cleanup_clears_runtime_json(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.wait = AsyncMock(return_value=0)
+        mock_proc.stderr = None
+        mock_proc.stdin = AsyncMock()
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            await spawner.spawn(spawn_msg)
+
+        assert spawner._manifest_store.load_runtime(spawn_msg.agent_id) is not None
+
+        spawner._cleanup(spawn_msg.agent_id)
+
+        assert spawner._manifest_store.load_runtime(spawn_msg.agent_id) is None
