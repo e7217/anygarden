@@ -217,11 +217,18 @@ class UsageBucket(BaseModel):
     request_count: int
     prompt_tokens: int
     completion_tokens: int
+    # #461 (Wave 2d) — summed USD cost for the bucket. Nullable-safe at
+    # the SQL layer (``coalesce(sum(cost_usd), 0)``); rows with no cost
+    # signal (gateway-routed openhands, codex/gemini) contribute 0.
+    cost_usd: float = 0.0
 
 
 class UsageOut(BaseModel):
     window_hours: int
     total_requests: int
+    # #461 — grand-total USD cost across the window (sum of self-reported
+    # per-request costs; an estimate, dominated by claude-code).
+    total_cost_usd: float = 0.0
     by_model: list[UsageBucket]
     by_agent: list[UsageBucket]
 
@@ -678,6 +685,16 @@ async def get_usage(
         )
     ).scalar_one()
 
+    # #461 — grand-total USD cost (nullable-safe). Rows with no cost
+    # signal contribute 0 via coalesce.
+    total_cost = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0)
+            ).where(LLMGatewayUsage.timestamp >= since)
+        )
+    ).scalar_one()
+
     by_model_rows = (
         await db.execute(
             select(
@@ -685,6 +702,8 @@ async def get_usage(
                 func.count(LLMGatewayUsage.id),
                 func.coalesce(func.sum(LLMGatewayUsage.prompt_tokens), 0),
                 func.coalesce(func.sum(LLMGatewayUsage.completion_tokens), 0),
+                # #461 — nullable-safe USD cost sum per model.
+                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0),
             )
             .where(LLMGatewayUsage.timestamp >= since)
             .group_by(LLMGatewayUsage.model_name)
@@ -699,6 +718,8 @@ async def get_usage(
                 func.count(LLMGatewayUsage.id),
                 func.coalesce(func.sum(LLMGatewayUsage.prompt_tokens), 0),
                 func.coalesce(func.sum(LLMGatewayUsage.completion_tokens), 0),
+                # #461 — nullable-safe USD cost sum per agent.
+                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0),
             )
             .where(
                 LLMGatewayUsage.timestamp >= since,
@@ -713,19 +734,22 @@ async def get_usage(
     return UsageOut(
         window_hours=hours,
         total_requests=int(total or 0),
+        total_cost_usd=float(total_cost or 0.0),
         by_model=[
             UsageBucket(
                 key=name, request_count=int(cnt),
                 prompt_tokens=int(pt), completion_tokens=int(ct),
+                cost_usd=float(cost or 0.0),
             )
-            for (name, cnt, pt, ct) in by_model_rows
+            for (name, cnt, pt, ct, cost) in by_model_rows
         ],
         by_agent=[
             UsageBucket(
                 key=str(agent_id), request_count=int(cnt),
                 prompt_tokens=int(pt), completion_tokens=int(ct),
+                cost_usd=float(cost or 0.0),
             )
-            for (agent_id, cnt, pt, ct) in by_agent_rows
+            for (agent_id, cnt, pt, ct, cost) in by_agent_rows
         ],
     )
 

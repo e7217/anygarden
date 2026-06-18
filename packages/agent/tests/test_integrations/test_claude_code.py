@@ -1169,3 +1169,113 @@ class TestRoomConversationWrapper:
         prompt = fake_sdk[-1]["prompt"]
         assert "<room_conversation>" not in prompt
         assert prompt == "안녕하세요"
+
+
+class TestResultUsageExtraction:
+    """#461 (Wave 2d) — claude-code is the confirmed gateway-free LLM
+    telemetry source: its ``ResultMessage`` reports token usage AND a
+    self-reported cost."""
+
+    def test_extract_full_usage(self) -> None:
+        from types import SimpleNamespace
+
+        from anygarden_agent.integrations.claude_code import (
+            _extract_result_usage,
+        )
+
+        msg = SimpleNamespace(
+            usage={"input_tokens": 1200, "output_tokens": 350},
+            total_cost_usd=0.0123,
+            model_usage={"claude-sonnet-4-5": {"input_tokens": 1200}},
+        )
+        rec = _extract_result_usage(msg)
+        assert rec == {
+            "model": "claude-sonnet-4-5",
+            "input_tokens": 1200,
+            "output_tokens": 350,
+            "cost_usd": 0.0123,
+        }
+
+    def test_extract_openai_shape_tokens(self) -> None:
+        from types import SimpleNamespace
+
+        from anygarden_agent.integrations.claude_code import (
+            _extract_result_usage,
+        )
+
+        # OpenAI-style key fallback so a future SDK shape change degrades
+        # gracefully rather than dropping the row.
+        msg = SimpleNamespace(
+            usage={"prompt_tokens": 9, "completion_tokens": 4},
+            total_cost_usd=None,
+            model_usage=None,
+        )
+        rec = _extract_result_usage(msg)
+        assert rec["input_tokens"] == 9
+        assert rec["output_tokens"] == 4
+        assert rec["cost_usd"] is None
+        assert rec["model"] is None
+
+    def test_extract_returns_none_when_no_signal(self) -> None:
+        from types import SimpleNamespace
+
+        from anygarden_agent.integrations.claude_code import (
+            _extract_result_usage,
+        )
+
+        # A ResultMessage with no usable usage signal → None → no row.
+        msg = SimpleNamespace(usage=None, total_cost_usd=None, model_usage=None)
+        assert _extract_result_usage(msg) is None
+
+    @pytest.mark.asyncio
+    async def test_collect_reply_stashes_usage_for_run_engine(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mocked ResultMessage with usage + total_cost_usd makes the
+        adapter surface those values (read back via ``_take_last_usage``)
+        so the run_engine closure can build an EngineTurn carrying them."""
+        from types import SimpleNamespace
+
+        class TextBlock:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class AssistantMessage:
+            content = [TextBlock("hi")]
+            session_id = "sess-1"
+
+        # The adapter dispatches on ``type(message).__name__ ==
+        # "ResultMessage"``, so the fake must be an instance of a class
+        # literally named ResultMessage (not a SimpleNamespace).
+        ResultMessage = type("ResultMessage", (), {})
+        rm = ResultMessage()
+        rm.result = "hi"
+        rm.session_id = "sess-1"
+        rm.usage = {"input_tokens": 42, "output_tokens": 7}
+        rm.total_cost_usd = 0.005
+        rm.model_usage = {"claude-opus-4-1": {}}
+
+        async def fake_query(*, prompt, options, transport=None):
+            yield AssistantMessage()
+            yield rm
+
+        fake_module = types.ModuleType("claude_agent_sdk")
+        fake_module.ClaudeAgentOptions = lambda **kw: SimpleNamespace(kwargs=kw)
+        fake_module.query = fake_query
+        fake_module.__version__ = "fake"
+        monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_module)
+
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+        reply = await adapter.on_message({"content": "hello", "room_id": "r1"})
+        assert reply == "hi"
+
+        usage = adapter._take_last_usage()
+        assert usage == {
+            "model": "claude-opus-4-1",
+            "input_tokens": 42,
+            "output_tokens": 7,
+            "cost_usd": 0.005,
+        }
+        # Drained — a second take is None (no leak into the next turn).
+        assert adapter._take_last_usage() is None

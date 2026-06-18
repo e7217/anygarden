@@ -159,7 +159,7 @@ class EngineTimeoutError(EngineError):
 
 @dataclass
 class EngineTurn:
-    """Richer engine result (#433) — gateway-free LLM turn I/O.
+    """Richer engine result (#433, #461) — gateway-free LLM turn I/O + usage.
 
     A ``run_engine`` callback may return this instead of a bare ``str``
     to also surface the augmented input the adapter handed the engine
@@ -167,12 +167,30 @@ class EngineTurn:
     both on the ``engine_call_finished`` frame so the cluster can stamp
     them onto the ``agent.engine_call`` span — no LLM gateway needed.
 
-    A plain ``str`` return stays valid (``prompt`` simply omitted), so
+    #461 (Wave 2d) — CLI engines (claude-code / codex / gemini) bypass
+    the LLM gateway, so their token usage never reached the central
+    ``LLMGatewayUsage`` telemetry. An adapter that can read its engine
+    SDK's usage now reports it here: ``model`` (resolved model name),
+    ``input_tokens`` / ``output_tokens`` (prompt / completion counts),
+    and ``cost_usd`` (provider/SDK self-reported cost when available —
+    claude-code's ``ResultMessage.total_cost_usd``). The supervisor
+    forwards these four on the ``engine_call_finished`` frame and the
+    cluster persists one usage row from them. All default ``None`` so a
+    bare ``str`` return — or an adapter that can't surface usage — is
+    unaffected and writes no token-bearing row (openhands, which routes
+    through the gateway reverse-proxy, deliberately leaves them ``None``
+    to avoid double-counting).
+
+    A plain ``str`` return stays valid (every field simply omitted), so
     adapters/tests that don't opt in are unaffected.
     """
 
     response: Optional[str]
     prompt: Optional[str] = None
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 # A run_engine callback may return the bare reply (legacy) or an
@@ -348,6 +366,11 @@ class RoomHandlerSupervisor:
             error: Optional[str] = None
             response: Optional[str] = None
             prompt: Optional[str] = None  # #433 — augmented turn input, if any
+            # #461 — gateway-free LLM usage carried off an EngineTurn.
+            model: Optional[str] = None
+            input_tokens: Optional[int] = None
+            output_tokens: Optional[int] = None
+            cost_usd: Optional[float] = None
             transient = False  # #457 — set from a transient EngineError cause
             # #433 — turn I/O capture is opt-in: only when the adapter returns
             # an EngineTurn (not a bare str) do we surface prompt/completion.
@@ -360,6 +383,12 @@ class RoomHandlerSupervisor:
                 )
                 response, prompt = _normalize_engine_result(raw)
                 io_capture = isinstance(raw, EngineTurn)
+                if io_capture:
+                    # #461 — usage telemetry rides the same EngineTurn opt-in.
+                    model = raw.model
+                    input_tokens = raw.input_tokens
+                    output_tokens = raw.output_tokens
+                    cost_usd = raw.cost_usd
             except asyncio.TimeoutError:
                 outcome = "timeout"
                 error = f"engine exceeded {self._timeout}s"
@@ -426,6 +455,18 @@ class RoomHandlerSupervisor:
                 # timeout). Both wire-excluded when None.
                 prompt=prompt if io_capture else None,
                 completion=(response if response else None) if io_capture else None,
+                # #461 — gateway-free LLM usage telemetry. Token counts are
+                # non-sensitive (needed for billing/observability) and are
+                # carried whenever the adapter reported them, regardless of
+                # the content-capture gate (which only governs prompt/
+                # completion TEXT). These stay None for a bare-str return or
+                # an adapter that can't surface usage (e.g. openhands, which
+                # is already counted via the gateway reverse-proxy), so no
+                # frame-sourced usage row is written for those turns.
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
 
             # #457 — decide whether to retry this attempt. Retry ONLY when:

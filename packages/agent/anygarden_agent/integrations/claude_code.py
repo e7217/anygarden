@@ -74,6 +74,79 @@ __all__ = [
 ]
 
 
+def _coerce_int(value: Any) -> int | None:
+    """Best-effort int coercion for a usage counter (None on garbage)."""
+    if isinstance(value, bool):  # bool is an int subclass — reject explicitly
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
+def _extract_result_usage(message: Any) -> dict[str, Any] | None:
+    """Normalise a claude-agent-sdk ``ResultMessage`` into a usage record.
+
+    #461 (Wave 2d) — claude-code is the one CLI engine whose SDK reports
+    token usage *and* a self-reported cost on its terminal
+    ``ResultMessage``, so it is the confirmed coverage for gateway-free
+    LLM telemetry. Returns a dict with ``model`` / ``input_tokens`` /
+    ``output_tokens`` / ``cost_usd`` (any of which may be ``None``), or
+    ``None`` when the message carries no usable usage signal at all.
+
+    The SDK's ``usage`` field is a free-form ``dict[str, Any]`` carrying
+    the raw Anthropic ``usage`` shape (``input_tokens`` / ``output_tokens``
+    plus a cache breakdown); we prefer those keys and fall back to the
+    OpenAI-style ``prompt_tokens`` / ``completion_tokens`` so a future SDK
+    shape change degrades gracefully rather than dropping the row. The
+    resolved model name is read from ``model_usage`` (a ``{model: …}``
+    map) when present. ``total_cost_usd`` is the SDK's *self-reported*
+    estimate — labelled as such, not a provider invoice.
+    """
+    usage = getattr(message, "usage", None)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    if isinstance(usage, dict):
+        input_tokens = _coerce_int(
+            usage.get("input_tokens")
+            if usage.get("input_tokens") is not None
+            else usage.get("prompt_tokens")
+        )
+        output_tokens = _coerce_int(
+            usage.get("output_tokens")
+            if usage.get("output_tokens") is not None
+            else usage.get("completion_tokens")
+        )
+
+    cost_raw = getattr(message, "total_cost_usd", None)
+    cost_usd = float(cost_raw) if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool) else None
+
+    # ``model_usage`` is ``{model_name: {...per-model usage...}}``. The
+    # first key is the resolved model label for the turn. Falls back to
+    # None when absent so the cluster row still records counts/cost.
+    model: str | None = None
+    model_usage = getattr(message, "model_usage", None)
+    if isinstance(model_usage, dict) and model_usage:
+        first_key = next(iter(model_usage), None)
+        if isinstance(first_key, str) and first_key:
+            model = first_key
+
+    if (
+        model is None
+        and input_tokens is None
+        and output_tokens is None
+        and cost_usd is None
+    ):
+        return None
+    return {
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost_usd,
+    }
+
+
 class ClaudeCodeAdapter(EngineAdapter):
     """Adapter that bridges Anygarden messages to the Claude Agent SDK."""
 
@@ -124,6 +197,14 @@ class ClaudeCodeAdapter(EngineAdapter):
         # imports the SDK. Kept as ``None`` when the SDK is missing
         # so ``_build_options`` can skip the handoff wiring entirely.
         self._handoff_server_config: Any = None
+        # #461 (Wave 2d) — last turn's LLM usage harvested from the SDK's
+        # ``ResultMessage`` (token counts + SDK-self-reported cost). Like
+        # ``_last_session_id`` it is stashed per turn inside
+        # ``_collect_reply`` and read back by the ``run_engine`` closure
+        # immediately after ``on_message`` returns, so the supervisor can
+        # surface it on the ``engine_call_finished`` frame and the cluster
+        # can record a gateway-free usage row. ``None`` between turns.
+        self._last_usage: dict[str, Any] | None = None
 
     async def start(self) -> None:
         """Import the claude-agent-sdk and cache the query hook."""
@@ -468,6 +549,8 @@ class ClaudeCodeAdapter(EngineAdapter):
         text_parts: list[str] = []
         result_field: str | None = None
         session_id: str | None = None
+        # #461 — usage harvested from the terminal ``ResultMessage``.
+        usage_record: dict[str, Any] | None = None
 
         # #197 — Place the gateway env vars in ``os.environ`` only for
         # the duration of the SDK call. The claude-agent-sdk reads
@@ -522,6 +605,16 @@ class ClaudeCodeAdapter(EngineAdapter):
                     result = getattr(message, "result", None)
                     if isinstance(result, str) and result.strip():
                         result_field = result
+                    # #461 (Wave 2d) — harvest token usage + SDK cost from
+                    # the SDK's terminal ResultMessage. ``usage`` is the
+                    # raw Anthropic ``usage`` dict (``input_tokens`` /
+                    # ``output_tokens`` plus cache breakdown); ``model_usage``
+                    # maps a model name → its per-model usage and gives us
+                    # the resolved model label; ``total_cost_usd`` is the
+                    # SDK's *self-reported* turn cost — an estimate, not a
+                    # provider invoice. Captured into a normalised record so
+                    # the run_engine closure can stamp it onto the EngineTurn.
+                    usage_record = _extract_result_usage(message)
 
         if session_id is not None:
             # Caller (integrate_with_claude_code) promotes this
@@ -529,6 +622,12 @@ class ClaudeCodeAdapter(EngineAdapter):
             # so the handler wrapper can grab it without having to
             # return session state alongside the reply.
             self._last_session_id = session_id
+
+        # #461 — stash the harvested usage on the instance (mirrors
+        # ``_last_session_id``); the run_engine closure reads it back via
+        # ``_take_last_usage`` right after ``on_message`` returns. ``None``
+        # when the SDK emitted no ResultMessage / no usage fields.
+        self._last_usage = usage_record
 
         # ResultMessage.result is the SDK's definitive final reply
         # for the turn — prefer it when present. Fall back to the
@@ -539,6 +638,17 @@ class ClaudeCodeAdapter(EngineAdapter):
         if text_parts:
             return "\n\n".join(part.strip() for part in text_parts).strip()
         return None
+
+    def _take_last_usage(self) -> dict[str, Any] | None:
+        """Pop the usage record harvested during the last ``_collect_reply``.
+
+        #461 — read by the ``run_engine`` closure right after
+        ``on_message`` returns so the harvested counts/cost are surfaced
+        on the EngineTurn exactly once and never leak into a later turn.
+        """
+        usage = self._last_usage
+        self._last_usage = None
+        return usage
 
 
 async def integrate_with_claude_code(
@@ -624,7 +734,18 @@ async def integrate_with_claude_code(
                     adapter._sessions[room_id] = sid
                     adapter._last_session_id = None
                 # #433 — pair the reply with the stashed turn input.
-                return EngineTurn(response or "", adapter._take_turn_input(room_id))
+                # #461 — also surface the harvested LLM usage so the cluster
+                # records a gateway-free ``LLMGatewayUsage`` row. ``cost_usd``
+                # is the SDK's self-reported estimate.
+                usage = adapter._take_last_usage() or {}
+                return EngineTurn(
+                    response or "",
+                    adapter._take_turn_input(room_id),
+                    model=usage.get("model"),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    cost_usd=usage.get("cost_usd"),
+                )
             finally:
                 typing_active = False
                 typing_task.cancel()
@@ -636,6 +757,9 @@ async def integrate_with_claude_code(
                 # #433 — drain the stash even when on_message raised, so a
                 # failed turn never leaks/leaves a stale prompt. No-op on ok.
                 adapter._take_turn_input(room_id)
+                # #461 — likewise drain any usage stash a raised turn left so
+                # it can't bleed into the next turn's frame.
+                adapter._take_last_usage()
 
         await supervisor.dispatch(
             room_id=room_id,
