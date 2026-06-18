@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "046"
+                assert version == "047"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -347,6 +347,53 @@ class TestMigrations:
             except OSError:
                 pass
 
+    def test_047_cost_usd_column_up_and_down(self) -> None:
+        """#461 (Wave 2d) — migration 047 adds ``llm_gateway_usage.cost_usd``
+        on upgrade head and removes it on downgrade 047 → 046."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                cols = {
+                    row[1]
+                    for row in conn.execute(
+                        text("PRAGMA table_info(llm_gateway_usage)")
+                    )
+                }
+                assert "cost_usd" in cols
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "047"
+            engine.dispose()
+
+            # Downgrade exactly one step (047 → 046) and confirm the column
+            # is gone and the head moved back.
+            command.downgrade(cfg, "046")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                cols = {
+                    row[1]
+                    for row in conn.execute(
+                        text("PRAGMA table_info(llm_gateway_usage)")
+                    )
+                }
+                assert "cost_usd" not in cols
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "046"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
     def test_downgrade_to_base_and_back(self) -> None:
         """Full round-trip: head → base → head must succeed."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -404,7 +451,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "046"
+                assert version == "047"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -444,7 +491,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "046"
+                assert version == "047"
             sync_engine.dispose()
         finally:
             try:
@@ -478,7 +525,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "046"
+            assert head == "047"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -580,7 +627,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "046"
+                assert version == "047"
             sync_engine.dispose()
         finally:
             try:

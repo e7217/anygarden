@@ -20,15 +20,61 @@ import anygarden_agent.integrations.codex as codex_mod
 from anygarden_agent.runtime.handler_wrapper import EngineTimeoutError
 
 
-def _make_fake_codex_module():
+class _FakeUsageTotal:
+    """#461 — stand-in for codex ``TokenUsageBreakdown`` (camelCase)."""
+
+    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+        self.inputTokens = input_tokens
+        self.outputTokens = output_tokens
+
+
+class _FakeThreadTokenUsage:
+    """#461 — stand-in for codex ``ThreadTokenUsage`` (has ``total``)."""
+
+    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+        self.total = _FakeUsageTotal(input_tokens, output_tokens)
+
+
+class _FakeCodexTurnStream:
+    """#461 — minimal ``CodexTurnStream`` fake: ``wait`` / ``final_text`` /
+    ``usage``. ``wait`` returns self like the real SDK."""
+
+    def __init__(self, final_text: str, usage: object | None = None) -> None:
+        self.final_text = final_text
+        self.usage = usage
+
+    def wait(self) -> "_FakeCodexTurnStream":
+        return self
+
+
+def _make_run_returning(final_text: str, usage: object | None = None):
+    """Build a ``run`` MagicMock that returns a fresh fake stream.
+
+    #461 — the adapter now drives turns via ``thread.run(...).wait()``
+    (instead of ``run_text``) so it can read ``CodexTurnStream.usage``.
+    ``run`` keeps the same ``(content, turn_options=None, *, signal=...)``
+    call shape, so call-arg assertions migrate from ``run_text`` to
+    ``run`` unchanged.
+    """
+    def _run(content, turn_options=None, *, signal=None):
+        return _FakeCodexTurnStream(final_text, usage)
+
+    return MagicMock(side_effect=_run)
+
+
+def _make_fake_codex_module(usage: object | None = None):
     """Create a fake codex module for testing.
 
     Also builds a fake ``codex.options`` submodule with a stub
     ``ThreadStartOptions`` so Issue #134 bypass flags flow through
     the adapter and can be asserted from the test side.
+
+    #461 — ``thread.run`` returns a fake ``CodexTurnStream`` (carrying
+    ``final_text`` + optional ``usage``) since the adapter switched from
+    ``run_text`` to the streaming API to harvest token usage.
     """
     mock_thread = MagicMock()
-    mock_thread.run_text = MagicMock(return_value="Hello from codex")
+    mock_thread.run = _make_run_returning("Hello from codex", usage)
 
     mock_codex = MagicMock()
     mock_codex.start_thread = MagicMock(return_value=mock_thread)
@@ -93,7 +139,7 @@ class TestCodexAdapter:
             # ``signal`` kwarg (threading.Event) so the timeout path
             # can abort stuck turns. Assert content + signal presence
             # without pinning the event instance.
-            call = mock_thread.run_text.call_args
+            call = mock_thread.run.call_args
             assert call.args == ("Hello",)
             assert isinstance(call.kwargs.get("signal"), threading.Event)
 
@@ -196,7 +242,7 @@ class TestCodexAdapter:
             await adapter.on_message({"content": "msg2", "room_id": "room-1"})
 
             assert mock_codex.start_thread.call_count == 1
-            assert mock_thread.run_text.call_count == 2
+            assert mock_thread.run.call_count == 2
 
     @pytest.mark.asyncio
     async def test_on_message_returns_none_when_not_started(self) -> None:
@@ -209,7 +255,7 @@ class TestCodexAdapter:
         """Different rooms get different threads."""
         fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
         mock_codex.start_thread = MagicMock(side_effect=lambda **kw: MagicMock(
-            run_text=MagicMock(return_value="ok"),
+            run=_make_run_returning("ok"),
         ))
         with _patch_codex(fake_mod, options_mod):
             adapter = CodexAdapter()
@@ -435,7 +481,7 @@ class TestCodexTurnTimeout:
 
         captured: dict[str, object] = {}
 
-        def slow_run_text(
+        def slow_run(
             content: str,
             turn_options=None,
             *,
@@ -445,19 +491,21 @@ class TestCodexTurnTimeout:
 
             Mirrors how the codex SDK's signal watcher interrupts a stuck
             turn — polling the event keeps the worker thread from leaking
-            after the test times out."""
+            after the test times out. #461 — the adapter now calls
+            ``thread.run(...)`` (then ``.wait()``); we block here in
+            ``run`` and return a fake stream so the call shape matches."""
             captured["content"] = content
             captured["signal"] = signal
             deadline = time.time() + 1.0
             while time.time() < deadline:
                 if signal is not None and signal.is_set():
                     captured["aborted"] = True
-                    return ""
+                    return _FakeCodexTurnStream("")
                 time.sleep(0.02)
             captured["aborted"] = False
-            return "should-not-be-returned"
+            return _FakeCodexTurnStream("should-not-be-returned")
 
-        mock_thread.run_text = slow_run_text
+        mock_thread.run = MagicMock(side_effect=slow_run)
 
         # Drive the timeout below the worker's deadline so the wait_for
         # path fires deterministically without making the suite slow.
@@ -502,7 +550,7 @@ class TestCodexTurnTimeout:
 
         captured: dict[str, object] = {}
 
-        def fast_run_text(
+        def fast_run(
             content: str,
             turn_options=None,
             *,
@@ -510,9 +558,9 @@ class TestCodexTurnTimeout:
         ):
             captured["signal"] = signal
             captured["turn_options"] = turn_options
-            return "ok"
+            return _FakeCodexTurnStream("ok")
 
-        mock_thread.run_text = fast_run_text
+        mock_thread.run = MagicMock(side_effect=fast_run)
 
         with _patch_codex(fake_mod, options_mod):
             adapter = CodexAdapter()
@@ -566,7 +614,7 @@ class TestCodexSharedContextReinjection:
             await adapter.start()
             await adapter.on_message({"content": "Q1", "room_id": "r1"})
 
-        sent = mock_thread.run_text.call_args.args[0]
+        sent = mock_thread.run.call_args.args[0]
         assert suffix.rstrip() in sent
         assert sent.rstrip().endswith("Q1"), (
             "shared block must be a prefix, user content is the tail"
@@ -584,7 +632,7 @@ class TestCodexSharedContextReinjection:
             await adapter.on_message({"content": "Q1", "room_id": "r1"})
             await adapter.on_message({"content": "Q2", "room_id": "r1"})
 
-        second = mock_thread.run_text.call_args_list[1].args[0]
+        second = mock_thread.run.call_args_list[1].args[0]
         assert "<shared-context>" not in second
         assert second == "Q2"
 
@@ -602,7 +650,7 @@ class TestCodexSharedContextReinjection:
             await adapter.on_message({"content": "Q1", "room_id": "r1"})
             await adapter.on_message({"content": "Q2", "room_id": "r1"})
 
-        second = mock_thread.run_text.call_args_list[1].args[0]
+        second = mock_thread.run.call_args_list[1].args[0]
         assert "v2-with-new-file" in second
         assert "v1" not in second, "stale version must not appear"
         # Must be user-visibly tagged as update so the model treats
@@ -619,19 +667,19 @@ class TestCodexSharedContextReinjection:
             await adapter.on_message({"content": "Q1", "room_id": "r1"})
             await adapter.on_message({"content": "Q2", "room_id": "r1"})
 
-        assert mock_thread.run_text.call_args_list[0].args[0] == "Q1"
-        assert mock_thread.run_text.call_args_list[1].args[0] == "Q2"
+        assert mock_thread.run.call_args_list[0].args[0] == "Q1"
+        assert mock_thread.run.call_args_list[1].args[0] == "Q2"
 
     @pytest.mark.asyncio
     async def test_per_room_cache_independent(self) -> None:
         """A change in room A must not force a re-inject in room B and
         vice-versa — the cache key is (room_id, sha)."""
         fake_mod, options_mod, mock_codex, _ = _make_fake_codex_module()
-        # Per-room threads need distinct run_text instances so each
+        # Per-room threads need distinct run instances so each
         # room's prompts are isolated in call_args_list.
         def make_thread(**_kw):
             t = MagicMock()
-            t.run_text = MagicMock(return_value="ok")
+            t.run = _make_run_returning("ok")
             return t
 
         mock_codex.start_thread = MagicMock(side_effect=make_thread)
@@ -650,8 +698,8 @@ class TestCodexSharedContextReinjection:
         # Second turn per room: suffix unchanged → no prefix.
         a_thread = adapter._threads["r-a"]
         b_thread = adapter._threads["r-b"]
-        assert "<shared-context>" not in a_thread.run_text.call_args_list[1].args[0]
-        assert "<shared-context>" not in b_thread.run_text.call_args_list[1].args[0]
+        assert "<shared-context>" not in a_thread.run.call_args_list[1].args[0]
+        assert "<shared-context>" not in b_thread.run.call_args_list[1].args[0]
 
 
 class TestCodexRoomConversationWrapper:
@@ -680,7 +728,7 @@ class TestCodexRoomConversationWrapper:
             })
             await adapter.on_message({"content": "다음 일정?", "room_id": "room-1"})
 
-        turn_content = mock_thread.run_text.call_args.args[0]
+        turn_content = mock_thread.run.call_args.args[0]
         assert "<room_conversation>" in turn_content
         assert "</room_conversation>" in turn_content
         # Ambient line lands inside the wrapper.
@@ -705,7 +753,7 @@ class TestCodexRoomConversationWrapper:
             await adapter.start()
             await adapter.on_message({"content": "안녕", "room_id": "room-1"})
 
-        turn_content = mock_thread.run_text.call_args.args[0]
+        turn_content = mock_thread.run.call_args.args[0]
         assert "<room_conversation>" not in turn_content
         # No memory_md cached → memory suffix path is also empty,
         # so the bare content reaches the thread untouched.
@@ -784,7 +832,7 @@ class TestCodexTurnIOIntegration:
         # stale prompt for a later turn), and the failed frame carries no
         # prompt (io_capture only fires on a returned EngineTurn).
         fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module()
-        mock_thread.run_text = MagicMock(side_effect=RuntimeError("boom"))
+        mock_thread.run = MagicMock(side_effect=RuntimeError("boom"))
         with _patch_codex(fake_mod, options_mod):
             client = _FakeClient()
             adapter = await integrate_with_codex(client)
@@ -801,3 +849,58 @@ class TestCodexTurnIOIntegration:
         assert fin.get("prompt") is None
         # CRITICAL: stash drained even though on_message raised before take.
         assert adapter._take_turn_input("room-1") is None
+
+    @pytest.mark.asyncio
+    async def test_engine_call_finished_carries_token_usage(self) -> None:
+        # #461 (Wave 2d) — codex exposes token usage via the
+        # CodexTurnStream; the adapter threads model + input/output tokens
+        # onto engine_call_finished. The codex SDK reports no cost, so
+        # cost_usd is absent (None → excluded from the frame).
+        usage = _FakeThreadTokenUsage(input_tokens=111, output_tokens=22)
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module(
+            usage=usage
+        )
+        with _patch_codex(fake_mod, options_mod):
+            client = _FakeClient()
+            adapter = await integrate_with_codex(client, model="gpt-5.5")
+            handler = client._message_handlers[-1]
+            await handler({
+                "content": "hello agent",
+                "room_id": "room-1",
+                "participant_id": "user-pid",
+                "metadata": {"request_id": "req-u"},
+            })
+
+        fin = next(e for e in client.lifecycle if e["event"] == "engine_call_finished")
+        assert fin["model"] == "gpt-5.5"
+        assert fin["input_tokens"] == 111
+        assert fin["output_tokens"] == 22
+        # No cost from codex.
+        assert fin.get("cost_usd") is None
+        # Usage stash drained on the success path (no leak).
+        assert adapter._take_last_usage() is None
+
+    @pytest.mark.asyncio
+    async def test_engine_call_finished_model_only_when_usage_unreadable(
+        self,
+    ) -> None:
+        # #461 — if the stream exposes no usable usage object, the adapter
+        # still records the model (occurrence/latency), tokens None.
+        fake_mod, options_mod, mock_codex, mock_thread = _make_fake_codex_module(
+            usage=None
+        )
+        with _patch_codex(fake_mod, options_mod):
+            client = _FakeClient()
+            await integrate_with_codex(client, model="gpt-5.5")
+            handler = client._message_handlers[-1]
+            await handler({
+                "content": "hi",
+                "room_id": "room-1",
+                "participant_id": "user-pid",
+                "metadata": {"request_id": "req-m"},
+            })
+
+        fin = next(e for e in client.lifecycle if e["event"] == "engine_call_finished")
+        assert fin["model"] == "gpt-5.5"
+        assert fin.get("input_tokens") is None
+        assert fin.get("output_tokens") is None

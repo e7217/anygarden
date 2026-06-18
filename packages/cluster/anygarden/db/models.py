@@ -1446,6 +1446,13 @@ class LLMGatewayUsage(Base):
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # #461 (Wave 2d) — per-request USD cost, nullable. Gateway-routed
+    # callers (openhands via the reverse proxy) leave this NULL — the
+    # proxy has no provider-cost signal. CLI engines that self-report a
+    # cost populate it: claude-code stamps its SDK's ``total_cost_usd``
+    # (an *estimate*, not a provider invoice); codex / gemini report no
+    # cost and stay NULL. Admin usage aggregation sums it nullable-safe.
+    cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     # Populated only on non-2xx. Short message from upstream or proxy

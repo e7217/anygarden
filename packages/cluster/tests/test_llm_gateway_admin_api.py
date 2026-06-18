@@ -536,6 +536,71 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
     assert by_agent[b_id]["request_count"] == 1
 
 
+async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:
+    """#461 (Wave 2d) — the usage aggregation sums ``cost_usd`` per model /
+    agent and a grand total, nullable-safe (rows with no cost contribute
+    0). claude-code self-reports a cost; gateway-routed / codex rows leave
+    it NULL."""
+    from anygarden.db.models import Agent
+
+    now = datetime.now(timezone.utc)
+    async with env["factory"]() as db:
+        agent_a = Agent(name="A", engine="claude-code")
+        agent_b = Agent(name="B", engine="codex")
+        db.add_all([agent_a, agent_b])
+        await db.flush()
+        a_id, b_id = agent_a.id, agent_b.id
+
+        rows = [
+            # claude-code: self-reported costs.
+            LLMGatewayUsage(
+                timestamp=now - timedelta(minutes=5),
+                identity_kind="agent", identity_id=a_id, agent_id=a_id,
+                model_name="claude-sonnet-4-6",
+                prompt_tokens=100, completion_tokens=50,
+                cost_usd=0.01, duration_ms=800, status_code=200,
+            ),
+            LLMGatewayUsage(
+                timestamp=now - timedelta(minutes=4),
+                identity_kind="agent", identity_id=a_id, agent_id=a_id,
+                model_name="claude-sonnet-4-6",
+                prompt_tokens=200, completion_tokens=80,
+                cost_usd=0.02, duration_ms=900, status_code=200,
+            ),
+            # codex: tokens but NULL cost — must contribute 0 to the sums.
+            LLMGatewayUsage(
+                timestamp=now - timedelta(minutes=3),
+                identity_kind="agent", identity_id=b_id, agent_id=b_id,
+                model_name="gpt-5.4",
+                prompt_tokens=75, completion_tokens=20,
+                cost_usd=None, duration_ms=500, status_code=200,
+            ),
+        ]
+        db.add_all(rows)
+        await db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.get(
+            "/api/v1/llm-gateway/usage", headers=_auth(env["admin_jwt"])
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # Grand total cost = 0.01 + 0.02 + 0 (codex NULL).
+    assert body["total_cost_usd"] == pytest.approx(0.03)
+
+    by_model = {row["key"]: row for row in body["by_model"]}
+    assert by_model["claude-sonnet-4-6"]["cost_usd"] == pytest.approx(0.03)
+    # NULL-cost codex row coalesces to 0, never errors.
+    assert by_model["gpt-5.4"]["cost_usd"] == pytest.approx(0.0)
+
+    by_agent = {row["key"]: row for row in body["by_agent"]}
+    assert by_agent[a_id]["cost_usd"] == pytest.approx(0.03)
+    assert by_agent[b_id]["cost_usd"] == pytest.approx(0.0)
+
+
 # ── /models/{id}/test ping ────────────────────────────────────────────
 
 

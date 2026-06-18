@@ -80,6 +80,19 @@ class LifecycleFrame(BaseModel):
     # not select these, so they never reach ActivityLog.
     prompt: Optional[str] = None
     completion: Optional[str] = None
+    # #461 (Wave 2d) — gateway-free LLM usage telemetry. MUST stay
+    # field-compatible with the agent frame (test_protocol_compat
+    # enforces parity). The WS handler writes one ``LLMGatewayUsage``
+    # row from these on ``engine_call_finished`` when ``input_tokens`` /
+    # ``output_tokens`` is set OR a ``model`` is present; token COUNTS
+    # are non-sensitive and persisted, while prompt/completion TEXT stays
+    # behind the existing capture_content span gate. All ``None`` for a
+    # bare-str engine return or openhands (already counted via the
+    # gateway reverse-proxy), so no double-counted row is written.
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 IncomingFrame = (

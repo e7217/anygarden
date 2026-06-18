@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import inspect
-
 import pytest
 
 from anygarden_agent.protocol import frames as sdk_frames
@@ -168,6 +165,88 @@ class TestLifecycleFrame:
         payload = f.model_dump(exclude_none=True)
         assert payload["prompt"] == "augmented user turn"
         assert payload["completion"] == "the engine reply"
+
+    def test_engine_call_finished_carries_usage(self) -> None:
+        # #461 (Wave 2d) — gateway-free LLM usage rides on
+        # engine_call_finished: model + input/output tokens + cost_usd.
+        f = sdk_frames.parse_incoming({
+            "type": "lifecycle",
+            "request_id": "req-u",
+            "room_id": "room-1",
+            "event": "engine_call_finished",
+            "engine": "claude-code",
+            "outcome": "ok",
+            "duration_ms": 42,
+            "model": "claude-sonnet-4-5",
+            "input_tokens": 1200,
+            "output_tokens": 350,
+            "cost_usd": 0.0123,
+        })
+        assert isinstance(f, sdk_frames.LifecycleFrame)
+        assert f.model == "claude-sonnet-4-5"
+        assert f.input_tokens == 1200
+        assert f.output_tokens == 350
+        assert f.cost_usd == 0.0123
+        payload = f.model_dump(exclude_none=True)
+        assert payload["input_tokens"] == 1200
+        assert payload["output_tokens"] == 350
+        assert payload["cost_usd"] == 0.0123
+        assert payload["model"] == "claude-sonnet-4-5"
+
+    def test_usage_fields_default_none_and_excluded(self) -> None:
+        # #461 — a frame without usage omits all four fields on the wire,
+        # so a bare-str engine return / openhands writes no usage row.
+        f = sdk_frames.LifecycleFrame(
+            request_id="req-n",
+            room_id="room-1",
+            event="engine_call_finished",
+            outcome="ok",
+        )
+        assert f.model is None
+        assert f.input_tokens is None
+        assert f.output_tokens is None
+        assert f.cost_usd is None
+        payload = f.model_dump(exclude_none=True)
+        for k in ("model", "input_tokens", "output_tokens", "cost_usd"):
+            assert k not in payload
+
+    def test_usage_wire_round_trip_agent_to_cluster(self) -> None:
+        # #461 — cross-package parity: the cluster's mirror LifecycleFrame
+        # reconstructs the four usage fields field-identical, or the WS
+        # handler couldn't read them off the wire (test_protocol_compat
+        # parity guard for Wave 2d).
+        import json
+
+        from anygarden.ws.protocol import LifecycleFrame as ClusterLifecycleFrame
+
+        agent_frame = sdk_frames.LifecycleFrame(
+            request_id="req-uw",
+            room_id="room-1",
+            event="engine_call_finished",
+            engine="claude-code",
+            outcome="ok",
+            duration_ms=7,
+            model="claude-sonnet-4-5",
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=0.5,
+        )
+        wire = json.loads(agent_frame.model_dump_json(exclude_none=True))
+        cluster_frame = ClusterLifecycleFrame(**wire)
+        assert cluster_frame.model == "claude-sonnet-4-5"
+        assert cluster_frame.input_tokens == 10
+        assert cluster_frame.output_tokens == 5
+        assert cluster_frame.cost_usd == 0.5
+
+    def test_lifecycle_frame_field_parity_agent_cluster(self) -> None:
+        # #461 — strong parity: both LifecycleFrame definitions must expose
+        # the exact same field set (names) so the two stay in lockstep.
+        from anygarden.ws.protocol import LifecycleFrame as ClusterLifecycleFrame
+
+        assert (
+            set(sdk_frames.LifecycleFrame.model_fields)
+            == set(ClusterLifecycleFrame.model_fields)
+        )
 
     def test_turn_io_wire_round_trip_agent_to_cluster(self) -> None:
         # #433 — a true cross-package wire round-trip: the agent dumps a

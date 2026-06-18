@@ -95,6 +95,24 @@ class LifecycleFrame(BaseModel):
     # the one genuinely new payload on the wire.
     prompt: Optional[str] = None
     completion: Optional[str] = None
+    # #461 (Wave 2d) — gateway-free LLM usage telemetry. CLI engines
+    # (claude-code / codex / gemini) don't route through the LLM gateway,
+    # so their token usage never reached the central ``LLMGatewayUsage``
+    # table. On ``engine_call_finished`` an adapter that can read its
+    # engine SDK's usage carries it here; the cluster persists one usage
+    # row. ``model`` is the resolved model name; ``input_tokens`` /
+    # ``output_tokens`` are prompt / completion counts; ``cost_usd`` is
+    # the SDK-self-reported turn cost (claude-code's ``total_cost_usd`` —
+    # an estimate, not a provider invoice). Unlike prompt/completion TEXT
+    # (which stays behind the cluster-side ``capture_content`` span gate),
+    # token COUNTS are non-sensitive and always carried when reported.
+    # All ``None`` for a bare-str engine return or an adapter that can't
+    # surface usage (openhands leaves them None — it is already counted
+    # via the gateway reverse-proxy — so no double-counting).
+    model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 
 IncomingFrame = (

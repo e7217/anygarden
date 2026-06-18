@@ -47,6 +47,36 @@ _CODEX_TIER_FLAGS: dict[str, tuple[str, str]] = {
 }
 
 
+def _extract_codex_tokens(usage: Any) -> tuple[int | None, int | None]:
+    """Pull ``(input_tokens, output_tokens)`` from a codex usage object.
+
+    #461 (Wave 2d) — the codex SDK's ``CodexTurnStream.usage`` is a
+    ``ThreadTokenUsage`` with a ``total`` :class:`TokenUsageBreakdown`
+    exposing ``inputTokens`` / ``outputTokens`` (camelCase pydantic
+    fields). Defensive: tolerates a missing ``usage`` (None), a missing
+    ``total``, or a dict-shaped stand-in (tests), returning ``(None,
+    None)`` rather than raising so a turn whose usage couldn't be read
+    still records model + latency. The codex SDK reports NO cost.
+    """
+    if usage is None:
+        return None, None
+    total = usage.get("total") if isinstance(usage, dict) else getattr(usage, "total", None)
+    if total is None:
+        return None, None
+
+    def _get(obj: Any, name: str) -> int | None:
+        val = obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+        if isinstance(val, bool):  # bool is an int subclass — reject
+            return None
+        if isinstance(val, int):
+            return val
+        if isinstance(val, float):
+            return int(val)
+        return None
+
+    return _get(total, "inputTokens"), _get(total, "outputTokens")
+
+
 def _resolve_codex_flags(
     permission_level: str | None,
 ) -> tuple[str, str]:
@@ -277,6 +307,13 @@ class CodexAdapter(EngineAdapter):
         from anygarden_agent.integrations.base import ShaTrackedInjector
 
         self._injector = ShaTrackedInjector()
+        # #461 (Wave 2d) — last turn's LLM usage harvested from the codex
+        # ``CodexTurnStream`` (token counts; the codex SDK exposes no cost,
+        # so ``cost_usd`` stays None). Stashed per turn inside
+        # ``on_message`` and read back by the run_engine closure right after
+        # it returns so the supervisor can surface it on the
+        # ``engine_call_finished`` frame. ``None`` between turns.
+        self._last_usage: dict[str, Any] | None = None
 
     async def start(self) -> None:
         """Start the Codex client (spawns app-server internally)."""
@@ -419,9 +456,18 @@ class CodexAdapter(EngineAdapter):
                     effort=self._reasoning_effort or None,
                 )
             try:
-                response = await asyncio.wait_for(
+                # #461 (Wave 2d) — run the turn through the streaming API
+                # (``run`` + ``wait``) rather than ``run_text`` so we keep
+                # access to the ``CodexTurnStream`` and can read its token
+                # usage. ``run_text`` is exactly ``run(...).wait().final_text``
+                # internally, so the reply text is byte-identical; the only
+                # gain is the gateway-free usage telemetry harvested below.
+                stream = await asyncio.wait_for(
                     asyncio.to_thread(
-                        thread.run_text, turn_content, **run_text_kwargs
+                        self._run_turn_stream,
+                        thread,
+                        turn_content,
+                        run_text_kwargs,
                     ),
                     timeout=_CODEX_TURN_TIMEOUT,
                 )
@@ -440,6 +486,11 @@ class CodexAdapter(EngineAdapter):
                 raise EngineTimeoutError(
                     f"codex turn exceeded {_CODEX_TURN_TIMEOUT}s"
                 ) from exc
+            response = getattr(stream, "final_text", None)
+            # #461 — harvest token usage from the stream. The codex SDK has
+            # NO cost field, so ``cost_usd`` stays None; model is the
+            # adapter-resolved name. Stashed for the run_engine closure.
+            self._record_turn_usage(room_id, stream)
             return response if response else None
         except EngineError:
             # already-classified engine failure (e.g. the timeout above)
@@ -456,12 +507,60 @@ class CodexAdapter(EngineAdapter):
                 str(exc), transient=is_transient_error(str(exc))
             ) from exc
 
+    @staticmethod
+    def _run_turn_stream(thread: Any, turn_content: str, run_kwargs: dict[str, Any]) -> Any:
+        """Run a codex turn and return the finished ``CodexTurnStream``.
+
+        #461 — runs on a worker thread (``asyncio.to_thread``). Mirrors
+        the SDK's own ``run_text`` (``run(...).wait()``) but returns the
+        stream so the caller can read both ``final_text`` and ``usage``.
+        ``run_kwargs`` carries the ``signal`` (and optional
+        ``turn_options``) the legacy ``run_text`` call used.
+        """
+        # ``run`` takes ``turn_options`` positionally/keyword and ``signal``
+        # keyword-only — same kwargs the prior ``run_text`` accepted.
+        stream = thread.run(turn_content, **run_kwargs)
+        stream.wait()
+        return stream
+
+    def _record_turn_usage(self, room_id: str | None, stream: Any) -> None:
+        """Stash token usage harvested from a finished ``CodexTurnStream``.
+
+        #461 — the codex SDK's ``CodexTurnStream.usage`` is a
+        ``ThreadTokenUsage`` whose ``total`` breakdown carries
+        ``inputTokens`` / ``outputTokens``. The SDK reports NO cost, so
+        ``cost_usd`` is left None. The model is the adapter-resolved name.
+        Defensive against SDK shape drift / a missing usage object: a
+        miss simply records the model (occurrence/latency) with None
+        tokens rather than raising.
+        """
+        input_tokens, output_tokens = _extract_codex_tokens(
+            getattr(stream, "usage", None)
+        )
+        self._last_usage = {
+            "model": self._model or None,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": None,
+        }
+
+    def _take_last_usage(self) -> dict[str, Any] | None:
+        """Pop the usage record stashed during the last ``on_message``.
+
+        #461 — read by the run_engine closure right after ``on_message``
+        returns so the harvested counts are surfaced on the EngineTurn
+        exactly once and never leak into a later turn.
+        """
+        usage = self._last_usage
+        self._last_usage = None
+        return usage
+
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an ``INGEST_ONLY`` message for the next active turn.
 
         Codex threads already persist history natively, so we only
         need to make sure the breadcrumb lands as part of the next
-        ``thread.run_text`` call. Prepended in ``on_message``.
+        ``thread.run`` call. Prepended in ``on_message``.
         """
         room_id = msg.get("room_id") or "_default"
         line = format_context_line(msg)
@@ -572,7 +671,17 @@ async def integrate_with_codex(
                 response = await adapter.on_message(msg)
                 # #433 — pair the reply with the augmented input the
                 # adapter handed the engine (stashed inside on_message).
-                return EngineTurn(response or "", adapter._take_turn_input(room_id))
+                # #461 — also surface the harvested token usage (model +
+                # input/output tokens; codex SDK reports no cost).
+                usage = adapter._take_last_usage() or {}
+                return EngineTurn(
+                    response or "",
+                    adapter._take_turn_input(room_id),
+                    model=usage.get("model"),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    cost_usd=usage.get("cost_usd"),
+                )
             finally:
                 typing_active = False
                 typing_task.cancel()
@@ -586,6 +695,8 @@ async def integrate_with_codex(
                 # failed/timed-out turn never leaks its prompt or leaves a
                 # stale one for a later turn. Idempotent on the ok path.
                 adapter._take_turn_input(room_id)
+                # #461 — likewise drain any usage stash a raised turn left.
+                adapter._take_last_usage()
 
         await supervisor.dispatch(
             room_id=room_id,

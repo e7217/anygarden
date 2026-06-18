@@ -155,6 +155,60 @@ def _apply_lifecycle_to_metrics(frame: LifecycleFrame) -> None:
         logger.warning("ws.lifecycle.metric_failed", error=str(exc))
 
 
+def _frame_carries_usage(frame: LifecycleFrame) -> bool:
+    """Does an ``engine_call_finished`` frame carry gateway-free usage?
+
+    #461 (Wave 2d) — true when the agent reported token counts
+    (``input_tokens`` / ``output_tokens``) OR a resolved ``model`` name.
+    A turn with all-None token fields and no model (a bare-str engine
+    return, or openhands — which is already counted via the gateway
+    reverse-proxy) carries no usage and must NOT produce a row, so
+    openhands is never double-counted.
+    """
+    if frame.event != "engine_call_finished":
+        return False
+    return (
+        frame.input_tokens is not None
+        or frame.output_tokens is not None
+        or bool(frame.model)
+    )
+
+
+async def _write_lifecycle_usage_row(
+    session_factory: Any, *, agent_id: str, frame: LifecycleFrame
+) -> None:
+    """Record one ``LLMGatewayUsage`` row from a token-bearing frame (#461).
+
+    CLI engines (claude-code / codex / gemini) bypass the LLM gateway, so
+    their usage arrives here on the ``engine_call_finished`` frame instead
+    of through the reverse-proxy. We reuse the proxy's ``_write_usage_row``
+    helper so both gateway-routed and gateway-free rows share one shape.
+
+    The caller must have already checked :func:`_frame_carries_usage`.
+    ``status_code=200`` so these rows fold into the Wave 1d budget ledger
+    (which sums status < 400 usage) exactly like a successful gateway
+    call. Token COUNTS and cost are persisted; the prompt/completion TEXT
+    on the frame is never written here (it stays trace-only, behind the
+    capture_content span gate). Best-effort — swallows DB errors inside
+    ``_write_usage_row`` so a hiccup can't break the WS receive loop.
+    """
+    from anygarden.llm_gateway.reverse_proxy import _write_usage_row
+
+    await _write_usage_row(
+        session_factory,
+        identity_kind="agent",
+        identity_id=agent_id,
+        agent_id=agent_id,
+        room_id=frame.room_id,
+        model_name=frame.model or "",
+        prompt_tokens=frame.input_tokens,
+        completion_tokens=frame.output_tokens,
+        cost_usd=frame.cost_usd,
+        duration_ms=frame.duration_ms or 0,
+        status_code=200,
+    )
+
+
 def _is_ambient_candidate(
     content: str,
     metadata: dict[str, Any],
@@ -1513,6 +1567,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         # #425 — turn metrics (independent of OTEL).
                         _apply_lifecycle_to_metrics(frame_in)
+                        # #461 (Wave 2d) — gateway-free LLM usage: when a
+                        # CLI engine reported token counts / a model on
+                        # engine_call_finished, record one LLMGatewayUsage
+                        # row (its own session so a write error can't roll
+                        # back the ActivityLog commit above). openhands
+                        # leaves these None — it is counted via the gateway
+                        # reverse-proxy — so no double-counted row is written.
+                        if _frame_carries_usage(frame_in):
+                            await _write_lifecycle_usage_row(
+                                session_factory,
+                                agent_id=identity.id,
+                                frame=frame_in,
+                            )
                     finally:
                         structlog.contextvars.unbind_contextvars("request_id")
                 else:

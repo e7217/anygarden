@@ -84,6 +84,7 @@ async def _write_usage_row(
     status_code: int,
     error: str | None = None,
     room_id: str | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     """Persist one usage row. Called from a FastAPI BackgroundTask.
 
@@ -91,6 +92,12 @@ async def _write_usage_row(
     proxy has already responded by the time this runs. ``room_id`` is
     filled from the tracing correlation (#420) when the call could be
     tied to a single in-flight request; it stays ``None`` otherwise.
+
+    #461 (Wave 2d) — ``cost_usd`` is the per-request USD cost. The
+    reverse-proxy path has no provider-cost signal and leaves it ``None``;
+    the gateway-free CLI-engine path (WS handler, ``engine_call_finished``
+    frame) passes claude-code's SDK-self-reported cost. Reused by both
+    call sites so the row shape stays in one place.
     """
     try:
         async with session_factory() as db:
@@ -103,6 +110,7 @@ async def _write_usage_row(
                     model_name=model_name or "",
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
+                    cost_usd=cost_usd,
                     duration_ms=duration_ms,
                     status_code=status_code,
                     error=error,

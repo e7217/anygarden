@@ -181,6 +181,14 @@ class GeminiCliAdapter(EngineAdapter):
         # after ``start()``; tests that instantiate the adapter directly
         # leave it None and the suffix helper degrades to empty string.
         self._client: ChatClient | None = None
+        # #461 (Wave 2d) — last turn's LLM usage parsed from the gemini
+        # CLI's ``--output-format json`` ``stats`` block (token counts +
+        # resolved model name; gemini reports no cost, so ``cost_usd``
+        # stays None). Stashed inside ``_call_gemini`` and read back by
+        # the run_engine closure right after ``on_message`` returns so the
+        # supervisor can surface it on the ``engine_call_finished`` frame.
+        # ``None`` between turns / when no parsable stats were emitted.
+        self._last_usage: dict[str, Any] | None = None
 
     async def start(self) -> None:
         """Verify that the gemini CLI is installed and reachable."""
@@ -433,7 +441,13 @@ class GeminiCliAdapter(EngineAdapter):
                 transient=is_transient_error(stderr_snippet),
             )
 
-        return self._parse_response(stdout.decode(errors="replace"))
+        raw = stdout.decode(errors="replace")
+        # #461 (Wave 2d) — parse the ``stats`` block for token usage before
+        # extracting the reply text. Stashed on the instance so the
+        # run_engine closure can surface it on the engine_call_finished
+        # frame; defensive (a miss leaves it None, never raises).
+        self._last_usage = self._extract_gemini_usage(raw, self._model)
+        return self._parse_response(raw)
 
     @staticmethod
     def _parse_response(raw: str) -> str | None:
@@ -465,6 +479,76 @@ class GeminiCliAdapter(EngineAdapter):
         if isinstance(data, str):
             return data
         return json.dumps(data, ensure_ascii=False)
+
+    @staticmethod
+    def _extract_gemini_usage(
+        raw: str, fallback_model: str | None
+    ) -> dict[str, Any] | None:
+        """Parse token usage from a ``gemini --output-format json`` payload.
+
+        #461 (Wave 2d) — the gemini CLI's JSON output carries a ``stats``
+        block: ``stats.models`` maps each resolved model name to a
+        ``{api, tokens}`` record whose ``tokens`` object exposes
+        ``prompt`` (input) and ``candidates`` (output) counts (verified
+        against gemini-cli 0.39's bundled telemetry schema). We sum those
+        across models and take the (first) model name as the label. The
+        gemini CLI reports NO cost, so ``cost_usd`` is always None.
+
+        Entirely best-effort: a missing / non-JSON / schema-drifted
+        payload yields ``None`` (or model-only with None tokens), never
+        raising — a turn whose stats couldn't be read still records the
+        model + latency rather than dropping the row. ``fallback_model``
+        (the adapter's configured model, possibly None) is used only when
+        the stats block names no model.
+        """
+        try:
+            data = json.loads(raw.strip())
+        except (json.JSONDecodeError, AttributeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        stats = data.get("stats")
+        models = stats.get("models") if isinstance(stats, dict) else None
+        if not isinstance(models, dict) or not models:
+            return None
+
+        model_name: str | None = None
+        input_tokens = 0
+        output_tokens = 0
+        saw_tokens = False
+        for name, rec in models.items():
+            if model_name is None and isinstance(name, str) and name:
+                model_name = name
+            tokens = rec.get("tokens") if isinstance(rec, dict) else None
+            if not isinstance(tokens, dict):
+                continue
+            # ``prompt`` == input tokens, ``candidates`` == output tokens.
+            pt = tokens.get("prompt")
+            ct = tokens.get("candidates")
+            if isinstance(pt, (int, float)) and not isinstance(pt, bool):
+                input_tokens += int(pt)
+                saw_tokens = True
+            if isinstance(ct, (int, float)) and not isinstance(ct, bool):
+                output_tokens += int(ct)
+                saw_tokens = True
+
+        return {
+            "model": model_name or fallback_model,
+            "input_tokens": input_tokens if saw_tokens else None,
+            "output_tokens": output_tokens if saw_tokens else None,
+            "cost_usd": None,
+        }
+
+    def _take_last_usage(self) -> dict[str, Any] | None:
+        """Pop the usage record parsed during the last ``_call_gemini``.
+
+        #461 — read by the run_engine closure right after ``on_message``
+        returns so the parsed counts are surfaced on the EngineTurn
+        exactly once and never leak into a later turn.
+        """
+        usage = self._last_usage
+        self._last_usage = None
+        return usage
 
 
 async def integrate_with_gemini_cli(
@@ -552,7 +636,18 @@ async def integrate_with_gemini_cli(
             try:
                 response = await adapter.on_message(msg)
                 # #433 — pair the reply with the stashed turn input.
-                return EngineTurn(response or "", adapter._take_turn_input(room_id))
+                # #461 — also surface the token usage parsed from the CLI's
+                # JSON ``stats`` (model + input/output tokens; gemini
+                # reports no cost).
+                usage = adapter._take_last_usage() or {}
+                return EngineTurn(
+                    response or "",
+                    adapter._take_turn_input(room_id),
+                    model=usage.get("model"),
+                    input_tokens=usage.get("input_tokens"),
+                    output_tokens=usage.get("output_tokens"),
+                    cost_usd=usage.get("cost_usd"),
+                )
             finally:
                 typing_active = False
                 typing_task.cancel()
@@ -568,6 +663,8 @@ async def integrate_with_gemini_cli(
                 # #433 — drain the stash even when on_message raised, so a
                 # failed turn never leaks/leaves a stale prompt. No-op on ok.
                 adapter._take_turn_input(room_id)
+                # #461 — likewise drain any usage stash a raised turn left.
+                adapter._take_last_usage()
 
         await supervisor.dispatch(
             room_id=room_id,

@@ -140,6 +140,79 @@ class TestParseResponse:
         assert GeminiCliAdapter._parse_response("   ") is None
 
 
+class TestExtractGeminiUsage:
+    """#461 (Wave 2d) — gemini's ``--output-format json`` ``stats`` block
+    carries per-model token counts (``tokens.prompt`` = input,
+    ``tokens.candidates`` = output). The gemini CLI reports no cost."""
+
+    def test_extracts_tokens_and_model_from_stats(self) -> None:
+        import json
+
+        raw = json.dumps({
+            "response": "hi",
+            "stats": {
+                "models": {
+                    "gemini-2.5-pro": {
+                        "api": {"totalRequests": 1},
+                        "tokens": {
+                            "input": 0,
+                            "prompt": 1500,
+                            "candidates": 400,
+                            "total": 1900,
+                            "cached": 0,
+                            "thoughts": 0,
+                            "tool": 0,
+                        },
+                    }
+                },
+                "tools": {"totalCalls": 0},
+            },
+        })
+        rec = GeminiCliAdapter._extract_gemini_usage(raw, None)
+        assert rec == {
+            "model": "gemini-2.5-pro",
+            "input_tokens": 1500,
+            "output_tokens": 400,
+            "cost_usd": None,
+        }
+
+    def test_no_stats_returns_none(self) -> None:
+        # A response with no stats block → None → no usage row.
+        rec = GeminiCliAdapter._extract_gemini_usage('{"response": "hi"}', None)
+        assert rec is None
+
+    def test_bad_json_returns_none(self) -> None:
+        assert GeminiCliAdapter._extract_gemini_usage("not json", None) is None
+
+    def test_model_only_when_tokens_absent(self) -> None:
+        import json
+
+        raw = json.dumps({
+            "response": "hi",
+            "stats": {"models": {"gemini-flash": {"api": {}}}},
+        })
+        rec = GeminiCliAdapter._extract_gemini_usage(raw, "fallback-model")
+        assert rec is not None
+        # Model name taken from the stats key (preferred over fallback).
+        assert rec["model"] == "gemini-flash"
+        assert rec["input_tokens"] is None
+        assert rec["output_tokens"] is None
+
+    def test_fallback_model_used_when_stats_unnamed(self) -> None:
+        import json
+
+        # models map present but with an empty-string key → fall back to
+        # the adapter's configured model.
+        raw = json.dumps({
+            "stats": {"models": {"": {"tokens": {"prompt": 5, "candidates": 2}}}},
+        })
+        rec = GeminiCliAdapter._extract_gemini_usage(raw, "configured-model")
+        assert rec is not None
+        assert rec["model"] == "configured-model"
+        assert rec["input_tokens"] == 5
+        assert rec["output_tokens"] == 2
+
+
 class TestCallGemini:
     """Regression tests for the subprocess invocation surface.
 
