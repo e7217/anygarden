@@ -41,7 +41,13 @@ async def engine(config: AnygardenSettings):
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng
-    await eng.dispose()
+    # Defensive (#464): swallow the in-memory aiosqlite teardown race
+    # ("no active connection" during dispose()'s rollback) — the DB is
+    # discarded and a cleanup race must not ERROR an otherwise-green test.
+    try:
+        await eng.dispose()
+    except Exception:  # pragma: no cover — best-effort teardown cleanup
+        pass
 
 
 @pytest_asyncio.fixture()

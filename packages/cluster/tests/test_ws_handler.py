@@ -87,7 +87,15 @@ async def ws_env(config: AnygardenSettings):
             "session_factory": session_factory,
         }
 
-    await engine.dispose()
+    # Defensive teardown (#464): a discarded in-memory aiosqlite DB can
+    # leave a pooled connection whose handle was already closed (e.g. a
+    # WS-handler task cancelled on TestClient websocket exit), so
+    # dispose()'s rollback may raise "no active connection". Swallow it —
+    # a teardown race must not turn a passing test into a teardown ERROR.
+    try:
+        await engine.dispose()
+    except Exception:  # pragma: no cover — best-effort teardown cleanup
+        pass
 
 
 # ── Protocol Frame Tests ──────────────────────────────────────────────
