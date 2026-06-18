@@ -58,6 +58,7 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
+    is_transient_error,
 )
 
 logger = structlog.get_logger(__name__)
@@ -261,7 +262,10 @@ class GeminiCliAdapter(EngineAdapter):
             conversation.pop()
             # #422 — propagate so the supervisor records outcome=failed
             # and notifies the user instead of returning None (silent).
-            raise EngineError(str(exc)) from exc
+            # #457 — classify conn-reset / upstream-5xx as transient.
+            raise EngineError(
+                str(exc), transient=is_transient_error(str(exc))
+            ) from exc
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an ``INGEST_ONLY`` message for the next active turn.
@@ -420,9 +424,13 @@ class GeminiCliAdapter(EngineAdapter):
             # producing a silent lost turn. Raise so the supervisor maps
             # it to outcome=failed and sends the failure notice regardless
             # of request_id (on_message re-raises EngineError cleanly).
+            # #457 — a 429/5xx in the stderr snippet is a clearly-transient
+            # upstream failure; tag it so the opt-in retry (default OFF)
+            # may re-run the empty turn.
             raise EngineError(
                 f"gemini exited with code {proc.returncode}"
-                + (f": {stderr_snippet}" if stderr_snippet.strip() else "")
+                + (f": {stderr_snippet}" if stderr_snippet.strip() else ""),
+                transient=is_transient_error(stderr_snippet),
             )
 
         return self._parse_response(stdout.decode(errors="replace"))

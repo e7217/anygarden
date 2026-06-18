@@ -50,6 +50,7 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTurn,
     RoomHandlerSupervisor,
+    is_transient_error,
 )
 
 
@@ -329,7 +330,11 @@ class OpenHandsAdapter(EngineAdapter):
                 )
                 # #422 — propagate so the supervisor records failed +
                 # notifies the user instead of returning None (silent).
-                raise EngineError(str(exc)) from exc
+                # #457 — the LLM call happens inside ``run``; classify a
+                # 429/5xx / conn-reset here as transient for the opt-in retry.
+                raise EngineError(
+                    str(exc), transient=is_transient_error(str(exc))
+                ) from exc
 
         # Step 6: drain captured assistant text. The capture closure
         # appends to a per-conversation list reset between turns.

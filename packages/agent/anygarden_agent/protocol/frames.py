@@ -60,7 +60,24 @@ class LifecycleFrame(BaseModel):
         "engine_call_finished",
     ]
     outcome: Optional[
-        Literal["ok", "failed", "timeout", "cancelled", "rejected"]
+        Literal[
+            "ok",
+            "failed",
+            "timeout",
+            "cancelled",
+            "rejected",
+            # #457 Wave 2b — bounded per-room queue + transient retry.
+            # ``queued``: a follow-up turn was deferred (lock held, under
+            # cap) and will run FIFO after the in-flight turn drains —
+            # the durable replacement for ``rejected``-on-overflow.
+            # ``retrying``/``retry_exhausted``: an opt-in transient retry
+            # (default OFF) re-ran an empty failed/timeout turn, then
+            # eventually gave up. None of these change the ``event``
+            # Literal — they are terminal results of ``handler_finished``.
+            "queued",
+            "retrying",
+            "retry_exhausted",
+        ]
     ] = None
     duration_ms: Optional[int] = None
     engine: Optional[str] = None

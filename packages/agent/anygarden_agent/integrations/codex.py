@@ -27,6 +27,7 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
+    is_transient_error,
 )
 
 logger = structlog.get_logger(__name__)
@@ -450,7 +451,10 @@ class CodexAdapter(EngineAdapter):
             self._threads.pop(room_id, None)
             # #422 — propagate so the supervisor records outcome=failed
             # and notifies the user, instead of returning None (silent).
-            raise EngineError(str(exc)) from exc
+            # #457 — classify conn-reset / upstream-5xx / 429 as transient.
+            raise EngineError(
+                str(exc), transient=is_transient_error(str(exc))
+            ) from exc
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an ``INGEST_ONLY`` message for the next active turn.
