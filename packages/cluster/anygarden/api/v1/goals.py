@@ -25,7 +25,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
@@ -39,6 +40,14 @@ from anygarden.goals.policy import (
 )
 
 router = APIRouter(tags=["goals"])
+
+# #449 (Wave 1b) — per-owner active-goal cap. A misconfigured client
+# (or an abusive one) could otherwise register unbounded goals, each
+# of which the scheduler fires on its own cadence — a slow-burn cost
+# runaway. 50 active goals per owner is far above any legitimate
+# single-user need while bounding the blast radius. Paused / terminal
+# goals don't count (they don't fire).
+MAX_ACTIVE_GOALS_PER_OWNER: int = 50
 
 
 # ── Schemas ────────────────────────────────────────────────────────
@@ -185,6 +194,26 @@ async def create_goal(
         validate_trigger_config(body.trigger_type, body.trigger_config)
     except InvalidTriggerConfig as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # #449 — per-owner active-goal cap. Reject before doing any other
+    # work so an abusive caller can't accumulate fire-on-cadence goals.
+    active_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Goal)
+            .where(Goal.owner_id == identity.id, Goal.status == "active")
+        )
+    ).scalar_one()
+    if active_count >= MAX_ACTIVE_GOALS_PER_OWNER:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"active goal limit reached "
+                f"({MAX_ACTIVE_GOALS_PER_OWNER} per owner); pause or "
+                f"delete an existing goal before creating another"
+            ),
+        )
+
     await _ensure_agent_in_room(db, agent_id, body.report_room_id)
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -323,6 +352,22 @@ async def delete_goal(
     await db.commit()
 
 
+def _manual_run_idempotency_key(goal: Goal, now: datetime) -> str:
+    """Deterministic dedup key for a Run-now fire (#449).
+
+    - scheduled goal (``next_run_at`` set): key on the current slot so
+      a manual fire that races the scheduler's claim of the same slot
+      collapses to one Task.
+    - manual goal (``next_run_at`` is NULL): bucket by the minute so
+      repeated Run-now clicks within the same minute dedup, but a
+      genuine re-run a minute later gets its own Task.
+    """
+    if goal.next_run_at is not None:
+        return f"{goal.id}:{int(goal.next_run_at.timestamp())}"
+    minute_bucket = int(now.replace(second=0, microsecond=0).timestamp())
+    return f"{goal.id}:manual:{minute_bucket}"
+
+
 @router.post("/api/v1/goals/{goal_id}/run", response_model=GoalOut)
 async def manual_run_goal(
     goal_id: str,
@@ -333,14 +378,38 @@ async def manual_run_goal(
     """Fire one execution now, regardless of schedule. Convenient for
     "run-once" type goals (``trigger_type='manual'``) and for owners
     who want to verify a freshly-edited spec without waiting for the
-    next cron tick."""
+    next cron tick.
+
+    Idempotent (#449): the fire stamps a deterministic
+    ``idempotency_key``. A duplicate Run-now of the same slot/minute
+    (or one racing the scheduler) hits the ``uq_tasks_idempotency_key``
+    UNIQUE index → we collapse the IntegrityError into the existing
+    goal state and return 200 instead of creating a second Task.
+    Note a Run-now no longer advances ``next_run_at`` — the schedule
+    is owned solely by the scheduler's CAS claim now."""
     goal = await _load_goal_owned(db, goal_id, identity)
+    now = datetime.now(timezone.utc)
+    idempotency_key = _manual_run_idempotency_key(goal, now)
     try:
-        await trigger_goal(db, goal, trigger_source="manual")
+        await trigger_goal(
+            db,
+            goal,
+            trigger_source="manual",
+            idempotency_key=idempotency_key,
+        )
         await db.commit()
     except GoalExecutionError as exc:
         await db.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except IntegrityError:
+        # Duplicate slot/minute — a concurrent fire already created the
+        # Task for this key. Roll back, re-fetch the goal, return the
+        # idempotent 200 (the existing Task is unchanged).
+        await db.rollback()
+        goal = await db.get(Goal, goal_id)
+        if goal is None:  # pragma: no cover — vanished mid-flight
+            raise HTTPException(status_code=404, detail="goal not found")
+        return _to_out(goal)
     await db.refresh(goal)
     return _to_out(goal)
 

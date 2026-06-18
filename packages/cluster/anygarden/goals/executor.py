@@ -11,7 +11,10 @@ existing task auto-execution flow. When a goal fires, the executor:
 3. Calls ``inject_task_assignment_message`` (#266) which drops the
    synthetic mention into the room. The agent's existing
    ``decide_policy`` mention path picks it up — no new spawn pathway.
-4. Updates ``Goal.last_run_at`` + ``next_run_at`` for the next fire.
+4. Updates ``Goal.last_run_at``. ``next_run_at`` is advanced by the
+   scheduler's atomic CAS claim *before* it calls the executor (#449),
+   not here — so the slot is consumed exactly once and a Run-now no
+   longer pushes a scheduled goal's clock forward.
 
 The materialize policy applies on completion, not at trigger time:
 the Task is always created so the agent has a target to mark
@@ -34,7 +37,6 @@ from anygarden.goals.policy import (
     GOAL_FAILURE_PAUSE_THRESHOLD,
     MaterializeDecision,
     apply_completion_to_failure_counter,
-    compute_next_run_at,
     materialize_decision,
 )
 from anygarden.messages.service import inject_task_assignment_message
@@ -78,6 +80,7 @@ async def trigger_goal(
     goal: Goal,
     *,
     trigger_source: str = "scheduler",
+    idempotency_key: str | None = None,
     manager: "ConnectionManager | None" = None,
 ) -> Task:
     """Fire one execution of *goal*. Returns the freshly-created Task.
@@ -85,6 +88,23 @@ async def trigger_goal(
     Caller is responsible for ``await db.commit()`` — we keep it
     transactional so a failure to inject the mention rolls back the
     Task creation cleanly.
+
+    ``idempotency_key`` (#449, Wave 1b) is stamped onto the Task. It
+    is the deterministic per-slot token the UNIQUE index
+    ``uq_tasks_idempotency_key`` enforces:
+    - scheduler: ``f"{goal.id}:{int(slot.timestamp())}"`` where *slot*
+      is the due ``next_run_at`` the CAS just claimed.
+    - Run-now on a scheduled goal: the current ``next_run_at`` slot
+      key, so a manual fire racing the scheduler dedups to one Task.
+    - Run-now on a manual goal: ``f"{goal.id}:manual:{minute_bucket}"``.
+    The callers compute it (the scheduler holds the pre-claim slot; the
+    API holds the goal state) and pass it in; ``None`` leaves the key
+    NULL for legacy callers / unit tests.
+
+    The scheduler no longer advances ``next_run_at`` here — that is the
+    CAS claim's job (#449). ``last_run_at`` is still set so the
+    Run-now / manual path records the most recent fire without
+    pushing the schedule forward.
 
     ``manager`` is forwarded to ``inject_task_assignment_message`` so
     the synthetic mention frame actually reaches the agent's WS
@@ -130,6 +150,9 @@ async def trigger_goal(
         spec=goal.spec,
         started_at=now,
         is_interesting=False,
+        # #449 — deterministic dedup token; the UNIQUE index makes a
+        # second fire of the same slot raise IntegrityError.
+        idempotency_key=idempotency_key,
     )
     db.add(task)
     await db.flush()  # populate task.id before message inject
@@ -149,14 +172,15 @@ async def trigger_goal(
         manager=manager,
     )
 
-    # Update goal bookkeeping. ``last_run_at`` always tracks the
-    # most recent fire; ``next_run_at`` rolls forward unless the
-    # goal is manual.
+    # Update goal bookkeeping. ``last_run_at`` always tracks the most
+    # recent fire. ``next_run_at`` is NO LONGER advanced here (#449):
+    # the scheduler advances it atomically in the CAS claim *before*
+    # calling this function, which (a) makes firing exactly-once under
+    # concurrent ticks / replicas and (b) fixes the latent bug where a
+    # Run-now on a cron/interval goal pushed the schedule forward
+    # (the old advance keyed off ``trigger_type != "manual"``, not the
+    # trigger source).
     goal.last_run_at = now
-    if goal.trigger_type != "manual":
-        goal.next_run_at = compute_next_run_at(
-            goal.trigger_type, goal.trigger_config, after=now
-        )
 
     log.info(
         "goal_fired",
