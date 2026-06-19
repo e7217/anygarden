@@ -43,7 +43,8 @@ async def ws_env(config: AnygardenSettings):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    async with session_factory() as db:
+    db = session_factory()
+    try:
         user = User(email="ws@test.com", password_hash="x")
         db.add(user)
         await db.flush()
@@ -87,15 +88,24 @@ async def ws_env(config: AnygardenSettings):
             "session_factory": session_factory,
         }
 
-    # Defensive teardown (#464): a discarded in-memory aiosqlite DB can
-    # leave a pooled connection whose handle was already closed (e.g. a
-    # WS-handler task cancelled on TestClient websocket exit), so
-    # dispose()'s rollback may raise "no active connection". Swallow it —
-    # a teardown race must not turn a passing test into a teardown ERROR.
-    try:
-        await engine.dispose()
-    except Exception:  # pragma: no cover — best-effort teardown cleanup
-        pass
+    finally:
+        # Defensive teardown (#468, supersedes #464/#466): the seeding
+        # session stays open across ``yield`` so the in-memory aiosqlite
+        # data remains visible to the app — but BOTH teardown steps must
+        # swallow the "no active connection" race. The real failure was the
+        # session-context ``__aexit__`` rollback (NOT ``engine.dispose()``,
+        # which #466 wrapped): a WS test whose handler task is cancelled on
+        # TestClient websocket exit can close the shared in-memory
+        # connection, so ``close()``'s rollback raises. Neither close nor
+        # dispose may turn a passing test into a teardown ERROR.
+        try:
+            await db.close()
+        except Exception:  # pragma: no cover — best-effort teardown cleanup
+            pass
+        try:
+            await engine.dispose()
+        except Exception:  # pragma: no cover — best-effort teardown cleanup
+            pass
 
 
 # ── Protocol Frame Tests ──────────────────────────────────────────────
