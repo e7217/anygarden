@@ -1,0 +1,46 @@
+{
+  "projectId": "ceb6b73e-802b-4526-b94c-69d3c68bf4fc",
+  "shape": "package",
+  "pkg": "anygarden-frontend",
+  "globalName": "AnygardenUI",
+  "buildCmd": "bash .design-sync/build-assets.sh",
+  "entry": "packages/cluster/frontend/ds-entry.tsx",
+  "tsconfig": "tsconfig.json",
+  "cssEntry": "dist/ds-styles.css",
+  "componentSrcMap": {
+    "Avatar": "src/components/ui/avatar.tsx",
+    "Badge": "src/components/ui/badge.tsx",
+    "Button": "src/components/ui/button.tsx",
+    "Card": "src/components/ui/card.tsx",
+    "Dialog": "src/components/ui/dialog.tsx",
+    "Input": "src/components/ui/input.tsx",
+    "Label": "src/components/ui/label.tsx",
+    "ScrollArea": "src/components/ui/scroll-area.tsx",
+    "Separator": "src/components/ui/separator.tsx",
+    "Table": "src/components/ui/table.tsx",
+    "Tabs": "src/components/ui/tabs.tsx",
+    "ChatBubble": "src/components/ui/chat/chat-bubble.tsx",
+    "ChatMessageList": "src/components/ui/chat/chat-message-list.tsx",
+    "ChatInput": "src/components/ui/chat/chat-input.tsx",
+    "MessageLoading": "src/components/ui/chat/message-loading.tsx"
+  },
+  "dtsPropsFor": {
+    "Button": "variant?: \"default\" | \"secondary\" | \"destructive\" | \"outline\" | \"ghost\" | \"link\";\n  size?: \"default\" | \"sm\" | \"lg\" | \"icon\";\n  asChild?: boolean;\n  onClick?: React.MouseEventHandler<HTMLButtonElement>;\n  disabled?: boolean;\n  type?: \"button\" | \"submit\" | \"reset\";\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;\n  /** Required for icon-only buttons (size=\"icon\"). */\n  \"aria-label\"?: string;",
+    "Input": "type?: React.HTMLInputTypeAttribute;\n  value?: string | number;\n  defaultValue?: string | number;\n  placeholder?: string;\n  onChange?: React.ChangeEventHandler<HTMLInputElement>;\n  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;\n  disabled?: boolean;\n  readOnly?: boolean;\n  required?: boolean;\n  name?: string;\n  id?: string;\n  className?: string;\n  style?: React.CSSProperties;\n  \"aria-label\"?: string;",
+    "Label": "htmlFor?: string;\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;",
+    "Separator": "orientation?: \"horizontal\" | \"vertical\";\n  decorative?: boolean;\n  className?: string;\n  style?: React.CSSProperties;\n  id?: string;",
+    "Tabs": "/** Controlled selected tab value (use with onValueChange). */\n  value?: string;\n  /** Uncontrolled initial tab value. */\n  defaultValue?: string;\n  onValueChange?: (value: string) => void;\n  orientation?: \"horizontal\" | \"vertical\";\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  /** TabsList, TabsTrigger, TabsContent (all on window.AnygardenUI). */\n  children?: React.ReactNode;",
+    "Avatar": "className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  /** AvatarImage and/or AvatarFallback (both on window.AnygardenUI). */\n  children?: React.ReactNode;",
+    "Card": "className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  onClick?: React.MouseEventHandler<HTMLDivElement>;\n  /** CardHeader / CardTitle / CardDescription / CardContent / CardFooter (all on window.AnygardenUI). */\n  children?: React.ReactNode;",
+    "Dialog": "/** Controlled open state (use with onOpenChange so it can be dismissed). */\n  open?: boolean;\n  defaultOpen?: boolean;\n  onOpenChange?: (open: boolean) => void;\n  modal?: boolean;\n  /** DialogTrigger + DialogContent (which wraps DialogHeader/Title/Description/Footer). */\n  children?: React.ReactNode;",
+    "Table": "className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  /** TableHeader/TableBody/TableFooter/TableRow/TableHead/TableCell/TableCaption (all on window.AnygardenUI). */\n  children?: React.ReactNode;",
+    "ScrollArea": "className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;",
+    "ChatInput": "value?: string;\n  defaultValue?: string;\n  placeholder?: string;\n  onChange?: React.ChangeEventHandler<HTMLTextAreaElement>;\n  onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;\n  disabled?: boolean;\n  rows?: number;\n  name?: string;\n  id?: string;\n  className?: string;\n  style?: React.CSSProperties;\n  \"aria-label\"?: string;",
+    "ChatBubble": "variant?: \"received\" | \"sent\";\n  /** \"ai\" renders full-width, borderless, transparent. */\n  layout?: \"default\" | \"ai\";\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  /** ChatBubbleAvatar / ChatBubbleMessage / ChatBubbleTimestamp / ChatBubbleAction. variant+layout are auto-injected into these children. */\n  children?: React.ReactNode;",
+    "ChatMessageList": "/** When true, auto-scroll and the scroll-to-bottom button animate; default false (instant). */\n  smooth?: boolean;\n  className?: string;\n  id?: string;\n  style?: React.CSSProperties;\n  children?: React.ReactNode;"
+  },
+  "overrides": {
+    "Dialog": { "cardMode": "single", "viewport": "640x460" }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

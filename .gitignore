@@ -46,3 +46,11 @@ node_modules/
 .claude/
 .playwright-mcp/
 .tmp/
+
+# /design-sync (claude.ai/design) — staged scripts, build output, machine state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+packages/cluster/frontend/dist/
