@@ -36,6 +36,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Deque, Optional, Tuple, Union
 
+from anygarden_agent.observability import metrics as _metrics
+
 
 _ERROR_MAX_CHARS = 500
 
@@ -440,6 +442,20 @@ class RoomHandlerSupervisor:
                 outcome = "failed"
                 if error is None:
                     error = "engine produced no response"
+            elif outcome == "ok" and not response and request_id is None:
+                # #482 — an *untracked* empty turn (request_id is None,
+                # e.g. a non-nominated peer mention) is a legitimate
+                # no-reply, so it must stay ``outcome=ok`` with no room
+                # send — reclassifying it to ``failed`` would spam the
+                # room with false failures for the intended silence.
+                # But it used to be wholly invisible. Tag the engine
+                # frame with a sentinel ``error`` (outcome unchanged) so
+                # the cluster persists it as a queryable detail, and bump
+                # the in-process counter so the no-response rate is
+                # measurable. Room behaviour is unchanged.
+                if error is None:
+                    error = "no_response(untracked)"
+                _metrics.agent_empty_untracked_total.inc()
 
             engine_dur = int((time.monotonic() - engine_started) * 1000)
             await self._client.sendLifecycle(

@@ -611,6 +611,34 @@ class TestCycleDetectionInDecidePolicy:
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
 
+    def test_cycle_skip_increments_counter(self):
+        """#482 — a cycle SKIP bumps ``decide_policy_cycle_skip_total``
+        so the cycle-suppression rate is measurable; a non-cycle decision
+        leaves it untouched."""
+        from anygarden_agent.observability import metrics
+
+        metrics.decide_policy_cycle_skip_total.reset()
+
+        looped_content = "I have analysed the logs and the issue appears to be X"
+        client = _make_client(
+            my_pids={"my-pid-123"},
+            recent_msgs=self._with_history("other-agent", looped_content, 2),
+        )
+        cycle_msg = {
+            "participant_id": "other-agent",
+            "room_id": "room-a",
+            "content": looped_content,
+            "metadata": {"mentions": [{"type": "user", "id": "my-pid-123"}]},
+        }
+        assert decide_policy(cycle_msg, client) is MessagePolicy.SKIP
+        assert metrics.decide_policy_cycle_skip_total.value() == 1
+
+        # A fresh (non-looping) mention RESPONDs and does not bump it.
+        fresh = dict(cycle_msg)
+        fresh["content"] = "a completely different and brand new question here"
+        assert decide_policy(fresh, client) is MessagePolicy.RESPOND
+        assert metrics.decide_policy_cycle_skip_total.value() == 1
+
 
 class TestRoundRobinStrategy:
     """Issue #159 Phase B — ``round_robin`` dispatches by the server-

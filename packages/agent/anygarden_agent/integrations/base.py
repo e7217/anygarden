@@ -14,6 +14,7 @@ from anygarden_agent.coordination.pending_context import (
     wrap_as_room_conversation,
 )
 from anygarden_agent.integrations.cycle_guard import is_cycle_detected
+from anygarden_agent.observability import metrics
 
 if TYPE_CHECKING:
     from anygarden_agent.client import ChatClient
@@ -575,6 +576,10 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
             room_id=room_id,
             sender=sender,
         )
+        # #482 — count the cycle-suppression SKIP so its rate is
+        # alertable; previously only the warning above marked it, which
+        # reads like normal flow in a busy log.
+        metrics.decide_policy_cycle_skip_total.inc()
         return MessagePolicy.SKIP
 
     # 3. Directly mentioned → respond. Evaluated before the

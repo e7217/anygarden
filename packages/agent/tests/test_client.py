@@ -371,6 +371,66 @@ class TestAgentTurnCounter:
         assert calls == []  # dropped
 
     @pytest.mark.asyncio
+    async def test_turn_limit_drop_increments_counter(self) -> None:
+        """#482 — the silent ``max_agent_turns`` drop bumps
+        ``agent_turn_limit_skip_total`` and, with the env gate OFF (the
+        default), posts no room message."""
+        from anygarden_agent.observability import metrics
+
+        metrics.agent_turn_limit_skip_total.reset()
+
+        client = self._make_client()
+        client.max_agent_turns = 3
+        client._agent_turn_count["room-a"] = 3
+        client._connections["room-a"] = AsyncMock()  # would allow a send
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-agent-pid",
+                "content": "agent reply",
+                "metadata": {"_nonce": "foreign-nonce"},
+            },
+        )
+        assert metrics.agent_turn_limit_skip_total.value() == 1
+        # Gate off → no room surfacing despite a live connection.
+        client._connections["room-a"].send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_turn_limit_drop_surfaces_room_line_when_gated_on(
+        self, monkeypatch
+    ) -> None:
+        """#482 — with ``ANYGARDEN_SURFACE_SILENT_PATHS`` truthy the drop
+        also posts a single room system line (opt-in operator surfacing)."""
+        from anygarden_agent.observability import metrics
+
+        metrics.agent_turn_limit_skip_total.reset()
+        monkeypatch.setenv("ANYGARDEN_SURFACE_SILENT_PATHS", "1")
+
+        client = self._make_client()
+        client.max_agent_turns = 3
+        client._agent_turn_count["room-a"] = 3
+        mock_ws = AsyncMock()
+        client._connections["room-a"] = mock_ws
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other-agent-pid",
+                "content": "agent reply",
+                "metadata": {"_nonce": "foreign-nonce"},
+            },
+        )
+        assert metrics.agent_turn_limit_skip_total.value() == 1
+        mock_ws.send.assert_called_once()
+        sent = json.loads(mock_ws.send.call_args[0][0])
+        assert sent["type"] == "send"
+
+    @pytest.mark.asyncio
     async def test_human_message_resets(self) -> None:
         """Human message (no nonce, not self) resets counter."""
         client = self._make_client()
@@ -967,6 +1027,51 @@ class TestHandlerSnapshot:
         # index and ``second`` would be skipped.
         assert order == ["first", "second"]
         assert client._message_handlers == [second]
+
+
+class TestHandlerErrorCounter:
+    """#482 — a registered handler that raises is logged-and-continued
+    so one bad handler can't kill the dispatch loop. That swallow used
+    to be invisible beyond an error log; it now bumps
+    ``client_handler_error_total`` per raising invocation, and dispatch
+    still proceeds to the remaining handlers."""
+
+    def _make_client(self) -> ChatClient:
+        return ChatClient("ws://x", token="t")
+
+    @pytest.mark.asyncio
+    async def test_handler_exception_increments_counter_and_continues(self) -> None:
+        from anygarden_agent.observability import metrics
+
+        metrics.client_handler_error_total.reset()
+
+        client = self._make_client()
+        order: list[str] = []
+
+        async def boom(msg):
+            order.append("boom")
+            raise RuntimeError("handler blew up")
+
+        async def survivor(msg):
+            order.append("survivor")
+
+        client._message_handlers.append(boom)
+        client._message_handlers.append(survivor)
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "message",
+                "seq": 1,
+                "participant_id": "other",
+                "content": "drives both handlers; first one raises ok",
+            },
+        )
+
+        # The raise was swallowed, the next handler still ran, and the
+        # swallow was counted exactly once.
+        assert order == ["boom", "survivor"]
+        assert metrics.client_handler_error_total.value() == 1
 
 
 class TestReconnectBackoff:

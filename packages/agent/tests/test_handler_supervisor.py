@@ -415,6 +415,64 @@ async def test_proactive_empty_response_stays_silent_ok():
     assert outcomes == ["ok"]
 
 
+@pytest.mark.asyncio
+async def test_untracked_empty_marks_engine_frame_and_counts():
+    """#482 — the untracked empty turn stays silent-ok (no send, no
+    failed outcome — preserving the no-reply contract), but it is no
+    longer *invisible*: the ``engine_call_finished`` frame carries a
+    ``no_response(untracked)`` error sentinel for ActivityLog queries and
+    the in-process counter increments so the no-response rate is
+    measurable. The room behaviour is unchanged from the test above."""
+    from anygarden_agent.observability import metrics
+
+    metrics.agent_empty_untracked_total.reset()
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    async def run_engine():
+        return ""
+
+    await sup.dispatch(room_id="r1", request_id=None, run_engine=run_engine)
+
+    # Contract preserved: no room send, terminal outcome ok.
+    assert client.sends == []
+    handler_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "handler_finished"
+    )
+    assert handler_fin["outcome"] == "ok"
+
+    # New: the engine frame is marked and the counter saw it.
+    engine_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "engine_call_finished"
+    )
+    assert engine_fin["outcome"] == "ok"
+    assert engine_fin["error"] == "no_response(untracked)"
+    assert metrics.agent_empty_untracked_total.value() == 1
+
+
+@pytest.mark.asyncio
+async def test_proactive_nonempty_does_not_mark_or_count():
+    """Guard: a *non-empty* untracked turn is an ordinary proactive
+    reply — it must not carry the sentinel nor bump the counter."""
+    from anygarden_agent.observability import metrics
+
+    metrics.agent_empty_untracked_total.reset()
+
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+
+    await sup.dispatch(
+        room_id="r1", request_id=None, run_engine=lambda: asyncio.sleep(0, result="hi")
+    )
+
+    engine_fin = next(
+        e for e in client.lifecycle_events if e["event"] == "engine_call_finished"
+    )
+    assert engine_fin.get("error") is None
+    assert metrics.agent_empty_untracked_total.value() == 0
+
+
 # ── #457 Wave 2b — bounded per-room queue ────────────────────────────
 
 
