@@ -23,6 +23,7 @@ to happen; pin it explicitly so future refactors don't strip it.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from anygarden_agent.coordination.pending_context import (
 from anygarden_agent.integrations.base import EngineAdapter
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
+    EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
     is_transient_error,
@@ -57,6 +59,22 @@ _ANTHROPIC_SDK_ENV_KEYS = (
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_API_KEY",
+)
+
+
+# Issue #483 — upper bound on a single claude-agent-sdk turn. The SDK's
+# ``query()`` async generator otherwise streams forever if the upstream
+# model / tool loop hangs, which used to leave the supervisor's 900s
+# ``wait_for`` as the *only* defence — 4-7.5x slower to notify than the
+# codex (600s) / gemini (120s) adapters, which already self-time-out.
+# Mirroring codex's 600s default keeps the adapter the *first* line to
+# fire (it must stay strictly below the supervisor's
+# ``ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC`` of 900s so the engine-side
+# cancellation + room notice runs before the supervisor's blunter
+# coroutine cancel). A dedicated env knob lets ops tune it without
+# touching the shared supervisor deadline.
+_CLAUDE_TURN_TIMEOUT = float(
+    os.environ.get("ANYGARDEN_AGENT_CLAUDE_TURN_TIMEOUT_SEC", "600")
 )
 
 logger = structlog.get_logger(__name__)
@@ -563,8 +581,20 @@ class ClaudeCodeAdapter(EngineAdapter):
         # enabled the gateway for this agent), ``secrets_in_env`` is a
         # no-op and the SDK falls through to its default env / Bedrock
         # / Vertex discovery as before.
-        with agent_secrets.secrets_in_env(list(_ANTHROPIC_SDK_ENV_KEYS)):
-            async for message in self._query_fn(prompt=prompt, options=options):
+        # #483 — the SDK's ``query()`` is an async generator with no
+        # intrinsic deadline; a hung upstream model / tool loop would
+        # stream forever. We drain it inside an inner coroutine wrapped
+        # in ``asyncio.wait_for`` so a stuck turn surfaces as a timeout
+        # rather than wedging the room until the supervisor's blunter
+        # 900s cancel. The generator handle is held explicitly so the
+        # timeout path can ``aclose()`` it — without that the SDK's
+        # transport / subprocess leaks. Symmetric with codex
+        # (``abort_signal``) / gemini (``_terminate_tree``).
+        agen = self._query_fn(prompt=prompt, options=options)
+
+        async def _consume() -> None:
+            nonlocal session_id, result_field, usage_record
+            async for message in agen:
                 msg_type = type(message).__name__
 
                 sid = getattr(message, "session_id", None)
@@ -615,6 +645,27 @@ class ClaudeCodeAdapter(EngineAdapter):
                     # provider invoice. Captured into a normalised record so
                     # the run_engine closure can stamp it onto the EngineTurn.
                     usage_record = _extract_result_usage(message)
+
+        with agent_secrets.secrets_in_env(list(_ANTHROPIC_SDK_ENV_KEYS)):
+            try:
+                await asyncio.wait_for(
+                    _consume(), timeout=_CLAUDE_TURN_TIMEOUT
+                )
+            except asyncio.TimeoutError as exc:
+                logger.error(
+                    "claude_code.timeout", timeout=_CLAUDE_TURN_TIMEOUT
+                )
+                # #422 — surface as a timeout so the supervisor records
+                # outcome=timeout and notifies the user, instead of a
+                # swallowed silent None.
+                raise EngineTimeoutError(
+                    f"claude turn exceeded {_CLAUDE_TURN_TIMEOUT}s"
+                ) from exc
+            finally:
+                # Always drain the generator's resources (transport /
+                # subprocess). ``aclose()`` drives the ``query()`` body's
+                # ``GeneratorExit`` cleanup; harmless if already exhausted.
+                await agen.aclose()
 
         if session_id is not None:
             # Caller (integrate_with_claude_code) promotes this

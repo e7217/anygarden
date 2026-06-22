@@ -48,6 +48,7 @@ from anygarden_agent.integrations.base import (
 )
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
+    EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
     is_transient_error,
@@ -55,6 +56,24 @@ from anygarden_agent.runtime.handler_wrapper import (
 
 
 logger = structlog.get_logger(__name__)
+
+
+# Issue #483 — upper bound on a single OpenHands turn. ``conversation.run``
+# is a synchronous SDK call dispatched onto a worker thread via
+# ``asyncio.to_thread``; if the agent loop / LLM call hangs it would run
+# forever, with the supervisor's 900s ``wait_for`` as the *only* defence.
+# Worse, the supervisor only cancels the awaiting *coroutine* — the worker
+# thread (and its in-flight LLM call) keeps running as a zombie. We wrap
+# the await in ``asyncio.wait_for`` so a stuck turn surfaces as a timeout,
+# and on timeout call ``conversation.pause()`` (thread-safe; takes effect
+# at the next agent-step boundary) as best-effort cancellation to bound
+# the zombie. Mirroring codex's 600s default keeps the adapter the *first*
+# line to fire (strictly below the supervisor's 900s
+# ``ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC``). A dedicated env knob tunes it
+# independently of the shared supervisor deadline.
+_OPENHANDS_TURN_TIMEOUT = float(
+    os.environ.get("ANYGARDEN_AGENT_OPENHANDS_TURN_TIMEOUT_SEC", "600")
+)
 
 
 # litellm-style provider env keys. ``LLM(api_key=...)`` is also
@@ -321,7 +340,35 @@ class OpenHandsAdapter(EngineAdapter):
         with agent_secrets.secrets_in_env(list(_OPENHANDS_SDK_ENV_KEYS)):
             try:
                 await asyncio.to_thread(conversation.send_message, prompt)
-                await asyncio.to_thread(conversation.run)
+                # #483 — bound the (otherwise unbounded) synchronous
+                # ``run`` so a hung agent loop surfaces as a timeout
+                # instead of leaning on the supervisor's blunter 900s
+                # coroutine cancel. ``wait_for`` only cancels the
+                # awaiting coroutine, not the worker thread, so we also
+                # ask the conversation to ``pause()`` — best-effort
+                # cancellation that stops the loop at the next
+                # agent-step boundary, bounding the zombie thread.
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(conversation.run),
+                        timeout=_OPENHANDS_TURN_TIMEOUT,
+                    )
+                except asyncio.TimeoutError as exc:
+                    self._request_conversation_pause(room_id, conversation)
+                    logger.error(
+                        "openhands.timeout",
+                        room_id=room_id,
+                        timeout=_OPENHANDS_TURN_TIMEOUT,
+                    )
+                    # #422 — surface as a timeout so the supervisor records
+                    # outcome=timeout and notifies the user.
+                    raise EngineTimeoutError(
+                        f"openhands turn exceeded {_OPENHANDS_TURN_TIMEOUT}s"
+                    ) from exc
+            except EngineError:
+                # Already-classified failure (e.g. the timeout above) —
+                # re-raise without re-wrapping into a generic EngineError.
+                raise
             except Exception as exc:
                 logger.error(
                     "openhands.run_failed",
@@ -343,6 +390,35 @@ class OpenHandsAdapter(EngineAdapter):
         if not text_parts:
             return None
         return "\n\n".join(p.strip() for p in text_parts if p.strip()).strip() or None
+
+    def _request_conversation_pause(self, room_id: str, conversation: Any) -> None:
+        """Best-effort cancellation of a timed-out ``conversation.run``.
+
+        #483 — ``asyncio.wait_for`` only cancels the awaiting coroutine,
+        not the worker thread the synchronous ``run`` is executing on,
+        so the in-flight agent loop / LLM call would otherwise keep
+        running as a zombie. OpenHands' ``Conversation.pause`` is
+        documented as callable from any thread and stops the loop at the
+        next agent-step boundary (an in-flight LLM completion still has
+        to finish first — full cancellation is an SDK limitation, hence
+        *best-effort*). Guarded by ``getattr`` + broad ``except`` so an
+        older SDK without ``pause``, or a pause that itself raises,
+        never masks the ``EngineTimeoutError`` the caller is about to
+        surface."""
+        pause = getattr(conversation, "pause", None)
+        if not callable(pause):
+            logger.warning(
+                "openhands.pause_unavailable",
+                room_id=room_id,
+                hint="SDK Conversation has no pause(); zombie run thread may persist",
+            )
+            return
+        try:
+            pause()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "openhands.pause_failed", room_id=room_id, error=str(exc)
+            )
 
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Stash a non-addressed message as context for the next turn.
