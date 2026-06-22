@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import json
+import os
 import random
 import uuid
 from typing import Any, Callable, Coroutine
@@ -15,6 +16,7 @@ import websockets
 from websockets.asyncio.client import connect as ws_connect
 
 from anygarden_agent.integrations.cycle_guard import hash_content
+from anygarden_agent.observability import metrics
 from anygarden_agent.protocol.frames import LifecycleFrame, MessageOut, SendFrame
 from anygarden_agent.protocol.versioning import build_subprotocols
 
@@ -22,6 +24,19 @@ logger = structlog.get_logger(__name__)
 
 # Type alias for message handlers
 MessageHandler = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+
+# #482 — operator opt-in: when ``ANYGARDEN_SURFACE_SILENT_PATHS`` is
+# truthy the ``max_agent_turns`` drop posts this one-line system notice
+# into the room so a human can see *why* the agent went quiet. Default
+# OFF (counter/log only) keeps chat UX clean.
+_AGENT_TURN_LIMIT_NOTICE = (
+    "(시스템) 에이전트 간 연속 턴 한도에 도달해 이 메시지에는 응답하지 않습니다."
+)
+
+
+def _is_truthy(value: str | None) -> bool:
+    """Parse an env flag: ``1/true/yes/on`` (case-insensitive) → True."""
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _is_task_init_content(content: str) -> bool:
@@ -671,6 +686,28 @@ class ChatClient:
                         count=count,
                         limit=self.max_agent_turns,
                     )
+                    # #482 — count the silent drop so the agent-loop
+                    # suppression rate is measurable (previously only the
+                    # info above marked it). Optionally surface a single
+                    # room system line when an operator opts in via
+                    # ``ANYGARDEN_SURFACE_SILENT_PATHS``; default OFF keeps
+                    # the room quiet so chat UX is not polluted.
+                    metrics.agent_turn_limit_skip_total.inc()
+                    if _is_truthy(os.environ.get("ANYGARDEN_SURFACE_SILENT_PATHS")):
+                        try:
+                            await self.send(
+                                room_id,
+                                _AGENT_TURN_LIMIT_NOTICE,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            # Surfacing is best-effort; a dead socket must
+                            # never turn a benign loop-guard drop into a
+                            # crash.
+                            logger.debug(
+                                "ws.agent_turn_limit.surface_failed",
+                                room_id=room_id,
+                                error=str(exc),
+                            )
                     return  # skip — agent-only loop exceeded limit
             else:
                 # From a human — reset both counters. Human messages
@@ -706,6 +743,11 @@ class ChatClient:
                     await handler(data)
                 except Exception as exc:
                     logger.error("handler.message_error", error=str(exc))
+                    # #482 — count the swallowed handler failure so the
+                    # error rate is measurable; dispatch still continues
+                    # to the remaining handlers (one bad handler must not
+                    # kill the loop).
+                    metrics.client_handler_error_total.inc()
         elif msg_type == "welcome":
             pid = data.get("participant_id")
             if pid:
