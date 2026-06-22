@@ -794,6 +794,8 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
         agents_crashed_by_sweep_total,
     )
     from anygarden.scheduler.lifecycle import (
+        ORPHAN_THRESHOLD_SEC_DEFAULT,
+        notify_and_redispatch_orphans,
         sweep_orphaned_requests,
         sweep_stale_agents,
     )
@@ -807,6 +809,18 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     except ValueError:
         stale_sec = 120
 
+    # #481 — slow-path orphan threshold, overridable from the env. The
+    # fast path (crashed agent) ignores it regardless.
+    try:
+        liveness_sec = int(
+            os.environ.get(
+                "ANYGARDEN_REQUEST_LIVENESS_SEC",
+                str(ORPHAN_THRESHOLD_SEC_DEFAULT),
+            )
+        )
+    except ValueError:
+        liveness_sec = ORPHAN_THRESHOLD_SEC_DEFAULT
+
     warmup = min(15.0, interval_seconds)
     try:
         await asyncio.sleep(warmup)
@@ -816,8 +830,18 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
     while True:
         try:
             factory = app.state.session_factory
-            # #427 — sweep returns the newly-orphaned request_ids.
-            orphaned = await sweep_orphaned_requests(factory)
+            # #447/#481 — reap dead agents FIRST so the orphan sweep that
+            # follows in the same cycle sees their just-``crashed`` state and
+            # takes the fast path (no ~20 min wait).
+            if stale_sec > 0:
+                crashed = await sweep_stale_agents(factory, threshold_sec=stale_sec)
+                if crashed:
+                    log.info("orphan_sweeper.heartbeat_stale", count=crashed)
+                    agents_crashed_by_sweep_total.inc(crashed)
+            # #427/#481 — sweep returns the newly-orphaned requests.
+            orphaned = await sweep_orphaned_requests(
+                factory, threshold_sec=liveness_sec
+            )
             if orphaned:
                 log.info("orphan_sweeper.marked", count=len(orphaned))
                 agent_turns_orphaned_total.inc(len(orphaned))
@@ -825,15 +849,14 @@ async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
                 # the two orphan mechanisms agree immediately (#427).
                 tracing = getattr(app.state, "tracing", None)
                 if tracing is not None:
-                    for rid in orphaned:
-                        tracing.reap_request(rid)
-            # #447 — flip agents stuck ``running`` on a dead machine to
-            # ``crashed`` so bin-pack placement stops counting them.
-            if stale_sec > 0:
-                crashed = await sweep_stale_agents(factory, threshold_sec=stale_sec)
-                if crashed:
-                    log.info("orphan_sweeper.heartbeat_stale", count=crashed)
-                    agents_crashed_by_sweep_total.inc(crashed)
+                    for orphan in orphaned:
+                        tracing.reap_request(orphan.request_id)
+                # #481 — surface (room notice) + recover (Task re-dispatch).
+                # ``connection_manager`` may be missing in stripped-down test
+                # apps; ``notify_and_redispatch_orphans`` degrades gracefully
+                # (notice skipped, re-dispatch still attempted).
+                manager = getattr(app.state, "connection_manager", None)
+                await notify_and_redispatch_orphans(factory, manager, orphaned)
             # #427 — refresh the fleet-health gauge (previously dead).
             await _reconcile_agents_by_state(app)
         except asyncio.CancelledError:

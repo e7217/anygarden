@@ -188,18 +188,24 @@ _UNRESOLVED_TASK_STATUSES = frozenset({"todo", "in_progress"})
 _MAX_TASK_REDISPATCH = 1
 
 
-async def _maybe_redispatch_task(
-    session_factory: Any,
+async def _redispatch_task_by_request_id(
+    db: AsyncSession,
     *,
-    manager: "ConnectionManager",
-    frame: LifecycleFrame,
-) -> None:
-    """Re-dispatch a failed assignment turn's Task once (#463).
+    request_id: str,
+    reason: str,
+    manager: "ConnectionManager | None",
+) -> bool:
+    """Re-dispatch an assignment turn's Task once, keyed by *request_id*.
 
-    Runs ONLY on a ``handler_finished`` frame whose ``outcome`` is a
-    terminal delivery failure (``rejected`` / ``timeout`` / ``failed``).
+    Extracted core of ``_maybe_redispatch_task`` (#463) so the same
+    recovery logic is reachable both from the WS ``handler_finished``
+    path *and* the server-side liveness watchdog (#481), which discovers
+    orphaned requests with no terminal frame at all.
 
-    Looks the turn up by ``frame.request_id`` in ``agent_turn_tasks``:
+    Operates on the caller-supplied *db* session and assumes the caller
+    owns the transaction lifecycle (this function ``flush``es but never
+    ``commit``s — the caller decides). Looks the turn up by *request_id*
+    in ``agent_turn_tasks``:
 
     - **no row** → a live (user-send / peer-handoff) turn, which never
       writes a correlation row. Do nothing — the scope invariant: the
@@ -210,9 +216,107 @@ async def _maybe_redispatch_task(
       nothing to recover. Do nothing.
     - **row, count < MAX, Task unresolved (todo / in_progress)** → return the
       Task to ``todo`` (assigned_at refreshed, started_at cleared, error
-      noted) and re-inject the assignment mention with
-      ``redispatch_count = found + 1`` so a *fresh* request_id + a new
-      correlation row carrying the incremented chain count is minted.
+      noted set to ``redispatch:<reason>``) and re-inject the assignment
+      mention with ``redispatch_count = found + 1`` so a *fresh* request_id
+      + a new correlation row carrying the incremented chain count is minted.
+
+    Returns ``True`` iff a re-dispatch was actually performed (a fresh turn
+    was minted), ``False`` for every no-op branch above.
+    """
+    mapping = await db.get(AgentTurnTask, request_id)
+    if mapping is None:
+        # Live (non-assignment) turn — scope invariant: untouched.
+        return False
+    if mapping.redispatch_count >= _MAX_TASK_REDISPATCH:
+        logger.info(
+            "ws.task_redispatch.bound_reached",
+            request_id=request_id,
+            task_id=mapping.task_id,
+            redispatch_count=mapping.redispatch_count,
+            reason=reason,
+        )
+        return False
+
+    task = await db.get(Task, mapping.task_id)
+    if task is None:
+        # Task was deleted (CASCADE would normally take the mapping
+        # too, but guard anyway).
+        return False
+    if task.status not in _UNRESOLVED_TASK_STATUSES:
+        # Already resolved (done / failed / cancelled / blocked) —
+        # nothing to recover.
+        return False
+    if not task.assignee_participant_id:
+        # No assignee to re-wake.
+        return False
+
+    assignee = await db.get(Participant, task.assignee_participant_id)
+    if assignee is None or assignee.agent_id is None:
+        # Human assignees do not auto-execute (mirrors the blocker
+        # resolve-wake + api/v1/tasks ``_maybe_inject``).
+        return False
+    room = await db.get(Room, task.room_id)
+    if room is None:
+        return False
+
+    # Return the Task to a re-runnable state. ``started_at=None``
+    # so the exec sweeper (Wave 0) re-measures from the next
+    # in_progress; ``assigned_at=now`` refreshes the pickup-timeout
+    # clock; the error notes which reason triggered it.
+    now = datetime.now(timezone.utc)
+    task.status = "todo"
+    task.assigned_at = now
+    task.started_at = None
+    task.error = f"redispatch:{reason}"
+    await db.flush()
+
+    # Re-wake: a fresh request_id + a new AgentTurnTask carrying the
+    # incremented chain count is minted inside inject. Pass the
+    # manager so the wake-up MessageOut is broadcast. Lazy import
+    # mirrors the blocker resolve-wake path (mcp/tools) and keeps
+    # the ws↔messages module load order cycle-free.
+    from anygarden.messages.service import (
+        inject_task_assignment_message,
+    )
+
+    await inject_task_assignment_message(
+        db,
+        room=room,
+        task=task,
+        sender_participant_id=task.assignee_participant_id,
+        event="reassigned",
+        manager=manager,
+        redispatch_count=mapping.redispatch_count + 1,
+    )
+
+    try:
+        task_redispatched_total.labels(outcome=reason).inc()
+    except Exception as exc:  # noqa: BLE001 — metric must not break the turn
+        logger.warning("ws.task_redispatch.metric_failed", error=str(exc))
+
+    logger.info(
+        "ws.task_redispatch.redispatched",
+        request_id=request_id,
+        task_id=mapping.task_id,
+        new_redispatch_count=mapping.redispatch_count + 1,
+        reason=reason,
+    )
+    return True
+
+
+async def _maybe_redispatch_task(
+    session_factory: Any,
+    *,
+    manager: "ConnectionManager",
+    frame: LifecycleFrame,
+) -> None:
+    """Re-dispatch a failed assignment turn's Task once (#463).
+
+    Runs ONLY on a ``handler_finished`` frame whose ``outcome`` is a
+    terminal delivery failure (``rejected`` / ``timeout`` / ``failed``).
+    Frame gating lives here; the actual recovery is delegated to
+    ``_redispatch_task_by_request_id`` (#481 extracted it so the orphan
+    sweeper can share the same core without a synthetic frame).
 
     Uses its own session so a bridge failure (or a re-inject error) can
     never roll back the ActivityLog commit that persisted the lifecycle
@@ -228,85 +332,14 @@ async def _maybe_redispatch_task(
         return
     try:
         async with session_factory() as db:
-            mapping = await db.get(AgentTurnTask, rid)
-            if mapping is None:
-                # Live (non-assignment) turn — scope invariant: untouched.
-                return
-            if mapping.redispatch_count >= _MAX_TASK_REDISPATCH:
-                logger.info(
-                    "ws.task_redispatch.bound_reached",
-                    request_id=rid,
-                    task_id=mapping.task_id,
-                    redispatch_count=mapping.redispatch_count,
-                    outcome=frame.outcome,
-                )
-                return
-
-            task = await db.get(Task, mapping.task_id)
-            if task is None:
-                # Task was deleted (CASCADE would normally take the mapping
-                # too, but guard anyway).
-                return
-            if task.status not in _UNRESOLVED_TASK_STATUSES:
-                # Already resolved (done / failed / cancelled / blocked) —
-                # nothing to recover.
-                return
-            if not task.assignee_participant_id:
-                # No assignee to re-wake.
-                return
-
-            assignee = await db.get(Participant, task.assignee_participant_id)
-            if assignee is None or assignee.agent_id is None:
-                # Human assignees do not auto-execute (mirrors the blocker
-                # resolve-wake + api/v1/tasks ``_maybe_inject``).
-                return
-            room = await db.get(Room, task.room_id)
-            if room is None:
-                return
-
-            # Return the Task to a re-runnable state. ``started_at=None``
-            # so the exec sweeper (Wave 0) re-measures from the next
-            # in_progress; ``assigned_at=now`` refreshes the pickup-timeout
-            # clock; the error notes which terminal outcome triggered it.
-            now = datetime.now(timezone.utc)
-            task.status = "todo"
-            task.assigned_at = now
-            task.started_at = None
-            task.error = f"redispatch:{frame.outcome}"
-            await db.flush()
-
-            # Re-wake: a fresh request_id + a new AgentTurnTask carrying the
-            # incremented chain count is minted inside inject. Pass the
-            # manager so the wake-up MessageOut is broadcast. Lazy import
-            # mirrors the blocker resolve-wake path (mcp/tools) and keeps
-            # the ws↔messages module load order cycle-free.
-            from anygarden.messages.service import (
-                inject_task_assignment_message,
-            )
-
-            await inject_task_assignment_message(
+            did = await _redispatch_task_by_request_id(
                 db,
-                room=room,
-                task=task,
-                sender_participant_id=task.assignee_participant_id,
-                event="reassigned",
+                request_id=rid,
+                reason=frame.outcome,
                 manager=manager,
-                redispatch_count=mapping.redispatch_count + 1,
             )
-            await db.commit()
-
-        try:
-            task_redispatched_total.labels(outcome=frame.outcome).inc()
-        except Exception as exc:  # noqa: BLE001 — metric must not break the turn
-            logger.warning("ws.task_redispatch.metric_failed", error=str(exc))
-
-        logger.info(
-            "ws.task_redispatch.redispatched",
-            request_id=rid,
-            task_id=mapping.task_id,
-            new_redispatch_count=mapping.redispatch_count + 1,
-            outcome=frame.outcome,
-        )
+            if did:
+                await db.commit()
     except Exception as exc:  # noqa: BLE001 — bridge must not break lifecycle
         logger.warning(
             "ws.task_redispatch.failed",

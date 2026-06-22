@@ -9,10 +9,11 @@ tokens or replacement placement as needed.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, func, select
+from sqlalchemy import and_, case, event, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -902,26 +903,53 @@ class AgentLifecycle:
 #: Default age at which a ``handler_started`` without a matching
 #: ``handler_finished`` is promoted to ``handler_orphaned``. Sized
 #: as the agent-side engine timeout (15 min) plus 5 min of slack
-#: for reconnects/cluster hops. Overridable per call for tests.
+#: for reconnects/cluster hops. Overridable per call for tests, and
+#: at the call site via the ``ANYGARDEN_REQUEST_LIVENESS_SEC`` env var
+#: (#481 — the server-side liveness watchdog).
 ORPHAN_THRESHOLD_SEC_DEFAULT = 1200
+
+
+@dataclass(frozen=True)
+class OrphanedRequest:
+    """A request the sweep just promoted to ``handler_orphaned`` (#481).
+
+    Carries the room/agent context the liveness watchdog needs to make
+    the orphan *visible* (room system notice) and *recoverable* (Task
+    re-dispatch) — see ``notify_and_redispatch_orphans``. ``room_id`` may
+    be ``None`` for legacy ``handler_started`` rows that never recorded
+    it inside ``details``.
+    """
+
+    request_id: str
+    agent_id: str | None
+    room_id: str | None
 
 
 async def sweep_orphaned_requests(
     session_factory,
     *,
     threshold_sec: int = ORPHAN_THRESHOLD_SEC_DEFAULT,
-) -> list[str]:
+) -> list[OrphanedRequest]:
     """Mark stalled handlers as ``handler_orphaned``.
 
-    For every ``request_id`` whose earliest ``handler_started`` is
-    older than *threshold_sec* and which has no terminal event
-    (``handler_finished`` or prior ``handler_orphaned``) yet,
-    insert a single ``handler_orphaned`` row.
+    A ``request_id`` is promoted to ``handler_orphaned`` (a single row
+    inserted) when it has a ``handler_started`` with no terminal event
+    (``handler_finished`` or a prior ``handler_orphaned``) yet, and
+    *either* of:
+
+    - **slow path (#204)** — its earliest event is older than
+      *threshold_sec*. The "alive but hung forever" backstop.
+    - **fast path (#481)** — the request's agent has been flipped to
+      ``actual_state == "crashed"`` (by ``sweep_stale_agents`` / a death
+      report). The threshold is ignored: the process is known dead, so
+      its in-flight turn can never deliver and is orphaned immediately
+      (~minutes instead of ~20).
 
     Idempotent by construction: the ``HAVING`` clause excludes
-    already-orphaned requests. Returns the list of newly-orphaned
-    ``request_id``s (#427) so the caller can bump the orphan metric and
-    reap the matching in-memory spans; ``len()`` is the count.
+    already-orphaned requests. Returns the newly-orphaned requests as
+    ``OrphanedRequest`` rows (#427/#481) so the caller can bump the
+    orphan metric, reap the matching in-memory spans, and surface +
+    re-dispatch them; ``len()`` is the count.
     """
     threshold = datetime.now(timezone.utc) - timedelta(seconds=threshold_sec)
 
@@ -942,15 +970,24 @@ async def sweep_orphaned_requests(
     earliest_ts = func.min(ActivityLog.timestamp).label("started_at")
 
     async with session_factory() as db:
+        # #481 — left-join the owning agent so the fast path can admit a
+        # request whose agent is ``crashed`` even when its rows are still
+        # recent (younger than *threshold*). The outer join keeps requests
+        # whose ``agent_id`` is NULL / unknown on the slow path only.
         stmt = (
             select(
                 ActivityLog.request_id,
                 ActivityLog.agent_id,
                 earliest_ts,
             )
+            .select_from(ActivityLog)
+            .outerjoin(Agent, Agent.id == ActivityLog.agent_id)
             .where(
                 ActivityLog.request_id.isnot(None),
-                ActivityLog.timestamp < threshold,
+                or_(
+                    ActivityLog.timestamp < threshold,
+                    Agent.actual_state == "crashed",
+                ),
             )
             .group_by(ActivityLog.request_id, ActivityLog.agent_id)
             .having(and_(started_expr > 0, terminal_expr == 0))
@@ -963,7 +1000,7 @@ async def sweep_orphaned_requests(
         # pass by looking up one handler_started row per group.
         # This is fine at orphan scale — orphans are rare by design
         # (engine_timeout already closes the common case).
-        orphaned_ids: list[str] = []
+        orphaned: list[OrphanedRequest] = []
         for req_id, agent_id, started_at in rows:
             started_row = (
                 await db.execute(
@@ -994,9 +1031,114 @@ async def sweep_orphaned_requests(
                     },
                 )
             )
-            orphaned_ids.append(req_id)
+            orphaned.append(
+                OrphanedRequest(
+                    request_id=req_id,
+                    agent_id=agent_id,
+                    room_id=room_id,
+                )
+            )
         await db.commit()
-        return orphaned_ids
+        return orphaned
+
+
+# ── #481 — orphan visibility + recovery ──────────────────────────────
+
+
+#: One-line Korean room notice posted when a request is orphaned by the
+#: liveness watchdog (#481). Keep it short and reassuring — the matching
+#: Task (if assignment-originated) is re-dispatched right after.
+_ORPHAN_NOTICE_TEXT = (
+    "⚠️ 에이전트 응답이 확인되지 않아 이 요청을 종료 처리했습니다."
+)
+
+
+async def notify_and_redispatch_orphans(
+    session_factory,
+    manager,
+    rows: list[OrphanedRequest],
+) -> None:
+    """Make freshly-orphaned requests visible and recoverable (#481).
+
+    For each ``OrphanedRequest`` the sweep just produced:
+
+    1. **Visibility** — append a system notice (``participant_id=None``,
+       ``metadata.system_origin == "liveness_orphan"``) to the request's
+       room and broadcast it as a ``MessageOut`` so live subscribers see
+       that the silent turn was closed out. Skipped when *room_id* is
+       unknown, or when *manager* is ``None`` (broadcast still relies on a
+       manager; the row is persisted regardless so a reconnect replays it).
+    2. **Recovery** — if the request maps to an assignment-originated Task,
+       re-dispatch it once via ``_redispatch_task_by_request_id`` (the same
+       bounded core the WS ``handler_finished`` path uses). Live turns (no
+       mapping) get only the notice — the scope invariant is preserved.
+
+    Fully fail-soft: each row is handled in its own ``try`` so one bad row
+    (or a broadcast / re-dispatch error) never blocks the remaining rows,
+    and never touches the orphan-marking commit the sweep already made
+    (separate sessions throughout).
+    """
+    if not rows:
+        return
+
+    # Lazy imports keep the scheduler↔ws / scheduler↔messages module load
+    # order cycle-free (mirrors the ws handler's lazy ``messages.service``
+    # import on its re-dispatch path).
+    from anygarden.db.repository import append_message
+    from anygarden.ws.handler import _redispatch_task_by_request_id
+    from anygarden.ws.protocol import MessageOut
+
+    for row in rows:
+        # --- 1. visibility: room system notice ---
+        if row.room_id and manager is not None:
+            try:
+                async with session_factory() as db:
+                    msg = await append_message(
+                        db,
+                        row.room_id,
+                        None,
+                        _ORPHAN_NOTICE_TEXT,
+                        {
+                            "system_origin": "liveness_orphan",
+                            "request_id": row.request_id,
+                        },
+                    )
+                    await db.commit()
+                    frame = MessageOut(
+                        id=msg.id,
+                        room_id=msg.room_id,
+                        participant_id=msg.participant_id,
+                        content=msg.content,
+                        seq=msg.seq,
+                        created_at=msg.created_at,
+                        metadata=msg.extra_metadata,
+                    )
+                await manager.broadcast(row.room_id, frame)
+            except Exception as exc:  # noqa: BLE001 — notice is best-effort
+                logger.warning(
+                    "liveness.orphan_notice.failed",
+                    request_id=row.request_id,
+                    room_id=row.room_id,
+                    error=str(exc),
+                )
+
+        # --- 2. recovery: re-dispatch the assignment Task (if any) ---
+        try:
+            async with session_factory() as db:
+                did = await _redispatch_task_by_request_id(
+                    db,
+                    request_id=row.request_id,
+                    reason="liveness_orphan",
+                    manager=manager,
+                )
+                if did:
+                    await db.commit()
+        except Exception as exc:  # noqa: BLE001 — recovery is best-effort
+            logger.warning(
+                "liveness.orphan_redispatch.failed",
+                request_id=row.request_id,
+                error=str(exc),
+            )
 
 
 # ── #447 Wave 1a — agent heartbeat reaper ────────────────────────────
