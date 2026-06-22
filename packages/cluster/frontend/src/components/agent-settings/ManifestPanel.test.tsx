@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 import ManifestPanel, {
@@ -566,5 +566,104 @@ describe('ManifestPanel — attached library skills (Issue #133)', () => {
     expect(textarea.value).toContain('Follow the design system')
     // "View in Skills" link should be present for navigation.
     expect(screen.getByTestId('agent-edit-view-in-skills')).toBeInTheDocument()
+  })
+})
+
+// Issue #479 — the panel re-seeded its editor working copy on every change
+// to the ``agent`` prop's object identity. The parent (#281 pattern) derives
+// a fresh Agent object from the live list on every ``useAgents.fetchAgents``
+// (e.g. the #219 transitional poll, every 1.5s), so an in-progress AGENTS.md
+// edit was clobbered repeatedly. The seed must run only when the agent's
+// stable id changes (open / agent switch), never for a same-id refresh.
+describe('ManifestPanel — edit preservation across agent prop refresh (#479)', () => {
+  function renderPanel(agent: Agent, mocks: {
+    fetchAgentFiles: ReturnType<typeof vi.fn>
+    fetchAttachedSkills: ReturnType<typeof vi.fn>
+  }) {
+    const updateAgent = vi.fn().mockResolvedValue(makeAgent())
+    const upsertAgentFile = vi.fn()
+    const deleteAgentFile = vi.fn().mockResolvedValue(undefined)
+    const fetchSkillPreview = vi.fn().mockResolvedValue(null)
+    const props = {
+      fetchAgentFiles: mocks.fetchAgentFiles,
+      updateAgent,
+      upsertAgentFile,
+      deleteAgentFile,
+      fetchAttachedSkills: mocks.fetchAttachedSkills,
+      fetchSkillPreview,
+    }
+    const view = render(
+      <MemoryRouter>
+        <ManifestPanel agent={agent} {...props} />
+      </MemoryRouter>,
+    )
+    const rerenderWith = (next: Agent) =>
+      view.rerender(
+        <MemoryRouter>
+          <ManifestPanel agent={next} {...props} />
+        </MemoryRouter>,
+      )
+    return { rerenderWith }
+  }
+
+  it('preserves an in-progress AGENTS.md edit when the agent prop is replaced with a new object of the same id', async () => {
+    const fetchAgentFiles = vi.fn().mockResolvedValue([])
+    const fetchAttachedSkills = vi.fn().mockResolvedValue([])
+    const { rerenderWith } = renderPanel(
+      makeAgent({ id: 'a1', agents_md: '# original' }),
+      { fetchAgentFiles, fetchAttachedSkills },
+    )
+
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    expect(textarea.value).toBe('# original')
+
+    fireEvent.change(textarea, { target: { value: '# edited by user' } })
+    expect(textarea.value).toBe('# edited by user')
+
+    const loadsBefore = fetchAgentFiles.mock.calls.length
+
+    // Simulate the #219 poll: setAgents replaces the list, so the parent
+    // hands down a brand-new Agent object with the SAME id and unchanged
+    // server content.
+    rerenderWith(makeAgent({ id: 'a1', agents_md: '# original' }))
+    // Let any (regressed) re-fired loadInitial resolve its fetch + setFiles.
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The seed must NOT re-run for the same id (no extra file load) and the
+    // edit must survive.
+    expect(fetchAgentFiles).toHaveBeenCalledTimes(loadsBefore)
+    expect(
+      (screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement).value,
+    ).toBe('# edited by user')
+  })
+
+  it('re-seeds AGENTS.md when the agent prop switches to a different id', async () => {
+    const fetchAgentFiles = vi.fn().mockResolvedValue([])
+    const fetchAttachedSkills = vi.fn().mockResolvedValue([])
+    const { rerenderWith } = renderPanel(
+      makeAgent({ id: 'a1', agents_md: '# original' }),
+      { fetchAgentFiles, fetchAttachedSkills },
+    )
+
+    await screen.findByTestId('agent-edit-file-AGENTS.md')
+    const textarea = screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '# edited by user' } })
+
+    const loadsBefore = fetchAgentFiles.mock.calls.length
+
+    // A genuinely different agent — the editor SHOULD reseed from its content.
+    rerenderWith(makeAgent({ id: 'a2', agents_md: '# other agent' }))
+    await waitFor(() =>
+      expect(fetchAgentFiles.mock.calls.length).toBeGreaterThan(loadsBefore),
+    )
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('agent-edit-file-content') as HTMLTextAreaElement).value,
+      ).toBe('# other agent'),
+    )
   })
 })
