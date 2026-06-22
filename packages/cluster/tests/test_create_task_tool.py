@@ -16,6 +16,7 @@ from __future__ import annotations
 import secrets
 
 import pytest
+from sqlalchemy import func
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -265,6 +266,212 @@ async def test_unknown_room_is_error(db) -> None:
         },
     )
     assert result["isError"] is True
+
+
+# ── Unit: soft in-flight dedup (#484) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_duplicate_open_task_is_deduplicated(db) -> None:
+    """Two create_task calls with the same (room, assignee, title)
+    while the first is still open must collapse to a single row. The
+    second returns the existing task_id with ``deduplicated=True`` and
+    does **not** re-inject the assignment mention (the assignee already
+    got woken on the first call)."""
+    seeded = await _seed_orchestrator_room(db)
+    args = {
+        "room_id": seeded["room"].id,
+        "title": "design review",
+        "assignee_pid": seeded["worker_p"].id,
+    }
+    first = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert first["isError"] is False
+    first_id = first["structuredContent"]["task_id"]
+    assert first["structuredContent"].get("deduplicated") in (None, False)
+
+    second = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert second["isError"] is False
+    assert second["structuredContent"]["task_id"] == first_id
+    assert second["structuredContent"]["deduplicated"] is True
+
+    # Exactly one row, and the mention was injected exactly once.
+    rows = (await db.execute(select(Task))).scalars().all()
+    assert len(rows) == 1
+    msgs = (await db.execute(select(Message))).scalars().all()
+    assert len(msgs) == 1
+
+
+@pytest.mark.asyncio
+async def test_dedup_for_unassigned_tasks(db) -> None:
+    """The dedup probe treats a NULL assignee consistently — two
+    unassigned tasks with the same title collapse to one open row."""
+    seeded = await _seed_orchestrator_room(db, second_agent=False)
+    args = {"room_id": seeded["room"].id, "title": "later"}
+    first = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert first["isError"] is False
+    first_id = first["structuredContent"]["task_id"]
+
+    second = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert second["isError"] is False
+    assert second["structuredContent"]["task_id"] == first_id
+    assert second["structuredContent"]["deduplicated"] is True
+
+    rows = (await db.execute(select(Task))).scalars().all()
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_closed_duplicate_title_creates_new_task(db) -> None:
+    """A finished task with the same title must **not** dedup — the
+    probe only matches open ('todo'/'in_progress') rows, so a legit
+    repeat ("PR review" again) gets its own fresh row."""
+    seeded = await _seed_orchestrator_room(db)
+    args = {
+        "room_id": seeded["room"].id,
+        "title": "PR review",
+        "assignee_pid": seeded["worker_p"].id,
+    }
+    first = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    first_id = first["structuredContent"]["task_id"]
+
+    # Close the first task — the probe should now miss it.
+    done = (
+        await db.execute(select(Task).where(Task.id == first_id))
+    ).scalar_one()
+    done.status = "done"
+    await db.flush()
+
+    second = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert second["isError"] is False
+    assert second["structuredContent"]["task_id"] != first_id
+    assert second["structuredContent"].get("deduplicated") in (None, False)
+
+    rows = (await db.execute(select(Task))).scalars().all()
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_dedup_scoped_per_assignee(db) -> None:
+    """Same title, different assignee → not a duplicate. The dedup key
+    includes the assignee participant."""
+    seeded = await _seed_orchestrator_room(db)
+    # A third agent + participant to be the second distinct assignee.
+    other_agent = Agent(name="worker2", engine="echo")
+    db.add(other_agent)
+    await db.flush()
+    other_p = Participant(
+        room_id=seeded["room"].id, agent_id=other_agent.id, role="member"
+    )
+    db.add(other_p)
+    await db.flush()
+
+    base = {"room_id": seeded["room"].id, "title": "ship it"}
+    r1 = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={**base, "assignee_pid": seeded["worker_p"].id},
+    )
+    r2 = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={**base, "assignee_pid": other_p.id},
+    )
+    assert r1["isError"] is False
+    assert r2["isError"] is False
+    assert r2["structuredContent"]["task_id"] != r1["structuredContent"]["task_id"]
+    assert (
+        len((await db.execute(select(Task))).scalars().all()) == 2
+    )
+
+
+# ── Unit: fan-out cap (#484) ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_fanout_cap_blocks_excess_open_tasks(db, monkeypatch) -> None:
+    """Once the room hits its open-task cap, a further create_task is a
+    fail-soft tool error (not a crash) and writes no new row."""
+    monkeypatch.setenv("ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM", "2")
+    seeded = await _seed_orchestrator_room(db, second_agent=False)
+    room_id = seeded["room"].id
+
+    # Fill the room to the cap with distinct titles (so dedup never hits).
+    for i in range(2):
+        r = await create_task(
+            db,
+            agent_id=seeded["orc_agent"].id,
+            arguments={"room_id": room_id, "title": f"task-{i}"},
+        )
+        assert r["isError"] is False
+
+    # The (cap+1)th distinct open task is refused, fail-soft.
+    blocked = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={"room_id": room_id, "title": "overflow"},
+    )
+    assert blocked["isError"] is True
+    assert "cap" in blocked["content"][0]["text"].lower()
+
+    # No overflow row landed.
+    total = (
+        await db.execute(select(func.count()).select_from(Task))
+    ).scalar_one()
+    assert total == 2
+
+
+@pytest.mark.asyncio
+async def test_fanout_cap_ignores_closed_tasks(db, monkeypatch) -> None:
+    """The cap only counts *open* tasks — closing one frees a slot."""
+    monkeypatch.setenv("ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM", "1")
+    seeded = await _seed_orchestrator_room(db, second_agent=False)
+    room_id = seeded["room"].id
+
+    first = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={"room_id": room_id, "title": "first"},
+    )
+    assert first["isError"] is False
+
+    # At the cap → the next distinct open task is refused.
+    refused = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={"room_id": room_id, "title": "second"},
+    )
+    assert refused["isError"] is True
+
+    # Close the first → a slot opens up, the next one succeeds.
+    done = (
+        await db.execute(select(Task).where(Task.id == first["structuredContent"]["task_id"]))
+    ).scalar_one()
+    done.status = "done"
+    await db.flush()
+
+    third = await create_task(
+        db,
+        agent_id=seeded["orc_agent"].id,
+        arguments={"room_id": room_id, "title": "third"},
+    )
+    assert third["isError"] is False
+
+
+@pytest.mark.asyncio
+async def test_dedup_hit_bypasses_cap(db, monkeypatch) -> None:
+    """A dedup hit returns the existing task even when the room is at
+    its cap — it creates no new row, so the cap is irrelevant."""
+    monkeypatch.setenv("ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM", "1")
+    seeded = await _seed_orchestrator_room(db, second_agent=False)
+    args = {"room_id": seeded["room"].id, "title": "dup-at-cap"}
+    first = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert first["isError"] is False
+
+    # Room is now at the cap (1 open task), but a duplicate dedups.
+    second = await create_task(db, agent_id=seeded["orc_agent"].id, arguments=args)
+    assert second["isError"] is False
+    assert second["structuredContent"]["deduplicated"] is True
+    assert second["structuredContent"]["task_id"] == first["structuredContent"]["task_id"]
 
 
 # ── Integration: JSON-RPC round-trip ────────────────────────────
