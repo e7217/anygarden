@@ -158,7 +158,16 @@ class ModelOut(BaseModel):
 class SecretCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    env_var_name: str = Field(..., min_length=1, max_length=64)
+    # #471 — this name is interpolated into the gateway child process'
+    # environment, so it must match POSIX env-var naming (leading letter
+    # or underscore, then alphanumerics/underscores). Rejects hyphens,
+    # leading digits and other shell-unsafe shapes with a 422.
+    env_var_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
     value: str = Field(..., min_length=1)
 
 

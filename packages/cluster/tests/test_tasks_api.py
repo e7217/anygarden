@@ -207,6 +207,106 @@ class TestCreateTask:
         assert resp.status_code == 400
 
 
+class TestTaskInputValidation:
+    """#471 — the task create/update schemas must reject meaningless
+    input at the edge (422) instead of persisting it.
+
+    Three gaps were open: an empty ``title`` on create, and an
+    arbitrary ``status`` string on both create and update (the DB column
+    is a free ``String(32)``). Status is validated against the canonical
+    ``TASK_STATUS_VALUES`` so the enum stays single-sourced (the same set
+    the MCP ``mark_task_status`` path uses — see #319 drift note)."""
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_empty_title(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": ""},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_unknown_status(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x", "status": "not-a-status"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_create_accepts_canonical_status(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        resp = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x", "status": "done"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 201
+        assert resp.json()["status"] == "done"
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_unknown_status(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"status": "not-a-status"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_accepts_canonical_status(self, tasks_env) -> None:
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"status": "in_progress"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "in_progress"
+
+    @pytest.mark.asyncio
+    async def test_update_status_none_is_allowed(self, tasks_env) -> None:
+        """A partial update that omits ``status`` (or sends null) must not
+        trip the validator — only title/assignee changes."""
+        client = tasks_env["client"]
+        room = tasks_env["room"]
+        create = await client.post(
+            f"/api/v1/rooms/{room.id}/tasks",
+            json={"title": "x"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = create.json()["id"]
+        resp = await client.put(
+            f"/api/v1/tasks/{task_id}",
+            json={"title": "renamed"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "renamed"
+
+
 class TestUpdateTask:
     @pytest.mark.asyncio
     async def test_assigning_agent_after_create_injects(self, tasks_env) -> None:

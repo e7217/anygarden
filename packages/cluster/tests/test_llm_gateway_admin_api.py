@@ -379,6 +379,44 @@ async def test_secret_post_encrypts_and_list_masks(env) -> None:
             assert b"sk-ant-api03" not in row.encrypted_value
 
 
+async def test_secret_rejects_invalid_env_var_name(env) -> None:
+    """#471 — ``env_var_name`` is interpolated into the gateway's child
+    process environment, so it must look like a real env var. A name with
+    a hyphen (or any non ``[A-Za-z_][A-Za-z0-9_]*`` shape) is rejected with
+    422 instead of being persisted as an unusable key."""
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/secrets",
+            headers=_auth(env["admin_jwt"]),
+            json={"env_var_name": "bad-name", "value": "sk-xxx"},
+        )
+        assert resp.status_code == 422
+
+        # A digit-leading name is also invalid for a shell env var.
+        resp2 = await c.post(
+            "/api/v1/llm-gateway/secrets",
+            headers=_auth(env["admin_jwt"]),
+            json={"env_var_name": "1KEY", "value": "sk-xxx"},
+        )
+        assert resp2.status_code == 422
+
+
+async def test_secret_accepts_valid_env_var_name(env) -> None:
+    """A conventional upper-snake env var name still creates a 201."""
+    async with AsyncClient(
+        transport=ASGITransport(app=env["app"]), base_url="http://test"
+    ) as c:
+        resp = await c.post(
+            "/api/v1/llm-gateway/secrets",
+            headers=_auth(env["admin_jwt"]),
+            json={"env_var_name": "OPENAI_API_KEY", "value": "sk-proj-xxx"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["env_var_name"] == "OPENAI_API_KEY"
+
+
 async def test_secret_delete(env) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=env["app"]), base_url="http://test"

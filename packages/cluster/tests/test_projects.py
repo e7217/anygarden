@@ -103,6 +103,21 @@ async def test_create_project_unauthenticated(projects_env: AsyncClient):
     assert resp.status_code == 401
 
 
+async def test_create_project_empty_name_is_rejected(projects_env: AsyncClient):
+    """#471 — an empty ``name`` is meaningless and must 422, not 201.
+
+    Sibling create schemas (``goals.py``, ``auth/routes.py``) already
+    enforce ``Field(min_length=1)``; projects fell through the gap.
+    """
+    token = await _register_and_get_token(projects_env)
+    resp = await projects_env.post(
+        "/api/v1/projects",
+        json={"name": ""},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
 # ── Delete project ───────────────────────────────────────────────────
 
 
