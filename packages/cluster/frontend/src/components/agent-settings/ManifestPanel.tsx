@@ -635,10 +635,23 @@ export default function ManifestPanel({
     }
   }, [agent, fetchFilesIntoWorking])
 
+  // Issue #479 — seed the editor working copy only when the dialog opens or
+  // the selected agent's STABLE id changes, never on every refreshed ``agent``
+  // object. The parent (#281 pattern) derives a fresh Agent object from the
+  // live list on every ``useAgents.fetchAgents`` — and the #219 transitional
+  // poll fires that every 1.5s — so an unconditional re-seed clobbered any
+  // in-progress AGENTS.md/file edit. Mirrors the ``agent?.id``-gated
+  // ``expandedPaths`` effect below. Re-opening for the same agent is covered
+  // by the dialog unmounting this panel on close (a fresh mount re-seeds).
+  const seededAgentIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (agent) {
-      void loadInitial()
+    if (!agent) {
+      seededAgentIdRef.current = null
+      return
     }
+    if (seededAgentIdRef.current === agent.id) return
+    seededAgentIdRef.current = agent.id
+    void loadInitial()
   }, [agent, loadInitial])
 
   // Issue #112 — engine-based prefix filter. Changes to the tree
