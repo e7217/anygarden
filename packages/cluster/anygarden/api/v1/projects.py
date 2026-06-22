@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +20,10 @@ router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
 
 class ProjectCreate(BaseModel):
-    name: str
+    # #471 — reject empty/oversized names at the edge (422). 255 mirrors
+    # the ``Project.name String(255)`` column; sibling create schemas
+    # (goals.py, auth/routes.py) already enforce the same min_length=1.
+    name: str = Field(min_length=1, max_length=255)
     description: Optional[str] = None
 
 

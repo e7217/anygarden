@@ -32,24 +32,13 @@ from anygarden.skills_library.service import (
     SkillOwnershipError,
 )
 
+# #471 — the canonical status vocabulary now lives in a tiny, import-light
+# module so the REST schemas (api/v1/tasks.py) can reuse it without pulling
+# the MCP router into their import graph. Re-exported here so the historical
+# ``from anygarden.mcp.tools import TASK_STATUS_VALUES`` path keeps working.
+from anygarden.tasks_status import TASK_STATUS_VALUES, TERMINAL_STATUSES
+
 log = logging.getLogger(__name__)
-
-# Terminal task statuses — a blocker is "satisfied" once it reaches one of
-# these. Reused by the #459 resolve-wake hook and the cycle/blocker walks.
-TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed"})
-
-# Allowed task status values for ``mark_task_status`` (#266, #319).
-# ``failed`` (#319) joined the legal set when the goals sweeper started
-# stamping it on pickup/execution timeouts; before that the LLM-facing
-# enum and the sweeper's stored value drifted, so an agent that wanted
-# to mark its own task as failed got a 4xx from the MCP RPC.
-TASK_STATUS_VALUES: tuple[str, ...] = (
-    "todo",
-    "in_progress",
-    "done",
-    "blocked",
-    "failed",
-)
 
 # ── Tool schemas ────────────────────────────────────────────────
 

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,21 +17,43 @@ from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
 )
+# #471 — validate ``status`` against the single canonical vocabulary
+# (the same set the MCP ``mark_task_status`` path enforces) so the REST
+# surface can't persist an out-of-band status the rest of the system
+# never expects. Sourced from the import-light module to avoid dragging
+# the MCP router into this module's import graph.
+from anygarden.tasks_status import TASK_STATUS_VALUES
 from anygarden.ws.protocol import MessageOut
 
 router = APIRouter(tags=["tasks"])
 
 
+def _validate_task_status(value: Optional[str]) -> Optional[str]:
+    """Reject any status outside :data:`TASK_STATUS_VALUES` with a 422.
+
+    ``None`` is passed through so the optional ``TaskUpdate.status`` field
+    stays a no-op on partial updates (title/assignee-only changes)."""
+    if value is not None and value not in TASK_STATUS_VALUES:
+        raise ValueError(
+            f"status must be one of {sorted(TASK_STATUS_VALUES)}"
+        )
+    return value
+
+
 class TaskCreate(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=500)
     status: str = "todo"
     assignee_participant_id: Optional[str] = None
+
+    _check_status = field_validator("status")(_validate_task_status)
 
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     status: Optional[str] = None
     assignee_participant_id: Optional[str] = None
+
+    _check_status = field_validator("status")(_validate_task_status)
 
 
 class TaskOut(BaseModel):
