@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
@@ -52,7 +53,13 @@ async def search_messages(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """Full-text search across messages using FTS5."""
+    """Full-text search across messages using FTS5.
+
+    If the ``messages_fts`` index is absent (e.g. a deployment whose DB
+    predates the index, or a Postgres backend where FTS5 is unavailable),
+    the underlying ``OperationalError`` is mapped to a 503 so a missing
+    index degrades gracefully instead of leaking a 500 (#473).
+    """
     # FTS5 query — use highlight() for snippets.
     # If project_id is given, join through rooms to filter.
     if project_id:
@@ -71,7 +78,7 @@ async def search_messages(
             ORDER BY rank
             LIMIT :limit
         """)
-        rows = (await db.execute(sql, {"query": q, "project_id": project_id, "limit": limit})).all()
+        params = {"query": q, "project_id": project_id, "limit": limit}
     else:
         sql = text("""
             SELECT
@@ -86,7 +93,14 @@ async def search_messages(
             ORDER BY rank
             LIMIT :limit
         """)
-        rows = (await db.execute(sql, {"query": q, "limit": limit})).all()
+        params = {"query": q, "limit": limit}
+
+    try:
+        rows = (await db.execute(sql, params)).all()
+    except OperationalError as exc:
+        raise HTTPException(
+            status_code=503, detail="Search index unavailable"
+        ) from exc
 
     return [
         SearchResult(

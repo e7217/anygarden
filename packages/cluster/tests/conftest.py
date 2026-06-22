@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.app import create_app
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.fts import create_message_fts
 from anygarden.db.models import Base
 
 
@@ -40,6 +41,11 @@ async def engine(config: AnygardenSettings):
     eng = build_engine(config.db_url)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all omits the raw FTS5 index (it lives only in migration
+        # 008), so mirror the fresh-DB bootstrap (#473) here to let search
+        # endpoint integration tests run against a real messages_fts.
+        if eng.dialect.name == "sqlite":
+            await create_message_fts(conn)
     yield eng
     # Defensive (#464): swallow the in-memory aiosqlite teardown race
     # ("no active connection" during dispose()'s rollback) — the DB is
