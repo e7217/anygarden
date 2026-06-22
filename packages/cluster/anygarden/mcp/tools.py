@@ -18,10 +18,11 @@ the LLM couldn't read the message.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Participant, Room, Task, TaskBlocker
@@ -482,6 +483,23 @@ async def mark_task_status(
 
 # ── create_task (#270) ─────────────────────────────────────────────
 
+# Issue #484 — "open" (still-actionable) statuses for the orchestrator
+# create_task safeguards. Both the soft in-flight dedup probe and the
+# fan-out cap count only these; a ``done``/``failed`` task neither blocks
+# a legit repeat of the same title nor consumes a cap slot. ``blocked`` is
+# deliberately excluded so a wedged blocker graph cannot mask the cap or
+# false-dedup against a task no one is actively working — mirrors the
+# ``status IN ('todo','in_progress')`` probe the goal path (#449) uses and
+# is covered by the ``ix_tasks_room_status`` index.
+_OPEN_TASK_STATUSES: tuple[str, ...] = ("todo", "in_progress")
+
+# Default ceiling on the number of *open* tasks a single room may hold.
+# Generous enough for normal decomposition (10–20 tasks) while still
+# capping a runaway orchestrator loop. Tunable per-deployment via the
+# ``ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM`` env var (read at call time so a
+# test / operator can override without restarting).
+_DEFAULT_MAX_OPEN_TASKS_PER_ROOM = 50
+
 
 async def create_task(
     db: AsyncSession,
@@ -557,10 +575,85 @@ async def create_task(
                 "assign a task to its own participant"
             )
 
+    clean_title = title.strip()
+
+    # ── Soft in-flight dedup (#484) ──────────────────────────────
+    # An orchestrator LLM that calls create_task twice in one turn (or
+    # re-fires after a transient error) would otherwise spawn duplicate
+    # tasks — the self-loop guard only stops *self*-assignment. Before we
+    # persist, look for an already-open task with the same
+    # (room, assignee, title). On a hit we return that task's id with
+    # ``deduplicated=True`` and do NOT re-inject the assignment mention
+    # (the assignee already woke on the first create) — a fail-soft,
+    # idempotent success rather than a second row. The probe matches a
+    # NULL assignee consistently via ``IS NULL`` so unassigned repeats
+    # collapse too. This is a *soft* guard (a true exactly-once token is
+    # the follow-up #449-style ``idempotency_key`` work); a near-
+    # simultaneous race could still slip two rows through, but the
+    # per-room single-turn lock serialises the orchestrator in practice.
+    existing_id = (
+        await db.execute(
+            select(Task.id)
+            .where(
+                Task.room_id == room_id,
+                Task.assignee_participant_id == assignee_pid
+                if assignee_pid is not None
+                else Task.assignee_participant_id.is_(None),
+                Task.title == clean_title,
+                Task.status.in_(_OPEN_TASK_STATUSES),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if existing_id is not None:
+        return _ok_result(
+            f"task {existing_id!r} already open (deduplicated)",
+            structured={
+                "task_id": existing_id,
+                "room_id": room_id,
+                "assignee_pid": assignee_pid,
+                "status": status,
+                "deduplicated": True,
+            },
+        )
+
+    # ── Fan-out cap (#484) ───────────────────────────────────────
+    # No dedup hit means we're about to create a genuinely new task.
+    # Guard against a runaway loop by refusing once the room already
+    # holds ``ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM`` open tasks. This is a
+    # fail-soft tool error (``isError: true``) — the orchestrator reads
+    # it and stops rather than crashing the turn. A malformed env value
+    # falls back to the default so a typo can't disable the safeguard.
+    try:
+        cap = int(
+            os.environ.get(
+                "ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM",
+                _DEFAULT_MAX_OPEN_TASKS_PER_ROOM,
+            )
+        )
+    except (TypeError, ValueError):
+        cap = _DEFAULT_MAX_OPEN_TASKS_PER_ROOM
+    open_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(
+                Task.room_id == room_id,
+                Task.status.in_(_OPEN_TASK_STATUSES),
+            )
+        )
+    ).scalar_one()
+    if open_count >= cap:
+        return _error_result(
+            f"open task cap reached for this room ({open_count}/{cap}); "
+            "refusing to create another task. Close or complete some open "
+            "tasks first, or raise ANYGARDEN_MAX_OPEN_TASKS_PER_ROOM."
+        )
+
     # ── Persist + inject ─────────────────────────────────────────
     task = Task(
         room_id=room_id,
-        title=title.strip(),
+        title=clean_title,
         status=status,
         assignee_participant_id=assignee_pid,
         # ``created_by`` is for User authors — agent-created tasks
