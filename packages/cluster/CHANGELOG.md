@@ -3,6 +3,35 @@
 
 ## Unreleased
 
+## v0.10.1 (2026-06-22)
+
+### Fixes
+
+- **Search 500 on fresh-DB bootstrap (#473)** — `messages_fts` (the FTS5
+  virtual table + sync triggers) was only created by migration 008, so the
+  fresh-DB bootstrap path (`create_all` + stamp, used by `anygarden server`
+  against an empty DB) left it missing and every authenticated
+  `GET /api/v1/search` returned 500 (`no such table: messages_fts`). The FTS
+  DDL now lives in a shared `anygarden/db/fts.py` helper that the bootstrap
+  runs after `create_all` (SQLite only), and the search query degrades to a
+  503 instead of a 500 when the index is unavailable.
+- **Room create 500 on bad project_id (#472)** — `POST /api/v1/rooms` with a
+  present-but-nonexistent `project_id` leaked the FK `IntegrityError` as a
+  500. It now pre-checks the project and returns a clean 404.
+- **Missing input validation (#471)** — empty project names and task titles
+  were accepted (201), arbitrary task `status` values were persisted via the
+  REST surface, and LLM Gateway secret `env_var_name` accepted shell-unsafe
+  shapes. These now return 422: project name / task title require
+  `min_length=1`; task `status` is validated against the canonical
+  `TASK_STATUS_VALUES` (hoisted to `anygarden/tasks_status.py` and shared with
+  the MCP path); `env_var_name` must match POSIX env-var naming.
+
+### Note on the changelog gap
+
+`v0.9.x` and `v0.10.0` shipped their notes via the tag-triggered GitHub
+Release (`release.yml --generate-notes`) rather than this file; this entry
+resumes the `CHANGELOG.md` trail at the current line.
+
 ## v0.8.0 (2026-05-22)
 
 ### ⚠ Breaking changes — full anygarden rebrand
