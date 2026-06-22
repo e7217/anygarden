@@ -20,8 +20,11 @@ Phase 0 contracts validated here:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,7 @@ from typing import Any
 import pytest
 
 from anygarden_agent import secrets as agent_secrets
+from anygarden_agent.integrations import openhands_engine as openhands_mod
 from anygarden_agent.integrations.openhands_engine import (
     OpenHandsAdapter,
     _OPENHANDS_SDK_ENV_KEYS,
@@ -39,6 +43,7 @@ from anygarden_agent.integrations.openhands_engine import (
     _try_register_runtime_tools,
     integrate_with_openhands,
 )
+from anygarden_agent.runtime.handler_wrapper import EngineTimeoutError
 
 
 @pytest.fixture
@@ -724,6 +729,120 @@ class TestIngestContext:
 
 
 # --------------------------------------------------------------- secrets
+
+
+class TestOpenHandsTurnTimeout:
+    """Issue #483 — ``conversation.run`` is an unbounded synchronous
+    call dispatched onto a worker thread via ``asyncio.to_thread``. A
+    hung agent loop used to lean on the supervisor's 900s ``wait_for``
+    as the only defence, and even then the worker thread (with its
+    in-flight LLM call) survived as a zombie. The adapter now wraps the
+    await in ``asyncio.wait_for(..., _OPENHANDS_TURN_TIMEOUT)``,
+    surfaces ``EngineTimeoutError`` (→ supervisor outcome=timeout +
+    room notice), and calls ``conversation.pause()`` as best-effort
+    cancellation — symmetric with the codex/gemini adapters."""
+
+    @pytest.mark.asyncio
+    async def test_run_timeout_raises_engine_timeout_and_pauses(
+        self, fake_sdk: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original_conv = fake_sdk["Conversation"]
+        observed: dict[str, Any] = {"paused": False, "run_returned": None}
+
+        class HangingConversation(original_conv):  # type: ignore[misc, valid-type]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                super().__init__(*args, **kwargs)
+                self._pause_event = threading.Event()
+
+            def run(self) -> None:
+                # Block the worker thread until pause() fires or ~1s
+                # elapses. Polling the event keeps the thread from
+                # leaking past the test (mirrors how a cooperative
+                # cancellation lets the worker exit cleanly).
+                deadline = time.time() + 1.0
+                while time.time() < deadline:
+                    if self._pause_event.is_set():
+                        observed["run_returned"] = "paused"
+                        return
+                    time.sleep(0.02)
+                observed["run_returned"] = "deadline"
+
+            def pause(self) -> None:
+                # OpenHands' real pause() is documented as thread-safe;
+                # the timeout handler calls it from the event loop while
+                # run() blocks on the worker thread.
+                observed["paused"] = True
+                self._pause_event.set()
+
+        sdk_mod = sys.modules["openhands.sdk"]
+        monkeypatch.setattr(sdk_mod, "Conversation", HangingConversation)
+
+        # Drive the deadline below the worker's 1s ceiling so the
+        # wait_for path fires fast and deterministically.
+        monkeypatch.setattr(openhands_mod, "_OPENHANDS_TURN_TIMEOUT", 0.2)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+
+        with pytest.raises(EngineTimeoutError):
+            await adapter.on_message({"content": "slow", "room_id": "r1"})
+
+        # Best-effort cancellation must have fired so the SDK loop
+        # stops at the next step boundary instead of zombie-running.
+        assert observed["paused"] is True, (
+            "timeout handler must call conversation.pause()"
+        )
+
+        # The worker polls the pause event every 20ms; yield to the
+        # loop so it observes the pause and exits cleanly rather than
+        # racing past the test.
+        deadline = time.time() + 1.0
+        while time.time() < deadline and observed["run_returned"] is None:
+            await asyncio.sleep(0.02)
+        assert observed["run_returned"] == "paused", (
+            "worker thread did not observe pause within 1s"
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_timeout_survives_missing_pause(
+        self, fake_sdk: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An older SDK whose Conversation has no ``pause`` must still
+        surface the timeout — the best-effort cancel is guarded so its
+        absence can't mask ``EngineTimeoutError``."""
+        original_conv = fake_sdk["Conversation"]
+
+        class NoPauseHangingConversation(  # type: ignore[misc, valid-type]
+            original_conv
+        ):
+            def run(self) -> None:
+                # FakeConversation.run is instant; sleep so wait_for trips.
+                time.sleep(1.0)
+
+            # Deliberately drop ``pause`` to simulate an older SDK. The
+            # base FakeConversation has none either, but be explicit.
+            pause = None  # type: ignore[assignment]
+
+        sdk_mod = sys.modules["openhands.sdk"]
+        monkeypatch.setattr(sdk_mod, "Conversation", NoPauseHangingConversation)
+        monkeypatch.setattr(openhands_mod, "_OPENHANDS_TURN_TIMEOUT", 0.2)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+
+        with pytest.raises(EngineTimeoutError):
+            await adapter.on_message({"content": "slow", "room_id": "r2"})
+
+    @pytest.mark.asyncio
+    async def test_normal_reply_unaffected_by_timeout_wrap(
+        self, fake_sdk: dict[str, Any]
+    ) -> None:
+        """A fast turn returns its reply unchanged — the wait_for
+        wrapper is invisible on the happy path."""
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message({"content": "hi", "room_id": "r1"})
+        assert reply == "echo: hi"
 
 
 class TestSecretsBridging:

@@ -7,6 +7,7 @@ regardless of whether the real package is installed in the venv.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -14,10 +15,12 @@ from typing import Any, AsyncIterator
 
 import pytest
 
+from anygarden_agent.integrations import claude_code as claude_mod
 from anygarden_agent.integrations.claude_code import (
     ClaudeCodeAdapter,
     integrate_with_claude_code,
 )
+from anygarden_agent.runtime.handler_wrapper import EngineTimeoutError
 
 
 @pytest.fixture
@@ -1279,3 +1282,75 @@ class TestResultUsageExtraction:
         }
         # Drained — a second take is None (no leak into the next turn).
         assert adapter._take_last_usage() is None
+
+
+class TestClaudeTurnTimeout:
+    """Issue #483 — the claude-agent-sdk ``query()`` consumption had no
+    intrinsic deadline. A hung turn used to lean on the supervisor's
+    900s ``wait_for`` as the *only* defence, so a stuck claude turn held
+    the room ~4-7.5x longer than codex (600s) / gemini (120s) before the
+    user was notified. The adapter now wraps the stream consumption in
+    ``asyncio.wait_for(..., _CLAUDE_TURN_TIMEOUT)`` and surfaces a
+    timeout as ``EngineTimeoutError`` (→ supervisor outcome=timeout +
+    room notice), symmetric with the codex/gemini adapters."""
+
+    @pytest.mark.asyncio
+    async def test_on_message_timeout_raises_engine_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        cleaned = {"done": False}
+
+        async def hanging_query(
+            *, prompt: str, options: Any, transport: Any = None
+        ) -> AsyncIterator[Any]:
+            try:
+                # Never yields a terminal message: the consumption
+                # blocks past the deadline so wait_for fires.
+                while True:
+                    await asyncio.sleep(0.05)
+                    yield SimpleNamespace()  # pragma: no cover - unreachable
+            finally:
+                # The timeout cancels the consume() coroutine, which
+                # propagates into this generator and runs its cleanup
+                # (whether via CancelledError or the subsequent
+                # ``aclose()``). Recording it here proves the SDK stream
+                # is not left dangling — that was the leak the wrapper
+                # has to prevent.
+                cleaned["done"] = True
+
+        fake_module = types.ModuleType("claude_agent_sdk")
+        fake_module.ClaudeAgentOptions = lambda **kw: SimpleNamespace(kwargs=kw)
+        fake_module.query = hanging_query
+        fake_module.__version__ = "fake"
+        monkeypatch.setitem(sys.modules, "claude_agent_sdk", fake_module)
+
+        # Drive the deadline well below the hang so the timeout path
+        # fires fast and deterministically.
+        monkeypatch.setattr(claude_mod, "_CLAUDE_TURN_TIMEOUT", 0.2)
+
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+
+        with pytest.raises(EngineTimeoutError):
+            await adapter.on_message({"content": "slow", "room_id": "r1"})
+
+        # The async generator must be drained/closed so the SDK stream
+        # doesn't leak past the timeout.
+        await asyncio.sleep(0.05)
+        assert cleaned["done"] is True, (
+            "timeout handler must clean up the query() stream"
+        )
+
+    @pytest.mark.asyncio
+    async def test_normal_reply_unaffected_by_timeout_wrap(
+        self, fake_sdk: list[dict[str, Any]]
+    ) -> None:
+        """A turn that completes well under the deadline returns the
+        reply unchanged — the wait_for wrapper is invisible on the
+        happy path."""
+        adapter = ClaudeCodeAdapter()
+        await adapter.start()
+        reply = await adapter.on_message({"content": "hi", "room_id": "r1"})
+        assert reply == "hello from fake claude"
