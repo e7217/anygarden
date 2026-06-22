@@ -16,6 +16,7 @@ from anygarden_machine.safefs import secure_chmod
 
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.fts import create_message_fts
 from anygarden.db.models import Base
 from anygarden.observability.logging import configure_logging
 from anygarden.messages.router import router as messages_router
@@ -62,6 +63,19 @@ _APP_TABLES = (
     "machine_engines",
     "machine_tokens",
 )
+
+
+def _is_asset_like_path(path: str) -> bool:
+    """True if *path* looks like a static asset request (#473).
+
+    The SPA catch-all should only return ``index.html`` for client-side
+    routes, which never carry a file extension (e.g. ``/rooms/abc``). A
+    request whose final path segment contains a ``.`` (``favicon.ico``,
+    ``robots.txt``) is an asset request — if it didn't match a real file,
+    it must 404 rather than fall through to the HTML shell. Only the
+    basename matters, so a dot in an earlier segment is ignored.
+    """
+    return "." in path.rsplit("/", 1)[-1]
 
 
 async def _ensure_schema_ready(engine, db_url: str) -> None:
@@ -120,6 +134,14 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
         head_rev = _discover_head_revision()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # create_all builds the ORM-declared tables but NOT the raw
+            # FTS5 virtual table + triggers (those live only in migration
+            # 008, which this bootstrap path never replays). Add them in
+            # the same transaction so a fresh install can serve search
+            # instead of 500ing on a missing messages_fts (#473). FTS5 is
+            # SQLite-only.
+            if engine.dialect.name == "sqlite":
+                await create_message_fts(conn)
             # Mirror what Alembic's `stamp head` does, inline, so it joins
             # the same transaction as create_all. Schema of alembic_version
             # is Alembic's standard single-column table.
@@ -1006,7 +1028,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
 
     # SPA static file serving — must be last so API routes take precedence.
     from starlette.staticfiles import StaticFiles
-    from starlette.responses import FileResponse
+    from starlette.responses import FileResponse, Response
 
     static_dir = Path(__file__).parent / "static"
     index_html = static_dir / "index.html"
@@ -1019,6 +1041,12 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
             file = static_dir / path
             if file.is_file():
                 return FileResponse(file)
+            # Asset-like requests (favicon.ico, robots.txt, …) that didn't
+            # resolve to a real file must 404 instead of falling through to
+            # the HTML shell (#473) — otherwise the browser tries to parse
+            # index.html as the asset. SPA routes carry no extension.
+            if _is_asset_like_path(path):
+                return Response(status_code=404)
             return FileResponse(index_html)
 
     return app
