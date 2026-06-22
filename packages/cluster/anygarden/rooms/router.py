@@ -28,6 +28,7 @@ from anygarden.db.models import (
     ActivityLog,
     Agent,
     Participant,
+    Project,
     Room,
     RoomArtifact,
     RoomSharedFile,
@@ -208,6 +209,15 @@ async def create_room(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new room in a project."""
+    # Pre-check the project exists so a present-but-nonexistent
+    # ``project_id`` surfaces as a clean 404 instead of leaking the
+    # FK ``IntegrityError`` as a 500 (#472). The None guard keeps the
+    # DM-room path (``project_id=NULL``) compatible.
+    if body.project_id is not None:
+        project = await db.get(Project, body.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
     room = Room(
         project_id=body.project_id,
         name=body.name,
