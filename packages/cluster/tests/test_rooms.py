@@ -116,6 +116,25 @@ class TestRoomCRUD:
             assert resp.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_create_room_unknown_project_id(self, room_env) -> None:
+        """#472 — a present-but-nonexistent ``project_id`` must surface as a
+        clean 404, not a leaked FK ``IntegrityError`` (which previously
+        bubbled up as a 500).
+        """
+        app = room_env["app"]
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/rooms",
+                json={"project_id": "not-a-real-project", "name": "ghost-room"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 404
+            assert resp.json()["detail"] == "Project not found"
+
+    @pytest.mark.asyncio
     async def test_list_rooms(self, room_env) -> None:
         app = room_env["app"]
         project = room_env["project"]
