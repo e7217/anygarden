@@ -33,9 +33,22 @@ spacing. Reference them as `var(--token)` in `style={{…}}` or via the matching
 **Radius** (`var(--radius*)`): `--radius` 4px (buttons/inputs) · `-sm` 5px · `-md` 8px · `-lg` 12px (cards/dialogs) · `-xl` 16px · `-pill`.
 **Spacing** (`var(--space-N)`): 1=4px 2=8px 3=12px 4=16px 5=20px 6=24px (canonical card/dialog/section pad) 8=32px 12=48px.
 **Shadow** (`var(--shadow-*)`): `whisper` · `card` (standard elevation) · `deep` (dialogs/popovers) · `focus`.
-**Type utilities** (class, size only — set color separately): `text-display` 48 · `text-title` 32 · `text-heading` 24 · `text-lead` 20 · `text-caption` 14 · `text-badge` 12. Body is 16px Inter.
+**Type utilities** (class — sets size + weight + line-height + tracking together; color is NOT set, apply `var(--color-foreground*)` separately): `text-display` 48 · `text-title` 32 · `text-heading` 24 · `text-lead` 20 · `text-caption` 14 · `text-badge` 12. Body is 16px Inter.
 **Custom utilities**: `shadow-card` · `shadow-deep` · `shadow-whisper` · `surface-alt`.
 **Font**: Inter (`var(--font-sans)`), loaded via the stylesheet.
+
+## Compound parts & key patterns
+
+- **Compound components** — sub-parts are separate exports on `window.AnygardenUI.*`, composed inside the root:
+  - `Card` → `CardHeader` · `CardTitle` · `CardDescription` · `CardContent` · `CardFooter` (Header/Content/Footer carry the `p-6` padding; Title/Description carry the type).
+  - `Table` → `TableHeader` · `TableBody` · `TableFooter` · `TableRow` · `TableHead` · `TableCell` · `TableCaption`. A `TableRow` supports `data-state="selected"` (brand-tint highlight).
+  - `Tabs` → `TabsList` · `TabsTrigger` · `TabsContent` (a trigger and its panel are linked by matching `value`).
+  - `Dialog` → `DialogTrigger` · `DialogContent` (which wraps `DialogHeader`/`DialogTitle`/`DialogDescription`/`DialogFooter`).
+  - `Avatar` → `AvatarImage` + `AvatarFallback` — **Avatar renders nothing without one of these children.**
+  - `ChatBubble` → `ChatBubbleAvatar` · `ChatBubbleMessage` · `ChatBubbleTimestamp` · `ChatBubbleAction`. Set `variant`/`layout` once on `ChatBubble`; it auto-injects them into the children.
+- **Controlled state** — `Dialog` and `Tabs` are Radix-controlled. Pass `open`+`onOpenChange` (with a `DialogTrigger`/`useState`) and `value`+`onValueChange` so they can actually open and dismiss; a hardcoded `open` with no handler can't be closed. `Input`/`ChatInput` use `value`+`onChange`.
+- **ChatMessageList** fills its parent (`h-full`) and scrolls internally — place it in a height-constrained box (fixed height, or a flex child with `min-h-0`). It auto-scrolls to the newest child; `smooth` animates that scroll.
+- **Accessibility** — icon-only buttons (`Button size="icon"`, `ChatBubbleAction`) require an `aria-label`. `Dialog` should keep a `DialogTitle` (Radix wires it as the accessible name).
 
 ## Where the truth lives
 

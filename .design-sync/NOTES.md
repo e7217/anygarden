@@ -61,3 +61,33 @@ playwright version to a cached `chromium-<build>` (1.60.0→1223, 1.61.0→1228)
   this automatically on re-sync).
 - New `ui/` components are NOT auto-discovered (export scan is empty) — add them to `cfg.componentSrcMap`
   AND to the `ds-entry.tsx` barrel.
+
+## QA pass (multi-agent audit) — what was hand-fixed and what's left
+
+A 54-agent QA audit ran after the first upload. Fixes applied to the synced surface:
+
+- **`cfg.dtsPropsFor` is hand-maintained for 13 components.** The extractor curated inline-typed
+  components (`React.HTMLAttributes`/`ComponentPropsWithoutRef` in the forwardRef generic, not a named
+  `interface XProps`) down to an opaque `[key:string]:unknown`, and dropped HTML handlers from Button.
+  `dtsPropsFor` now pins accurate props (Button onClick/disabled/type/aria-label, Input/Label/Separator/
+  Tabs/ChatInput real props, controlled-state props for Dialog/Tabs, etc.). **If a component's real API
+  changes, update its `dtsPropsFor` entry** — it OVERRIDES extraction, so a stale entry silently ships a
+  wrong contract. Badge + MessageLoading are left to extraction (Badge has a clean named interface;
+  MessageLoading takes no props).
+- **Compound parts are documented in `conventions.md`, not typed per-part.** The emitter only emits a
+  `.d.ts` for the listed (carded) component, so CardHeader/TableRow/DialogContent/AvatarFallback/etc. are
+  on `window.AnygardenUI` and shown in previews + the conventions header, but have no standalone
+  `<Part>Props`. Acceptable (they're simple div/text wrappers); revisit if the design agent misuses them.
+
+## Re-sync risks (continued) — source-level a11y the audit flagged (NOT fixed; app-source territory)
+
+These are real accessibility gaps in the **app source** (`src/components/ui/chat/`), out of scope for a
+design sync (don't edit product code from here). Worth a separate app-side fix:
+
+- `ChatBubbleAvatar` hardcodes `alt="Avatar"` with no override prop (chat-bubble.tsx) — every chat avatar
+  announces a meaningless label.
+- `ChatBubbleAction` (icon button) and `ChatBubbleActionWrapper` are exported on the bundle but not carded
+  (not in `componentSrcMap`), so they have no `.d.ts`/`.prompt.md`. The conventions header notes they need
+  `aria-label`. Either card them or stop exporting if not meant for consumers.
+- `MessageLoading` SVG has no `role`/`aria-label`/`aria-live`; the `isLoading` bubble announces nothing to
+  screen readers.

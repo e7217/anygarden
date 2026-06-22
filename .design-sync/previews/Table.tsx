@@ -1,6 +1,6 @@
 // Authored preview for Table — text-heavy compound (Header/Body/Row/Head/Cell).
 import {
-  Table, TableHeader, TableBody, TableRow, TableHead, TableCell, TableCaption,
+  Table, TableHeader, TableBody, TableFooter, TableRow, TableHead, TableCell, TableCaption,
   Badge,
 } from 'anygarden-frontend';
 
@@ -16,7 +16,7 @@ export const AgentRoster = () => (
         </TableRow>
       </TableHeader>
       <TableBody>
-        <TableRow>
+        <TableRow data-state="selected">
           <TableCell style={{ fontWeight: 500 }}>orchestrator</TableCell>
           <TableCell>Claude</TableCell>
           <TableCell><Badge>online</Badge></TableCell>
@@ -35,7 +35,15 @@ export const AgentRoster = () => (
           <TableCell style={{ textAlign: 'right' }}>7</TableCell>
         </TableRow>
       </TableBody>
-      <TableCaption>Agents currently joined to the production room.</TableCaption>
+      <TableFooter>
+        <TableRow>
+          <TableCell style={{ fontWeight: 600 }}>Total</TableCell>
+          <TableCell />
+          <TableCell />
+          <TableCell style={{ textAlign: 'right', fontWeight: 600 }}>177</TableCell>
+        </TableRow>
+      </TableFooter>
+      <TableCaption>Agents currently joined to the production room (selected row highlighted).</TableCaption>
     </Table>
   </div>
 );

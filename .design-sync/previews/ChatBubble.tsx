@@ -30,3 +30,17 @@ export const Loading = () => (
     </ChatBubble>
   </div>
 );
+
+// layout="ai" renders a full-width, borderless, top-bordered message — the
+// assistant/transcript style. ChatBubble injects layout into its children.
+export const AiMessage = () => (
+  <div style={{ maxWidth: 560 }}>
+    <ChatBubble variant="received" layout="ai">
+      <ChatBubbleAvatar fallback="AI" />
+      <ChatBubbleMessage>
+        I've queued the staging deploy and will hand off to the reviewer once the test suite passes.
+        Plan: run migrations, deploy, then smoke-test the room API.
+      </ChatBubbleMessage>
+    </ChatBubble>
+  </div>
+);
