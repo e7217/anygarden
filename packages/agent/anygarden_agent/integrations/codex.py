@@ -29,6 +29,10 @@ from anygarden_agent.runtime.handler_wrapper import (
     RoomHandlerSupervisor,
     is_transient_error,
 )
+from anygarden_agent.integrations._turn_timeout import (
+    resolve_supervisor_timeout,
+    resolve_turn_timeout,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -105,7 +109,9 @@ def _resolve_codex_flags(
 # lock a room on a stuck turn. 10 minutes matches the observed P95 of
 # legitimate tool-heavy queries while still guaranteeing the room
 # recovers if the SDK or the app-server hangs.
-_CODEX_TURN_TIMEOUT = 600
+# #492 — resolved via the shared helper so codex gains an env override
+# (``ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC``) symmetric with the other engines.
+_CODEX_TURN_TIMEOUT = resolve_turn_timeout("codex")
 
 
 def _codex_thread_cwd() -> Path:
@@ -613,9 +619,7 @@ async def integrate_with_codex(
     adapter._client = client
     await adapter.start()
 
-    engine_timeout = float(
-        os.environ.get("ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC", "900")
-    )
+    engine_timeout = resolve_supervisor_timeout(_CODEX_TURN_TIMEOUT)
     supervisor = RoomHandlerSupervisor(
         client=client, engine_name="codex", engine_timeout=engine_timeout
     )

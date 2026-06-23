@@ -100,8 +100,26 @@ async def _run_agent(
     reasoning_effort: str | None = None,
 ) -> None:
     from anygarden_agent.client import ChatClient
+    from anygarden_agent.integrations._turn_timeout import (
+        resolve_ping_timeout,
+        resolve_turn_timeout,
+    )
 
-    client = ChatClient(server, token=token, agent_name=name)
+    # #492 — the WS ping_timeout must tolerate the engine's turn timeout or a
+    # long turn is silently dropped on keepalive. CLI engine names differ from
+    # the helper's engine keys, so map them here (the one place that owns the
+    # ``--engine`` choices).
+    engine_key = {
+        "claude-code": "claude",
+        "codex": "codex",
+        "gemini-cli": "gemini",
+        "openhands": "openhands",
+    }.get(engine, engine)
+    ping_timeout = resolve_ping_timeout(resolve_turn_timeout(engine_key))
+
+    client = ChatClient(
+        server, token=token, agent_name=name, ping_timeout=ping_timeout
+    )
 
     # Build kwargs for the integration function based on engine
     await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)
