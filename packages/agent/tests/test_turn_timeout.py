@@ -59,6 +59,15 @@ def test_new_codex_key(monkeypatch):
     assert tt.resolve_turn_timeout("codex") == 900.0
 
 
+def test_per_agent_overrides_everything(monkeypatch):
+    # #493 — the engine-agnostic per-agent env wins over the per-engine env.
+    monkeypatch.setenv("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC", "450")
+    monkeypatch.setenv("ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC", "900")
+    assert tt.resolve_turn_timeout("codex") == 450.0
+    # and applies regardless of engine, including gemini's 120s default
+    assert tt.resolve_turn_timeout("gemini") == 450.0
+
+
 # --- resolve_supervisor_timeout: floor 900 + SUP_SLACK 300 ------------------
 
 

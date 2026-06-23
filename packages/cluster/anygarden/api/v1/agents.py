@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,44 @@ router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
 # ── Request / Response schemas ───────────────────────────────────────
 
 
+# Issue #493 — per-agent turn timeout bounds (seconds). The lower bound keeps
+# a turn meaningful; the upper bound stays below the cluster orphan-sweep
+# threshold (``ANYGARDEN_REQUEST_LIVENESS_SEC``) minus the supervisor slack, so
+# a legitimately long turn records ``handler_finished`` before the sweeper
+# would orphan it. ``None`` means "use the global env / hardcoded default".
+_TURN_TIMEOUT_MIN_SEC = 30
+# mirrors anygarden_agent.integrations._turn_timeout.SUP_SLACK
+_SUPERVISOR_SLACK_SEC = 300
+_ORPHAN_THRESHOLD_DEFAULT_SEC = 1200
+
+
+def _turn_timeout_upper_bound_exclusive() -> int:
+    """Exclusive upper bound for ``turn_timeout_sec`` so the derived supervisor
+    deadline (``N + slack``) stays strictly below the orphan threshold."""
+    orphan = int(
+        os.environ.get(
+            "ANYGARDEN_REQUEST_LIVENESS_SEC", str(_ORPHAN_THRESHOLD_DEFAULT_SEC)
+        )
+    )
+    return orphan - _SUPERVISOR_SLACK_SEC
+
+
+def _validate_turn_timeout(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    upper = _turn_timeout_upper_bound_exclusive()
+    if value < _TURN_TIMEOUT_MIN_SEC or value >= upper:
+        raise ValueError(
+            f"turn_timeout_sec must be between {_TURN_TIMEOUT_MIN_SEC} and "
+            f"{upper - 1} seconds (got {value})"
+        )
+    return value
+
+
+# Reusable validated type so AgentCreate / AgentUpdate share one range check.
+TurnTimeoutSec = Annotated[Optional[int], AfterValidator(_validate_turn_timeout)]
+
+
 class AgentCreate(BaseModel):
     engine: str
     name: str
@@ -53,6 +92,8 @@ class AgentCreate(BaseModel):
     files: Optional[dict[str, str]] = None
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    # Issue #493 — per-agent turn timeout (seconds). None = global default.
+    turn_timeout_sec: TurnTimeoutSec = None
     restart_policy: str = "restart_anywhere"
     # Issue #73 — runtime selector (``python`` default, ``typescript``
     # for the new anygarden-agent-ts path). Accepting it here lets admins
@@ -97,6 +138,12 @@ class AgentUpdate(BaseModel):
     reasoning_effort_set: bool = False
     model: Optional[str] = None
     model_set: bool = False
+    # Issue #493 — per-agent turn timeout (seconds). ``_set`` flag follows
+    # the established pattern so a rename PATCH can't silently clear it.
+    # Range-validated by ``TurnTimeoutSec``; ``None`` clears it back to the
+    # global default.
+    turn_timeout_sec: TurnTimeoutSec = None
+    turn_timeout_sec_set: bool = False
     # Issue #309 — semantic permission tier. Validated against the
     # tier set; ``_set`` flag follows the established pattern so a
     # rename PATCH can't silently flip the level. Admin-only is
@@ -166,6 +213,10 @@ class AgentOut(BaseModel):
     # failed.
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    # Issue #493 — per-agent turn timeout (seconds). NULL means the adapter
+    # uses the global env / hardcoded default; the UI renders NULL as the
+    # default placeholder.
+    turn_timeout_sec: Optional[int] = None
     # Issue #309 — semantic permission tier. NULL means the adapter
     # falls back to the ``standard`` tier (= pre-#309 hardcoded
     # behaviour); the UI renders NULL as "Default".
@@ -277,6 +328,7 @@ async def create_agent(
         agents_md=body.agents_md,
         reasoning_effort=body.reasoning_effort,
         model=body.model,
+        turn_timeout_sec=body.turn_timeout_sec,
         restart_policy=body.restart_policy,
         runtime=body.runtime,
         description=body.description,
@@ -369,6 +421,11 @@ async def update_agent(
         runtime_changed = True
     if body.model_set:
         agent.model = body.model
+        runtime_changed = True
+    if body.turn_timeout_sec_set:
+        # Issue #493 — the agent subprocess reads the timeout from its spawn
+        # env, so a change needs a respawn (bump_generation below).
+        agent.turn_timeout_sec = body.turn_timeout_sec
         runtime_changed = True
     if body.permission_level_set:
         # #309 — admin-only permission tier. The pattern matches

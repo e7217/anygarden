@@ -131,6 +131,71 @@ class TestSpawnEnvSecrets:
         # daemon's stdin into the agent.
         assert captured["stdin"] == asyncio.subprocess.PIPE
 
+    async def test_turn_timeout_sec_injected_into_env_when_set(
+        self, spawner: Spawner
+    ) -> None:
+        """#493 — a per-agent turn timeout is exported as
+        ``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC`` so the engine adapter resolves it.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-tt",
+            engine="claude-code",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            turn_timeout_sec=450,
+        )
+        captured: dict = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _mock_proc()
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert captured["env"]["ANYGARDEN_AGENT_TURN_TIMEOUT_SEC"] == "450"
+
+    async def test_turn_timeout_sec_absent_when_unset(
+        self, spawner: Spawner
+    ) -> None:
+        """#493 — no per-agent value → the env key is absent so the adapter
+        falls back to the global env / hardcoded default.
+        """
+        msg = SpawnManifest(
+            agent_id="agent-tt-none",
+            engine="claude-code",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+        )
+        captured: dict = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _mock_proc()
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            result = await spawner.spawn(msg)
+
+        assert result.success is True
+        assert "ANYGARDEN_AGENT_TURN_TIMEOUT_SEC" not in captured["env"]
+
     async def test_engine_secrets_piped_to_stdin_as_json(
         self, spawner: Spawner
     ) -> None:

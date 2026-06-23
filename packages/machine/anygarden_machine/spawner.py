@@ -77,6 +77,10 @@ class SpawnManifest:
     # engine adapter can resolve it into native dials. ``None``
     # means the adapter's "standard" mapping is used.
     permission_level: str | None = None
+    # Issue #493 — per-agent turn timeout (seconds). The spawner exports it as
+    # ``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC`` in the child env when set; ``None``
+    # leaves the engine adapter on its global env / hardcoded default.
+    turn_timeout_sec: int | None = None
     sub_rooms: list[dict] = field(default_factory=list)
     # Issue #73 — which runtime process should host this agent.
     # ``"python"`` (default) spawns the existing Python ``anygarden-agent``
@@ -921,6 +925,14 @@ class Spawner:
         # adapters can rely on its presence and don't have to
         # special-case the missing key.
         env["ANYGARDEN_AGENT_PERMISSION_LEVEL"] = msg.permission_level or "standard"
+
+        # Issue #493 — per-agent turn timeout. Unlike permission_level this is
+        # set ONLY when present: the engine adapter's resolution chain treats a
+        # missing env as "fall back to the global per-engine env / hardcoded
+        # default" (see ``anygarden_agent.integrations._turn_timeout``), so an
+        # unset value must not shadow that fallback.
+        if msg.turn_timeout_sec is not None:
+            env["ANYGARDEN_AGENT_TURN_TIMEOUT_SEC"] = str(msg.turn_timeout_sec)
 
         # Redirect ``CODEX_HOME`` at the per-agent ``.codex/`` ONLY when
         # the manifest actually carries a codex overlay (MCP templates

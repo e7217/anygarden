@@ -60,6 +60,12 @@ class SyncDesiredStateFrame(BaseModel):
     # hardcoded behaviour pre-#309).
     permission_level: str | None = None
 
+    # Issue #493 — per-agent turn timeout (seconds). The machine spawner
+    # exports this as ``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC`` in the agent
+    # process env; the engine adapters resolve it (deriving the ping /
+    # supervisor deadlines). None = global env / hardcoded default.
+    turn_timeout_sec: int | None = None
+
     # Sub-rooms this agent can delegate to (v2 delegation)
     # Each entry: {"name": "...", "description": "..." or null}
     sub_rooms: list[dict[str, str | None]] = Field(default_factory=list)

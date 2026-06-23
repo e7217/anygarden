@@ -529,6 +529,9 @@ class MachineDaemon:
             # the cluster's sync frame. ``getattr`` keeps in-memory
             # manifests from pre-#309 schema revisions compatible.
             permission_level=getattr(manifest, "permission_level", None),
+            # Issue #493 — per-agent turn timeout propagated from the sync
+            # frame. ``getattr`` keeps pre-#493 in-memory manifests compatible.
+            turn_timeout_sec=getattr(manifest, "turn_timeout_sec", None),
             sub_rooms=list(manifest.sub_rooms),
             # Issue #73 — runtime passes through from the server frame.
             # ``getattr`` keeps compatibility with in-memory manifest

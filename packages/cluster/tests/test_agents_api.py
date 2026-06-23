@@ -1200,6 +1200,100 @@ class TestAgentManifestAPI:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_turn_timeout_sec_crud_and_validation(self, agents_env) -> None:
+        """#493 — per-agent turn timeout: create/update round-trip, range
+        validation (below orphan threshold), and ``_set`` flag semantics.
+        """
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+        hdr = {"Authorization": f"Bearer {token}"}
+
+        # Create with a valid value round-trips through GET.
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "tt-agent", "turn_timeout_sec": 300},
+            headers=hdr,
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["turn_timeout_sec"] == 300
+        agent_id = body["id"]
+
+        # Create defaults to NULL when omitted.
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "tt-default"},
+            headers=hdr,
+        )
+        assert resp.status_code == 201
+        assert resp.json()["turn_timeout_sec"] is None
+
+        # Out-of-range rejected on create (>= 900 with default orphan 1200).
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "tt-hi", "turn_timeout_sec": 5000},
+            headers=hdr,
+        )
+        assert resp.status_code == 422
+        # Below the lower bound rejected too.
+        resp = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "tt-lo", "turn_timeout_sec": 5},
+            headers=hdr,
+        )
+        assert resp.status_code == 422
+
+        # Update with the _set flag changes value and bumps generation
+        # (a field the subprocess reads → runtime change → respawn).
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            gen_before = agent.generation
+
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"turn_timeout_sec": 600, "turn_timeout_sec_set": True},
+            headers=hdr,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["turn_timeout_sec"] == 600
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.turn_timeout_sec == 600
+            assert agent.generation > gen_before
+
+        # Rename without the _set flag must not reset the timeout.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"name": "tt-renamed", "turn_timeout_sec": 120},
+            headers=hdr,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["turn_timeout_sec"] == 600
+
+        # _set with null clears back to the global default.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"turn_timeout_sec": None, "turn_timeout_sec_set": True},
+            headers=hdr,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["turn_timeout_sec"] is None
+
+        # Out-of-range rejected on update.
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}",
+            json={"turn_timeout_sec": 5000, "turn_timeout_sec_set": True},
+            headers=hdr,
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_create_agent_with_collaboration_mode(self, agents_env) -> None:
         """#279 — POST accepts ``collaboration_mode`` and rejects garbage."""
         client = agents_env["client"]
