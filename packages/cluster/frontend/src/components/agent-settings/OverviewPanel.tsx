@@ -72,6 +72,8 @@ interface Props {
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean
+      turn_timeout_sec?: number | null
+      turn_timeout_sec_set?: boolean
       permission_level?: string | null
       permission_level_set?: boolean
       description?: string | null
@@ -106,6 +108,13 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
   const [catalogState, setCatalogState] = useState<CatalogState>({ kind: 'loading' })
   const [configSaving, setConfigSaving] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
+  // Issue #493 — per-agent turn timeout (seconds). Blur-commit like
+  // ``nameDraft``; empty clears back to the global default. A dedicated
+  // error state keeps the range-validation message in its own row.
+  const [turnTimeoutDraft, setTurnTimeoutDraft] = useState(
+    agent?.turn_timeout_sec != null ? String(agent.turn_timeout_sec) : '',
+  )
+  const [turnTimeoutError, setTurnTimeoutError] = useState<string | null>(null)
 
   // Re-seed the name draft whenever the target agent changes so the
   // input reflects the new agent's current name.
@@ -256,6 +265,33 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  // #493 — commit the turn timeout on blur. Empty input clears the
+  // override (null + _set). The API enforces the numeric range (30 .. below
+  // the orphan threshold) and returns 422, surfaced via ``turnTimeoutError``.
+  const handleTurnTimeoutCommit = async () => {
+    const trimmed = turnTimeoutDraft.trim()
+    const nextVal = trimmed === '' ? null : Number(trimmed)
+    if (nextVal !== null && (!Number.isInteger(nextVal) || nextVal <= 0)) {
+      setTurnTimeoutError('초 단위 양의 정수를 입력하세요.')
+      return
+    }
+    if ((agent.turn_timeout_sec ?? null) === nextVal) {
+      setTurnTimeoutError(null)
+      return
+    }
+    setConfigSaving(true)
+    setTurnTimeoutError(null)
+    try {
+      await updateAgent(agent.id, {
+        turn_timeout_sec: nextVal,
+        turn_timeout_sec_set: true,
+      })
+    } catch (e) {
+      setTurnTimeoutError(e instanceof Error ? e.message : String(e))
     }
     setConfigSaving(false)
   }
@@ -546,6 +582,41 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             </dd>
           </>
         ) : null}
+
+        {/* #493 — Per-agent turn timeout (seconds). Blank = global default.
+            Engine-agnostic, so it renders for every agent (outside the
+            catalog-gated Model/Reasoning block). Blur-commits; the range is
+            validated server-side and a 422 surfaces in ``turnTimeoutError``. */}
+        <dt className="text-[var(--color-foreground-muted)]">Turn timeout</dt>
+        <dd>
+          <input
+            type="number"
+            inputMode="numeric"
+            min={30}
+            step={10}
+            value={turnTimeoutDraft}
+            onChange={e => setTurnTimeoutDraft(e.target.value)}
+            onBlur={() => void handleTurnTimeoutCommit()}
+            disabled={configSaving}
+            placeholder="Default"
+            aria-label="Turn timeout in seconds"
+            data-testid="overview-turn-timeout-input"
+            className={SELECT_CSS}
+          />
+          {turnTimeoutError ? (
+            <div
+              className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
+              data-testid="overview-turn-timeout-error"
+            >
+              <AlertCircle className="h-3 w-3" aria-hidden="true" />
+              {turnTimeoutError}
+            </div>
+          ) : (
+            <p className="mt-1 text-[11px] text-[var(--color-foreground-muted)]">
+              응답 최대 대기 시간(초). 비우면 기본값, 재시작 시 적용.
+            </p>
+          )}
+        </dd>
 
         {/* #309 — Permission tier. Sits next to Model / Reasoning so
             it groups with the other adapter-spawn parameters. The

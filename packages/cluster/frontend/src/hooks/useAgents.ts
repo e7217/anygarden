@@ -16,6 +16,9 @@ export interface Agent {
   agents_md?: string | null;
   reasoning_effort?: string | null;
   model?: string | null;
+  // Issue #493 — per-agent turn timeout (seconds). ``null`` = global
+  // default; the UI shows an empty input with a default placeholder.
+  turn_timeout_sec?: number | null;
   // Issue #309 — semantic permission tier. ``null`` means the
   // adapter falls back to the ``standard`` tier (= pre-#309
   // hardcoded behaviour); the UI renders ``null`` as ``Default``
@@ -246,6 +249,10 @@ export function useAgents() {
       model_set?: boolean;
       reasoning_effort?: string | null;
       reasoning_effort_set?: boolean;
+      // Issue #493 — per-agent turn timeout (seconds), same ``_set`` idiom
+      // (turn_timeout_sec=null + turn_timeout_sec_set=true clears it).
+      turn_timeout_sec?: number | null;
+      turn_timeout_sec_set?: boolean;
       // Issue #271 — public-facing introduction. ``_set`` idiom lets
       // an admin clear the field (description=null + description_set=true).
       description?: string | null;

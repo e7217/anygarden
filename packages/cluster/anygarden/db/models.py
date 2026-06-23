@@ -265,6 +265,15 @@ class Agent(Base):
     permission_level: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, default=None
     )
+    # Issue #493 — per-agent turn timeout in seconds. NULL means fall back
+    # to the global env / hardcoded engine default (see
+    # ``anygarden_agent.integrations._turn_timeout``). The cluster API
+    # validates the range so it stays below the orphan-sweep threshold
+    # (``ANYGARDEN_REQUEST_LIVENESS_SEC``); chosen NULL-default so pre-#493
+    # rows need no backfill, mirroring ``permission_level``.
+    turn_timeout_sec: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
     restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
     generation: Mapped[int] = mapped_column(Integer, default=0)
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)

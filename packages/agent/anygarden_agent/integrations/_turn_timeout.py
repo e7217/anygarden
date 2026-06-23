@@ -12,9 +12,10 @@ surface asymmetric. This module is the single source of truth for:
    construction (raising the turn cap can no longer silently drop a response on
    the ping deadline or get pre-empted by the supervisor).
 
-A per-agent leg (``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC``, engine-agnostic) is
-prepended to ``resolve_turn_timeout`` in the follow-up issue (#493); until then
-that env is simply unset.
+A per-agent leg (``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC``, engine-agnostic) takes
+precedence over the per-engine env (#493). The machine spawner injects it into
+the agent process env at spawn from the agent's DB column; it is absent for
+agents with no per-agent override.
 
 Env is read at call time. Adapters call ``resolve_turn_timeout`` at import to
 fix their module-level constant — safe because each agent runs in its own
@@ -47,9 +48,16 @@ _SUP_FLOOR = 900.0
 def resolve_turn_timeout(engine: str) -> float:
     """Resolve the turn timeout (seconds) for ``engine``.
 
-    Precedence: per-engine global env > hardcoded default. The per-agent leg is
-    added in #493.
+    Precedence: per-agent override > per-engine global env > hardcoded default.
+    The per-agent value (``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC``, engine-agnostic)
+    is injected by the machine spawner at spawn time from the agent's DB
+    column (#493).
     """
+    # #493 — per-agent override injected into the process env at spawn. Engine-
+    # agnostic, so it wins over the per-engine global env for this one agent.
+    per_agent = os.environ.get("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC")
+    if per_agent:
+        return float(per_agent)
     per_engine = os.environ.get(f"ANYGARDEN_AGENT_{engine.upper()}_TURN_TIMEOUT_SEC")
     if per_engine:
         return float(per_engine)

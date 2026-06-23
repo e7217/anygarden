@@ -872,6 +872,11 @@ class AgentLifecycle:
             # into the agent process env (``ANYGARDEN_AGENT_PERMISSION_LEVEL``)
             # and each engine adapter translates to native dials.
             "permission_level": agent.permission_level,
+            # #493 — per-agent turn timeout; the machine forwards it into the
+            # agent process env (``ANYGARDEN_AGENT_TURN_TIMEOUT_SEC``) where the
+            # engine adapters resolve it (see ``_turn_timeout``). None = global
+            # default.
+            "turn_timeout_sec": agent.turn_timeout_sec,
             "sub_rooms": sub_rooms_info,
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,

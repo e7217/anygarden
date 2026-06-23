@@ -147,6 +147,64 @@ describe('OverviewPanel', () => {
     })
   })
 
+  describe('turn timeout inline edit (#493)', () => {
+    it('commits turn_timeout_sec with _set on blur after typing', async () => {
+      const { updateAgent } = setup()
+      const input = screen.getByTestId(
+        'overview-turn-timeout-input',
+      ) as HTMLInputElement
+      fireEvent.change(input, { target: { value: '300' } })
+      fireEvent.blur(input)
+
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        turn_timeout_sec: 300,
+        turn_timeout_sec_set: true,
+      })
+    })
+
+    it('clears the override (null) when emptied', async () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ turn_timeout_sec: 300 }),
+      })
+      const input = screen.getByTestId(
+        'overview-turn-timeout-input',
+      ) as HTMLInputElement
+      fireEvent.change(input, { target: { value: '' } })
+      fireEvent.blur(input)
+
+      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+        turn_timeout_sec: null,
+        turn_timeout_sec_set: true,
+      })
+    })
+
+    it('does nothing when the value is unchanged', () => {
+      const { updateAgent } = setup({
+        agent: makeAgent({ turn_timeout_sec: 300 }),
+      })
+      const input = screen.getByTestId(
+        'overview-turn-timeout-input',
+      ) as HTMLInputElement
+      fireEvent.blur(input)
+      expect(updateAgent).not.toHaveBeenCalled()
+    })
+
+    it('shows an error and skips commit on a non-positive value', () => {
+      const { updateAgent } = setup()
+      const input = screen.getByTestId(
+        'overview-turn-timeout-input',
+      ) as HTMLInputElement
+      fireEvent.change(input, { target: { value: '-5' } })
+      fireEvent.blur(input)
+      expect(updateAgent).not.toHaveBeenCalled()
+      expect(
+        screen.getByTestId('overview-turn-timeout-error'),
+      ).toBeInTheDocument()
+    })
+  })
+
   describe('description inline edit (#271)', () => {
     it('commits with description_set: true on blur after typing', async () => {
       const { updateAgent } = setup()
