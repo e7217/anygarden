@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 
 from anygarden.mcp.auth import resolve_agent_id
 from anygarden.mcp.tools import (
@@ -47,14 +47,25 @@ def _jsonrpc_ok(req_id: Any, result: dict[str, Any]) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
-@router.post("/rpc")
-async def mcp_rpc(request: Request) -> dict[str, Any]:
+@router.post("/rpc", response_model=None)
+async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
     """Single-shot JSON-RPC endpoint.
 
     MCP technically prefers a long-lived transport (SSE or stdio) but
     a POST-per-call pattern is equally compliant for tools-only
     servers and keeps us inside FastAPI's standard request/response
     model — no background task bookkeeping required.
+
+    One Streamable-HTTP rule we DO honour: JSON-RPC *notifications*
+    (messages carrying no ``id``, e.g. ``notifications/initialized``)
+    must be acknowledged with ``202 Accepted`` and an empty body —
+    never with a JSON-RPC response. Returning a ``-32601`` response to
+    the ``notifications/initialized`` that strict clients send right
+    after ``initialize`` makes their ``streamable_http_client`` abort
+    the handshake, so the cluster tools never appear in the agent's
+    tool list. codex's rmcp client is strict (it broke); claude-code's
+    is lenient (it tolerated the old behaviour) — that asymmetry is
+    issue #352.
     """
     config = request.app.state.config
     auth_header = request.headers.get("authorization")
@@ -74,6 +85,17 @@ async def mcp_rpc(request: Request) -> dict[str, Any]:
         )
     req_id = payload.get("id")
     method = payload.get("method")
+
+    # JSON-RPC notifications carry no ``id`` and MUST NOT receive a
+    # response body. Ack them with 202 + empty body so a strict MCP
+    # Streamable HTTP client (codex/rmcp) completes its handshake
+    # instead of aborting on an unexpected ``-32601`` response (#352).
+    # Notifications are fire-and-forget and trigger no handler, so the
+    # ack is unconditional (no auth/session work needed).
+    if req_id is None or (
+        isinstance(method, str) and method.startswith("notifications/")
+    ):
+        return Response(status_code=status.HTTP_202_ACCEPTED)
 
     session_factory = request.app.state.session_factory
     async with session_factory() as db:
