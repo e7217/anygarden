@@ -17,7 +17,7 @@ from websockets.asyncio.client import connect as ws_connect
 
 from anygarden_agent.integrations.cycle_guard import hash_content
 from anygarden_agent.observability import metrics
-from anygarden_agent.protocol.frames import LifecycleFrame, MessageOut, SendFrame
+from anygarden_agent.protocol.frames import LifecycleFrame, SendFrame
 from anygarden_agent.protocol.versioning import build_subprotocols
 
 logger = structlog.get_logger(__name__)
@@ -122,11 +122,16 @@ class ChatClient:
         agent_name: str = "",
         *,
         max_reconnect_delay: float = 60.0,
+        ping_timeout: float = 600.0,
     ) -> None:
         self._server_url = server_url.rstrip("/")
         self._token = token
         self._agent_name = agent_name
         self._max_reconnect_delay = max_reconnect_delay
+        # Issue #492 — WS ping_timeout derived from the engine's turn timeout
+        # (set by the agent CLI) so a long turn can't be cut by keepalive.
+        # Defaults to 600s for the plain text client, which has no engine.
+        self._ping_timeout = ping_timeout
 
         # room_id -> last seen sequence number
         self._last_seq: dict[str, int] = {}
@@ -888,7 +893,10 @@ class ChatClient:
                     ws_url,
                     subprotocols=subprotocols,
                     ping_interval=60,
-                    ping_timeout=600,
+                    # #492 — derived from the engine turn timeout so raising
+                    # the turn cap keeps the socket open (ping > turn); see
+                    # ``integrations/_turn_timeout``.
+                    ping_timeout=self._ping_timeout,
                 ) as ws:
                     self._connections[room_id] = ws
                     delay = 1.0  # Reset backoff on successful connect

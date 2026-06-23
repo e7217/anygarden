@@ -60,6 +60,10 @@ from anygarden_agent.runtime.handler_wrapper import (
     RoomHandlerSupervisor,
     is_transient_error,
 )
+from anygarden_agent.integrations._turn_timeout import (
+    resolve_supervisor_timeout,
+    resolve_turn_timeout,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -137,7 +141,10 @@ def _terminate_tree(pid: int, timeout: float) -> None:
 # shorter 120s fits its faster turn profile. Shorter timeouts than
 # this bite under real tool use where retrieval + reasoning can take
 # a minute.
-_GEMINI_TIMEOUT = 120
+# #492 — resolved via the shared helper so gemini gains an env override
+# (``ANYGARDEN_AGENT_GEMINI_TURN_TIMEOUT_SEC``); the 120s default profile is
+# preserved when unset.
+_GEMINI_TIMEOUT = resolve_turn_timeout("gemini")
 
 
 class GeminiCliAdapter(EngineAdapter):
@@ -583,9 +590,7 @@ async def integrate_with_gemini_cli(
     adapter._client = client
     await adapter.start()
 
-    engine_timeout = float(
-        os.environ.get("ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC", "900")
-    )
+    engine_timeout = resolve_supervisor_timeout(_GEMINI_TIMEOUT)
     supervisor = RoomHandlerSupervisor(
         client=client, engine_name="gemini", engine_timeout=engine_timeout
     )

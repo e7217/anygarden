@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +52,10 @@ from anygarden_agent.runtime.handler_wrapper import (
     RoomHandlerSupervisor,
     is_transient_error,
 )
+from anygarden_agent.integrations._turn_timeout import (
+    resolve_supervisor_timeout,
+    resolve_turn_timeout,
+)
 
 
 logger = structlog.get_logger(__name__)
@@ -71,9 +74,7 @@ logger = structlog.get_logger(__name__)
 # line to fire (strictly below the supervisor's 900s
 # ``ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC``). A dedicated env knob tunes it
 # independently of the shared supervisor deadline.
-_OPENHANDS_TURN_TIMEOUT = float(
-    os.environ.get("ANYGARDEN_AGENT_OPENHANDS_TURN_TIMEOUT_SEC", "600")
-)
+_OPENHANDS_TURN_TIMEOUT = resolve_turn_timeout("openhands")
 
 
 # litellm-style provider env keys. ``LLM(api_key=...)`` is also
@@ -1080,9 +1081,7 @@ async def integrate_with_openhands(
     )
     await adapter.start()
 
-    engine_timeout = float(
-        os.environ.get("ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC", "900")
-    )
+    engine_timeout = resolve_supervisor_timeout(_OPENHANDS_TURN_TIMEOUT)
     supervisor = RoomHandlerSupervisor(
         client=client, engine_name="openhands", engine_timeout=engine_timeout
     )
