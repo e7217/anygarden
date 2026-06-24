@@ -44,7 +44,7 @@ class TestAnygardenDefaultEntry:
         # disk never sees the raw token. The matching env var is
         # injected by the machine spawner at process start time.
         entry = anygarden_default_entry(
-            engine="codex",
+            engine="codex-cli",
             cluster_url="http://127.0.0.1:8001",
             agent_token="tok-abc",  # not stored in the rendered config
         )
@@ -114,13 +114,13 @@ class TestMergeWithDefault:
     def test_codex_merge_includes_anygarden(self):
         secret_token = "PLAINTEXT_TOKEN_THAT_MUST_NOT_LEAK"
         default = anygarden_default_entry(
-            engine="codex",
+            engine="codex-cli",
             cluster_url="http://localhost:8001",
             agent_token=secret_token,
         )
         assert default is not None
         merged = merge_for_engine(
-            engine="codex",
+            engine="codex-cli",
             admin_content=None,
             overlays=[default],
         )

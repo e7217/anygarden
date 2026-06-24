@@ -205,20 +205,20 @@ class TestLifecycleOverlay:
     async def test_codex_agent_gets_toml_overlay(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="codex", name="c1",
+                engine="codex-cli", name="c1",
                 desired_state="idle", actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
                 display_name="GitHub",
                 config_per_engine={
-                    "codex": {
+                    "codex-cli": {
                         "command": "npx", "args": ["-y", "gh"],
                         "env": {"T": "v"},
                     },
                 },
                 required_env_vars=[],
-                supported_engines=["codex"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
@@ -304,7 +304,7 @@ class TestAnygardenSelfRegistration:
     async def test_codex_uses_env_var_indirection(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="codex", name="cx",
+                engine="codex-cli", name="cx",
                 desired_state="idle", actual_state="idle",
             )
             db.add(agent)

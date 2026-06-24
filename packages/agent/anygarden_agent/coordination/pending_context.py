@@ -3,7 +3,7 @@
 Stage A (#74) introduced a buffer on ``ClaudeCodeAdapter`` that
 absorbs ``INGEST_ONLY`` messages as context for the next active
 turn. Stage B rolls the same pattern out to ``GeminiCliAdapter``
-and ``CodexAdapter``. Rather than copy the TTL / size-cap / format
+and ``CodexCliAdapter``. Rather than copy the TTL / size-cap / format
 logic into each class, we factor the primitives here so all three
 session-based adapters share one implementation.
 

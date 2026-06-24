@@ -40,7 +40,7 @@ def _msg(
     agents_md: str | None = "# instructions\nHello",
     files: dict[str, str] | None = None,
     engine_secrets: dict[str, str] | None = None,
-    engine: str = "codex",
+    engine: str = "codex-cli",
 ) -> SpawnManifest:
     return SpawnManifest(
         agent_id=agent_id,
@@ -70,7 +70,7 @@ class TestMaterializeFresh:
     def test_codex_gets_sandbox_workspace(
         self, spawner: Spawner
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
         workspace = agent_root / "workspace"
         assert workspace.is_dir()
         assert (workspace / ".anygarden-codex-workspace").is_file()
@@ -228,7 +228,7 @@ class TestMaterializeFresh:
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(
-            _msg(agents_md="# instructions", engine="codex")
+            _msg(agents_md="# instructions", engine="codex-cli")
         )
         path = agent_root / "AGENTS.md"
         assert path.is_file()
@@ -239,7 +239,7 @@ class TestMaterializeFresh:
         self, spawner: Spawner
     ) -> None:
         agent_root = spawner._materialize_agent_dir(
-            _msg(agents_md="# instructions", engine="codex")
+            _msg(agents_md="# instructions", engine="codex-cli")
         )
         path = agent_root / "CLAUDE.md"
         assert path.is_symlink()
@@ -345,7 +345,7 @@ class TestMaterializeFresh:
         스타트업 경로를 일관적으로 깨뜨리게 된다.
         """
         agent_root = spawner._materialize_agent_dir(
-            _msg(engine="codex", files={})
+            _msg(engine="codex-cli", files={})
         )
         assert not (agent_root / ".codex").exists()
 
@@ -450,7 +450,7 @@ class TestMaterializePrune:
         self, spawner: Spawner
     ) -> None:
         spawner._materialize_agent_dir(
-            _msg(agents_md="# real", engine="codex")
+            _msg(agents_md="# real", engine="codex-cli")
         )
         agent_root = spawner._agent_dirs_root / "agent-x"
         path = agent_root / "AGENTS.md"
@@ -461,7 +461,7 @@ class TestMaterializePrune:
         assert not path.is_symlink()
 
         spawner._materialize_agent_dir(
-            _msg(agents_md="# real", engine="codex")
+            _msg(agents_md="# real", engine="codex-cli")
         )
 
         assert path.is_file()
@@ -485,18 +485,18 @@ class TestMaterializePrune:
     def test_codex_workspace_runtime_survives_codex_respawn(
         self, spawner: Spawner
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
         scratch = agent_root / "workspace" / "in-progress.md"
         scratch.write_text("session state")
 
-        spawner._materialize_agent_dir(_msg(engine="codex"))
+        spawner._materialize_agent_dir(_msg(engine="codex-cli"))
 
         assert scratch.read_text() == "session state"
 
     def test_codex_workspace_runtime_migrates_on_engine_switch(
         self, spawner: Spawner
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
         scratch = agent_root / "workspace" / "in-progress.md"
         scratch.write_text("session state")
 
@@ -741,7 +741,7 @@ class TestCodexHostAuthSymlink:
         """
         agent_root = spawner._materialize_agent_dir(
             _msg(
-                engine="codex",
+                engine="codex-cli",
                 files={".codex/config.toml": "[mcp_servers.x]\n"},
             )
         )
@@ -771,7 +771,7 @@ class TestCodexHostAuthSymlink:
 
         agent_root = spawner._materialize_agent_dir(
             _msg(
-                engine="codex",
+                engine="codex-cli",
                 files={".codex/config.toml": "[mcp_servers.x]\n"},
             )
         )
@@ -790,7 +790,7 @@ class TestCodexHostAuthSymlink:
         ``.codex/`` 디렉토리가 남지도 말아야 한다.
         """
         agent_root = spawner._materialize_agent_dir(
-            _msg(engine="codex", files={})
+            _msg(engine="codex-cli", files={})
         )
 
         assert not (agent_root / ".codex").exists()
@@ -808,7 +808,7 @@ class TestCodexHostAuthSymlink:
         admin_auth = '{"auth_mode":"api","OPENAI_API_KEY":"sk-admin"}'
         agent_root = spawner._materialize_agent_dir(
             _msg(
-                engine="codex",
+                engine="codex-cli",
                 files={
                     ".codex/config.toml": "[mcp_servers.x]\n",
                     ".codex/auth.json": admin_auth,
@@ -855,14 +855,14 @@ class TestCodexHostAuthSymlink:
         """
         spawner._materialize_agent_dir(
             _msg(
-                engine="codex",
+                engine="codex-cli",
                 files={".codex/config.toml": "[mcp_servers.x]\n"},
             )
         )
         # 두 번째 spawn — prune 후 재생성
         agent_root = spawner._materialize_agent_dir(
             _msg(
-                engine="codex",
+                engine="codex-cli",
                 files={".codex/config.toml": "[mcp_servers.y]\n"},
             )
         )
@@ -1032,7 +1032,7 @@ class TestMemorySharedDirectory:
     def test_codex_shared_bridge_points_to_direct_directory(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
         shared = agent_root / "memory" / "shared"
         bridge = agent_root / "workspace" / "memory" / "shared"
         assert shared.is_dir()
@@ -1089,7 +1089,7 @@ class TestMemoryOutboxDirectory:
     def test_codex_outbox_bridge_points_to_direct_directory(
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
-        agent_root = spawner._materialize_agent_dir(_msg(engine="codex"))
+        agent_root = spawner._materialize_agent_dir(_msg(engine="codex-cli"))
         outbox = agent_root / "memory" / "outbox"
         bridge = agent_root / "workspace" / "memory" / "outbox"
         assert outbox.is_dir()

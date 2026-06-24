@@ -79,7 +79,7 @@ def _all_engines_stdio(
     cfg = _stdio_config(command, args, env)
     return {
         "claude-code": cfg,
-        "codex": cfg,
+        "codex-cli": cfg,
         "gemini-cli": cfg,
         "openhands": cfg,
     }
@@ -108,7 +108,7 @@ BUILTIN_TEMPLATES: list[BuiltinTemplateSpec] = [
             env={"GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"},
         ),
         required_env_vars=["GITHUB_PERSONAL_ACCESS_TOKEN"],
-        supported_engines=["claude-code", "codex", "gemini-cli", "openhands"],
+        supported_engines=["claude-code", "codex-cli", "gemini-cli", "openhands"],
     ),
     BuiltinTemplateSpec(
         name="slack",
@@ -126,7 +126,7 @@ BUILTIN_TEMPLATES: list[BuiltinTemplateSpec] = [
             },
         ),
         required_env_vars=["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
-        supported_engines=["claude-code", "codex", "gemini-cli", "openhands"],
+        supported_engines=["claude-code", "codex-cli", "gemini-cli", "openhands"],
     ),
     BuiltinTemplateSpec(
         name="notion",
@@ -139,7 +139,7 @@ BUILTIN_TEMPLATES: list[BuiltinTemplateSpec] = [
             env={"NOTION_API_KEY": "${NOTION_API_KEY}"},
         ),
         required_env_vars=["NOTION_API_KEY"],
-        supported_engines=["claude-code", "codex", "gemini-cli", "openhands"],
+        supported_engines=["claude-code", "codex-cli", "gemini-cli", "openhands"],
     ),
     BuiltinTemplateSpec(
         name="linear",
@@ -152,7 +152,7 @@ BUILTIN_TEMPLATES: list[BuiltinTemplateSpec] = [
             env={"LINEAR_API_KEY": "${LINEAR_API_KEY}"},
         ),
         required_env_vars=["LINEAR_API_KEY"],
-        supported_engines=["claude-code", "codex", "gemini-cli", "openhands"],
+        supported_engines=["claude-code", "codex-cli", "gemini-cli", "openhands"],
     ),
     BuiltinTemplateSpec(
         name="filesystem",
@@ -173,6 +173,6 @@ BUILTIN_TEMPLATES: list[BuiltinTemplateSpec] = [
             env={},
         ),
         required_env_vars=["MCP_FS_ALLOWED_PATH"],
-        supported_engines=["claude-code", "codex", "gemini-cli", "openhands"],
+        supported_engines=["claude-code", "codex-cli", "gemini-cli", "openhands"],
     ),
 ]

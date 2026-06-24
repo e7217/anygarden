@@ -75,9 +75,9 @@ describe('buildTemplatePayload', () => {
 
   it('fans out a single config to all three engines', () => {
     const payload = buildTemplatePayload(baseForm)
-    expect(payload.supported_engines).toEqual(['claude-code', 'codex', 'gemini-cli'])
+    expect(payload.supported_engines).toEqual(['claude-code', 'codex-cli', 'gemini-cli'])
     expect(Object.keys(payload.config_per_engine).sort()).toEqual(
-      ['claude-code', 'codex', 'gemini-cli'],
+      ['claude-code', 'codex-cli', 'gemini-cli'],
     )
     const cfg = payload.config_per_engine['claude-code']
     expect(cfg.command).toBe('npx')
@@ -88,7 +88,7 @@ describe('buildTemplatePayload', () => {
   it('keeps identical config references across engines so a single JSON.stringify matches', () => {
     const payload = buildTemplatePayload(baseForm)
     const a = JSON.stringify(payload.config_per_engine['claude-code'])
-    const b = JSON.stringify(payload.config_per_engine['codex'])
+    const b = JSON.stringify(payload.config_per_engine['codex-cli'])
     const c = JSON.stringify(payload.config_per_engine['gemini-cli'])
     expect(a).toBe(b)
     expect(b).toBe(c)
@@ -177,11 +177,11 @@ describe('parseTemplateIntoForm', () => {
       description: null,
       config_per_engine: {
         'claude-code': stdioBlock,
-        'codex': stdioBlock,
+        'codex-cli': stdioBlock,
         'gemini-cli': stdioBlock,
       },
       required_env_vars: ['GITHUB_TOKEN'],
-      supported_engines: ['claude-code', 'codex', 'gemini-cli'],
+      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
     })
     expect(out.mode).toBe('simple')
     if (out.mode !== 'simple') throw new Error('typecheck')
@@ -203,11 +203,11 @@ describe('parseTemplateIntoForm', () => {
       description: null,
       config_per_engine: {
         'claude-code': { command: 'npx', args: [], env: { FOO: '1' } },
-        'codex': { command: 'npx', args: [], env: { FOO: '2' } },
+        'codex-cli': { command: 'npx', args: [], env: { FOO: '2' } },
         'gemini-cli': { command: 'npx', args: [], env: { FOO: '1' } },
       },
       required_env_vars: [],
-      supported_engines: ['claude-code', 'codex', 'gemini-cli'],
+      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
     })
     expect(out.mode).toBe('advanced')
   })
@@ -220,11 +220,11 @@ describe('parseTemplateIntoForm', () => {
       description: null,
       config_per_engine: {
         'claude-code': httpBlock,
-        'codex': httpBlock,
+        'codex-cli': httpBlock,
         'gemini-cli': httpBlock,
       },
       required_env_vars: [],
-      supported_engines: ['claude-code', 'codex', 'gemini-cli'],
+      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
     })
     expect(out.mode).toBe('advanced')
   })
@@ -255,11 +255,11 @@ describe('parseTemplateIntoForm', () => {
       description: null,
       config_per_engine: {
         'claude-code': block,
-        'codex': block,
+        'codex-cli': block,
         'gemini-cli': block,
       },
       required_env_vars: [],
-      supported_engines: ['claude-code', 'codex', 'gemini-cli'],
+      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
     })
     expect(out.mode).toBe('simple')
     if (out.mode !== 'simple') throw new Error('typecheck')

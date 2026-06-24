@@ -63,7 +63,7 @@ def settings_path_for_engine(engine: str) -> str | None:
     """
     return {
         "claude-code": CLAUDE_SETTINGS_PATH,
-        "codex": CODEX_CONFIG_PATH,
+        "codex-cli": CODEX_CONFIG_PATH,
         "gemini-cli": GEMINI_SETTINGS_PATH,
         # Issue #355 Phase 1 — openhands consumes the same FastMCP /
         # ``mcpServers`` JSON shape as claude-code, so it shares the
@@ -278,7 +278,7 @@ def anygarden_default_entry(
                 "headers": {"Authorization": f"Bearer {agent_token}"},
             },
         )
-    if engine == "codex":
+    if engine == "codex-cli":
         return RenderedInstance(
             name=ANYGARDEN_BUILTIN_NAME,
             config={
@@ -307,6 +307,6 @@ def merge_for_engine(
     """
     if engine in ("claude-code", "gemini-cli", "openhands"):
         return merge_json_settings(admin_content, overlays)
-    if engine == "codex":
+    if engine == "codex-cli":
         return merge_codex_config(admin_content, overlays)
     raise ValueError(f"Unsupported MCP engine: {engine}")

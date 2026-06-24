@@ -31,7 +31,7 @@ import {
  * template to an agent without leaving the page.
  */
 
-const SUPPORTED_ENGINES = ['claude-code', 'codex', 'gemini-cli'] as const
+const SUPPORTED_ENGINES = ['claude-code', 'codex-cli', 'gemini-cli'] as const
 type EngineId = typeof SUPPORTED_ENGINES[number]
 
 interface Template {

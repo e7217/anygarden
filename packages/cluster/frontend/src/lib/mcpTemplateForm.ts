@@ -9,7 +9,7 @@
  * save time.
  */
 
-export const SUPPORTED_ENGINE_IDS = ['claude-code', 'codex', 'gemini-cli'] as const
+export const SUPPORTED_ENGINE_IDS = ['claude-code', 'codex-cli', 'gemini-cli'] as const
 export type SupportedEngine = (typeof SUPPORTED_ENGINE_IDS)[number]
 
 const PLACEHOLDER_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/g
@@ -118,7 +118,7 @@ export function buildTemplatePayload(form: TemplateFormState): ApiPayload {
     icon: null,
     config_per_engine: {
       'claude-code': config,
-      'codex': config,
+      'codex-cli': config,
       'gemini-cli': config,
     },
     supported_engines: [...SUPPORTED_ENGINE_IDS],

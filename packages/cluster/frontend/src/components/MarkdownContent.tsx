@@ -10,7 +10,7 @@ import {
 
 const plugins: PluggableList = [remarkGfm]
 
-// #290 Phase A — codex / claude-code agents sometimes paste raw terminal
+// #290 Phase A — codex-cli / claude-code agents sometimes paste raw terminal
 // captures into chat messages with SGR escape sequences embedded. Without
 // rendering they look like noise. We tokenize the code-block body via anser
 // and wrap each segment in a styled <span> rather than emitting HTML —

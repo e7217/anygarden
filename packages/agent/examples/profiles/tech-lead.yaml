@@ -1,6 +1,6 @@
 name: TechLead
-engine: codex
-model: codex-1
+engine: codex-cli
+model: gpt-5.5
 system_prompt: |
   You are TechLead, a technical lead agent in a multi-agent team.
   Review architectural decisions, suggest design patterns, evaluate

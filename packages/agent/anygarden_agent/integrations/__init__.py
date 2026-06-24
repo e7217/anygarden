@@ -23,9 +23,8 @@ __all__ = [
 # Lazy-load mapping: engine name -> module path
 ENGINES: dict[str, str] = {
     "claude-code": "anygarden_agent.integrations.claude_code",
-    "codex": "anygarden_agent.integrations.codex",
-    # #496 — codex-cli: ``codex exec`` subprocess engine, decoupled from
-    # the codex-python SDK's bundled binary version.
+    # #496 — codex-cli: ``codex exec`` subprocess engine, decoupled from the
+    # codex-python SDK's bundled binary version (#506 removed the SDK codex).
     "codex-cli": "anygarden_agent.integrations.codex_cli",
     "gemini-cli": "anygarden_agent.integrations.gemini_cli",
     "openhands": "anygarden_agent.integrations.openhands_engine",
@@ -34,7 +33,6 @@ ENGINES: dict[str, str] = {
 # Engine name -> adapter class name
 _ADAPTER_CLASSES: dict[str, str] = {
     "claude-code": "ClaudeCodeAdapter",
-    "codex": "CodexAdapter",
     "codex-cli": "CodexCliAdapter",
     "gemini-cli": "GeminiCliAdapter",
     "openhands": "OpenHandsAdapter",

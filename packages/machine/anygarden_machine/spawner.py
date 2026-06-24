@@ -486,7 +486,7 @@ class Spawner:
         if not workspace.is_dir() or workspace.is_symlink():
             return
         marker = workspace / cls._CODEX_WORKSPACE_MARKER
-        if marker.is_file() and engine in ("codex", "codex-cli"):
+        if marker.is_file() and engine == "codex-cli":
             return
 
         for entry in list(workspace.iterdir()):
@@ -768,7 +768,7 @@ class Spawner:
             path.startswith(".codex/") for path in msg.files
         )
         # #496 — codex-cli shares codex's ``.codex`` auth/config overlay.
-        if msg.engine in ("codex", "codex-cli") and has_codex_overlay:
+        if msg.engine == "codex-cli" and has_codex_overlay:
             per_agent_auth = agent_root / ".codex" / "auth.json"
             host_auth = Path.home() / ".codex" / "auth.json"
             if (
@@ -807,7 +807,7 @@ class Spawner:
         # adapter pins ThreadStartOptions.cwd at this directory.
         # #496 — codex-cli uses the same workspace-write sandbox root as
         # the SDK codex engine (``_codex_thread_cwd`` resolves to it).
-        if msg.engine in ("codex", "codex-cli"):
+        if msg.engine == "codex-cli":
             workspace = agent_root / "workspace"
             workspace.mkdir(parents=True, exist_ok=True)
             secure_chmod(workspace, 0o700)
@@ -961,7 +961,7 @@ class Spawner:
             path.startswith(".codex/") for path in msg.files
         )
         if (
-            msg.engine in ("codex", "codex-cli")
+            msg.engine == "codex-cli"
             and agent_root is not None
             and has_codex_overlay
         ):

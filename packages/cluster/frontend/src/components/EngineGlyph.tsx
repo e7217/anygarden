@@ -3,7 +3,7 @@ import { Bot } from 'lucide-react'
 // AI-engine logos we actually render are pulled into the bundle.
 // Mapping covers every engine ID in
 // packages/agent/anygarden_agent/integrations/__init__.py::ENGINES
-// (claude-code, codex, gemini-cli, openhands, deep-agents, openai,
+// (claude-code, codex-cli, gemini-cli, openhands, deep-agents, openai,
 // anthropic) plus backend-agnostic variants the UI might still see.
 import Claude from '@lobehub/icons/es/Claude'
 import Codex from '@lobehub/icons/es/Codex'

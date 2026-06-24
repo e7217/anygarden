@@ -95,74 +95,13 @@ class EngineCatalogEntry:
 
 
 ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
-    # Codex CLI: reasoning levels verified by triggering its config
-    # validator (it reports ``none/minimal/low/medium/high/xhigh``).
-    # Model list verified by round-tripping an actual ``codex exec``
-    # call with a ChatGPT-account login. The CLI binary's hardcoded
-    # symbol table is *not* authoritative — Codex does no client-side
-    # model-id validation, so the source of truth is what the backend
-    # accepts.
-    #
-    # Models confirmed to work under ChatGPT-account auth. Other IDs
-    # surfaced in the binary (``gpt-5.4-pro``, ``gpt-5.2-codex``,
-    # ``gpt-5.1-codex-max``, ``gpt-5.1-codex-mini``) return
-    # "not supported when using Codex with a ChatGPT account" and are
-    # presumed API-key-only, so they're omitted until we wire API-key
-    # auth through a separate engine entry.
-    "codex": EngineCatalogEntry(
-        engine="codex",
-        default_model="gpt-5.5",
-        models=(
-            # gpt-5.5: announcement-only on 2026-04-25; runtime
-            # round-trip verification pending. See module docstring.
-            EngineModel(
-                id="gpt-5.5",
-                label="GPT-5.5",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-            ),
-            EngineModel(
-                id="gpt-5.4",
-                label="GPT-5.4",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-            ),
-            EngineModel(
-                id="gpt-5.4-mini",
-                label="GPT-5.4 Mini",
-                reasoning_levels=("minimal", "low", "medium", "high"),
-            ),
-            EngineModel(
-                id="gpt-5.3-codex",
-                label="GPT-5.3 Codex",
-                reasoning_levels=("low", "medium", "high", "xhigh"),
-            ),
-            EngineModel(
-                id="gpt-5.3-codex-spark",
-                label="GPT-5.3 Codex Spark",
-                reasoning_levels=("minimal", "low"),
-            ),
-            EngineModel(
-                id="gpt-5.2",
-                label="GPT-5.2",
-                reasoning_levels=("low", "medium", "high"),
-            ),
-        ),
-        reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-        # #502 — SDK codex is legacy. codex-python in-process couples
-        # SDK↔bundled-binary↔model versions (root cause of the gpt-5.5
-        # outage) and needs the #190 parse_notification shim. The codex-cli
-        # (exec) engine decouples the binary and drops the shim, so prefer it
-        # for new agents. Existing codex agents keep running — this flag only
-        # affects admin-UI sort/badge, not engine availability.
-        deprecated=True,
-        deprecation_note=(
-            "SDK 버전 결합(codex-python↔번들 바이너리↔모델)이 있어 "
-            "codex-cli (exec) 엔진을 권장합니다. 기존 에이전트는 계속 동작합니다."
-        ),
-    ),
-    # #496 — codex-cli (``codex exec``) engine. Same binary, model list,
-    # and reasoning levels as the SDK ``codex`` engine above; only the
-    # invocation path differs (CLI subprocess vs codex-python SDK), so
-    # the catalog surface is intentionally identical.
+    # Codex CLI (exec) engine. Reasoning levels verified via its config
+    # validator (none/minimal/low/medium/high/xhigh). Model list verified by
+    # round-tripping an actual ``codex exec`` call with a ChatGPT-account
+    # login; Codex does no client-side model-id validation, so the source of
+    # truth is what the backend accepts. Other binary IDs (gpt-5.4-pro,
+    # gpt-5.2-codex, gpt-5.1-codex-max/mini) return "not supported with a
+    # ChatGPT account" and are omitted. (#506 removed the SDK ``codex`` entry.)
     "codex-cli": EngineCatalogEntry(
         engine="codex-cli",
         default_model="gpt-5.5",

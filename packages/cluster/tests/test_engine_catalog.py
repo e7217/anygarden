@@ -27,7 +27,7 @@ from anygarden.engines.catalog import is_deprecated
 
 class TestCatalog:
     def test_known_engines_are_present(self) -> None:
-        assert "codex" in ENGINE_CATALOG
+        assert "codex-cli" in ENGINE_CATALOG
         assert "claude-code" in ENGINE_CATALOG
         assert "gemini-cli" in ENGINE_CATALOG
 
@@ -42,23 +42,23 @@ class TestCatalog:
         assert get_engine_entry("nonexistent") is None
 
     def test_is_valid_model(self) -> None:
-        assert is_valid_model("codex", "gpt-5.4") is True
-        assert is_valid_model("codex", "nonexistent") is False
+        assert is_valid_model("codex-cli", "gpt-5.4") is True
+        assert is_valid_model("codex-cli", "nonexistent") is False
         assert is_valid_model("unknown-engine", "gpt-5.4") is False
 
     def test_is_valid_reasoning_effort_engine_level(self) -> None:
         """Without specifying a model, engine-level levels apply."""
-        assert is_valid_reasoning_effort("codex", "medium") is True
+        assert is_valid_reasoning_effort("codex-cli", "medium") is True
         # Codex CLI validator also accepts ``none``, but the catalog
         # omits it so we don't surface a "disabled" pseudo-level.
-        assert is_valid_reasoning_effort("codex", "none") is False
+        assert is_valid_reasoning_effort("codex-cli", "none") is False
 
     def test_is_valid_reasoning_effort_model_level(self) -> None:
         """Per-model reasoning_levels narrow the engine-level list."""
         # gpt-5.4 supports xhigh at model level
-        assert is_valid_reasoning_effort("codex", "xhigh", model="gpt-5.4") is True
+        assert is_valid_reasoning_effort("codex-cli", "xhigh", model="gpt-5.4") is True
         # gpt-5.2 does NOT support xhigh (only low/medium/high)
-        assert is_valid_reasoning_effort("codex", "xhigh", model="gpt-5.2") is False
+        assert is_valid_reasoning_effort("codex-cli", "xhigh", model="gpt-5.2") is False
 
     def test_is_valid_reasoning_effort_unknown_engine(self) -> None:
         assert is_valid_reasoning_effort("unknown", "medium") is False
@@ -75,13 +75,13 @@ class TestDeprecationFields:
 
     Issue #382 flips ``claude-code`` after the Anthropic Agent SDK
     credit split made non-interactive CLI orchestration a cost risk.
-    Issue #502 flips ``codex`` (SDK) toward the codex-cli (exec) engine
-    after the SDK version-coupling outage. Other engines remain
+    Issue #506 removed the SDK ``codex`` engine outright (was #502-
+    deprecated) in favour of codex-cli. Other engines remain
     non-deprecated until a separate decision explicitly moves them.
     """
 
-    # Engines flagged legacy in the catalog (#382 claude-code, #502 codex).
-    DEPRECATED_ENGINES = {"claude-code", "codex"}
+    # Engines flagged legacy in the catalog (#382 claude-code).
+    DEPRECATED_ENGINES = {"claude-code"}
 
     def test_deprecated_flag_matches_expected_engines(self) -> None:
         for name, entry in ENGINE_CATALOG.items():
@@ -92,9 +92,6 @@ class TestDeprecationFields:
             if name == "claude-code":
                 assert entry.deprecation_note is not None
                 assert "OpenHands" in entry.deprecation_note
-            elif name == "codex":
-                assert entry.deprecation_note is not None
-                assert "codex-cli" in entry.deprecation_note
             else:
                 assert entry.deprecation_note is None
 
@@ -168,25 +165,25 @@ async def catalog_env():
 
 class TestEngineModelsEndpoint:
     @pytest.mark.asyncio
-    async def test_get_codex_models(self, catalog_env) -> None:
+    async def test_get_codex_cli_models(self, catalog_env) -> None:
         client = catalog_env["client"]
         token = catalog_env["token"]
 
         resp = await client.get(
-            "/api/v1/agents/engines/codex/models",
+            "/api/v1/agents/engines/codex-cli/models",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["engine"] == "codex"
+        assert data["engine"] == "codex-cli"
         assert data["default_model"] == "gpt-5.5"
         model_ids = [m["id"] for m in data["models"]]
         assert "gpt-5.5" in model_ids
         assert "gpt-5.4" in model_ids
         assert "gpt-5.4-mini" in model_ids
-        # #502 — codex (SDK) deprecated toward codex-cli (exec).
-        assert data["deprecated"] is True
-        assert "codex-cli" in data["deprecation_note"]
+        # #506 — codex-cli is the recommended (non-deprecated) engine.
+        assert data["deprecated"] is False
+        assert data["deprecation_note"] is None
 
     @pytest.mark.asyncio
     async def test_get_claude_code_models_exposes_deprecation_metadata(
@@ -221,7 +218,7 @@ class TestEngineModelsEndpoint:
         """Anonymous requests should be rejected."""
         client = catalog_env["client"]
 
-        resp = await client.get("/api/v1/agents/engines/codex/models")
+        resp = await client.get("/api/v1/agents/engines/codex-cli/models")
         # Without any auth header, expect 401 or 403
         assert resp.status_code in (401, 403)
 
@@ -232,7 +229,7 @@ class TestEngineModelsEndpoint:
         token = catalog_env["token"]
 
         resp = await client.get(
-            "/api/v1/agents/engines/codex/models",
+            "/api/v1/agents/engines/codex-cli/models",
             headers={"Authorization": f"Bearer {token}"},
         )
         data = resp.json()
@@ -260,7 +257,7 @@ class TestAvailableEnginesEndpoint:
             db.add_all(
                 [
                     MachineEngine(machine_id=machine.id, engine="claude-code"),
-                    MachineEngine(machine_id=machine.id, engine="codex"),
+                    MachineEngine(machine_id=machine.id, engine="codex-cli"),
                 ]
             )
             await db.commit()
@@ -273,9 +270,9 @@ class TestAvailableEnginesEndpoint:
         rows = {row["engine"]: row for row in resp.json()}
         assert rows["claude-code"]["deprecated"] is True
         assert "OpenHands" in rows["claude-code"]["deprecation_note"]
-        # #502 — codex (SDK) is now deprecated toward codex-cli (exec).
-        assert rows["codex"]["deprecated"] is True
-        assert "codex-cli" in rows["codex"]["deprecation_note"]
+        # #506 — codex-cli is the recommended (non-deprecated) engine.
+        assert rows["codex-cli"]["deprecated"] is False
+        assert rows["codex-cli"]["deprecation_note"] is None
 
 
 # ── Issue #359 — gateway model merge ────────────────────────────────
@@ -364,7 +361,7 @@ class TestOpenHandsGatewayMerge:
         assert not any(m["id"] == "openai/paused-model" for m in data["models"])
 
     @pytest.mark.parametrize(
-        "engine_name", ["claude-code", "codex", "gemini-cli"]
+        "engine_name", ["claude-code", "codex-cli", "gemini-cli"]
     )
     @pytest.mark.asyncio
     async def test_other_engines_do_not_get_gateway_merge(
