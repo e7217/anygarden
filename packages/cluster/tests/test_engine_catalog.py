@@ -75,19 +75,26 @@ class TestDeprecationFields:
 
     Issue #382 flips ``claude-code`` after the Anthropic Agent SDK
     credit split made non-interactive CLI orchestration a cost risk.
-    Other engines remain non-deprecated until a separate decision
-    explicitly moves them.
+    Issue #502 flips ``codex`` (SDK) toward the codex-cli (exec) engine
+    after the SDK version-coupling outage. Other engines remain
+    non-deprecated until a separate decision explicitly moves them.
     """
 
-    def test_default_deprecated_false_for_all_engines(self) -> None:
-        for name, entry in ENGINE_CATALOG.items():
-            assert entry.deprecated is (name == "claude-code")
+    # Engines flagged legacy in the catalog (#382 claude-code, #502 codex).
+    DEPRECATED_ENGINES = {"claude-code", "codex"}
 
-    def test_default_deprecation_note_none(self) -> None:
+    def test_deprecated_flag_matches_expected_engines(self) -> None:
+        for name, entry in ENGINE_CATALOG.items():
+            assert entry.deprecated is (name in self.DEPRECATED_ENGINES)
+
+    def test_deprecation_note_present_for_deprecated(self) -> None:
         for name, entry in ENGINE_CATALOG.items():
             if name == "claude-code":
                 assert entry.deprecation_note is not None
                 assert "OpenHands" in entry.deprecation_note
+            elif name == "codex":
+                assert entry.deprecation_note is not None
+                assert "codex-cli" in entry.deprecation_note
             else:
                 assert entry.deprecation_note is None
 
@@ -95,7 +102,11 @@ class TestDeprecationFields:
         # Unknown engine — caller-friendly False.
         assert is_deprecated("no-such-engine") is False
         for name in ENGINE_CATALOG:
-            assert is_deprecated(name) is (name == "claude-code")
+            assert is_deprecated(name) is (name in self.DEPRECATED_ENGINES)
+
+    def test_codex_cli_not_deprecated(self) -> None:
+        # #502 — the exec engine is the recommended replacement, not legacy.
+        assert is_deprecated("codex-cli") is False
 
     def test_entry_can_carry_deprecation_metadata(self) -> None:
         """Frozen dataclass accepts the new fields when constructed.
@@ -173,8 +184,9 @@ class TestEngineModelsEndpoint:
         assert "gpt-5.5" in model_ids
         assert "gpt-5.4" in model_ids
         assert "gpt-5.4-mini" in model_ids
-        assert data["deprecated"] is False
-        assert data["deprecation_note"] is None
+        # #502 — codex (SDK) deprecated toward codex-cli (exec).
+        assert data["deprecated"] is True
+        assert "codex-cli" in data["deprecation_note"]
 
     @pytest.mark.asyncio
     async def test_get_claude_code_models_exposes_deprecation_metadata(
@@ -261,8 +273,9 @@ class TestAvailableEnginesEndpoint:
         rows = {row["engine"]: row for row in resp.json()}
         assert rows["claude-code"]["deprecated"] is True
         assert "OpenHands" in rows["claude-code"]["deprecation_note"]
-        assert rows["codex"]["deprecated"] is False
-        assert rows["codex"]["deprecation_note"] is None
+        # #502 — codex (SDK) is now deprecated toward codex-cli (exec).
+        assert rows["codex"]["deprecated"] is True
+        assert "codex-cli" in rows["codex"]["deprecation_note"]
 
 
 # ── Issue #359 — gateway model merge ────────────────────────────────
