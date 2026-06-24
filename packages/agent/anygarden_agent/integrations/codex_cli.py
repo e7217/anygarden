@@ -41,7 +41,6 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter, ShaTrackedInjector
-from anygarden_agent.integrations.codex import _codex_thread_cwd, _resolve_codex_flags
 from anygarden_agent.integrations.gemini_cli import (
     _subprocess_group_kwargs,
     _terminate_tree,
@@ -61,10 +60,50 @@ from anygarden_agent.runtime.handler_wrapper import (
 logger = structlog.get_logger(__name__)
 
 
-# Same turn-timeout profile as the SDK codex engine (#190/#492): codex
-# tool turns can reason for minutes. Shares the ``codex`` env override
-# key (``ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC``) since the underlying
-# binary and turn profile are identical.
+# Issue #309 — semantic permission tier → codex native dial mapping.
+# Moved here from the (removed) SDK codex adapter (#506); codex-cli is now
+# the sole consumer. Knobs: ``sandbox`` (read-only / workspace-write /
+# danger-full-access) and ``approval_policy``.
+_CODEX_TIER_FLAGS: dict[str, tuple[str, str]] = {
+    "restricted": ("read-only", "untrusted"),
+    "standard":   ("workspace-write", "never"),
+    "trusted":    ("danger-full-access", "never"),
+}
+
+
+def _resolve_codex_flags(permission_level: str | None) -> tuple[str, str]:
+    """Translate a ``permission_level`` tier into ``(sandbox, approval_policy)``.
+
+    ``None`` falls back to ``standard`` (pre-#309 behaviour). Anything else
+    raises ``ValueError`` so a typo fails loud rather than silently
+    downgrading the agent's privilege.
+    """
+    if permission_level is None:
+        return _CODEX_TIER_FLAGS["standard"]
+    try:
+        return _CODEX_TIER_FLAGS[permission_level]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown permission_level: {permission_level!r} — "
+            f"expected one of {sorted(_CODEX_TIER_FLAGS)}"
+        ) from exc
+
+
+def _codex_thread_cwd() -> Path:
+    """Return the cwd codex should use for its sandbox root.
+
+    The machine materializer creates ``workspace/`` for codex-cli agents;
+    older or test layouts fall back to ``agent_root`` (the process cwd).
+    """
+    workspace = Path.cwd() / "workspace"
+    if workspace.is_dir():
+        return workspace
+    return Path.cwd()
+
+
+# Same turn-timeout profile as the (removed) SDK codex engine (#190/#492):
+# codex tool turns can reason for minutes. Uses the ``codex`` env override
+# key (``ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC``).
 _CODEX_CLI_TIMEOUT = resolve_turn_timeout("codex")
 
 

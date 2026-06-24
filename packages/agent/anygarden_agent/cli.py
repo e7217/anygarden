@@ -25,7 +25,8 @@ _ENGINE_CHOICES = sorted(ENGINES.keys())
 # ``resolve_turn_timeout`` raises (#500). Regression-tested in test_cli.
 _ENGINE_TIMEOUT_KEY: dict[str, str] = {
     "claude-code": "claude",
-    "codex": "codex",
+    # codex-cli uses the "codex" turn-timeout profile (_ENGINE_DEFAULTS["codex"]);
+    # #506 removed the SDK "codex" engine but the timeout key stays for codex-cli.
     "codex-cli": "codex",
     "gemini-cli": "gemini",
     "openhands": "openhands",
@@ -166,15 +167,6 @@ async def _setup_engine(
                 "system_prompt": system_prompt,
                 "model": model,
             },
-        )
-    elif engine == "codex":
-        from anygarden_agent.integrations.codex import integrate_with_codex
-
-        await integrate_with_codex(
-            client,
-            model=model,  # None → codex CLI 기본 모델 사용
-            system_prompt=system_prompt or "You are a helpful coding assistant.",
-            reasoning_effort=reasoning_effort,
         )
     elif engine == "codex-cli":
         # #496 — codex exec subprocess engine (SDK 버전 결합 없이 codex 바이너리 직접 호출)

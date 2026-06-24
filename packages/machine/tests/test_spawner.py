@@ -497,7 +497,7 @@ class TestSpawn:
         """
         msg = SpawnManifest(
             agent_id="agent-codex",
-            engine="codex",
+            engine="codex-cli",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -545,7 +545,7 @@ class TestSpawn:
         """
         msg = SpawnManifest(
             agent_id="agent-codex-hostauth",
-            engine="codex",
+            engine="codex-cli",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -935,7 +935,7 @@ class TestKillAdoptedAgent:
         spawner._agents["adopted-1"] = RunningAgent(
             agent_id="adopted-1",
             pid=4321,
-            engine="codex",
+            engine="codex-cli",
             started_at=1_700_000_000.0,
             proc=None,
         )
@@ -957,14 +957,14 @@ class TestKillAdoptedAgent:
                 "pid": 4321,
                 "pgid": 4321,
                 "started_at": 1_700_000_000.0,
-                "engine": "codex",
+                "engine": "codex-cli",
                 "generation": 2,
             },
         )
         spawner._agents["adopted-1"] = RunningAgent(
             agent_id="adopted-1",
             pid=4321,
-            engine="codex",
+            engine="codex-cli",
             started_at=1_700_000_000.0,
             proc=None,
         )

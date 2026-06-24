@@ -176,7 +176,7 @@ class GeminiCliAdapter(EngineAdapter):
         # Per-room conversation history to prevent cross-room leaks.
         # Gemini CLI in headless mode is stateless per invocation, so
         # we rebuild the prompt from history each call (same approach
-        # CodexAdapter uses).
+        # CodexCliAdapter uses).
         self._conversations: dict[str, list[dict[str, str]]] = {}
         # Per-room pending context buffer (#74 Stage B). Populated by
         # ``ingest_context`` and drained as a prompt prefix on the

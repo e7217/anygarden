@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from anygarden_agent.integrations.codex import _resolve_codex_flags
+from anygarden_agent.integrations.codex_cli import _resolve_codex_flags
 
 
 class TestResolveCodexFlags:

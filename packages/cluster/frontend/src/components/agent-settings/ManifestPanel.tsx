@@ -104,7 +104,7 @@ const PREFIX_LABELS: Record<string, string> = {
 // writing garbage.
 const ENGINE_PREFIXES: Record<string, readonly string[]> = {
   'claude-code': ['skills/', '.claude/'],
-  'codex': ['skills/', '.codex/'],
+  'codex-cli': ['skills/', '.codex/'],
   'gemini-cli': ['skills/', '.gemini/'],
   'openhands': ['skills/', '.openhands/'],
   // API-only and library-style engines: no CLI config dir to edit.

@@ -71,7 +71,7 @@ and takes effect the next time the agent reconnects (Part 2's UI toggle
 triggers a `bump_generation` respawn so the refresh is automatic).
 
 Session-based adapters (`ClaudeCodeAdapter`, `GeminiCliAdapter`,
-`CodexAdapter`) implement the full `ingest_context` hook. Raw-SDK adapters
+`CodexCliAdapter`) implement the full `ingest_context` hook. Raw-SDK adapters
 (OpenAI, Anthropic, OpenHands, Deep Agents) keep their own history
 management and inherit the base no-op.
 

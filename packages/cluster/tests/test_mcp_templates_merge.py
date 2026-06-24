@@ -51,7 +51,7 @@ class TestRenderInstance:
                     "args": ["-y", "x"],
                     "env": {"T": "${T}"},
                 },
-                "codex": {"command": "npx"},
+                "codex-cli": {"command": "npx"},
             },
             env_values={"T": "secret"},
             engine="claude-code",
@@ -71,7 +71,7 @@ class TestRenderInstance:
             name="github",
             config_per_engine={"claude-code": {"command": "x"}},
             env_values={},
-            engine="codex",
+            engine="codex-cli",
         )
         assert result is None
 
@@ -176,7 +176,7 @@ class TestDispatcher:
 
     def test_codex_uses_toml(self):
         out = merge_for_engine(
-            engine="codex",
+            engine="codex-cli",
             admin_content=None,
             overlays=[RenderedInstance(name="x", config={"command": "y"})],
         )
@@ -196,7 +196,7 @@ class TestSettingsPath:
         # .claude/settings.json "mcpServers" section (which is
         # silently ignored). Pin the file name.
         assert settings_path_for_engine("claude-code") == ".mcp.json"
-        assert settings_path_for_engine("codex") == ".codex/config.toml"
+        assert settings_path_for_engine("codex-cli") == ".codex/config.toml"
         assert settings_path_for_engine("gemini-cli") == ".gemini/settings.json"
 
     def test_non_mcp_engines_return_none(self):

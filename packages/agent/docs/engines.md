@@ -5,7 +5,7 @@
 | 엔진 | 타입 | CLI/API | 설명 |
 |------|------|---------|------|
 | claude-code | SDK (subprocess) | Claude Agent SDK | Anthropic Claude Code (별도 CLI 프로세스를 띄움) |
-| codex | SDK (subprocess) | codex-python | OpenAI Codex (별도 CLI 프로세스를 띄움) |
+| codex-cli | CLI subprocess | `codex exec --json` | OpenAI Codex (codex 바이너리 직접 호출, SDK 비결합 — #506) |
 | gemini-cli | CLI subprocess | `gemini` | Google Gemini CLI |
 | openhands | In-process Python SDK | openhands-sdk (litellm) | OpenHands V1 — Anthropic/OpenAI/Google 모두 단일 어댑터로 (#355) |
 

@@ -21,14 +21,8 @@ dependencies = [
     "psutil>=5.9",
     # Engine dependencies — included by default so all engines work
     # out of the box without extra install flags.
-    # codex-python 1.141 bundles codex-cli 0.140, the first vendored
-    # binary that supports the gpt-5.5 model (the SDK adapter's default).
-    # Older bundles (1.122→cli 0.122, 1.114→cli 0.114) reject gpt-5.5
-    # with a 400 "requires a newer version of Codex", surfacing as the
-    # user-facing "에이전트가 응답을 생성하지 못했습니다." notice.
-    # The codex-cli (exec) engine (#496) calls the binary directly and
-    # does not depend on this SDK pin, but the SDK ``codex`` engine does.
-    "codex-python>=1.141",
+    # (#506 removed codex-python: the codex-cli engine invokes the ``codex``
+    # binary directly via subprocess, so no Python SDK dependency is needed.)
     "claude-agent-sdk>=0.1.0",
     # Issue #355 Phase 0 — OpenHands V1 SDK as the in-process Python
     # adapter alternative to the three CLI engines.
@@ -47,7 +41,6 @@ dependencies = [
 # Kept for backward compatibility (pip install anygarden-agent[claude-code])
 claude-code = []
 gemini-cli = []
-codex = []
 openhands = []
 dev = [
     "pytest>=8.0",

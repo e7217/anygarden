@@ -131,7 +131,7 @@ __all__ = [
 class OpenHandsAdapter(EngineAdapter):
     """Adapter that bridges Anygarden messages to the OpenHands V1 SDK.
 
-    Parallels the structure of ``ClaudeCodeAdapter`` / ``CodexAdapter``:
+    Parallels the structure of ``ClaudeCodeAdapter`` / ``CodexCliAdapter``:
 
     - ``_pending_context`` per-room buffer for ``INGEST_ONLY`` messages
       (#74 / #286 contract).

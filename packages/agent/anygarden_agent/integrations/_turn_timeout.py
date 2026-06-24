@@ -27,7 +27,9 @@ from __future__ import annotations
 import os
 
 # Hardcoded per-engine defaults (seconds). gemini keeps a faster turn profile;
-# the others mirror codex's original 600s cap (#190).
+# the others mirror codex's original 600s cap (#190). The "codex" key is
+# retained for codex-cli (#506 removed the SDK codex engine; codex-cli maps to
+# this key via cli._ENGINE_TIMEOUT_KEY).
 _ENGINE_DEFAULTS: dict[str, float] = {
     "codex": 600.0,
     "claude": 600.0,

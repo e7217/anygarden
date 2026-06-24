@@ -38,12 +38,9 @@ BINARY_ENGINES: list[tuple[str, str]] = [
     # install package. Use the real on-disk name so ``shutil.which``
     # actually finds it.
     ("claude-code", "claude"),
-    ("codex", "codex"),
-    # #496 — codex-cli is the same on-disk ``codex`` binary as the SDK
-    # ``codex`` engine, but a distinct engine that shells out to
-    # ``codex exec --json`` instead of embedding the codex-python SDK.
-    # Advertised separately so it appears as its own choice in the
-    # agent-creation UI; both light up whenever ``codex`` is on PATH.
+    # #496/#506 — codex-cli shells out to ``codex exec --json`` (the SDK
+    # codex engine was removed). Same on-disk ``codex`` binary; lights up
+    # whenever ``codex`` is on PATH.
     ("codex-cli", "codex"),
     ("gemini-cli", "gemini"),
 ]

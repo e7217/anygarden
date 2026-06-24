@@ -20,7 +20,7 @@ interface ParentBreadcrumb {
 interface DmAgent {
   id: string
   name: string
-  /** Optional engine id (claude-code, codex, gemini-cli, …).
+  /** Optional engine id (claude-code, codex-cli, gemini-cli, …).
    *  When provided, shows up as a corner badge on the avatar. */
   engine?: string
   /** Issue #101 — optional avatar override forwarded from the
