@@ -147,6 +147,17 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             ),
         ),
         reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+        # #502 — SDK codex is legacy. codex-python in-process couples
+        # SDK↔bundled-binary↔model versions (root cause of the gpt-5.5
+        # outage) and needs the #190 parse_notification shim. The codex-cli
+        # (exec) engine decouples the binary and drops the shim, so prefer it
+        # for new agents. Existing codex agents keep running — this flag only
+        # affects admin-UI sort/badge, not engine availability.
+        deprecated=True,
+        deprecation_note=(
+            "SDK 버전 결합(codex-python↔번들 바이너리↔모델)이 있어 "
+            "codex-cli (exec) 엔진을 권장합니다. 기존 에이전트는 계속 동작합니다."
+        ),
     ),
     # #496 — codex-cli (``codex exec``) engine. Same binary, model list,
     # and reasoning levels as the SDK ``codex`` engine above; only the
