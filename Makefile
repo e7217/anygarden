@@ -1,7 +1,7 @@
 .PHONY: install setup test lint clean dev release-agent release-machine release-cluster
 
 install:                ## Install all packages (workspace) + litellm gateway CLI (#197)
-	uv sync --all-packages
+	uv sync --all-packages --all-extras
 	@# Install the litellm CLI as a uv tool so anygarden-server can spawn
 	@# it as a subprocess via PATH (#197 / ADR-004). Using ``uv tool install``
 	@# instead of ``uvx`` gives version stability and zero per-invocation
@@ -10,9 +10,9 @@ install:                ## Install all packages (workspace) + litellm gateway CL
 
 setup:                  ## One-time dev setup: install + activate git hooks
 	git config core.hooksPath .githooks
-	uv sync --all-packages
+	uv sync --all-packages --all-extras
 	@uv tool install 'litellm[proxy]' 2>&1 | tail -2 || true
-	@echo "[setup] git hooks enabled via .githooks/ — 'git pull' will auto-run 'uv sync --all-packages'."
+	@echo "[setup] git hooks enabled via .githooks/ — 'git pull' will auto-run 'uv sync --all-packages --all-extras'."
 
 test:                   ## Run tests across all packages
 	uv run pytest packages/
