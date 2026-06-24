@@ -148,6 +148,47 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
         ),
         reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
     ),
+    # #496 — codex-cli (``codex exec``) engine. Same binary, model list,
+    # and reasoning levels as the SDK ``codex`` engine above; only the
+    # invocation path differs (CLI subprocess vs codex-python SDK), so
+    # the catalog surface is intentionally identical.
+    "codex-cli": EngineCatalogEntry(
+        engine="codex-cli",
+        default_model="gpt-5.5",
+        models=(
+            EngineModel(
+                id="gpt-5.5",
+                label="GPT-5.5",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="gpt-5.4",
+                label="GPT-5.4",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="gpt-5.4-mini",
+                label="GPT-5.4 Mini",
+                reasoning_levels=("minimal", "low", "medium", "high"),
+            ),
+            EngineModel(
+                id="gpt-5.3-codex",
+                label="GPT-5.3 Codex",
+                reasoning_levels=("low", "medium", "high", "xhigh"),
+            ),
+            EngineModel(
+                id="gpt-5.3-codex-spark",
+                label="GPT-5.3 Codex Spark",
+                reasoning_levels=("minimal", "low"),
+            ),
+            EngineModel(
+                id="gpt-5.2",
+                label="GPT-5.2",
+                reasoning_levels=("low", "medium", "high"),
+            ),
+        ),
+        reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+    ),
     # Claude Code: ``--effort`` (session flag) accepts
     # ``low/medium/high/xhigh/max``. There is no ``disabled`` option at
     # the CLI — the API-level ``extended_thinking`` / ``adaptive``

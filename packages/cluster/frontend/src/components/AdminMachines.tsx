@@ -43,6 +43,7 @@ interface MachineEngineInfo {
 
 const ENGINE_LABELS: Record<string, string> = {
   'codex': 'Codex CLI',
+  'codex-cli': 'Codex CLI (exec)',
   'claude-code': 'Claude Code',
   'gemini-cli': 'Gemini CLI',
   'openai': 'OpenAI API',
