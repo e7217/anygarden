@@ -75,14 +75,22 @@ def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
     ``_resolve_codex_flags``) so both codex engines share one permission
     model: ``restricted`` → ``read-only``/``untrusted``, ``standard`` →
     ``workspace-write``/``never``, ``trusted`` → ``danger-full-access``/
-    ``never``. ``-s`` accepts the sandbox mode directly; the approval
-    policy rides ``-c approval_policy=<p>`` (both verified against codex
-    exec 0.140/0.141: sandbox values read-only|workspace-write|
-    danger-full-access; approval_policy untrusted|never|...). An unknown
-    tier raises ``ValueError`` (fail-loud, same as the SDK adapter).
+    ``never``.
+
+    Both knobs ride the ``-c`` config form rather than ``-s``: the
+    ``codex exec resume`` subcommand rejects ``-s``/``-C`` (exec-only),
+    so passing ``-s`` there fails with ``unexpected argument`` and breaks
+    session continuity (#498). ``-c sandbox_mode=<s>`` and
+    ``-c approval_policy=<p>`` are accepted by BOTH exec and resume
+    (verified against codex exec 0.140/0.141: sandbox values
+    read-only|workspace-write|danger-full-access). An unknown tier raises
+    ``ValueError`` (fail-loud, same as the SDK adapter).
     """
     sandbox, approval_policy = _resolve_codex_flags(permission_level)
-    return ["-s", sandbox, "-c", f"approval_policy={approval_policy}"]
+    return [
+        "-c", f"sandbox_mode={sandbox}",
+        "-c", f"approval_policy={approval_policy}",
+    ]
 
 
 class CodexCliAdapter(EngineAdapter):
@@ -223,7 +231,10 @@ class CodexCliAdapter(EngineAdapter):
             cmd: list[str] = [self._codex_path or "codex", "exec"]
             if thread_id:
                 cmd += ["resume", thread_id]
-            cmd += ["--json", "--skip-git-repo-check", "-C", str(agent_root)]
+            # No ``-C``: ``codex exec resume`` doesn't accept it (exec-only,
+            # #498). The subprocess ``cwd=agent_root`` below sets the working
+            # dir for both the fresh-exec and resume paths.
+            cmd += ["--json", "--skip-git-repo-check"]
             cmd += _resolve_codex_cli_args(self._permission_level)
             if self._model:
                 cmd += ["-m", self._model]
@@ -271,6 +282,15 @@ class CodexCliAdapter(EngineAdapter):
                         + (f": {stderr_snippet}" if stderr_snippet.strip() else ""),
                         transient=is_transient_error(stderr_snippet),
                     )
+                # resume failed — surface stderr (warning) so an argument-
+                # shape bug (#498) isn't silently misread as an expired
+                # session, then let the caller retry fresh once.
+                logger.warning(
+                    "codex_cli.resume_nonzero",
+                    thread_id=thread_id,
+                    code=proc.returncode,
+                    stderr=stderr_snippet,
+                )
                 return None, None, None, True
 
             # Prefer the ``-o`` file; fall back to JSONL agent_message.

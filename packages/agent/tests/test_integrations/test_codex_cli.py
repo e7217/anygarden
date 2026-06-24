@@ -17,24 +17,24 @@ class TestResolveCodexCliArgs:
 
     def test_restricted(self) -> None:
         assert _resolve_codex_cli_args("restricted") == [
-            "-s",
-            "read-only",
+            "-c",
+            "sandbox_mode=read-only",
             "-c",
             "approval_policy=untrusted",
         ]
 
     def test_standard(self) -> None:
         assert _resolve_codex_cli_args("standard") == [
-            "-s",
-            "workspace-write",
+            "-c",
+            "sandbox_mode=workspace-write",
             "-c",
             "approval_policy=never",
         ]
 
     def test_trusted(self) -> None:
         assert _resolve_codex_cli_args("trusted") == [
-            "-s",
-            "danger-full-access",
+            "-c",
+            "sandbox_mode=danger-full-access",
             "-c",
             "approval_policy=never",
         ]
@@ -42,8 +42,8 @@ class TestResolveCodexCliArgs:
     def test_none_defaults_to_standard(self) -> None:
         # ``None`` → standard tier (pre-#309 behaviour), same as codex SDK.
         assert _resolve_codex_cli_args(None) == [
-            "-s",
-            "workspace-write",
+            "-c",
+            "sandbox_mode=workspace-write",
             "-c",
             "approval_policy=never",
         ]
