@@ -18,6 +18,19 @@ logger = structlog.get_logger(__name__)
 
 _ENGINE_CHOICES = sorted(ENGINES.keys())
 
+# #492/#500 — CLI engine names → ``_turn_timeout`` engine keys. The helper
+# keys off short names (codex/claude/gemini/openhands); codex-cli shares
+# codex's turn-timeout profile. Every name in ENGINES MUST map to a key the
+# ``_turn_timeout`` defaults know, else the agent crashes at spawn when
+# ``resolve_turn_timeout`` raises (#500). Regression-tested in test_cli.
+_ENGINE_TIMEOUT_KEY: dict[str, str] = {
+    "claude-code": "claude",
+    "codex": "codex",
+    "codex-cli": "codex",
+    "gemini-cli": "gemini",
+    "openhands": "openhands",
+}
+
 
 @click.command("anygarden-agent")
 @click.option(
@@ -107,14 +120,9 @@ async def _run_agent(
 
     # #492 — the WS ping_timeout must tolerate the engine's turn timeout or a
     # long turn is silently dropped on keepalive. CLI engine names differ from
-    # the helper's engine keys, so map them here (the one place that owns the
-    # ``--engine`` choices).
-    engine_key = {
-        "claude-code": "claude",
-        "codex": "codex",
-        "gemini-cli": "gemini",
-        "openhands": "openhands",
-    }.get(engine, engine)
+    # the helper's engine keys; the mapping lives at module level
+    # (``_ENGINE_TIMEOUT_KEY``) so it can be regression-tested (#500).
+    engine_key = _ENGINE_TIMEOUT_KEY.get(engine, engine)
     ping_timeout = resolve_ping_timeout(resolve_turn_timeout(engine_key))
 
     client = ChatClient(

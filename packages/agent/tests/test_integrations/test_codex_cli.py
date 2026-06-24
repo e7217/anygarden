@@ -263,3 +263,31 @@ class TestOnMessage:
         monkeypatch.setattr(adapter, "_call_codex", boom)
         with pytest.raises(EngineError):
             await adapter.on_message({"content": "hi", "room_id": "r1", "metadata": {}})
+
+
+class TestEngineTimeoutKeyMapping:
+    """#500 — spawn-time engine_key → _turn_timeout regression guard.
+
+    codex-cli crashed at spawn because cli.py's engine_key map lacked it,
+    so resolve_turn_timeout('codex-cli') raised ValueError. Guard every
+    registered engine against the same gap.
+    """
+
+    def test_codex_cli_maps_to_codex(self) -> None:
+        from anygarden_agent.cli import _ENGINE_TIMEOUT_KEY
+
+        assert _ENGINE_TIMEOUT_KEY["codex-cli"] == "codex"
+
+    def test_all_engines_resolve_without_raising(self) -> None:
+        # A new engine added to ENGINES without a matching
+        # _ENGINE_TIMEOUT_KEY entry (or a key _turn_timeout doesn't know)
+        # would crash the agent at spawn — fail loud here instead.
+        from anygarden_agent.cli import _ENGINE_TIMEOUT_KEY
+        from anygarden_agent.integrations import ENGINES
+        from anygarden_agent.integrations._turn_timeout import (
+            resolve_turn_timeout,
+        )
+
+        for engine in ENGINES:
+            key = _ENGINE_TIMEOUT_KEY.get(engine, engine)
+            resolve_turn_timeout(key)  # must not raise
