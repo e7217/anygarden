@@ -168,6 +168,16 @@ async def _setup_engine(
             system_prompt=system_prompt or "You are a helpful coding assistant.",
             reasoning_effort=reasoning_effort,
         )
+    elif engine == "codex-cli":
+        # #496 — codex exec subprocess engine (SDK 버전 결합 없이 codex 바이너리 직접 호출)
+        from anygarden_agent.integrations.codex_cli import integrate_with_codex_cli
+
+        await integrate_with_codex_cli(
+            client,
+            model=model,  # None → codex_cli 기본 모델(gpt-5.5) 사용
+            system_prompt=system_prompt or "You are a helpful coding assistant.",
+            reasoning_effort=reasoning_effort,
+        )
     elif engine == "gemini-cli":
         from anygarden_agent.integrations.gemini_cli import integrate_with_gemini_cli
 

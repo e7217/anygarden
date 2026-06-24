@@ -39,6 +39,12 @@ BINARY_ENGINES: list[tuple[str, str]] = [
     # actually finds it.
     ("claude-code", "claude"),
     ("codex", "codex"),
+    # #496 — codex-cli is the same on-disk ``codex`` binary as the SDK
+    # ``codex`` engine, but a distinct engine that shells out to
+    # ``codex exec --json`` instead of embedding the codex-python SDK.
+    # Advertised separately so it appears as its own choice in the
+    # agent-creation UI; both light up whenever ``codex`` is on PATH.
+    ("codex-cli", "codex"),
     ("gemini-cli", "gemini"),
 ]
 
