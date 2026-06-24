@@ -20,5 +20,9 @@
 # then behavior is unchanged.
 set -e
 cd "$(git rev-parse --show-toplevel)"
-echo "[post-merge] running: uv sync --all-packages"
-uv sync --all-packages
+# #504 — ``--all-extras`` is required: cluster's runtime deps
+# (fastapi/sqlalchemy/uvicorn) live in the ``anygarden[server]`` extra,
+# so a bare ``--all-packages`` sync drops them and leaves the cluster
+# server crashing with ``ModuleNotFoundError: fastapi`` after a pull.
+echo "[post-merge] running: uv sync --all-packages --all-extras"
+uv sync --all-packages --all-extras
