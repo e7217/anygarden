@@ -536,6 +536,20 @@ class AgentLifecycle:
                 frame = await self._build_sync_frame(db, agent, rooms)
                 frames.append(frame)
 
+            # #510 — commit the per-agent ``anygarden_mcp_token`` rows that
+            # ``_build_sync_frame`` → ``_acquire_anygarden_token`` staged via
+            # ``db.add``. Without this the minted tokens roll back (never
+            # persisted) yet are still shipped in the frame, so every agent
+            # (re)spawned via a machine-reconnect batch 401s at ``/mcp/rpc``
+            # ("Invalid agent token") and can't call ``mark_task_status``.
+            # Committing also fires the ``after_commit`` hook that promotes
+            # the tokens into ``_token_cache`` — so a repeated batch reuses
+            # the same token (idempotent) instead of re-minting a fresh one.
+            # Mirrors ``request_start`` / ``handle_token_request``, which the
+            # ``after_commit`` hook comment already lists as the committing
+            # batch shapes this path was meant to share.
+            await db.commit()
+
         # ``send_sync_batch`` queries every agent placed on the machine,
         # so the outgoing batch represents the full desired set. Set
         # ``is_full_snapshot=True`` explicitly so the machine treats
