@@ -29,6 +29,18 @@ export interface Agent {
   // surfaces it as a tooltip on ``pending`` / ``crashed`` state
   // badges so admins can tell at a glance why an agent is stuck.
   last_crash_reason?: string | null;
+  // Issue #516 — structured "why can't this agent respond" for the
+  // not-running family (engine change, no machine for engine, spawn
+  // failure, crash, engine drift, no room). ``null`` when the agent
+  // is fine. ``message`` is rendered for the admin audience (may carry
+  // stderr); the admin UI shows it as a badge + hover so a silent
+  // ``pending`` finally explains itself.
+  unavailable_reason?: {
+    code: string;
+    message: string;
+    detail?: Record<string, unknown> | null;
+    since?: string | null;
+  } | null;
   // Issue #101 — admin-chosen avatar override. Both NULL means
   // the UI falls back to the seed-driven initial from EntityAvatar.
   avatar_kind?: string | null;

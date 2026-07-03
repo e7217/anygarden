@@ -24,6 +24,7 @@ from anygarden.db.models import (
     Task,
     User,
 )
+from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import append_message, replay_since_seq
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.messages.references import (
@@ -63,6 +64,72 @@ from anygarden.ws.protocol import (
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+
+#: #516 — best-effort dedup for the reactive "agent can't respond" room
+#: notice. Keyed by ``(agent_id, since_iso)`` so a fresh reason (new
+#: ``unavailable_since``) posts again, but repeated messages to the same
+#: stuck agent don't spam the room. In-memory / per-worker is sufficient:
+#: the cluster runs a single WS worker (see ws/manager.py), and losing the
+#: dedup across a restart just re-posts once. Bounded to avoid unbounded
+#: growth if many distinct agents churn reasons.
+_UNAVAIL_NOTICE_SEEN: set[tuple[str, str]] = set()
+_UNAVAIL_NOTICE_SEEN_CAP = 2048
+
+
+async def _notify_unavailable_responders(
+    session_factory,
+    manager: "ConnectionManager",
+    room_id: str,
+    responders: list[dict],
+) -> None:
+    """Post a room system notice for expected responders that can't reply (#516).
+
+    ``responders`` is a list of ``{agent_id, name, code, detail, since}``.
+    Debounced per ``(agent_id, since)`` so a user hammering a stuck agent
+    sees the explanation once, not once per message. Fully fail-soft — the
+    notice is advisory and must never break the send path.
+    """
+    for r in responders:
+        since = r.get("since")
+        key = (r["agent_id"], since.isoformat() if since else str(r.get("code")))
+        if key in _UNAVAIL_NOTICE_SEEN:
+            continue
+        if len(_UNAVAIL_NOTICE_SEEN) >= _UNAVAIL_NOTICE_SEEN_CAP:
+            _UNAVAIL_NOTICE_SEEN.clear()
+        _UNAVAIL_NOTICE_SEEN.add(key)
+        try:
+            text = room_notice_for_unavailable(r["name"], r["code"], r.get("detail"))
+            async with session_factory() as db:
+                msg = await append_message(
+                    db,
+                    room_id=room_id,
+                    participant_id=None,
+                    content=text,
+                    metadata={
+                        "system_origin": "agent_unavailable",
+                        "agent_id": r["agent_id"],
+                        "unavailable_code": r["code"],
+                    },
+                )
+                await db.commit()
+                frame = MessageOut(
+                    id=msg.id,
+                    room_id=msg.room_id,
+                    participant_id=msg.participant_id,
+                    content=msg.content,
+                    seq=msg.seq,
+                    created_at=msg.created_at,
+                    metadata=msg.extra_metadata,
+                )
+            await manager.broadcast(room_id, frame)
+        except Exception as exc:  # noqa: BLE001 — notice is best-effort
+            logger.warning(
+                "handler.unavailable_notice.failed",
+                agent_id=r["agent_id"],
+                room_id=room_id,
+                error=str(exc),
+            )
 
 
 def _lifecycle_details(frame: LifecycleFrame) -> dict[str, Any]:
@@ -1590,6 +1657,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # below carry it (cleared next loop iteration).
                     structlog.contextvars.bind_contextvars(message_id=msg.id)
 
+                    # #516 — expected responders that can't actually respond;
+                    # populated on user sends, surfaced as a room notice after
+                    # the broadcast below. Default empty for agent/nominate paths.
+                    unavailable_responders: list[dict] = []
+
                     # Log message events for agents (same transaction).
                     # On user sends we mint a fresh ``request_id`` per
                     # target agent (keyed by that agent's participant_id
@@ -1670,6 +1742,26 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 Participant.agent_id.isnot(None),
                             )
                         )).all()
+                        # #516 — of the agents expected to respond, which
+                        # can't? Collected here, warned in-room after broadcast.
+                        if agent_parts:
+                            unavail_rows = (await db.execute(
+                                select(
+                                    Agent.id, Agent.name, Agent.unavailable_code,
+                                    Agent.unavailable_detail, Agent.unavailable_since,
+                                ).where(
+                                    Agent.id.in_([aid for _, aid in agent_parts]),
+                                    Agent.unavailable_code.isnot(None),
+                                )
+                            )).all()
+                            unavailable_responders = [
+                                {
+                                    "agent_id": row[0], "name": row[1],
+                                    "code": row[2], "detail": row[3],
+                                    "since": row[4],
+                                }
+                                for row in unavail_rows
+                            ]
                         for pid, aid in agent_parts:
                             rid = str(uuid4())
                             request_id_by_participant[pid] = rid
@@ -1730,6 +1822,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         detail="대표 에이전트가 오프라인입니다",
                     )
                     await websocket.send_text(sys_out.model_dump_json())
+
+                # #516 — reactive room notice: the user just messaged agent(s)
+                # that can't respond (engine change, no machine, crash, …).
+                # Without this the sender sees silence with no progress cue.
+                if unavailable_responders:
+                    await _notify_unavailable_responders(
+                        session_factory, manager, room_id, unavailable_responders
+                    )
 
             elif isinstance(frame_in, TypingFrame):
                 typing_tracker.set_typing(room_id, participant.id, frame_in.is_typing)

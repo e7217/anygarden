@@ -444,7 +444,18 @@ export default function AdminMachines() {
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
                         <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
-                        {agent.last_crash_reason && (
+                        {/* #516 — the structured unavailability reason is the
+                            authoritative "why". Show its first line inline and
+                            the full admin message (may include stderr) on hover;
+                            fall back to the raw last_crash_reason. */}
+                        {agent.unavailable_reason ? (
+                          <span
+                            className="truncate text-[var(--color-warning)]"
+                            title={agent.unavailable_reason.message}
+                          >
+                            · {agent.unavailable_reason.message.split('\n')[0]}
+                          </span>
+                        ) : agent.last_crash_reason && (
                           <span className="truncate text-[var(--color-warning)]" title={agent.last_crash_reason}>
                             · {agent.last_crash_reason}
                           </span>

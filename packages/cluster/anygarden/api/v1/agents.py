@@ -25,6 +25,7 @@ from anygarden.db.models import (
     Room,
     Task,
 )
+from anygarden.agent_availability import render_unavailable_message
 from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
 from anygarden.rooms.membership import ensure_agent_in_room
@@ -195,6 +196,20 @@ class AgentUpdate(BaseModel):
     collaboration_mode_set: bool = False
 
 
+class UnavailableReasonOut(BaseModel):
+    """#516 — why an agent can't respond, for the admin UI.
+
+    ``message`` is rendered with the ``admin`` audience so it may include
+    stderr / exit code. The end-user-facing (coarse) label is derived
+    separately on the WS presence path, never here.
+    """
+
+    code: str
+    message: str
+    detail: Optional[dict] = None
+    since: Optional[datetime] = None
+
+
 class AgentOut(BaseModel):
     id: str
     name: str
@@ -203,6 +218,9 @@ class AgentOut(BaseModel):
     actual_state: str
     placed_on_machine_id: Optional[str] = None
     machine_online: bool = False
+    # #516 — structured "why can't this agent respond" for the not-running
+    # family. None when the agent is fine. Rendered for the admin audience.
+    unavailable_reason: Optional[UnavailableReasonOut] = None
     restart_policy: str
     agents_md: Optional[str] = None
     # Last failure reason as recorded by the lifecycle — surfaced
@@ -257,6 +275,17 @@ def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
         and machine_bus
         and machine_bus.is_connected(agent.placed_on_machine_id)
     )
+    # #516 — derive the admin-facing unavailability reason from the stored
+    # code/detail (the human message is never persisted).
+    if agent.unavailable_code:
+        out.unavailable_reason = UnavailableReasonOut(
+            code=agent.unavailable_code,
+            message=render_unavailable_message(
+                agent.unavailable_code, agent.unavailable_detail, audience="admin"
+            ),
+            detail=agent.unavailable_detail,
+            since=agent.unavailable_since,
+        )
     return out
 
 
