@@ -222,6 +222,8 @@ class Agent(Base):
     __tablename__ = "agents"
     __table_args__ = (
         Index("ix_agents_placed_state", "placed_on_machine_id", "actual_state"),
+        # #516 — admin query "which agents are unavailable, and why".
+        Index("ix_agents_unavailable_code", "unavailable_code"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -245,6 +247,24 @@ class Agent(Base):
         UtcDateTime, nullable=True, default=None
     )
     last_crash_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # #516 — structured "why can't this agent respond" for the not-running
+    # family (engine change, no machine for engine, spawn failure, crash,
+    # engine drift, no room). NULL ``unavailable_code`` == the agent is fine.
+    # The human message is NOT stored — it is derived from ``(code, detail,
+    # audience)`` via ``anygarden.agent_availability.render_unavailable_message``
+    # so it stays translatable and audience-gated (stderr never leaks to
+    # end users). ``unavailable_detail`` carries engine name / stderr_tail /
+    # exit_code / running-vs-db engine. NULL-default so pre-#516 rows need no
+    # backfill, mirroring ``permission_level`` / ``turn_timeout_sec``.
+    unavailable_code: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    unavailable_detail: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    unavailable_since: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
     reasoning_effort: Mapped[Optional[str]] = mapped_column(
         String(32), nullable=True, default=None
     )

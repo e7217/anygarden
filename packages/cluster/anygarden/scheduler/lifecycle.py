@@ -17,6 +17,13 @@ from sqlalchemy import and_, case, event, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
+from anygarden.agent_availability import (
+    CRASHED,
+    ENGINE_MISMATCH,
+    NO_MACHINE_FOR_ENGINE,
+    NO_ROOM,
+    SPAWN_FAILED,
+)
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
     ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Machine,
@@ -27,6 +34,25 @@ from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 logger = structlog.get_logger(__name__)
+
+
+def _mark_unavailable(agent: Agent, code: str, detail: dict | None = None) -> None:
+    """Stamp the structured unavailability reason (#516).
+
+    ``unavailable_since`` is preserved when the code is unchanged so it
+    reflects when *this* reason began rather than the latest report.
+    """
+    if agent.unavailable_code != code:
+        agent.unavailable_since = datetime.now(timezone.utc)
+    agent.unavailable_code = code
+    agent.unavailable_detail = detail
+
+
+def _clear_unavailable(agent: Agent) -> None:
+    """Clear the unavailability reason — the agent can respond again (#516)."""
+    agent.unavailable_code = None
+    agent.unavailable_detail = None
+    agent.unavailable_since = None
 
 
 class AgentLifecycle:
@@ -130,6 +156,7 @@ class AgentLifecycle:
                     "no rooms assigned \u2014 add the agent to at least one room "
                     "before starting"
                 )
+                _mark_unavailable(agent, NO_ROOM, None)
                 await db.commit()
                 return
 
@@ -144,6 +171,24 @@ class AgentLifecycle:
                     engine=agent.engine,
                 )
                 agent.actual_state = "pending"
+                # #516 \u2014 previously the only *silent* start failure: no reason,
+                # no ActivityLog, and the stale placement stranded the agent
+                # from ``_place_orphaned_agents`` (which filters
+                # ``placed_on_machine_id IS NULL``). Now record the reason,
+                # release the placement so a newly-registered machine can adopt
+                # it, and leave an audit trail.
+                agent.placed_on_machine_id = None
+                agent.last_crash_reason = (
+                    f"no online machine supports engine '{agent.engine}'"
+                )
+                _mark_unavailable(
+                    agent, NO_MACHINE_FOR_ENGINE, {"engine": agent.engine}
+                )
+                db.add(ActivityLog(
+                    agent_id=agent_id,
+                    event_type="agent_unavailable",
+                    details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
+                ))
                 await db.commit()
                 return
 
@@ -152,6 +197,10 @@ class AgentLifecycle:
             agent.actual_state = "pending"
             agent.generation = (agent.generation or 0) + 1
             agent.started_at = datetime.now(timezone.utc)
+            # A machine was found \u2014 the prior no_machine / no_room reason (if
+            # any) no longer applies. A later spawn failure re-stamps a fresh
+            # reason via ``handle_report_actual_state``.
+            _clear_unavailable(agent)
 
             frame = await self._build_sync_frame(db, agent, rooms)
             db.add(ActivityLog(
@@ -284,6 +333,9 @@ class AgentLifecycle:
                 return
 
             agent.desired_state = "stopped"
+            # #516 — an intentional stop is not a "problem"; clear any
+            # unavailability reason so the admin/user surfaces don't alarm.
+            _clear_unavailable(agent)
             if agent.placed_on_machine_id:
                 if agent.actual_state in ("running", "starting", "pending"):
                     agent.actual_state = "stopping"
@@ -352,6 +404,31 @@ class AgentLifecycle:
                 if new_state == "running":
                     agent.last_heartbeat_at = datetime.now(timezone.utc)
 
+                # #516 — maintain the structured unavailability reason from the
+                # report. The live process carries its own ``engine`` so engine
+                # drift (DB migrated the engine but the process is still the old
+                # one) is detectable for free.
+                if new_state == "running":
+                    reported_engine = (entry.get("engine") or "").strip()
+                    if reported_engine and reported_engine != agent.engine:
+                        _mark_unavailable(agent, ENGINE_MISMATCH, {
+                            "db_engine": agent.engine,
+                            "running_engine": reported_engine,
+                        })
+                    else:
+                        _clear_unavailable(agent)
+                elif new_state == "crashed":
+                    # uptime≈0 ⇒ it never really started (spawn failure);
+                    # otherwise it ran and then died.
+                    uptime = entry.get("uptime_seconds") or 0
+                    code = SPAWN_FAILED if uptime <= 0 else CRASHED
+                    _mark_unavailable(agent, code, {
+                        "engine": agent.engine,
+                        "stderr_tail": entry.get("last_crash_reason"),
+                    })
+                elif new_state == "stopped":
+                    _clear_unavailable(agent)
+
                 # Only log when state actually changed (skip heartbeat noise)
                 if new_state and new_state != old_state:
                     db.add(ActivityLog(
@@ -382,6 +459,7 @@ class AgentLifecycle:
                     old = agent.actual_state
                     agent.actual_state = "stopped"
                     agent.pid = None
+                    _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
                     db.add(ActivityLog(
                         agent_id=agent.id,
                         event_type="state_changed",
