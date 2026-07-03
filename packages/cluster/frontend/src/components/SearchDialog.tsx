@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, X } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { formatMessageTimestamp } from '@/lib/datetime'
 
 interface SearchResult {
   message_id: string
@@ -91,7 +92,9 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
                 dangerouslySetInnerHTML={{ __html: r.snippet }}
               />
               <div className="text-[11px] text-[var(--color-foreground-subtle)] mt-0.5">
-                {r.created_at ? new Date(r.created_at).toLocaleString() : ''}
+                {/* #514 — share the chat bubble's #93-safe formatter: today
+                    shows the time, older results are prefixed with the date. */}
+                {formatMessageTimestamp(r.created_at)}
               </div>
             </button>
           ))}
