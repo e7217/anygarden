@@ -18,7 +18,7 @@ import {
 import { parseHandoff, stripHandoffToTrailer } from '@/lib/handoff'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
-import { parseServerDate } from '@/lib/datetime'
+import { formatMessageTimestamp } from '@/lib/datetime'
 import {
   buildFileReferenceCandidates,
   extractSharedFileReferencesFromMetadata,
@@ -111,14 +111,10 @@ export default memo(function MessageBubble({
   const isAgent = participant?.kind === 'agent'
   const isOrphan = message.participant_id == null || participant == null
 
-  const formatTime = (iso: string) => {
-    try {
-      const d = parseServerDate(iso)
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    } catch {
-      return ''
-    }
-  }
+  // #512 — today's messages show the time only; older messages are
+  // prefixed with their date. Formatting lives in ``lib/datetime`` so
+  // it is unit-tested independently of this component.
+  const formatTime = (iso: string) => formatMessageTimestamp(iso)
 
   // ---------- Issue #55: room_query result / forward variants ----------
   // Result variant delegates entirely to RoomQueryResultCard. The
