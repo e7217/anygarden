@@ -47,6 +47,10 @@ node_modules/
 .playwright-mcp/
 .tmp/
 
+# Local-only AI agent instruction files
+AGENTS.md
+CLAUDE.md
+
 # /design-sync (claude.ai/design) — staged scripts, build output, machine state
 .ds-sync/
 ds-bundle/
