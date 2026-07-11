@@ -588,6 +588,30 @@ class Participant(Base):
             "pinned",
             "sort_order",
         ),
+        # A user (or agent) must appear at most once per room. Without
+        # this guard duplicate rows crept in via non-idempotent add
+        # paths, and ``require_room_member``'s single-row fetch then
+        # 500'd/4003'd the whole room (#519). Partial (``… IS NOT NULL``)
+        # because ``user_id`` and ``agent_id`` are mutually-exclusive
+        # nullable columns — a plain composite UNIQUE would let SQLite's
+        # NULL-distinct rule wave every duplicate through. Migration 052
+        # dedupes existing rows and builds the same indexes at deploy.
+        Index(
+            "uq_participants_room_user",
+            "room_id",
+            "user_id",
+            unique=True,
+            sqlite_where=sa_text("user_id IS NOT NULL"),
+            postgresql_where=sa_text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_participants_room_agent",
+            "room_id",
+            "agent_id",
+            unique=True,
+            sqlite_where=sa_text("agent_id IS NOT NULL"),
+            postgresql_where=sa_text("agent_id IS NOT NULL"),
+        ),
     )
 
 

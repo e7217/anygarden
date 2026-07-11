@@ -74,3 +74,29 @@ async def create_message_fts(conn) -> None:
     """
     for statement in MESSAGE_FTS_STATEMENTS:
         await conn.execute(text(statement))
+
+
+# Index any ``messages`` rows not yet mirrored into ``messages_fts``. The
+# sync triggers only fire on future INSERT/UPDATE/DELETE, so a table that
+# was created late (e.g. self-healed on an existing DB — #520) would leave
+# every pre-existing message unsearchable. The ``NOT EXISTS`` guard makes
+# this safe to run repeatedly: rows already present are skipped.
+_BACKFILL_MESSAGE_FTS = """
+    INSERT INTO messages_fts(content, room_id, participant_id, message_id, created_at)
+    SELECT m.content, m.room_id, m.participant_id, m.id, m.created_at
+    FROM messages m
+    WHERE NOT EXISTS (
+        SELECT 1 FROM messages_fts f WHERE f.message_id = m.id
+    )
+"""
+
+
+async def backfill_message_fts(conn) -> None:
+    """Index existing ``messages`` rows missing from ``messages_fts`` (idempotent).
+
+    ``conn`` is an ``AsyncConnection``. Call after :func:`create_message_fts`
+    so a table created after messages already exist becomes fully
+    searchable. Safe to call repeatedly (``NOT EXISTS`` skips indexed
+    rows). FTS5 is SQLite-only — callers guard on the dialect.
+    """
+    await conn.execute(text(_BACKFILL_MESSAGE_FTS))
