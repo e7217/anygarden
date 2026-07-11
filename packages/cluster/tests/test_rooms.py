@@ -350,14 +350,21 @@ class TestRoomCRUD:
     @pytest.mark.asyncio
     async def test_add_participant(self, room_env) -> None:
         app = room_env["app"]
-        room = room_env["room"]
-        user = room_env["user"]
         token = room_env["token"]
+        project = room_env["project"]
+
+        # Add a *distinct* user — re-adding the room creator (already a
+        # participant) is a 409, covered by test_add_participant_duplicate.
+        async with app.state.session_factory() as db:
+            other = User(email="add-target@anygarden.io", password_hash="x")
+            db.add(other)
+            await db.commit()
+            await db.refresh(other)
+            other_id = other.id
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Create a second room and add participant
-            project = room_env["project"]
             resp = await client.post(
                 "/api/v1/rooms",
                 json={"project_id": project.id, "name": "new-room"},
@@ -367,25 +374,60 @@ class TestRoomCRUD:
 
             resp = await client.post(
                 f"/api/v1/rooms/{new_room_id}/participants",
-                json={"user_id": user.id, "role": "member"},
+                json={"user_id": other_id, "role": "member"},
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 201
             data = resp.json()
-            assert data["user_id"] == user.id
+            assert data["user_id"] == other_id
             assert data["role"] == "member"
 
     @pytest.mark.asyncio
+    async def test_add_participant_duplicate_returns_409(self, room_env) -> None:
+        """Re-adding a user already in the room must 409, not create a
+        duplicate Participant row (#519). Previously the duplicate slipped
+        in silently and later 500'd the whole room."""
+        app = room_env["app"]
+        room = room_env["room"]
+        user = room_env["user"]  # already a participant (owner) of ``room``
+        token = room_env["token"]
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/v1/rooms/{room.id}/participants",
+                json={"user_id": user.id, "role": "member"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 409, resp.text
+
+    @pytest.mark.asyncio
     async def test_add_participant_notifies_user(self, room_env) -> None:
-        """Adding an existing user to a new room pushes a
-        ``room_membership_changed`` frame over the user's existing WS."""
+        """Adding a user to a new room pushes a ``room_membership_changed``
+        frame over that user's *other* existing WS sessions."""
         import json
 
         app = room_env["app"]
         existing_room = room_env["room"]
-        existing_part = room_env["participant"]
-        user = room_env["user"]
         token = room_env["token"]
+        project = room_env["project"]
+
+        # A second user who already participates in the existing room (so
+        # they have another session to be notified on) — distinct from the
+        # creator, whose re-add would 409.
+        async with app.state.session_factory() as db:
+            other = User(email="notify-target@anygarden.io", password_hash="x")
+            db.add(other)
+            await db.flush()
+            other_part = Participant(
+                room_id=existing_room.id, user_id=other.id, role="member"
+            )
+            db.add(other_part)
+            await db.commit()
+            await db.refresh(other)
+            await db.refresh(other_part)
+            other_id = other.id
+            other_part_id = other_part.id
 
         from anygarden.ws.manager import ConnectionManager
 
@@ -400,12 +442,11 @@ class TestRoomCRUD:
                 received.append(data)
 
         ws = FakeWS()
-        await manager.subscribe(existing_room.id, existing_part.id, ws)  # type: ignore[arg-type]
+        await manager.subscribe(existing_room.id, other_part_id, ws)  # type: ignore[arg-type]
 
         try:
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                project = room_env["project"]
                 resp = await client.post(
                     "/api/v1/rooms",
                     json={"project_id": project.id, "name": "notif-target"},
@@ -415,12 +456,12 @@ class TestRoomCRUD:
 
                 resp = await client.post(
                     f"/api/v1/rooms/{new_room_id}/participants",
-                    json={"user_id": user.id, "role": "member"},
+                    json={"user_id": other_id, "role": "member"},
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 assert resp.status_code == 201
         finally:
-            await manager.unsubscribe(existing_part.id)
+            await manager.unsubscribe(other_part_id)
 
         membership_frames = [
             json.loads(raw)
@@ -431,7 +472,7 @@ class TestRoomCRUD:
         frame = membership_frames[0]
         assert frame["action"] == "added"
         assert frame["room_id"] == new_room_id
-        assert frame["user_id"] == user.id
+        assert frame["user_id"] == other_id
 
     @pytest.mark.asyncio
     async def test_add_participant_agent_invokes_lifecycle_on_room_added(
@@ -507,8 +548,15 @@ class TestRoomCRUD:
         machine re-spawn). Keep the two branches cleanly separated."""
         app = room_env["app"]
         project = room_env["project"]
-        user = room_env["user"]
         token = room_env["token"]
+
+        # Distinct, not-yet-member user so the add is a real 201 insert.
+        async with app.state.session_factory() as db:
+            other = User(email="user-branch-target@anygarden.io", password_hash="x")
+            db.add(other)
+            await db.commit()
+            await db.refresh(other)
+            other_id = other.id
 
         calls: list[str] = []
 
@@ -529,7 +577,7 @@ class TestRoomCRUD:
 
             resp = await client.post(
                 f"/api/v1/rooms/{new_room_id}/participants",
-                json={"user_id": user.id, "role": "member"},
+                json={"user_id": other_id, "role": "member"},
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 201, resp.text

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.jwt import (
@@ -186,8 +186,21 @@ async def require_room_member(
     else:
         stmt = stmt.where(Participant.agent_id == identity.id)
 
+    # A (room, identity) pair should have exactly one Participant row, but
+    # the table historically had no uniqueness guard (added in migration
+    # 052), so a legacy DB can still hold duplicates. Tolerate them instead
+    # of ``scalar_one_or_none()`` which raises ``MultipleResultsFound`` —
+    # that 500s the REST paths (messages/read) and is swallowed as a false
+    # 4003 on the WS handshake, bricking the whole room (#519). Order
+    # admin/owner first so the returned row preserves the caller's highest
+    # privilege (``role`` feeds downstream authz), then take a single row.
+    stmt = stmt.order_by(
+        case((Participant.role.in_(("admin", "owner")), 0), else_=1),
+        Participant.joined_at.asc(),
+        Participant.id.asc(),
+    ).limit(1)
     result = await db.execute(stmt)
-    participant = result.scalar_one_or_none()
+    participant = result.scalars().first()
     if participant is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

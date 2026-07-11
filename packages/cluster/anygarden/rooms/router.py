@@ -516,6 +516,23 @@ async def add_participant(
             await lifecycle.on_room_added(body.agent_id)
     else:
         assert body.user_id is not None
+        # ``add_user_to_room`` is deliberately non-idempotent, so guard the
+        # repeat-add here: a user already in the room must yield 409, not a
+        # duplicate Participant row. Before migration 052 the duplicate
+        # slipped in silently and later 500'd/4003'd the whole room via
+        # ``require_room_member`` (#519); now the partial UNIQUE index would
+        # raise IntegrityError, so this explicit check keeps the documented
+        # 409 contract the frontend depends on.
+        already = await db.execute(
+            select(Participant).where(
+                Participant.room_id == room_id,
+                Participant.user_id == body.user_id,
+            )
+        )
+        if already.scalars().first() is not None:
+            raise HTTPException(
+                status_code=409, detail="User is already a participant"
+            )
         participant = await add_user_to_room(
             db,
             manager,

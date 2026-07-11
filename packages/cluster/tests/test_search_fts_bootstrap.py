@@ -111,6 +111,88 @@ class TestFreshBootstrapCreatesFts:
                 pass
 
 
+class TestSelfHealExistingDb:
+    @pytest.mark.asyncio
+    async def test_self_heal_creates_fts_and_backfills_existing_messages(self) -> None:
+        """An Alembic-managed DB that already has messages but is missing
+        ``messages_fts`` (the #520 state) must, after ``_self_heal_message_fts``,
+        have the FTS table *and* have its pre-existing messages indexed — the
+        sync triggers only cover future writes, so a backfill is required.
+        """
+        from anygarden.app import _self_heal_message_fts
+        from anygarden.db.engine import build_engine
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            db_url = f"sqlite+aiosqlite:///{db_path}"
+            engine = build_engine(db_url)
+            try:
+                # create_all builds the ORM tables but NOT the raw FTS
+                # virtual table — this is exactly the broken existing-DB state.
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                    await conn.execute(
+                        text(
+                            "INSERT INTO projects (id, name, created_at) "
+                            "VALUES ('p-1', 'P', '2026-06-22T00:00:00+00:00')"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            "INSERT INTO rooms (id, project_id, name, created_at, "
+                            "is_dm, context_window_enabled, speaker_strategy, "
+                            "current_speaker_index, ephemeral, allow_human_assignment) "
+                            "VALUES ('r-1', 'p-1', 'R', '2026-06-22T00:00:00+00:00', "
+                            "0, 0, 'mentioned_only', 0, 0, 0)"
+                        )
+                    )
+                    await conn.execute(
+                        text(
+                            "INSERT INTO messages "
+                            "(id, room_id, participant_id, content, seq, created_at) "
+                            "VALUES ('m-1', 'r-1', NULL, 'preexisting backfillable text', "
+                            "1, '2026-06-22T00:00:00+00:00')"
+                        )
+                    )
+
+                # The heal step: create the table + backfill the old message.
+                await _self_heal_message_fts(engine)
+
+                async with engine.begin() as conn:
+                    tables = {
+                        row[0]
+                        for row in (
+                            await conn.execute(
+                                text(
+                                    "SELECT name FROM sqlite_master WHERE type='table'"
+                                )
+                            )
+                        ).all()
+                    }
+                    assert "messages_fts" in tables, "self-heal must create messages_fts"
+
+                    rows = (
+                        await conn.execute(
+                            text(
+                                "SELECT message_id FROM messages_fts "
+                                "WHERE messages_fts MATCH 'backfillable'"
+                            )
+                        )
+                    ).all()
+                    assert [r[0] for r in rows] == ["m-1"], (
+                        "self-heal must backfill messages that existed before "
+                        "the FTS table was created"
+                    )
+            finally:
+                await engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+
 class TestSearchDegradesWhenIndexMissing:
     @pytest_asyncio.fixture()
     async def env_without_fts(self) -> AsyncIterator[dict]:

@@ -16,7 +16,7 @@ from anygarden_machine.safefs import secure_chmod
 
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.fts import create_message_fts
+from anygarden.db.fts import backfill_message_fts, create_message_fts
 from anygarden.db.models import Base
 from anygarden.observability.logging import configure_logging
 from anygarden.messages.router import router as messages_router
@@ -78,6 +78,24 @@ def _is_asset_like_path(path: str) -> bool:
     return "." in path.rsplit("/", 1)[-1]
 
 
+async def _self_heal_message_fts(engine) -> None:
+    """Ensure ``messages_fts`` exists and is populated on any SQLite DB.
+
+    Migration 008 created the FTS table, but migrations are frozen and
+    ``alembic upgrade head`` is a no-op once a DB is stamped past 008.
+    So an Alembic-managed DB (Case 1) that predates 008 — or that lost
+    the virtual table — stays permanently broken, every search 503ing on
+    a missing ``messages_fts`` (#520). ``create_message_fts`` is
+    idempotent and ``backfill_message_fts`` only inserts missing rows, so
+    running both on every boot is safe. FTS5 is SQLite-only.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    async with engine.begin() as conn:
+        await create_message_fts(conn)
+        await backfill_message_fts(conn)
+
+
 async def _ensure_schema_ready(engine, db_url: str) -> None:
     """Ensure the database schema is ready, using Alembic where possible.
 
@@ -120,6 +138,10 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
     if has_alembic:
         await _alembic_action("upgrade", db_url, "head")
         log.info("startup.schema_migrated", action="upgrade", target="head")
+        # Self-heal a missing/empty FTS index on an existing DB — `upgrade
+        # head` won't recreate the table once stamped past migration 008
+        # (#520). No-op when the index is already present and populated.
+        await _self_heal_message_fts(engine)
         return
 
     if not existing_tables:
