@@ -38,6 +38,7 @@ from anygarden_agent.integrations.openhands_engine import (
     _OPENHANDS_SDK_ENV_KEYS,
     _load_mcp_manifest,
     _load_skills_summary,
+    _manifest_to_mcp_config,
     _parse_skill_frontmatter,
     _try_register_delegate_tool,
     _try_register_runtime_tools,
@@ -1116,7 +1117,11 @@ class TestMcpConfigForwarded:
         assert "mcp_config" in agent_kw, (
             "mcp_config kwarg must be forwarded when manifest exists"
         )
-        assert agent_kw["mcp_config"] == manifest
+        # #525 — the adapter now unwraps the ``mcpServers`` envelope (and,
+        # with a real SDK, coerces it to ``dict[str, MCPServer]``). Under
+        # the fake SDK there is no ``openhands.sdk.mcp.config`` submodule,
+        # so the fallback path forwards the unwrapped server map.
+        assert agent_kw["mcp_config"] == manifest["mcpServers"]
 
     @pytest.mark.asyncio
     async def test_no_mcp_config_kwarg_when_manifest_missing(
@@ -1182,6 +1187,79 @@ class TestMcpConfigForwarded:
         # The successful kwargs (post-fallback) should NOT carry mcp_config.
         agent_kw = fake_sdk["agent_kwargs"][-1]
         assert "mcp_config" not in agent_kw
+
+    @pytest.mark.asyncio
+    async def test_agent_falls_back_when_sdk_raises_validation_error(
+        self,
+        fake_sdk: dict[str, Any],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """openhands-sdk >=1.35 rejects a mis-shaped ``mcp_config`` with a
+        pydantic ``ValidationError`` (not ``TypeError``). The adapter must
+        still degrade to "no MCP" instead of hard-failing before the LLM
+        call — the exact #525 outage (fails ~4ms after the message, request
+        never reaches the LLM). Guards the widened ``except (TypeError,
+        ValidationError)`` in ``_get_or_create_conversation``.
+        """
+        manifest = {"mcpServers": {"anygarden": {"url": "http://x/mcp"}}}
+        (tmp_path / ".mcp.json").write_text(
+            json.dumps(manifest), encoding="utf-8"
+        )
+        monkeypatch.chdir(tmp_path)
+
+        from pydantic import BaseModel, ValidationError
+
+        class _Probe(BaseModel):
+            x: int
+
+        sdk_mod = sys.modules["openhands.sdk"]
+        original_agent = sdk_mod.Agent  # type: ignore[attr-defined]
+
+        class StrictAgent(original_agent):  # type: ignore[misc, valid-type]
+            def __init__(self, **kwargs: Any) -> None:
+                if "mcp_config" in kwargs:
+                    try:
+                        _Probe(x="not-an-int")  # type: ignore[arg-type]
+                    except ValidationError as exc:
+                        raise exc
+                super().__init__(**kwargs)
+
+        monkeypatch.setattr(sdk_mod, "Agent", StrictAgent)
+
+        adapter = OpenHandsAdapter(model="anthropic/claude-opus-4-7")
+        await adapter.start()
+        reply = await adapter.on_message({"content": "hi", "room_id": "r1"})
+        # Reply still produced — Agent boots (post-fallback), Conversation runs.
+        assert reply is not None
+        agent_kw = fake_sdk["agent_kwargs"][-1]
+        assert "mcp_config" not in agent_kw
+
+    def test_manifest_coerced_to_server_map_with_real_sdk(self) -> None:
+        """With the real openhands-sdk >=1.35 installed, the ``.mcp.json``
+        envelope is unwrapped + coerced into the SDK's ``dict[str,
+        MCPServer]`` server map — the shape ``Agent.mcp_config`` requires
+        and the check the fake-SDK tests cannot make. Skipped when the SDK
+        (or its ``mcp.config`` module) isn't installed.
+        """
+        pytest.importorskip("openhands.sdk.mcp.config")
+        from openhands.sdk.mcp.config import MCPServer
+
+        envelope = {
+            "mcpServers": {
+                "anygarden": {
+                    "type": "http",
+                    "url": "http://localhost:8000/mcp/rpc",
+                    "headers": {},
+                }
+            }
+        }
+        coerced = _manifest_to_mcp_config(envelope)
+        assert isinstance(coerced, dict)
+        assert set(coerced) == {"anygarden"}
+        # Coerced values are SDK MCPServer models, not raw dicts — proving
+        # the FastMCP envelope was normalised, not just passed through.
+        assert all(isinstance(v, MCPServer) for v in coerced.values())
 
 
 # --------------------------------------------- Phase 2: skills awareness

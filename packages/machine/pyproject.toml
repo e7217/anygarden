@@ -37,14 +37,14 @@ dependencies = [
 # extra restores clean installs; operators who run the OpenHands engine
 # opt in with ``pip install "anygarden-machine[openhands]"`` and the
 # detector advertises it once importable.
-openhands = ["openhands-sdk>=1.21"]
+openhands = ["openhands-sdk>=1.35,<2"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.3",
     "mypy>=1.9",
     # Issue #357 — exercise the OpenHands detection path in tests.
-    "openhands-sdk>=1.21",
+    "openhands-sdk>=1.35,<2",
 ]
 
 [project.scripts]
