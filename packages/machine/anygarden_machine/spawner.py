@@ -222,6 +222,18 @@ class Spawner:
         "CLAUDE.md",
     })
 
+    # #532 — subset of managed top-levels that hold agent/engine RUNTIME
+    # state which must survive a respawn's re-materialize. For these the
+    # prune removes only materializer-managed files (config/auth/overlay)
+    # and preserves everything else. Currently just ``.codex`` — codex's
+    # per-agent ``CODEX_HOME`` session store (``sessions/``, ``*.sqlite``,
+    # ``history.jsonl``) when a ``.codex/*`` overlay redirects CODEX_HOME
+    # there. ``.claude`` is deliberately NOT here: the claude-agent-sdk
+    # stores session transcripts under the host ``~/.claude`` keyed by cwd,
+    # not under ``agent_root/.claude`` (which only holds managed
+    # settings.json + the skills alias), so claude already survives respawn.
+    _SESSION_BEARING_MANAGED = frozenset({".codex"})
+
     _WORKSPACE_MANAGED_TOP_LEVEL = frozenset({
         ".anygarden-codex-workspace",
         ".claude",
@@ -514,10 +526,34 @@ class Spawner:
             log.warning("workspace_migration_leftover", path=str(workspace))
 
     @classmethod
-    def _prune_materializer_managed_entries(cls, agent_root: Path) -> None:
-        """Drop stale managed entries while preserving agent-created output."""
+    def _prune_materializer_managed_entries(
+        cls,
+        agent_root: Path,
+        managed_session_dir_relpaths: frozenset[str] = frozenset(),
+    ) -> None:
+        """Drop stale managed entries while preserving agent-created output.
+
+        #532 — session-bearing managed dirs (``_SESSION_BEARING_MANAGED``,
+        i.e. ``.codex``) hold codex's per-agent ``CODEX_HOME`` session store
+        when an overlay redirects it there. Those are NOT wiped wholesale:
+        only the materializer-managed files inside them (``config.toml``,
+        the ``auth.json`` symlink, and any manifest-seeded ``.codex/*``
+        overlay — passed via ``managed_session_dir_relpaths``) are removed,
+        so a re-materialize refreshes config while codex sessions, sqlite
+        state, and history survive respawn. All other managed entries keep
+        the original whole-entry prune.
+        """
         for name in cls._MATERIALIZER_MANAGED_TOP_LEVEL:
             entry = agent_root / name
+            if (
+                name in cls._SESSION_BEARING_MANAGED
+                and entry.is_dir()
+                and not entry.is_symlink()
+            ):
+                cls._prune_managed_files_within(
+                    agent_root, name, managed_session_dir_relpaths
+                )
+                continue
             if not entry.exists() and not entry.is_symlink():
                 continue
             try:
@@ -526,6 +562,42 @@ class Spawner:
                 raise RuntimeError(
                     f"Failed to prune {entry} during materialize: {exc}"
                 ) from exc
+
+    @classmethod
+    def _prune_managed_files_within(
+        cls, agent_root: Path, dir_name: str, managed_relpaths: frozenset[str]
+    ) -> None:
+        """Remove only materializer-managed paths under ``dir_name`` (#532).
+
+        Everything else in the directory (agent/engine runtime state, e.g.
+        codex ``sessions/`` and sqlite state) is preserved. Each relpath is
+        constrained to stay under ``dir_name`` so a malformed entry can't
+        reach outside the session dir; removal uses ``_remove_tree_entry``
+        which never follows symlinks.
+        """
+        prefix = dir_name + "/"
+        for rel in managed_relpaths:
+            if not rel.startswith(prefix):
+                continue
+            target = agent_root / rel
+            if not target.exists() and not target.is_symlink():
+                continue
+            try:
+                cls._remove_tree_entry(target)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Failed to prune managed {target} during materialize: {exc}"
+                ) from exc
+        # #532 — if removing managed files leaves the dir empty (the agent
+        # dropped its overlay and has no runtime state), remove it so a
+        # no-overlay codex agent falls back to host ``~/.codex/`` (matches
+        # the pre-#532 whole-entry prune for the empty case).
+        session_dir = agent_root / dir_name
+        try:
+            if session_dir.is_dir() and not any(session_dir.iterdir()):
+                session_dir.rmdir()
+        except OSError:
+            pass
 
     @classmethod
     def _ensure_real_directory(cls, path: Path, *, mode: int = 0o700) -> None:
@@ -633,7 +705,23 @@ class Spawner:
         secure_chmod(agent_root, 0o700)
 
         self._migrate_legacy_workspace(agent_root, msg.engine)
-        self._prune_materializer_managed_entries(agent_root)
+        # #532 — preserve codex's per-agent session store (in ``.codex`` when
+        # a ``.codex/*`` overlay redirects CODEX_HOME there) across respawn.
+        # Prune only the materializer-managed files inside ``.codex``: the
+        # manifest-seeded ``.codex/*`` overlay (incl. ``config.toml``) plus
+        # the ``auth.json`` host-auth symlink the materializer re-creates
+        # below. All other content (sessions/, *.sqlite, history) survives.
+        # ``config.toml``/``auth.json`` are the always-managed files the
+        # materializer (re)writes below, so hardcode them: this ensures a
+        # config dropped from the manifest is still wiped (no stale MCP
+        # overlay) even though we can't see the previous manifest (the
+        # daemon overwrites it before spawn). Arbitrary extra ``.codex/*``
+        # overlays only prune while present in the current manifest.
+        managed_codex_relpaths = frozenset(
+            {p for p in msg.files if p.startswith(".codex/")}
+            | {".codex/config.toml", ".codex/auth.json"}
+        )
+        self._prune_materializer_managed_entries(agent_root, managed_codex_relpaths)
 
         # --- Write AGENTS.md from manifest -----------------------------
         #
