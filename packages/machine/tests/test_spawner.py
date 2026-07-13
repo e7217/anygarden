@@ -1164,3 +1164,70 @@ class TestSpawnRecordsRuntime:
         spawner._cleanup(spawn_msg.agent_id)
 
         assert spawner._manifest_store.load_runtime(spawn_msg.agent_id) is None
+
+
+class TestSessionStorePreservation:
+    """#532 — codex 세션 스토어가 respawn(re-materialize)을 넘어 보존되는지."""
+
+    def _codex_msg(self, config: str) -> SpawnManifest:
+        return SpawnManifest(
+            agent_id="agent-codex-sess",
+            engine="codex-cli",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={".codex/config.toml": config},
+        )
+
+    def test_codex_session_store_survives_rematerialize(
+        self, spawner: Spawner
+    ) -> None:
+        """재-materialize가 codex 세션 스토어(sessions/·*.sqlite)를 보존하고
+        managed config.toml은 갱신한다 — #532의 핵심."""
+        root = spawner._materialize_agent_dir(self._codex_msg("old = 1\n"))
+        assert (root / ".codex" / "config.toml").read_text() == "old = 1\n"
+
+        # codex 런타임이 세션 상태를 남긴 것을 흉내낸다.
+        sessions = root / ".codex" / "sessions"
+        sessions.mkdir(parents=True, exist_ok=True)
+        (sessions / "thread-abc.jsonl").write_text("event\n")
+        (root / ".codex" / "state.sqlite").write_text("db-bytes")
+        (root / ".codex" / "history.jsonl").write_text("h\n")
+
+        # respawn: 새 config 로 재-materialize.
+        spawner._materialize_agent_dir(self._codex_msg("new = 2\n"))
+
+        # 세션 스토어 보존 + config 갱신.
+        assert (sessions / "thread-abc.jsonl").read_text() == "event\n"
+        assert (root / ".codex" / "state.sqlite").read_text() == "db-bytes"
+        assert (root / ".codex" / "history.jsonl").read_text() == "h\n"
+        assert (root / ".codex" / "config.toml").read_text() == "new = 2\n"
+
+    def test_non_session_managed_dirs_still_wiped_wholesale(
+        self, spawner: Spawner
+    ) -> None:
+        """회귀 가드: 세션 미보유 관리 dir(.claude/.gemini)은 여전히
+        트리째 prune된다 — #532가 .codex에만 적용됨을 확인."""
+        msg = SpawnManifest(
+            agent_id="agent-cc",
+            engine="claude-code",
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+            files={},
+        )
+        root = spawner._materialize_agent_dir(msg)
+
+        stray_gemini = root / ".gemini" / "stray.txt"
+        stray_gemini.parent.mkdir(parents=True, exist_ok=True)
+        stray_gemini.write_text("junk")
+        stray_claude = root / ".claude" / "stray.txt"
+        stray_claude.parent.mkdir(parents=True, exist_ok=True)
+        stray_claude.write_text("junk")
+
+        spawner._materialize_agent_dir(msg)
+
+        assert not stray_gemini.exists()
+        assert not stray_claude.exists()
