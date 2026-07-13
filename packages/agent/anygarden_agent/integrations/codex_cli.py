@@ -41,6 +41,10 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter, ShaTrackedInjector
+from anygarden_agent.integrations.engine_session_store import (
+    load_sessions,
+    save_sessions,
+)
 from anygarden_agent.integrations.gemini_cli import (
     _subprocess_group_kwargs,
     _terminate_tree,
@@ -177,6 +181,10 @@ class CodexCliAdapter(EngineAdapter):
                 "codex_cli.not_found",
                 hint="Install codex: npm i -g @openai/codex",
             )
+        # #526 — restore per-room resume handles persisted by a prior
+        # process so a respawned adapter can ``resume`` instead of starting
+        # cold. Missing/corrupt store → empty map (fresh start).
+        self._room_thread_ids = load_sessions(Path.cwd())
 
     async def on_message(self, msg: dict[str, Any]) -> str | None:
         """Forward the message to ``codex exec`` and return the reply."""
@@ -255,6 +263,8 @@ class CodexCliAdapter(EngineAdapter):
         if new_thread_id:
             self._room_thread_ids[room_id] = new_thread_id
         self._last_usage = self._extract_usage(usage, self._model)
+        # #526 — persist resume handles so a future respawn can restore them.
+        save_sessions(Path.cwd(), self._room_thread_ids)
         return response
 
     async def _exec_once(
