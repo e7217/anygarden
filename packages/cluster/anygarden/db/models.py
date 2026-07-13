@@ -381,7 +381,14 @@ class Machine(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # ``hostname`` is the daemon-detected real hostname (socket.gethostname()),
+    # overwritten on every register frame. Empty until the daemon first
+    # connects. NOT the user-facing label — that is ``name`` (identifier) and
+    # ``description`` (free-form note) as of issue #523.
     hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    # User-supplied free-form label / note (issue #523). Optional; replaces
+    # the former user-entered ``hostname`` input which is now auto-detected.
+    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
     owner_user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -390,8 +397,13 @@ class Machine(Base):
     daemon_last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
+    # Static system info reported by the daemon on register (issue #523).
+    # ``cpu_cores`` / ``memory_gb`` predate #523 but were never populated;
+    # #523 wires the daemon to fill them. ``lan_ip`` / ``os_platform`` are new.
     cpu_cores: Mapped[int] = mapped_column(Integer, default=0)
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
+    lan_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    os_platform: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
     # Placement capacity limit. Hidden from UI/API/CLI as of 2026-04-15
     # (issue #2) — kept in the schema so ``placement.py`` can still
     # enforce a soft cap and we can re-expose it later without a

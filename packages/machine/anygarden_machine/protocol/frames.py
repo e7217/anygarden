@@ -204,6 +204,21 @@ ServerFrame = Union[
 # ── Machine -> Server frames ─────────────────────────────────────────
 
 
+class SystemInfo(BaseModel):
+    """Static system info the daemon detects once and reports on register.
+
+    Issue #523 — surfaced in the admin machine detail view. All fields are
+    best-effort: a collection failure lands as the default (empty / 0 / None)
+    rather than blocking registration.
+    """
+
+    hostname: str = ""
+    lan_ip: str | None = None
+    os_platform: str = ""
+    cpu_cores: int = 0
+    memory_gb: float = 0.0
+
+
 class RegisterFrame(BaseModel):
     """Machine registers itself with the server on connect."""
 
@@ -211,6 +226,9 @@ class RegisterFrame(BaseModel):
     machine_id: str
     capabilities: list[dict] = Field(default_factory=list)
     labels: dict = Field(default_factory=dict)
+    # Static system info (issue #523). Optional for backward compat with
+    # older daemons that don't send it.
+    system_info: SystemInfo | None = None
 
 
 class AgentActual(BaseModel):

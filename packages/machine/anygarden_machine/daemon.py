@@ -17,6 +17,7 @@ from anygarden_machine.config import save_token
 from anygarden_machine.crash_budget import CrashBudget
 from anygarden_machine.detector import detect_engines
 from anygarden_machine.manifest_store import ManifestStore
+from anygarden_machine.sysinfo import collect_system_info
 from anygarden_machine.protocol.frames import (
     AgentActual,
     AgentMemorySharedFileDeleteFrame,
@@ -256,22 +257,29 @@ class MachineDaemon:
                 self._ws = None
 
     async def _register(self) -> None:
-        """Send register frame with detected capabilities."""
+        """Send register frame with detected capabilities + system info."""
         detection = await detect_engines()
         capabilities = [
             {"engine": e.engine, "version": e.version, "path": e.path}
             for e in detection.engines
         ]
+        # Static system info (issue #523) — best-effort, never blocks register.
+        system_info = collect_system_info()
         frame = RegisterFrame(
             machine_id=self.machine_id,
             capabilities=capabilities,
             labels=self.labels,
+            system_info=system_info,
         )
         await self._send(frame.model_dump())
         log.info(
             "registered",
             machine_id=self.machine_id,
             capabilities=len(capabilities),
+            hostname=system_info.hostname,
+            lan_ip=system_info.lan_ip,
+            cpu_cores=system_info.cpu_cores,
+            memory_gb=system_info.memory_gb,
         )
 
     async def _readopt_running_agents(self) -> None:

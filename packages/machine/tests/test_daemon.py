@@ -14,6 +14,7 @@ from anygarden_machine.protocol.frames import (
     RegisterFrame,
     ReportActualStateFrame,
     SyncDesiredStateFrame,
+    SystemInfo,
 )
 
 
@@ -109,6 +110,35 @@ class TestRegisterFrame:
         assert frame["machine_id"] == "machine-test-001"
         assert len(frame["capabilities"]) == 1
         assert frame["capabilities"][0]["engine"] == "claude-code"
+
+    async def test_register_includes_system_info(self, daemon: MachineDaemon) -> None:
+        """_register embeds collected static SystemInfo in the frame (#523)."""
+        sent_frames = _capture_ws(daemon)
+
+        mock_detection = MagicMock()
+        mock_detection.engines = []
+        fake_info = SystemInfo(
+            hostname="worker01",
+            lan_ip="192.168.1.42",
+            os_platform="Linux-test-x86_64",
+            cpu_cores=8,
+            memory_gb=64.0,
+        )
+
+        with patch(
+            "anygarden_machine.daemon.detect_engines", return_value=mock_detection
+        ), patch(
+            "anygarden_machine.daemon.collect_system_info", return_value=fake_info
+        ):
+            await daemon._register()
+
+        assert len(sent_frames) == 1
+        si = sent_frames[0]["system_info"]
+        assert si["hostname"] == "worker01"
+        assert si["lan_ip"] == "192.168.1.42"
+        assert si["os_platform"] == "Linux-test-x86_64"
+        assert si["cpu_cores"] == 8
+        assert si["memory_gb"] == 64.0
 
 
 # ── Report actual state ──────────────────────────────────────────────

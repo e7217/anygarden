@@ -81,16 +81,37 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "my-machine", "hostname": "my-host"},
+            json={"name": "my-machine", "description": "my note"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 201
         data = resp.json()
         assert data["name"] == "my-machine"
-        assert data["hostname"] == "my-host"
+        assert data["description"] == "my note"
+        # hostname is daemon-detected on register (#523), empty until connect.
+        assert data["hostname"] == ""
+        # Static system-info fields are exposed with safe defaults.
+        assert data["lan_ip"] is None
+        assert data["os_platform"] is None
+        assert data["cpu_cores"] == 0
+        assert data["memory_gb"] == 0.0
         assert data["status"] == "offline"
         assert "machine_token" in data
         assert data["machine_token"].startswith("mch_")
+
+    @pytest.mark.asyncio
+    async def test_register_ignores_stray_hostname(self, machines_env) -> None:
+        """A legacy client still sending hostname must not 422 or persist it."""
+        client = machines_env["client"]
+        token = machines_env["token"]
+
+        resp = await client.post(
+            "/api/v1/machines",
+            json={"name": "legacy", "hostname": "ignored.example.com"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["hostname"] == ""
 
     @pytest.mark.asyncio
     async def test_list_machines(self, machines_env) -> None:
@@ -194,7 +215,7 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "get-machine", "hostname": "h1"},
+            json={"name": "get-machine"},
             headers={"Authorization": f"Bearer {token}"},
         )
         machine_id = resp.json()["id"]
@@ -213,20 +234,20 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "old-name", "hostname": "old-host"},
+            json={"name": "old-name", "description": "old-desc"},
             headers={"Authorization": f"Bearer {token}"},
         )
         machine_id = resp.json()["id"]
 
         resp = await client.patch(
             f"/api/v1/machines/{machine_id}",
-            json={"name": "new-name", "hostname": "new-host"},
+            json={"name": "new-name", "description": "new-desc"},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "new-name"
-        assert data["hostname"] == "new-host"
+        assert data["description"] == "new-desc"
 
     @pytest.mark.asyncio
     async def test_update_machine_partial(self, machines_env) -> None:
@@ -236,7 +257,7 @@ class TestMachinesAPI:
 
         resp = await client.post(
             "/api/v1/machines",
-            json={"name": "partial", "hostname": "host1"},
+            json={"name": "partial", "description": "keep-me"},
             headers={"Authorization": f"Bearer {token}"},
         )
         machine_id = resp.json()["id"]
@@ -249,7 +270,7 @@ class TestMachinesAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == "partial-updated"
-        assert data["hostname"] == "host1"
+        assert data["description"] == "keep-me"
 
     @pytest.mark.asyncio
     async def test_delete_machine(self, machines_env) -> None:

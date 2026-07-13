@@ -156,21 +156,24 @@ export default function AdminMachines() {
   // ── Register Machine ─────────────────────────────────────────────
   const [registerOpen, setRegisterOpen] = useState(false)
   const [regName, setRegName] = useState('')
-  const [regHostname, setRegHostname] = useState('')
+  // #523 — hostname is now daemon-detected; the user field is a free-form
+  // description (alias / note), and it's optional.
+  const [regDescription, setRegDescription] = useState('')
   const [regLoading, setRegLoading] = useState(false)
   const [tokenResult, setTokenResult] = useState<RegisterMachineResult | null>(null)
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
   const handleRegister = async () => {
-    if (!regName.trim() || !regHostname.trim()) return
+    if (!regName.trim()) return
     setRegLoading(true)
     try {
       const result = await registerMachine({
-        name: regName.trim(), hostname: regHostname.trim(),
+        name: regName.trim(),
+        description: regDescription.trim() || undefined,
       })
       setTokenResult(result)
-      setRegName(''); setRegHostname('')
+      setRegName(''); setRegDescription('')
       setRegisterOpen(false)
       setTokenDialogOpen(true)
     } catch { /* ignore */ }
@@ -368,7 +371,9 @@ export default function AdminMachines() {
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
-                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">{m.hostname}</div>
+                  {(m.description || m.hostname) && (
+                    <div className="text-xs text-[var(--color-foreground-muted)] truncate">{m.description || m.hostname}</div>
+                  )}
                   <div className="flex items-center gap-2 mt-1.5">
                     <span className="flex items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
                       <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDot(m.status)}`} />
@@ -505,7 +510,9 @@ export default function AdminMachines() {
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-lg font-semibold text-[var(--color-foreground)]">{selectedMachine.name}</h1>
-                <p className="text-sm text-[var(--color-foreground-muted)]">{selectedMachine.hostname}</p>
+                {(selectedMachine.description || selectedMachine.hostname) && (
+                  <p className="text-sm text-[var(--color-foreground-muted)]">{selectedMachine.description || selectedMachine.hostname}</p>
+                )}
               </div>
               <Badge variant="outline" className={`${
                 selectedMachine.status === 'online'
@@ -524,7 +531,23 @@ export default function AdminMachines() {
               <div className="grid grid-cols-2 gap-x-8 gap-y-2 px-4 py-3 text-sm">
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Hostname</span>
-                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.hostname}</p>
+                  <p className="text-[var(--color-foreground)] font-medium break-all">{selectedMachine.hostname || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[var(--color-foreground-muted)]">IP address</span>
+                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.lan_ip || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[var(--color-foreground-muted)]">OS</span>
+                  <p className="text-[var(--color-foreground)] font-medium break-words">{selectedMachine.os_platform || '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[var(--color-foreground-muted)]">CPU</span>
+                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.cpu_cores ? `${selectedMachine.cpu_cores} cores` : '—'}</p>
+                </div>
+                <div>
+                  <span className="text-[var(--color-foreground-muted)]">Memory</span>
+                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.memory_gb ? `${selectedMachine.memory_gb} GB` : '—'}</p>
                 </div>
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Version</span>
@@ -809,7 +832,10 @@ export default function AdminMachines() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Register Machine</DialogTitle>
-            <DialogDescription>Add a new machine to host agents.</DialogDescription>
+            <DialogDescription>
+              Add a new machine to host agents. Its hostname and system info are
+              detected automatically when the daemon connects.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
@@ -817,12 +843,12 @@ export default function AdminMachines() {
               <Input placeholder="e.g. gpu-worker-01" value={regName} onChange={e => setRegName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Hostname</Label>
-              <Input placeholder="e.g. worker01.example.com" value={regHostname} onChange={e => setRegHostname(e.target.value)} />
+              <Label>Description <span className="text-[var(--color-foreground-subtle)]">(optional)</span></Label>
+              <Input placeholder="e.g. downstairs GPU rig" value={regDescription} onChange={e => setRegDescription(e.target.value)} />
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={handleRegister} disabled={regLoading || !regName.trim() || !regHostname.trim()}>
+            <Button onClick={handleRegister} disabled={regLoading || !regName.trim()}>
               {regLoading ? 'Registering...' : 'Register'}
             </Button>
           </DialogFooter>

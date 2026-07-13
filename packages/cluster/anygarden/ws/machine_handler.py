@@ -196,6 +196,32 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                 await db.commit()
 
 
+def _apply_system_info(machine: Machine, system_info: Any) -> None:
+    """Copy daemon-reported static system info onto ``machine`` (issue #523).
+
+    Only meaningful values overwrite existing columns: an empty string / 0
+    (a failed daemon-side probe) is ignored so it can't wipe a good value.
+    ``lan_ip`` uses ``is not None`` since any non-null string is meaningful.
+    """
+    if not isinstance(system_info, dict):
+        return
+    hostname = system_info.get("hostname")
+    if hostname:
+        machine.hostname = str(hostname)
+    lan_ip = system_info.get("lan_ip")
+    if lan_ip is not None:
+        machine.lan_ip = str(lan_ip)
+    os_platform = system_info.get("os_platform")
+    if os_platform:
+        machine.os_platform = str(os_platform)
+    cpu_cores = system_info.get("cpu_cores")
+    if isinstance(cpu_cores, (int, float)) and cpu_cores:
+        machine.cpu_cores = int(cpu_cores)
+    memory_gb = system_info.get("memory_gb")
+    if isinstance(memory_gb, (int, float)) and memory_gb:
+        machine.memory_gb = float(memory_gb)
+
+
 async def _handle_register(
     session_factory,
     machine_id: str,
@@ -217,6 +243,11 @@ async def _handle_register(
         machine.daemon_last_seen_at = datetime.now(timezone.utc)
         if daemon_version:
             machine.daemon_version = daemon_version
+
+        # Static system info (issue #523). Only overwrite a field when the
+        # daemon reported a meaningful value, so a partial collection failure
+        # (empty hostname, 0 cpu_cores) never clobbers a previously-good value.
+        _apply_system_info(machine, data.get("system_info"))
 
         # Replace engine list
         await db.execute(

@@ -7,10 +7,12 @@ from pydantic import ValidationError
 
 from anygarden_machine.protocol.frames import (
     AgentActual,
+    RegisterFrame,
     ReportActualStateFrame,
     RequestReplacementFrame,
     SyncBatchFrame,
     SyncDesiredStateFrame,
+    SystemInfo,
     TokenGrantFrame,
     TokenRequestFrame,
     parse_server_frame,
@@ -536,3 +538,45 @@ class TestSharedFileFrames:
         assert isinstance(parsed, AgentMemorySharedFileDeleteFrame)
         assert parsed.agent_id == "a1"
         assert parsed.storage_name == "spec.md"
+
+
+# ── RegisterFrame + SystemInfo (issue #523) ───────────────────────────
+
+
+class TestRegisterFrameSystemInfo:
+    def test_system_info_defaults_none_for_backward_compat(self):
+        """Older daemons omit system_info; it must default to None."""
+        frame = RegisterFrame(machine_id="m1")
+        assert frame.system_info is None
+        assert frame.model_dump()["system_info"] is None
+
+    def test_register_with_system_info_roundtrip(self):
+        frame = RegisterFrame(
+            machine_id="m1",
+            system_info=SystemInfo(
+                hostname="worker01",
+                lan_ip="192.168.1.42",
+                os_platform="Linux-6.17.0-generic-x86_64",
+                cpu_cores=8,
+                memory_gb=64.0,
+            ),
+        )
+        data = frame.model_dump()
+        assert data["type"] == "register"
+        assert data["system_info"]["hostname"] == "worker01"
+        assert data["system_info"]["lan_ip"] == "192.168.1.42"
+        assert data["system_info"]["cpu_cores"] == 8
+
+        # Rehydrate from the dumped dict (mirrors server-side parsing).
+        rehydrated = RegisterFrame.model_validate(data)
+        assert rehydrated.system_info is not None
+        assert rehydrated.system_info.memory_gb == 64.0
+        assert rehydrated.system_info.os_platform.startswith("Linux")
+
+    def test_system_info_field_defaults(self):
+        """Partial system info fills missing fields with safe defaults."""
+        info = SystemInfo(hostname="h")
+        assert info.lan_ip is None
+        assert info.os_platform == ""
+        assert info.cpu_cores == 0
+        assert info.memory_gb == 0.0

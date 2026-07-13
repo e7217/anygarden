@@ -23,7 +23,9 @@ router = APIRouter(prefix="/api/v1/machines", tags=["machines"])
 
 class MachineCreate(BaseModel):
     name: str
-    hostname: str = "localhost"
+    # ``hostname`` is now daemon-detected on register (issue #523), no longer a
+    # user input. ``description`` is the user-facing free-form label / note.
+    description: Optional[str] = None
     labels: Optional[dict] = None
 
 
@@ -31,16 +33,22 @@ class MachineOut(BaseModel):
     id: str
     name: str
     hostname: str
+    description: Optional[str] = None
     owner_user_id: str
     status: str
     daemon_version: Optional[str] = None
     labels: Optional[dict] = None
+    # Static system info reported by the daemon on register (issue #523).
+    lan_ip: Optional[str] = None
+    os_platform: Optional[str] = None
+    cpu_cores: int = 0
+    memory_gb: float = 0.0
     model_config = {"from_attributes": True}
 
 
 class MachineUpdate(BaseModel):
     name: Optional[str] = None
-    hostname: Optional[str] = None
+    description: Optional[str] = None
     labels: Optional[dict] = None
 
 
@@ -66,7 +74,9 @@ async def register_machine(
 
     machine = Machine(
         name=body.name,
-        hostname=body.hostname,
+        # hostname is daemon-detected on register; start empty (issue #523).
+        hostname="",
+        description=body.description,
         owner_user_id=identity.id,
         labels=body.labels,
     )
@@ -85,14 +95,10 @@ async def register_machine(
     await db.commit()
     await db.refresh(machine)
 
+    # Build from the ORM row (from_attributes) so new MachineOut fields are
+    # picked up automatically instead of being enumerated here (issue #523).
     return MachineCreateOut(
-        id=machine.id,
-        name=machine.name,
-        hostname=machine.hostname,
-        owner_user_id=machine.owner_user_id,
-        status=machine.status,
-        daemon_version=machine.daemon_version,
-        labels=machine.labels,
+        **MachineOut.model_validate(machine).model_dump(),
         machine_token=plaintext,
     )
 

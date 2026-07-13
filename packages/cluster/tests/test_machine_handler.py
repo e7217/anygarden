@@ -176,6 +176,83 @@ class TestMachineHandler:
             assert engine_names == {"echo", "llm"}
 
     @pytest.mark.asyncio
+    async def test_register_persists_system_info(self, handler_env) -> None:
+        """A register frame with system_info persists it, overwriting the
+        placeholder hostname (issue #523)."""
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+
+        await _handle_register(
+            factory,
+            machine.id,
+            {
+                "type": "register",
+                "engines": [],
+                "system_info": {
+                    "hostname": "real-worker-01",
+                    "lan_ip": "192.168.1.42",
+                    "os_platform": "Linux-6.17-x86_64",
+                    "cpu_cores": 8,
+                    "memory_gb": 64.0,
+                },
+            },
+        )
+
+        async with factory() as db:
+            m = (
+                await db.execute(select(Machine).where(Machine.id == machine.id))
+            ).scalar_one()
+            assert m.hostname == "real-worker-01"  # overwrote "test-host"
+            assert m.lan_ip == "192.168.1.42"
+            assert m.os_platform == "Linux-6.17-x86_64"
+            assert m.cpu_cores == 8
+            assert m.memory_gb == 64.0
+
+    @pytest.mark.asyncio
+    async def test_register_partial_system_info_does_not_clobber(
+        self, handler_env
+    ) -> None:
+        """Empty / zero probe results must not wipe a previously-good value."""
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+
+        # First register with good values.
+        await _handle_register(
+            factory,
+            machine.id,
+            {
+                "type": "register",
+                "system_info": {
+                    "hostname": "real-worker-01",
+                    "cpu_cores": 8,
+                    "memory_gb": 64.0,
+                },
+            },
+        )
+        # Second register where collection failed on several fields.
+        await _handle_register(
+            factory,
+            machine.id,
+            {
+                "type": "register",
+                "system_info": {
+                    "hostname": "",
+                    "cpu_cores": 0,
+                    "memory_gb": 0.0,
+                    "lan_ip": None,
+                },
+            },
+        )
+
+        async with factory() as db:
+            m = (
+                await db.execute(select(Machine).where(Machine.id == machine.id))
+            ).scalar_one()
+            assert m.hostname == "real-worker-01"  # not clobbered by ""
+            assert m.cpu_cores == 8  # not clobbered by 0
+            assert m.memory_gb == 64.0
+
+    @pytest.mark.asyncio
     async def test_report_actual_state_updates_db(self, handler_env) -> None:
         """report_actual_state should update the agent's actual_state and pid in DB."""
         factory = handler_env["factory"]
