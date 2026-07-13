@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from pydantic import ValidationError
 
 from anygarden_agent import secrets as agent_secrets
 from anygarden_agent.client import ChatClient
@@ -638,14 +639,18 @@ class OpenHandsAdapter(EngineAdapter):
                 )
 
         llm = self._build_llm()
-        # Issue #355 Phase 1 — load the materialized ``.mcp.json`` from
-        # agent root so both admin-attached and builtin MCP servers
-        # reach the LLM. Empty / missing file → no MCP, same as a
-        # fresh agent without any servers attached. We pass the dict
-        # straight through to ``Agent(mcp_config=...)``; the
-        # FastMCP-compatible shape claude-code already uses requires
-        # no transformation.
-        mcp_config = _load_mcp_manifest(Path.cwd() / _MCP_MANIFEST_PATH)
+        # Issue #355 Phase 1 / #525 — load the materialized ``.mcp.json``
+        # from agent root so both admin-attached and builtin MCP servers
+        # reach the LLM. Empty / missing file → no MCP, same as a fresh
+        # agent without any servers attached. openhands-sdk >=1.35 types
+        # ``Agent.mcp_config`` as ``dict[str, MCPServer]`` — a server map,
+        # NOT the FastMCP ``{"mcpServers": {...}}`` envelope our
+        # ``.mcp.json`` stores. ``_manifest_to_mcp_config`` unwraps the
+        # envelope and runs the SDK's own ``coerce_mcp_config`` before
+        # handing it to ``Agent(mcp_config=...)``. See #525.
+        mcp_config = _manifest_to_mcp_config(
+            _load_mcp_manifest(Path.cwd() / _MCP_MANIFEST_PATH)
+        )
         # Issue #355 Phase 3 — attach DelegateTool to the agent so the
         # LLM can spawn / delegate to sub-agents inside its conversation
         # thread. The tool was registered globally on first ``start``;
@@ -709,7 +714,12 @@ class OpenHandsAdapter(EngineAdapter):
 
         try:
             agent = _try_construct({})
-        except TypeError as exc:
+        except (TypeError, ValidationError) as exc:
+            # #525 — widen from ``TypeError`` only to also catch pydantic
+            # ``ValidationError``. openhands-sdk >=1.35 rejects a
+            # mis-shaped ``mcp_config`` with a ``ValidationError`` (not a
+            # ``TypeError``), so without this the adapter hard-fails
+            # before the LLM call instead of degrading to "no MCP".
             if "mcp_config" in agent_kwargs:
                 logger.warning(
                     "openhands.mcp_config_rejected_by_sdk",
@@ -1058,6 +1068,43 @@ def _load_mcp_manifest(path: Path) -> dict[str, Any] | None:
     if not isinstance(servers, dict) or not servers:
         return None
     return data
+
+
+def _manifest_to_mcp_config(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Normalise the ``.mcp.json`` envelope into the shape ``Agent`` expects.
+
+    ``_load_mcp_manifest`` returns the FastMCP ``{"mcpServers": {<name>:
+    {...}}}`` envelope (what ``mcp_templates/merge.py`` writes for
+    claude-code). openhands-sdk **>=1.35** types ``Agent.mcp_config`` as
+    ``dict[str, MCPServer]`` — a *server map*, not the envelope. Passing the
+    envelope makes the SDK read ``"mcpServers"`` as a server name and reject
+    the nested ``anygarden`` entry with ``Extra inputs are not permitted``
+    (#525).
+
+    So we unwrap the ``mcpServers`` map and hand it to the SDK's own
+    ``coerce_mcp_config`` (FastMCP → ``MCPServer`` normalisation), matching how
+    the SDK loads config internally (``plugin/loader.py`` / ``skills/skill.py``
+    both call ``coerce_mcp_config(config["mcpServers"])``).
+
+    When ``coerce_mcp_config`` is unavailable — a pre-1.35 SDK, or the test
+    fake that stubs ``openhands.sdk`` without a ``mcp.config`` submodule — we
+    fall back to the raw unwrapped server map, which is already the correct
+    ``dict[str, ...]`` shape for those SDKs. Returns ``None`` for an
+    empty/absent manifest so the caller omits the ``mcp_config`` kwarg
+    entirely.
+    """
+    if not raw:
+        return None
+    servers = raw.get("mcpServers", raw)
+    if not isinstance(servers, dict) or not servers:
+        return None
+    try:
+        from openhands.sdk.mcp.config import (  # type: ignore[import-not-found]
+            coerce_mcp_config,
+        )
+    except ImportError:
+        return servers
+    return coerce_mcp_config(servers)
 
 
 async def integrate_with_openhands(
