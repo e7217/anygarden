@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,14 @@ from anygarden_agent.integrations.codex_cli import (
     CodexCliAdapter,
     _resolve_codex_cli_args,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_agent_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # #526 — the adapter now persists per-room session handles to a file
+    # under ``Path.cwd()``. Isolate each test's cwd so those writes can't
+    # leak into a shared dir and pollute sibling tests.
+    monkeypatch.chdir(tmp_path)
 
 
 class TestResolveCodexCliArgs:

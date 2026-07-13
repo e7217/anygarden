@@ -39,6 +39,10 @@ from anygarden_agent.coordination.pending_context import (
     format_context_line,
 )
 from anygarden_agent.integrations.base import EngineAdapter
+from anygarden_agent.integrations.engine_session_store import (
+    load_sessions,
+    save_sessions,
+)
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTimeoutError,
@@ -240,6 +244,10 @@ class ClaudeCodeAdapter(EngineAdapter):
         self._sdk = claude_agent_sdk
         self._options_cls = claude_agent_sdk.ClaudeAgentOptions
         self._query_fn = claude_agent_sdk.query
+        # #526 — restore per-room resume handles persisted by a prior
+        # process so a respawned adapter can ``resume`` instead of starting
+        # cold. Missing/corrupt store → empty map (fresh start).
+        self._sessions = load_sessions(Path.cwd())
         logger.info(
             "claude_code.initialized",
             version=getattr(claude_agent_sdk, "__version__", "?"),
@@ -783,6 +791,8 @@ async def integrate_with_claude_code(
                 if sid is not None and room_id:
                     adapter._sessions[room_id] = sid
                     adapter._last_session_id = None
+                    # #526 — persist so a future respawn can restore it.
+                    save_sessions(Path.cwd(), adapter._sessions)
                 # #433 — pair the reply with the stashed turn input.
                 # #461 — also surface the harvested LLM usage so the cluster
                 # records a gateway-free ``LLMGatewayUsage`` row. ``cost_usd``

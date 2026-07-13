@@ -23,6 +23,14 @@ from anygarden_agent.integrations.claude_code import (
 from anygarden_agent.runtime.handler_wrapper import EngineTimeoutError
 
 
+@pytest.fixture(autouse=True)
+def _isolate_agent_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # #526 — the adapter now persists per-room session handles to a file
+    # under ``Path.cwd()``. Isolate each test's cwd so those writes can't
+    # leak into a shared dir and pollute sibling tests.
+    monkeypatch.chdir(tmp_path)
+
+
 @pytest.fixture
 def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     """Stub the claude_agent_sdk module with a recording query()."""
