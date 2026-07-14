@@ -204,6 +204,7 @@ class CodexCliAdapter(EngineAdapter):
             room_id,
             content,
             metadata if isinstance(metadata, dict) else None,
+            sender_participant_id=msg.get("participant_id"),
         )
 
         # Issue #237/#293 — sha-tracked memory + roster injection. codex
@@ -442,7 +443,7 @@ class CodexCliAdapter(EngineAdapter):
     async def ingest_context(self, msg: dict[str, Any]) -> None:
         """Buffer an INGEST_ONLY message for the next active turn."""
         room_id = msg.get("room_id") or "_default"
-        line = format_context_line(msg)
+        line = format_context_line(msg, roster=self._room_roster(room_id))
         if line is None:
             return
         append_context_line(self._pending_context, room_id, line)

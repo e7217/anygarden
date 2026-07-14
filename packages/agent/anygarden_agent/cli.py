@@ -143,6 +143,42 @@ async def _run_agent(
         await client.close()
 
 
+def _compose_identity_header(name: str | None) -> str | None:
+    """Build the self-identity preamble injected into every engine's
+    system prompt (#538).
+
+    The runtime knows the agent's ``name`` but pre-#538 never told the
+    LLM, so a profile-less agent answered "who are you?" with the engine
+    default persona ("Codex") and mis-attributed peers/humans. Stating
+    the name (and the no-impersonation rule) up front anchors identity
+    regardless of profile richness. Returns ``None`` when no name is
+    known so the caller leaves the prompt untouched.
+    """
+    if not name:
+        return None
+    return (
+        f'You are "{name}", one participant in a multi-agent chat room. '
+        "Other participants (humans and agents) appear in the room roster; "
+        "refer to them by their display names. "
+        "Do not speak as, or on behalf of, another participant."
+    )
+
+
+def _with_identity(name: str | None, system_prompt: str | None) -> str | None:
+    """Prepend the identity header (#538) to ``system_prompt``.
+
+    Keeps the existing prompt intact and merely anchors identity above
+    it. When no name is known the prompt is returned unchanged so
+    behaviour is a strict superset of pre-#538.
+    """
+    header = _compose_identity_header(name)
+    if not header:
+        return system_prompt
+    if not system_prompt:
+        return header
+    return f"{header}\n\n{system_prompt}"
+
+
 async def _setup_engine(
     client: Any,
     engine: str,
@@ -164,7 +200,7 @@ async def _setup_engine(
             client,
             agent_config={
                 "name": name,
-                "system_prompt": system_prompt,
+                "system_prompt": _with_identity(name, system_prompt),
                 "model": model,
             },
         )
@@ -175,7 +211,9 @@ async def _setup_engine(
         await integrate_with_codex_cli(
             client,
             model=model,  # None → codex_cli 기본 모델(gpt-5.5) 사용
-            system_prompt=system_prompt or "You are a helpful coding assistant.",
+            system_prompt=_with_identity(
+                name, system_prompt or "You are a helpful coding assistant."
+            ),
             reasoning_effort=reasoning_effort,
         )
     elif engine == "gemini-cli":
@@ -184,7 +222,9 @@ async def _setup_engine(
         await integrate_with_gemini_cli(
             client,
             model=model,  # None → gemini CLI 기본 모델 사용
-            system_prompt=system_prompt or "You are a helpful coding assistant.",
+            system_prompt=_with_identity(
+                name, system_prompt or "You are a helpful coding assistant."
+            ),
             reasoning_effort=reasoning_effort,
         )
     elif engine == "openhands":
@@ -200,7 +240,7 @@ async def _setup_engine(
             client,
             agent_config={
                 "name": name,
-                "system_prompt": system_prompt,
+                "system_prompt": _with_identity(name, system_prompt),
                 "model": model,
                 "reasoning_effort": reasoning_effort,
             },
