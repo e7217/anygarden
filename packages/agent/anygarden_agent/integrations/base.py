@@ -405,6 +405,7 @@ class ShaTrackedInjector:
     """
 
     def __init__(self) -> None:
+        self._system_sha: dict[str, str] = {}
         self._memory_sha: dict[str, str] = {}
         self._roster_sha: dict[str, str] = {}
 
@@ -416,10 +417,12 @@ class ShaTrackedInjector:
         roster_suffix: str,
         memory_label: str,
         roster_label: str,
+        system_suffix: str = "",
+        system_label: str = "",
     ) -> str:
         """Return the prefix to prepend to this turn's user content.
 
-        Returns ``""`` when neither block changed since the last call
+        Returns ``""`` when no block changed since the last call
         for ``room_id`` — the caller should leave the user content
         untouched in that case. When a block did change, the
         returned text starts with that block's delta label (omitted
@@ -427,12 +430,28 @@ class ShaTrackedInjector:
         trailing newline so the caller can join with the user
         content using its own separator.
 
-        Memory is emitted before roster when both change in the same
-        call.
+        Order on emission is **system, then memory, then roster**.
+
+        #540 — ``system_suffix`` carries the engine's system prompt
+        (identity + base instructions). codex ``exec`` has no native
+        system-prompt channel, so the prompt is seeded into turn
+        content on the first turn per process and suppressed thereafter
+        (codex ``resume`` keeps it in history). Optional + defaulted so
+        pre-#540 callers (memory/roster only) stay byte-identical.
         """
         import hashlib
 
         parts: list[str] = []
+
+        if system_suffix:
+            new_sha = hashlib.sha256(system_suffix.encode("utf-8")).hexdigest()
+            last_sha = self._system_sha.get(room_id)
+            if new_sha != last_sha:
+                if last_sha is None:
+                    parts.append(system_suffix)
+                else:
+                    parts.append(f"{system_label}\n{system_suffix}")
+                self._system_sha[room_id] = new_sha
 
         if memory_suffix:
             new_sha = hashlib.sha256(memory_suffix.encode("utf-8")).hexdigest()
