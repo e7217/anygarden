@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anygarden-agent"
-version = "0.11.0"
+version = "0.11.1"
 description = "Python SDK for Anygarden multi-agent chat"
 authors = [{ name = "Changyong Um" }]
 license = "Apache-2.0"
@@ -35,6 +35,22 @@ dependencies = [
     # the SDK's ``_handle_content_response`` marks the conversation
     # FINISHED. The package ships these tools as a separate wheel.
     "openhands-tools>=1.35,<2",
+    # OpenHands drives the LLM through litellm. Whenever the agent has any
+    # tools attached, ``litellm.completion()`` eagerly imports its proxy MCP
+    # handler (``litellm.responses.mcp.*`` -> ``litellm.proxy.
+    # litellm_pre_call_utils``), which runs a top-level ``from fastapi import
+    # HTTPException, Request`` — this happens *before* the conditional
+    # ``_should_use_litellm_mcp_gateway`` check, so it fires even though we
+    # never take the litellm MCP-gateway path. Neither openhands-sdk nor
+    # litellm declares fastapi as a hard dependency (it lives in litellm's
+    # proxy extra), so a clean install — e.g. ``uvx anygarden-agent`` — ships
+    # without it and *every* OpenHands turn dies with ``ModuleNotFoundError:
+    # No module named 'fastapi'`` wrapped as an SDK ``ConversationRunError``,
+    # surfacing as a failed engine call with no reply. orjson/uvicorn (the
+    # other proxy-import deps) already arrive transitively; fastapi is the
+    # only gap. Declared directly so the OpenHands engine actually runs.
+    # Range pinned to match cluster's ``anygarden[server]`` fastapi bound.
+    "fastapi>=0.110,<0.120",
 ]
 
 [project.optional-dependencies]
