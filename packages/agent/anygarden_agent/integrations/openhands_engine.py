@@ -309,6 +309,7 @@ class OpenHandsAdapter(EngineAdapter):
             room_id,
             content,
             metadata if isinstance(metadata, dict) else None,
+            sender_participant_id=msg.get("participant_id"),
         )
         suffix = compose_session_context_suffix(
             self._client,
@@ -430,7 +431,7 @@ class OpenHandsAdapter(EngineAdapter):
         drain on the next active turn (#74, #286).
         """
         room_id = msg.get("room_id") or "_default"
-        line = format_context_line(msg)
+        line = format_context_line(msg, roster=self._room_roster(room_id))
         if line is None:
             return
         append_context_line(self._pending_context, room_id, line)
@@ -442,7 +443,9 @@ class OpenHandsAdapter(EngineAdapter):
         that introspects an adapter via this method name keeps
         working when retargeted at this engine.
         """
-        return format_context_line(msg)
+        return format_context_line(
+            msg, roster=self._room_roster(msg.get("room_id") or "_default")
+        )
 
     def _drain_pending_context(self, room_id: str) -> str:
         """Back-compat wrapper around the shared helper."""

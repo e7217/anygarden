@@ -122,6 +122,55 @@ class TestChatClientWelcomeParsing:
         assert client._agent_id is None
 
 
+class TestSelfEchoHardFilter:
+    """#538 — own-participant frames must be hard-filtered before they
+    reach message handlers, even after a reconnect re-populates
+    ``_my_participant_ids`` via the welcome frame (welcome precedes the
+    ``since_seq`` replay, so the filter still recognises a replayed self
+    message). Locks the invariant that keeps self-echo loops out of the
+    engine while a peer's message flows through normally."""
+
+    @pytest.mark.asyncio
+    async def test_own_message_filtered_peer_delivered(self) -> None:
+        client = ChatClient("ws://localhost:8000", token="t")
+        seen: list[dict] = []
+
+        async def handler(msg: dict) -> None:
+            seen.append(msg)
+
+        client.on_message(handler)
+
+        # (Re)connect welcome establishes our own participant id.
+        await client._process_frame(
+            "room-1",
+            {"type": "welcome", "participant_id": "pid-self", "agent_id": "a1"},
+        )
+
+        # Our own message echoing back must be hard-filtered.
+        await client._process_frame(
+            "room-1",
+            {
+                "type": "message",
+                "participant_id": "pid-self",
+                "content": "mine",
+                "seq": 5,
+            },
+        )
+        assert seen == []
+
+        # A human peer message (no ``_nonce``) is delivered normally.
+        await client._process_frame(
+            "room-1",
+            {
+                "type": "message",
+                "participant_id": "pid-human",
+                "content": "hi",
+                "seq": 6,
+            },
+        )
+        assert [m["content"] for m in seen] == ["hi"]
+
+
 class TestChatClientSend:
     @pytest.mark.asyncio
     async def test_send_raises_when_not_connected(self) -> None:

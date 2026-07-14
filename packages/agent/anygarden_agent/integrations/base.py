@@ -11,6 +11,7 @@ import structlog
 
 from anygarden_agent.coordination.pending_context import (
     drain_context,
+    resolve_speaker_label,
     wrap_as_room_conversation,
 )
 from anygarden_agent.integrations.cycle_guard import is_cycle_detected
@@ -136,11 +137,30 @@ class EngineAdapter(ABC):
     async def stop(self) -> None:
         """Cleanup resources. Override if the engine needs teardown."""
 
+    def _room_roster(self, room_id: str | None) -> dict[str, Any] | None:
+        """Return the cached participant roster for ``room_id`` (#538).
+
+        Reads ``client._participants_by_room[room_id]`` defensively so
+        adapters (and bare test subclasses) without a wired client fall
+        back to ``None`` — callers then skip name-labelling and keep the
+        pre-#538 behaviour. Same roster the ``compose_roster_suffix``
+        header draws from, keyed by participant_id.
+        """
+        client = getattr(self, "_client", None)
+        if client is None or not room_id:
+            return None
+        roster = getattr(client, "_participants_by_room", None)
+        if isinstance(roster, dict):
+            return roster.get(room_id)
+        return None
+
     def assemble_user_content(
         self,
         room_id: str,
         raw_content: str,
         metadata: dict[str, Any] | None = None,
+        *,
+        sender_participant_id: str | None = None,
     ) -> str:
         """Standard user-content augmentation pipeline (#286).
 
@@ -150,6 +170,15 @@ class EngineAdapter(ABC):
         those blocks to ``raw_content``. An empty buffer and empty
         metadata short-circuit the function so the adapter emits
         ``raw_content`` byte-identical to the bare-input path.
+
+        #538 — when ``sender_participant_id`` resolves to a known
+        roster entry, the addressed message itself is prefixed with
+        ``{display_name}({kind}): `` so the engine can attribute the
+        turn's trigger to its actual sender (human vs peer agent)
+        instead of treating it as an unlabelled user turn — the root
+        cause of self-misattribution and verbatim echo. When the
+        sender is omitted or unknown, ``raw_content`` is passed through
+        unchanged (byte-identical to pre-#538).
 
         Why this lives on the base class: pre-#286 each session
         adapter (Claude Code, Codex, Gemini CLI) inlined the same
@@ -172,10 +201,19 @@ class EngineAdapter(ABC):
         if referenced_files:
             parts.append(referenced_files)
 
-        if not parts:
-            return raw_content
+        # #538 — label the addressed message with its sender so the
+        # engine never mistakes a peer/human turn for its own voice.
+        sender_label = resolve_speaker_label(
+            sender_participant_id, self._room_roster(room_id)
+        )
+        labelled_content = (
+            f"{sender_label}: {raw_content}" if sender_label else raw_content
+        )
 
-        parts.append(raw_content)
+        if not parts:
+            return labelled_content
+
+        parts.append(labelled_content)
         return "\n\n".join(parts)
 
     def _record_turn_input(self, room_id: str | None, text: str | None) -> None:

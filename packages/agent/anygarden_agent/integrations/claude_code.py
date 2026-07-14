@@ -289,6 +289,7 @@ class ClaudeCodeAdapter(EngineAdapter):
             room_id,
             content,
             metadata if isinstance(metadata, dict) else None,
+            sender_participant_id=msg.get("participant_id"),
         )
         # #433 — stash the user-turn input handed to the engine (memory/
         # roster ride in the system prompt via options, not here).
@@ -326,7 +327,7 @@ class ClaudeCodeAdapter(EngineAdapter):
         Dropped silently when the message has no renderable content.
         """
         room_id = msg.get("room_id") or "_default"
-        line = format_context_line(msg)
+        line = format_context_line(msg, roster=self._room_roster(room_id))
         if line is None:
             return
         append_context_line(self._pending_context, room_id, line)
@@ -338,7 +339,9 @@ class ClaudeCodeAdapter(EngineAdapter):
         keeps the wrapper so those assertions keep passing while
         the logic itself lives in ``coordination.pending_context``.
         """
-        return format_context_line(msg)
+        return format_context_line(
+            msg, roster=self._room_roster(msg.get("room_id") or "_default")
+        )
 
     def _drain_pending_context(self, room_id: str) -> str:
         """Back-compat wrapper around the shared helper. See

@@ -250,6 +250,7 @@ class GeminiCliAdapter(EngineAdapter):
             room_id,
             content,
             metadata if isinstance(metadata, dict) else None,
+            sender_participant_id=msg.get("participant_id"),
         )
 
         # Build prompt with per-room conversation context.
@@ -291,7 +292,7 @@ class GeminiCliAdapter(EngineAdapter):
         the next ``on_message`` prompt prefix.
         """
         room_id = msg.get("room_id") or "_default"
-        line = format_context_line(msg)
+        line = format_context_line(msg, roster=self._room_roster(room_id))
         if line is None:
             return
         append_context_line(self._pending_context, room_id, line)

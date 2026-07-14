@@ -32,7 +32,34 @@ PENDING_CONTEXT_MAX = 10
 PENDING_CONTEXT_TTL_SEC = 600
 
 
-def format_context_line(msg: dict[str, Any]) -> str | None:
+def resolve_speaker_label(
+    participant_id: str | None,
+    roster: dict[str, Any] | None,
+) -> str | None:
+    """Resolve a human-readable speaker label for a participant (#538).
+
+    Returns ``"{display_name}({kind})"`` when the room roster knows
+    the participant, so the LLM can attribute a message to a *named*
+    agent/human instead of an opaque id. Returns ``None`` when the
+    roster is absent (pre-#221 server) or does not know the
+    participant yet — callers decide the fallback (breadcrumbs fall
+    back to ``@{id[:8]}``; the addressed-message prefix skips
+    labelling entirely so a bare-id prefix never leaks into prose).
+    """
+    if roster and participant_id:
+        brief = roster.get(participant_id)
+        if isinstance(brief, dict):
+            name = brief.get("display_name")
+            if name:
+                kind = brief.get("kind") or "user"
+                return f"{name}({kind})"
+    return None
+
+
+def format_context_line(
+    msg: dict[str, Any],
+    roster: dict[str, Any] | None = None,
+) -> str | None:
     """Render a one-line breadcrumb for injection into the next
     turn's prompt.
 
@@ -43,6 +70,12 @@ def format_context_line(msg: dict[str, Any]) -> str | None:
     and ``room_query_result`` gets a special locator so the reader
     can tell "this came from the cross-room query" vs "another
     participant spoke ambient".
+
+    #538 — when ``roster`` is supplied the speaker is rendered as
+    ``{display_name}({kind})`` so the model can tell *who* spoke
+    (agent vs human vs self) instead of parroting an opaque
+    ``@{id[:8]}``. Without a roster (or an unknown participant) the
+    pre-#538 ``@{id[:8]}`` form is preserved for backward compat.
     """
     content = (msg.get("content") or "").strip()
     if not content:
@@ -53,8 +86,9 @@ def format_context_line(msg: dict[str, Any]) -> str | None:
         rq = meta["room_query_result"] or {}
         target = rq.get("target_room_id") or "?"
         return f"[참고] 룸 {target}에서 다음 응답이 왔습니다: {snippet}"
-    sender = (msg.get("participant_id") or "unknown")[:8]
-    return f"[참고] @{sender}: {snippet}"
+    pid = msg.get("participant_id")
+    label = resolve_speaker_label(pid, roster) or f"@{(pid or 'unknown')[:8]}"
+    return f"[참고] {label}: {snippet}"
 
 
 def append_context_line(
