@@ -221,8 +221,14 @@ class CodexCliAdapter(EngineAdapter):
             )
         prefix = self._injector.apply(
             room_id,
+            # #540 — codex exec has no system-prompt channel, so seed the
+            # system prompt (identity + base instructions) into turn content.
+            # Unconditional (unlike roster): a solo agent still must know who
+            # it is. Injected once per process/room, then sha-suppressed.
+            system_suffix=self._system_prompt or "",
             memory_suffix=memory_suffix,
             roster_suffix=roster_suffix,
+            system_label="[시스템 지침 업데이트]",
             memory_label="[공유 자료 업데이트]",
             roster_label="[팀 구성 업데이트]",
         )
