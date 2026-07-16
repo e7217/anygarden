@@ -59,6 +59,9 @@ class TestCatalog:
         assert is_valid_reasoning_effort("codex-cli", "xhigh", model="gpt-5.4") is True
         # gpt-5.2 does NOT support xhigh (only low/medium/high)
         assert is_valid_reasoning_effort("codex-cli", "xhigh", model="gpt-5.2") is False
+        # GPT-5.6 tiers add the new ``max`` level; older models lack it.
+        assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-5.6-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-5.4") is False
 
     def test_is_valid_reasoning_effort_unknown_engine(self) -> None:
         assert is_valid_reasoning_effort("unknown", "medium") is False
@@ -176,8 +179,11 @@ class TestEngineModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["engine"] == "codex-cli"
-        assert data["default_model"] == "gpt-5.5"
+        assert data["default_model"] == "gpt-5.6-terra"
         model_ids = [m["id"] for m in data["models"]]
+        assert "gpt-5.6-sol" in model_ids
+        assert "gpt-5.6-terra" in model_ids
+        assert "gpt-5.6-luna" in model_ids
         assert "gpt-5.5" in model_ids
         assert "gpt-5.4" in model_ids
         assert "gpt-5.4-mini" in model_ids
@@ -235,8 +241,12 @@ class TestEngineModelsEndpoint:
         data = resp.json()
         gpt54 = next(m for m in data["models"] if m["id"] == "gpt-5.4")
         assert "xhigh" in gpt54["reasoning_levels"]
+        assert "max" not in gpt54["reasoning_levels"]
         gpt52 = next(m for m in data["models"] if m["id"] == "gpt-5.2")
         assert "xhigh" not in gpt52["reasoning_levels"]
+        # GPT-5.6 tiers surface the new ``max`` level.
+        sol = next(m for m in data["models"] if m["id"] == "gpt-5.6-sol")
+        assert "max" in sol["reasoning_levels"]
 
 
 class TestAvailableEnginesEndpoint:

@@ -210,7 +210,7 @@ async def _setup_engine(
 
         await integrate_with_codex_cli(
             client,
-            model=model,  # None → codex_cli 기본 모델(gpt-5.5) 사용
+            model=model,  # None → codex_cli 기본 모델(gpt-5.6-terra) 사용
             system_prompt=_with_identity(
                 name, system_prompt or "You are a helpful coding assistant."
             ),

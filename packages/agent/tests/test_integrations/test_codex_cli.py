@@ -197,7 +197,7 @@ class TestCallCodexSession:
         assert resp == "reply"
         assert adapter._room_thread_ids["room1"] == "new-tid"
         assert adapter._take_last_usage() == {
-            "model": "gpt-5.5",
+            "model": "gpt-5.6-terra",
             "input_tokens": 1,
             "output_tokens": 2,
             "cost_usd": None,
