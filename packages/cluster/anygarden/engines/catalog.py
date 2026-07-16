@@ -1,16 +1,27 @@
 """Static catalog of engine models and reasoning levels.
 
-Last refreshed: 2026-04-25 against the locally-installed CLIs
-(``claude`` 2.1.116, ``codex`` 0.121.0, ``gemini`` 0.37.1). Values were
+Last refreshed: 2026-07-16 against the locally-installed CLIs
+(``claude`` 2.1.211, ``codex`` 0.144.1, ``gemini`` 0.39.1). Values were
 verified by probing ``--help``, triggering validation errors, and
 reading the shipped binaries' model-name tables — not by trusting the
 vendor marketing docs, which lag behind the actual CLIs.
 
-Exception: ``gpt-5.5`` (codex) was added on the 2026-04-25
-announcement and is not yet round-tripped against a live ``codex exec``
-call. If ChatGPT-account auth rejects it at runtime, roll the
-``default_model`` back to ``gpt-5.4`` — Codex does no client-side
-validation, so the catalog can advertise an ID the backend then refuses.
+The GPT-5.6 family (codex ``gpt-5.6-sol`` / ``gpt-5.6-terra`` /
+``gpt-5.6-luna``, released 2026-07-09; ``sol``/``terra``/``luna`` are
+OpenAI's tier codenames, not separate versions) was verified two ways
+against codex 0.144.1: the slugs appear verbatim in the shipped
+binary's model-preset table, and a live ``codex exec -m gpt-5.6-sol``
+round-trip reached the model — the request was accepted and only
+rejected afterwards on a deliberately-invalid ``reasoning_effort`` —
+whereas a bogus ``gpt-5.6-zzz`` was refused outright ("not supported
+when using Codex with a ChatGPT account"). That same validation-error
+response is the source of truth for the reasoning levels: the GPT-5.6
+generation accepts ``none/minimal/low/medium/high/xhigh/max`` — ``max``
+is new this generation. (``ultra``, from OpenAI's announcement, is a
+codex CLI multi-agent orchestration mode, not a ``reasoning.effort``
+value, so it is intentionally absent here.) Codex does no client-side
+model-id validation, so a stale entry is a trivial PR, not a runtime
+failure.
 
 This is intentionally a hand-maintained dict rather than a live query
 against each SDK/CLI. Reasons:
@@ -20,7 +31,8 @@ against each SDK/CLI. Reasons:
   endpoint per admin page load is a usability regression compared to a
   static dict.
 - Reasoning-effort taxonomies differ per engine *at the CLI layer*:
-  Codex allows ``none/minimal/low/medium/high/xhigh``; Claude Code uses
+  Codex allows ``none/minimal/low/medium/high/xhigh/max`` (``max`` added
+  with the GPT-5.6 generation); Claude Code uses
   ``low/medium/high/xhigh/max`` (``--effort`` flag); Gemini CLI has no
   effort flag — the adapter translates ``low/medium/high`` into the
   ``--thinking-budget`` integer instead. The catalog encodes what the
@@ -95,17 +107,40 @@ class EngineCatalogEntry:
 
 
 ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
-    # Codex CLI (exec) engine. Reasoning levels verified via its config
-    # validator (none/minimal/low/medium/high/xhigh). Model list verified by
-    # round-tripping an actual ``codex exec`` call with a ChatGPT-account
-    # login; Codex does no client-side model-id validation, so the source of
-    # truth is what the backend accepts. Other binary IDs (gpt-5.4-pro,
-    # gpt-5.2-codex, gpt-5.1-codex-max/mini) return "not supported with a
-    # ChatGPT account" and are omitted. (#506 removed the SDK ``codex`` entry.)
+    # Codex CLI (exec) engine. Reasoning levels come from the backend's
+    # own validation error (none/minimal/low/medium/high/xhigh/max — see
+    # module docstring). Model list verified by round-tripping an actual
+    # ``codex exec`` call with a ChatGPT-account login; Codex does no
+    # client-side model-id validation, so the source of truth is what the
+    # backend accepts. Other binary IDs (gpt-5.4-pro, gpt-5.2-codex,
+    # gpt-5.1-codex-max/mini) return "not supported with a ChatGPT account"
+    # and are omitted. (#506 removed the SDK ``codex`` entry.)
+    #
+    # GPT-5.6 (2026-07-09) ships as three tiers keyed by OpenAI's
+    # codenames — sol (flagship), terra (balanced), luna (cost-efficient);
+    # all three are live-verified against codex 0.144.1 and add the new
+    # ``max`` reasoning level. ``default_model`` is the balanced ``terra``
+    # tier — a sensible cost/quality default for everyday agents; operators
+    # can pick ``sol`` per-agent when a task warrants the flagship.
     "codex-cli": EngineCatalogEntry(
         engine="codex-cli",
-        default_model="gpt-5.5",
+        default_model="gpt-5.6-terra",
         models=(
+            EngineModel(
+                id="gpt-5.6-sol",
+                label="GPT-5.6 Sol",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="gpt-5.6-terra",
+                label="GPT-5.6 Terra",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="gpt-5.6-luna",
+                label="GPT-5.6 Luna",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
             EngineModel(
                 id="gpt-5.5",
                 label="GPT-5.5",
@@ -137,7 +172,7 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
                 reasoning_levels=("low", "medium", "high"),
             ),
         ),
-        reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+        reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
     ),
     # Claude Code: ``--effort`` (session flag) accepts
     # ``low/medium/high/xhigh/max``. There is no ``disabled`` option at
@@ -253,9 +288,24 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
                 reasoning_levels=("low", "medium", "high", "xhigh", "max"),
             ),
             # ── OpenAI (mirrors codex's model list) ─────────────
-            # gpt-5.5 carries the same backend-side caveat the codex
-            # entry documents: announcement-only on 2026-04-25, no
-            # round-trip verification yet.
+            # GPT-5.6 tiers (sol/terra/luna) mirror the codex-cli entry;
+            # litellm routes ``openai/gpt-5.6-*`` straight through, and
+            # the ``max`` reasoning level rides along per-model.
+            EngineModel(
+                id="openai/gpt-5.6-sol",
+                label="GPT-5.6 Sol (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.6-terra",
+                label="GPT-5.6 Terra (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
+            EngineModel(
+                id="openai/gpt-5.6-luna",
+                label="GPT-5.6 Luna (via OpenHands)",
+                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+            ),
             EngineModel(
                 id="openai/gpt-5.5",
                 label="GPT-5.5 (via OpenHands)",
