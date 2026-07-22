@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import getpass
+import os
 import sys
+from collections.abc import Iterable, MutableMapping
 from pathlib import Path
 
 import click
@@ -16,6 +18,80 @@ from anygarden_machine.daemon import MachineDaemon
 from anygarden_machine.detector import detect_engines
 
 log = structlog.get_logger()
+
+
+# ── Engine PATH handling (#545) ───────────────────────────────────────
+#
+# Engine CLIs are installed to per-user locations that systemd user
+# units do not put on PATH by default: claude/codex land in
+# ``~/.local/bin`` and gemini in ``/usr/local/bin``. The detector uses
+# ``shutil.which`` against the live process PATH, so a daemon started
+# from a minimal-PATH unit finds 0 engines while a login shell finds
+# all 3. These helpers keep both the generated unit and the running
+# daemon aligned with where the CLIs actually live.
+
+
+def _wellknown_engine_dirs() -> list[Path]:
+    """User bin dirs where engine CLIs are installed.
+
+    ``~`` is expanded via ``Path.home()`` because systemd
+    ``Environment=`` lines do not perform tilde expansion.
+    """
+    return [Path.home() / ".local" / "bin", Path("/usr/local/bin")]
+
+
+def _dedup_path(entries: Iterable[str]) -> str:
+    """Join PATH entries with ``:`` preserving order, dropping empties/dups."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for entry in entries:
+        if not entry or entry in seen:
+            continue
+        seen.add(entry)
+        ordered.append(entry)
+    return ":".join(ordered)
+
+
+def build_systemd_path() -> str:
+    """Build the ``PATH`` value baked into the systemd unit.
+
+    Combines the interpreter's bin dir, the install-time shell PATH
+    (where the engine CLIs were already detectable), the well-known
+    user bin dirs, and the base system dirs — deduped, order-preserving.
+    Capturing the install-time PATH gives parity with the shell that
+    detects all engines, covering arbitrary install locations
+    (nvm/asdf/custom prefixes), not just the two well-known dirs.
+    """
+    entries = [
+        str(Path(sys.executable).parent),
+        *os.environ.get("PATH", "").split(":"),
+        *(str(d) for d in _wellknown_engine_dirs()),
+        "/usr/bin",
+        "/bin",
+    ]
+    return _dedup_path(entries)
+
+
+def ensure_engine_paths(environ: MutableMapping[str, str] | None = None) -> None:
+    """Append well-known engine bin dirs to ``PATH`` if missing (idempotent).
+
+    Augments the live process PATH so ``shutil.which`` in the detector —
+    and any spawned agent that copies ``os.environ`` — can find the
+    engine CLIs even when the daemon was launched from a systemd unit
+    with a pinned minimal PATH (including already-deployed units, which
+    self-heal on restart without re-running ``install-systemd-unit``).
+    """
+    if environ is None:
+        environ = os.environ
+    current = environ.get("PATH", "")
+    parts = current.split(":") if current else []
+    existing = set(parts)
+    for engine_dir in _wellknown_engine_dirs():
+        as_str = str(engine_dir)
+        if as_str not in existing:
+            parts.append(as_str)
+            existing.add(as_str)
+    environ["PATH"] = ":".join(parts)
 
 
 @click.group()
@@ -108,6 +184,11 @@ def register(server: str, name: str) -> None:
 @click.option("--machine-id", default=None, help="Machine ID override")
 def run(config_path: str | None, server: str | None, token: str | None, machine_id: str | None) -> None:
     """Run the machine daemon (connects to server via WebSocket)."""
+    # #545 — augment PATH before anything spawns/detects so engine CLIs
+    # in ~/.local/bin and /usr/local/bin are visible even when launched
+    # from a systemd unit with a pinned minimal PATH.
+    ensure_engine_paths()
+
     # Try loading config file, but allow all-CLI usage
     try:
         path = Path(config_path) if config_path else None
@@ -211,7 +292,7 @@ Type=simple
 ExecStart={sys.executable} -m anygarden_machine.cli run
 Restart=always
 RestartSec=5
-Environment=PATH={Path(sys.executable).parent}:/usr/bin:/bin
+Environment=PATH={build_systemd_path()}
 
 [Install]
 WantedBy=default.target
