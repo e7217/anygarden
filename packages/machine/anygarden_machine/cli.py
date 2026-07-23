@@ -1,10 +1,11 @@
-"""CLI entry point: register, run, status, install-systemd-unit."""
+"""CLI entry point: register, run, status, install-systemd-unit, update, bootstrap."""
 
 from __future__ import annotations
 
 import asyncio
 import getpass
 import os
+import subprocess
 import sys
 from collections.abc import Iterable, MutableMapping
 from pathlib import Path
@@ -13,9 +14,11 @@ import click
 import httpx
 import structlog
 
+from anygarden_machine import install_manifest
 from anygarden_machine.config import MachineConfig, load_token, save_token
 from anygarden_machine.daemon import MachineDaemon
 from anygarden_machine.detector import detect_engines
+from anygarden_machine.updater import run_update
 
 log = structlog.get_logger()
 
@@ -274,9 +277,12 @@ def status() -> None:
         click.echo(f"  - {agent.get('agent_id', '?')} (engine={agent.get('engine', '?')})")
 
 
-@main.command("install-systemd-unit")
-def install_systemd_unit() -> None:
-    """Generate and install a systemd user unit file."""
+def _write_systemd_unit() -> Path:
+    """Write the systemd user unit pointing at the current interpreter.
+
+    ``sys.executable`` is the owned venv's python when run from a
+    bootstrap install, so the unit and the update target stay aligned.
+    """
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True, exist_ok=True)
     unit_path = unit_dir / "anygarden-machine.service"
@@ -297,9 +303,108 @@ Environment=PATH={build_systemd_path()}
 [Install]
 WantedBy=default.target
 """
-
     unit_path.write_text(unit_content)
+    return unit_path
+
+
+@main.command("install-systemd-unit")
+def install_systemd_unit() -> None:
+    """Generate and install a systemd user unit file."""
+    unit_path = _write_systemd_unit()
     click.echo(f"Unit file written to {unit_path}")
+    click.echo("Enable and start with:")
+    click.echo("  systemctl --user daemon-reload")
+    click.echo("  systemctl --user enable --now anygarden-machine")
+
+
+# systemd user service name — also the console-script / distribution name.
+SERVICE_NAME = "anygarden-machine"
+
+
+def _restart_service() -> None:
+    """Restart the systemd user service so the new version takes effect."""
+    subprocess.run(
+        ["systemctl", "--user", "restart", SERVICE_NAME],
+        check=False,
+    )
+
+
+@main.command("update")
+@click.option(
+    "--version",
+    "target_version",
+    default=None,
+    help="Pin a specific version (PEP 440); default installs the latest.",
+)
+@click.option(
+    "--restart/--no-restart",
+    default=False,
+    help="Restart the systemd user service after a successful update.",
+)
+def update(target_version: str | None, restart: bool) -> None:
+    """Update anygarden-machine to the latest version (#550).
+
+    Reinstalls into the owned venv recorded in the install manifest. The
+    running daemon keeps the old code until restarted — pass ``--restart``
+    or run ``systemctl --user restart anygarden-machine`` afterwards.
+    """
+    result = run_update(target_version)
+    if not result.ok:
+        click.echo(f"Update failed: {result.error}", err=True)
+        sys.exit(1)
+
+    target = result.to_version or "latest"
+    click.echo(f"Updated anygarden-machine ({result.from_version} → {target}).")
+    if restart:
+        click.echo("Restarting service…")
+        _restart_service()
+    else:
+        click.echo("Restart to run the new version:")
+        click.echo(f"  systemctl --user restart {SERVICE_NAME}")
+
+
+def _write_launcher_shim(shim_dir: Path) -> Path:
+    """Write a launcher shim that execs the owned venv's console script.
+
+    Mirrors the Hermes pattern: a tiny bash shim on PATH that unsets
+    inherited PYTHONPATH/PYTHONHOME and execs the venv binary, so
+    ``anygarden-machine`` resolves without activating the venv.
+    """
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    shim_path = shim_dir / SERVICE_NAME
+    console_script = Path(sys.executable).parent / SERVICE_NAME
+    shim_path.write_text(
+        "#!/usr/bin/env bash\n"
+        "unset PYTHONPATH\n"
+        "unset PYTHONHOME\n"
+        f'exec "{console_script}" "$@"\n'
+    )
+    shim_path.chmod(0o755)
+    return shim_path
+
+
+@main.command("bootstrap")
+def bootstrap() -> None:
+    """Record this venv as the self-owned install (#550).
+
+    Writes the install manifest, a launcher shim on PATH, and the systemd
+    unit. Intended to run from inside the dedicated venv created by
+    ``scripts/install.sh`` (which owns venv creation). Together these make
+    ``anygarden-machine update`` deterministic.
+    """
+    manifest = install_manifest.InstallManifest(
+        method="venv-pip",
+        package=install_manifest.PACKAGE_NAME,
+        python=sys.executable,
+    )
+    install_manifest.write(manifest)
+    shim = _write_launcher_shim(Path.home() / ".local" / "bin")
+    unit = _write_systemd_unit()
+
+    click.echo("Bootstrapped self-owned install:")
+    click.echo(f"  manifest: {install_manifest.MANIFEST_PATH}")
+    click.echo(f"  shim:     {shim}")
+    click.echo(f"  unit:     {unit}")
     click.echo("Enable and start with:")
     click.echo("  systemctl --user daemon-reload")
     click.echo("  systemctl --user enable --now anygarden-machine")

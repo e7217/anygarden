@@ -13,7 +13,7 @@ import {
 import {
   Plus, Copy, Check, Trash2, RefreshCw, Save as SaveIcon,
   PauseCircle, Server, Bot, Square, Settings, Play,
-  DoorOpen, FileCog, History, Loader2,
+  DoorOpen, FileCog, History, Loader2, ArrowUpCircle,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
@@ -68,7 +68,7 @@ function statusLabel(status: string) {
 // ── Main Component ─────────────────────────────────────────────────
 
 export default function AdminMachines() {
-  const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, regenerateToken } = useMachines()
+  const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, updateMachineDaemon, regenerateToken } = useMachines()
   const {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
     pendingIds,
@@ -551,7 +551,23 @@ export default function AdminMachines() {
                 </div>
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Version</span>
-                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.daemon_version || '-'}</p>
+                  <p className="text-[var(--color-foreground)] font-medium">
+                    {selectedMachine.daemon_version || '-'}
+                    {selectedMachine.update_status === 'updating' && (
+                      <span className="ml-2 text-xs text-[var(--color-foreground-muted)]">updating…</span>
+                    )}
+                    {selectedMachine.update_status === 'success' && (
+                      <span className="ml-2 text-xs text-[#097fe8]">updated</span>
+                    )}
+                    {selectedMachine.update_status === 'failed' && (
+                      <span
+                        className="ml-2 text-xs text-[var(--color-destructive)]"
+                        title={selectedMachine.update_error || undefined}
+                      >
+                        update failed
+                      </span>
+                    )}
+                  </p>
                 </div>
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Engines</span>
@@ -777,6 +793,19 @@ export default function AdminMachines() {
                     }}
                   >
                     <PauseCircle className="mr-1.5 h-3 w-3" /> Drain
+                  </Button>
+                  <Button variant="outline" size="sm"
+                    disabled={selectedMachine.status === 'offline' || selectedMachine.update_status === 'updating'}
+                    onClick={async () => {
+                      if (!confirm('Update this machine to the latest anygarden-machine? The daemon will reinstall and restart.')) return
+                      try {
+                        await updateMachineDaemon(selectedMachine.id)
+                      } catch (e) {
+                        alert(`Failed to trigger update: ${(e as Error).message}`)
+                      }
+                    }}
+                  >
+                    <ArrowUpCircle className="mr-1.5 h-3 w-3" /> Update
                   </Button>
                   <Button variant="outline" size="sm"
                     className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)] border-[var(--color-destructive)]/30 hover:border-[var(--color-destructive)]/50"

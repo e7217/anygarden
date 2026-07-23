@@ -26,11 +26,13 @@ from anygarden_machine.protocol.frames import (
     RegisterFrame,
     ReportActualStateFrame,
     RequestReplacementFrame,
+    SelfUpdateResultFrame,
     SyncDesiredStateFrame,
     TokenRequestFrame,
     parse_server_frame,
 )
 from anygarden_machine.spawner import Spawner, SpawnManifest
+from anygarden_machine.updater import run_update
 
 log = structlog.get_logger()
 
@@ -134,6 +136,10 @@ class MachineDaemon:
         self._token_path = token_path
         self._draining = False
         self._ws: Any = None
+        # #550 — set when a self-update succeeds; the run loop returns
+        # instead of reconnecting so the process exits and systemd
+        # restarts it on the freshly-installed version.
+        self._exit_requested: bool = False
 
         self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
         self._spawner = Spawner(
@@ -205,6 +211,13 @@ class MachineDaemon:
             except asyncio.CancelledError:
                 log.info("daemon_cancelled")
                 await self._spawner.drain()
+                return
+
+            # #550 — a successful self-update asks the daemon to exit so
+            # systemd respawns it on the new version. Do NOT drain agents:
+            # they outlive the restart and are re-adopted (#451).
+            if self._exit_requested:
+                log.info("daemon_exiting_for_update")
                 return
 
             await asyncio.sleep(backoff)
@@ -353,6 +366,8 @@ class MachineDaemon:
                 await self._handle_agent_memory_shared_file_write(frame)
             case "agent_memory_shared_file_delete":
                 await self._handle_agent_memory_shared_file_delete(frame)
+            case "self_update":
+                await self._handle_self_update(frame)
 
     # ── Desired-state handlers ─────────────────────────────────────────
 
@@ -1007,6 +1022,42 @@ class MachineDaemon:
             return
         self.machine_token = new_token
         log.info("rotate_token_applied")
+
+    async def _handle_self_update(self, frame: Any) -> None:
+        """Handle self_update: reinstall anygarden-machine, then exit for restart (#550).
+
+        Reports ``updating`` first, runs the install off the event loop, and
+        on success flags the daemon to exit (systemd restarts it on the new
+        version — running agents are re-adopted per #451). On failure reports
+        ``failed`` and keeps running the current version.
+        """
+        await self._send(
+            SelfUpdateResultFrame(
+                status="updating",
+                from_version=__version__,
+                to_version=frame.target_version,
+            ).model_dump()
+        )
+
+        # pip install blocks; keep the event loop responsive.
+        result = await asyncio.to_thread(run_update, frame.target_version)
+
+        if not result.ok:
+            await self._send(
+                SelfUpdateResultFrame(
+                    status="failed",
+                    from_version=result.from_version,
+                    to_version=result.to_version,
+                    error=result.error,
+                ).model_dump()
+            )
+            return
+
+        log.info("self_update_success_exiting_for_restart", to=result.to_version)
+        self._exit_requested = True
+        # Break the serve loop so run() sees the exit flag and returns.
+        if self._ws is not None:
+            await self._ws.close()
 
     # ── Room shared file handlers (#246) ───────────────────────────────
 

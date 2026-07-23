@@ -43,6 +43,10 @@ class MachineOut(BaseModel):
     os_platform: Optional[str] = None
     cpu_cores: int = 0
     memory_gb: float = 0.0
+    # Server-driven self-update state (#550).
+    update_status: Optional[str] = None
+    update_error: Optional[str] = None
+    update_started_at: Optional[datetime] = None
     model_config = {"from_attributes": True}
 
 
@@ -50,6 +54,12 @@ class MachineUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     labels: Optional[dict] = None
+
+
+class MachineUpdateTrigger(BaseModel):
+    """Body for POST /{id}/update — optional pinned version (#550)."""
+
+    target_version: Optional[str] = None
 
 
 class MachineCreateOut(MachineOut):
@@ -307,6 +317,55 @@ async def drain_machine(
     db.add(MachineActivityLog(machine_id=machine_id, event_type="drain"))
     await db.commit()
     return {"id": machine.id, "status": "draining"}
+
+
+@router.post("/{machine_id}/update", response_model=MachineOut)
+async def update_machine_daemon(
+    machine_id: str,
+    request: Request,
+    payload: Optional[MachineUpdateTrigger] = None,
+    # Owner (or admin) only — machines are a registered-user concern, and
+    # updating your own machine is not a privilege escalation (the owner
+    # already controls it). The daemon only ever reinstalls the fixed
+    # anygarden-machine distribution from PyPI (#550).
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger a server-driven self-update on the machine's daemon (#550).
+
+    Sends a ``self_update`` frame over the machine's WebSocket. The daemon
+    reinstalls into its owned venv and restarts; the new ``daemon_version``
+    on re-register confirms success. Returns 409 if the machine is offline.
+    """
+    machine = await _get_owned_machine(db, machine_id, identity)
+
+    target_version = payload.target_version if payload else None
+    if target_version is not None:
+        # Fail fast on a malformed version rather than shipping garbage to
+        # the daemon (which would also reject it as non-PEP 440).
+        from packaging.version import InvalidVersion, Version
+
+        try:
+            Version(target_version)
+        except InvalidVersion:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid target version: {target_version!r}"
+            )
+
+    machine_bus = request.app.state.machine_bus
+    sent = await machine_bus.send(
+        machine_id, {"type": "self_update", "target_version": target_version}
+    )
+    if not sent:
+        raise HTTPException(status_code=409, detail="Machine is not connected")
+
+    machine.update_status = "updating"
+    machine.update_error = None
+    machine.update_started_at = datetime.now(timezone.utc)
+    db.add(MachineActivityLog(machine_id=machine_id, event_type="self_update"))
+    await db.commit()
+    await db.refresh(machine)
+    return machine
 
 
 @router.post("/{machine_id}/tokens/revoke", status_code=200)

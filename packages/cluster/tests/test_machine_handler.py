@@ -26,7 +26,11 @@ from anygarden.db.models import (
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.scheduler.lifecycle import AgentLifecycle
-from anygarden.ws.machine_handler import _authenticate_machine, _handle_register
+from anygarden.ws.machine_handler import (
+    _authenticate_machine,
+    _handle_register,
+    _handle_self_update_result,
+)
 
 
 @pytest_asyncio.fixture()
@@ -392,3 +396,69 @@ class TestMachineHandler:
 
         await bus.unregister(machine.id)
         assert not bus.is_connected(machine.id)
+
+
+class TestSelfUpdateResult:
+    """Server-side handling of self-update progress/outcome (#550)."""
+
+    @pytest.mark.asyncio
+    async def test_failed_records_error(self, handler_env) -> None:
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            m.update_status = "updating"
+            await db.commit()
+
+        await _handle_self_update_result(
+            factory,
+            machine.id,
+            {"type": "self_update_result", "status": "failed", "error": "pip exited 1"},
+        )
+
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            assert m.update_status == "failed"
+            assert m.update_error == "pip exited 1"
+
+    @pytest.mark.asyncio
+    async def test_register_confirms_success_on_new_version(self, handler_env) -> None:
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            m.update_status = "updating"
+            m.daemon_version = "0.12.0"
+            await db.commit()
+
+        await _handle_register(
+            factory,
+            machine.id,
+            {"type": "register", "capabilities": [], "daemon_version": "0.13.0"},
+        )
+
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            assert m.daemon_version == "0.13.0"
+            assert m.update_status == "success"
+            assert m.update_error is None
+
+    @pytest.mark.asyncio
+    async def test_register_same_version_stays_updating(self, handler_env) -> None:
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            m.update_status = "updating"
+            m.daemon_version = "0.12.0"
+            await db.commit()
+
+        await _handle_register(
+            factory,
+            machine.id,
+            {"type": "register", "capabilities": [], "daemon_version": "0.12.0"},
+        )
+
+        async with factory() as db:
+            m = await db.get(Machine, machine.id)
+            assert m.update_status == "updating"

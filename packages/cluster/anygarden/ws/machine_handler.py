@@ -115,6 +115,10 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                 reason = data.get("reason", "")
                 await lifecycle.handle_request_replacement(machine_id, agent_id, reason)
 
+            elif frame_type == "self_update_result":
+                # #550 — daemon reported self-update progress/outcome.
+                await _handle_self_update_result(session_factory, machine_id, data)
+
             elif frame_type == "agent_memory_update":
                 # #237 — file → DB sync. Machine observed a change in
                 # ``memory/notes.md`` and shipped the full body. We
@@ -222,6 +226,31 @@ def _apply_system_info(machine: Machine, system_info: Any) -> None:
         machine.memory_gb = float(memory_gb)
 
 
+async def _handle_self_update_result(
+    session_factory,
+    machine_id: str,
+    data: dict[str, Any],
+) -> None:
+    """Record a ``self_update_result`` from the daemon (#550).
+
+    ``failed`` records the error and clears the pending state. ``updating``
+    just confirms the daemon accepted the command — success is recognized
+    separately when the daemon re-registers on the new version.
+    """
+    status = data.get("status")
+    async with session_factory() as db:
+        machine = await db.get(Machine, machine_id)
+        if machine is None:
+            return
+        if status == "failed":
+            machine.update_status = "failed"
+            machine.update_error = data.get("error")
+        elif status == "updating":
+            machine.update_status = "updating"
+            machine.update_error = None
+        await db.commit()
+
+
 async def _handle_register(
     session_factory,
     machine_id: str,
@@ -241,8 +270,22 @@ async def _handle_register(
 
         machine.status = "online"
         machine.daemon_last_seen_at = datetime.now(timezone.utc)
+        old_version = machine.daemon_version
         if daemon_version:
             machine.daemon_version = daemon_version
+
+        # #550 — a pending server-driven self-update is confirmed successful
+        # when the daemon comes back online reporting a different version.
+        # (Only outdated machines are updated, so the version always changes
+        # on a real success; a same-version reconnect stays "updating" and
+        # is resolved out of band.)
+        if (
+            machine.update_status == "updating"
+            and daemon_version
+            and daemon_version != old_version
+        ):
+            machine.update_status = "success"
+            machine.update_error = None
 
         # Static system info (issue #523). Only overwrite a field when the
         # daemon reported a meaningful value, so a partial collection failure

@@ -16,6 +16,10 @@ export interface Machine {
   os_platform?: string | null;
   cpu_cores?: number;
   memory_gb?: number;
+  // Server-driven self-update state (#550): "updating" | "success" | "failed".
+  update_status?: string | null;
+  update_error?: string | null;
+  update_started_at?: string | null;
 }
 
 export interface RegisterMachineResult {
@@ -153,6 +157,23 @@ export function useMachines() {
     return updated;
   }, [refreshInBackground]);
 
+  // #550 — trigger a server-driven daemon self-update. Optional
+  // ``targetVersion`` pins a version; omit for latest.
+  const updateMachineDaemon = useCallback(async (id: string, targetVersion?: string) => {
+    const resp = await apiFetch(`/api/v1/machines/${id}/update`, {
+      method: 'POST',
+      body: JSON.stringify(targetVersion ? { target_version: targetVersion } : {}),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail || `Update failed (${resp.status})`);
+    }
+    const updated: Machine = await resp.json();
+    setMachines(prev => prev.map(m => (m.id === id ? { ...m, ...updated } : m)));
+    refreshInBackground();
+    return updated;
+  }, [refreshInBackground]);
+
   const deleteMachine = useCallback(async (id: string, force: boolean = false): Promise<{ stopped_agents: string[] }> => {
     const url = force ? `/api/v1/machines/${id}?force=true` : `/api/v1/machines/${id}`;
     const resp = await apiFetch(url, { method: 'DELETE' });
@@ -200,6 +221,7 @@ export function useMachines() {
     drainMachine,
     registerMachine,
     updateMachine,
+    updateMachineDaemon,
     deleteMachine,
     regenerateToken,
     fetchMachines,

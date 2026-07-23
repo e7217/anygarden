@@ -13,9 +13,11 @@ from anygarden_machine.daemon import MachineDaemon, _base_url_from_machine_url
 from anygarden_machine.protocol.frames import (
     RegisterFrame,
     ReportActualStateFrame,
+    SelfUpdateFrame,
     SyncDesiredStateFrame,
     SystemInfo,
 )
+from anygarden_machine.updater import UpdateResult
 
 
 class TestBaseUrlFromMachineUrl:
@@ -1802,3 +1804,49 @@ class TestReadoptRunningAgents:
         await daemon._readopt_running_agents()
 
         adopt_spy.assert_not_called()
+
+
+class TestSelfUpdate:
+    """Server-driven self-update handler (#550)."""
+
+    async def test_success_reports_updating_and_requests_exit(
+        self, daemon: MachineDaemon
+    ) -> None:
+        sent = _capture_ws(daemon)
+        ok = UpdateResult(ok=True, from_version="0.12.0", to_version=None, error=None)
+
+        with patch("anygarden_machine.daemon.run_update", return_value=ok):
+            await daemon._handle_self_update(SelfUpdateFrame())
+
+        # First frame is the "updating" progress report.
+        assert sent[0]["type"] == "self_update_result"
+        assert sent[0]["status"] == "updating"
+        # Success ⇒ request process exit so systemd restarts on the new version,
+        # and close the socket to break the serve loop. No "failed" is sent.
+        assert daemon._exit_requested is True
+        daemon._ws.close.assert_awaited()
+        assert not any(f.get("status") == "failed" for f in sent)
+
+    async def test_failure_reports_failed_and_keeps_running(
+        self, daemon: MachineDaemon
+    ) -> None:
+        sent = _capture_ws(daemon)
+        fail = UpdateResult(
+            ok=False, from_version="0.12.0", to_version=None, error="pip exited 1"
+        )
+
+        with patch("anygarden_machine.daemon.run_update", return_value=fail):
+            await daemon._handle_self_update(SelfUpdateFrame())
+
+        statuses = [f["status"] for f in sent if f["type"] == "self_update_result"]
+        assert statuses == ["updating", "failed"]
+        assert sent[-1]["error"] == "pip exited 1"
+        # Failure ⇒ daemon stays up.
+        assert daemon._exit_requested is False
+
+    async def test_dispatch_routes_self_update(self, daemon: MachineDaemon) -> None:
+        _capture_ws(daemon)
+        ok = UpdateResult(ok=True, from_version="0.12.0", to_version=None, error=None)
+        with patch("anygarden_machine.daemon.run_update", return_value=ok):
+            await daemon._handle({"type": "self_update"})
+        assert daemon._exit_requested is True
