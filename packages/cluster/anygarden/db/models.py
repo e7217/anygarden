@@ -1737,3 +1737,31 @@ class TokenBudgetIncident(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
+
+
+class VersionCheck(Base):
+    """Cached result of the last PyPI update check per package (#546).
+
+    One row per package (``anygarden``, ``anygarden-machine``). The admin
+    ``check-updates`` endpoint upserts here; the ``updates`` endpoint and
+    the UI badge read from it without any outbound call. Persisting to the
+    DB (rather than in-memory) keeps the last-known state across restarts
+    and lets a future background poller fill the same cache unchanged.
+    """
+    __tablename__ = "version_checks"
+
+    # Package name is the natural primary key — one cache row per package.
+    package: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Latest version seen on PyPI; NULL until a successful check.
+    latest_version: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    # When the last check ran (success or failure); NULL if never checked.
+    checked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    # Failure reason (e.g. "unreachable") when the last check could not
+    # resolve a version; NULL on success.
+    error: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None
+    )

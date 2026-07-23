@@ -8,6 +8,7 @@ import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
 import AdminMachinesPage from '@/pages/AdminMachinesPage'
 import AdminSkillsPage from '@/pages/AdminSkillsPage'
+import AdminSystemPage from '@/pages/AdminSystemPage'
 import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
 import AdminLLMGatewayPage from '@/pages/AdminLLMGatewayPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
@@ -68,6 +69,7 @@ export default function App() {
             <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />
             <Route path="/admin/machines" element={<AdminRoute><AdminMachinesPage /></AdminRoute>} />
+            <Route path="/admin/system" element={<AdminRoute><AdminSystemPage /></AdminRoute>} />
             <Route path="/admin/skills" element={<AdminRoute><AdminSkillsPage /></AdminRoute>} />
             <Route path="/admin/mcp-templates" element={<AdminRoute><AdminMCPTemplatesPage /></AdminRoute>} />
             {/* #197 — LLM Gateway admin. Nested route: the shell owns the

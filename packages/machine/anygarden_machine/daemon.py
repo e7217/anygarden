@@ -13,6 +13,7 @@ import structlog
 import websockets
 from websockets.asyncio.client import connect
 
+from anygarden_machine import __version__
 from anygarden_machine.config import save_token
 from anygarden_machine.crash_budget import CrashBudget
 from anygarden_machine.detector import detect_engines
@@ -270,6 +271,7 @@ class MachineDaemon:
             capabilities=capabilities,
             labels=self.labels,
             system_info=system_info,
+            daemon_version=__version__,  # #546
         )
         await self._send(frame.model_dump())
         log.info(

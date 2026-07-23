@@ -39,6 +39,7 @@ from anygarden.api.v1.saved import router as saved_router
 from anygarden.api.v1.search import router as search_router
 from anygarden.api.v1.tasks import router as tasks_router
 from anygarden.api.v1.goals import router as goals_router
+from anygarden.api.v1.system import router as system_router
 from anygarden.routing.router import router as routing_router
 from anygarden.orchestration.rules import (
     CooldownManager,
@@ -951,6 +952,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     app.include_router(search_router)
     app.include_router(tasks_router)
     app.include_router(goals_router)
+    app.include_router(system_router)
     app.include_router(routing_router)
     # #197 — LLM gateway reverse proxy + admin CRUD. Both are always
     # included; their handlers 503 when ``app.state.llm_gateway_*``

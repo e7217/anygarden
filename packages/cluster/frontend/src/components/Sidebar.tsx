@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { useSystemVersion, useUpdateStatus } from '@/hooks/useSystemVersion'
 import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
@@ -23,6 +24,7 @@ import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
   Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug, Waypoints,
+  Package,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -185,6 +187,11 @@ export default function Sidebar({
   const navigate = useNavigate()
   const location = useLocation()
   const isAdmin = !!user?.is_admin
+
+  // #546 — server version (all users) + admin-only cached update status.
+  const serverVersion = useSystemVersion()
+  const { updates } = useUpdateStatus(isAdmin)
+  const updateAvailable = updates.some((u) => u.update_available)
 
   // Edit dialog state lives at the sidebar root (not inside
   // ``SidebarRoomMenu``) so closing the menu doesn't unmount the
@@ -716,6 +723,25 @@ export default function Sidebar({
               Machines
             </button>
             <button
+              onClick={() => go('/admin/system')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname === '/admin/system'
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <Package className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              <span className="min-w-0 truncate">System</span>
+              {updateAvailable && (
+                <span
+                  className="ml-auto rounded-full bg-[#f2f9ff] px-2 py-0.5 text-[11px] font-semibold text-[#097fe8]"
+                  title="Update available"
+                >
+                  update
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => go('/admin/skills')}
               className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
                 location.pathname === '/admin/skills'
@@ -769,7 +795,14 @@ export default function Sidebar({
 
       {/* User info */}
       <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-3">
-        <span className="truncate text-xs text-[var(--color-foreground-muted)]">{user?.email}</span>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-xs text-[var(--color-foreground-muted)]">{user?.email}</span>
+          {serverVersion && (
+            <span className="truncate text-[11px] text-[var(--color-foreground-subtle)]" title="Server version">
+              anygarden v{serverVersion}
+            </span>
+          )}
+        </div>
         <Button variant="ghost" size="icon" onClick={logout} title="Logout">
           <LogOut className="h-4 w-4" />
         </Button>

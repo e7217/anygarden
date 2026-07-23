@@ -140,6 +140,27 @@ class TestRegisterFrame:
         assert si["cpu_cores"] == 8
         assert si["memory_gb"] == 64.0
 
+    async def test_register_includes_daemon_version(self, daemon: MachineDaemon) -> None:
+        """_register reports the daemon's own package version (#546).
+
+        The server persists this as ``machine.daemon_version`` for the
+        admin UI; before #546 the frame carried no version at all so the
+        column stayed NULL.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        mock_detection = MagicMock()
+        mock_detection.engines = []
+
+        with patch(
+            "anygarden_machine.daemon.detect_engines", return_value=mock_detection
+        ):
+            await daemon._register()
+
+        from anygarden_machine import __version__
+
+        assert sent_frames[0]["daemon_version"] == __version__
+
 
 # ── Report actual state ──────────────────────────────────────────────
 

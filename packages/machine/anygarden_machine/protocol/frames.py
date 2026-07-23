@@ -229,6 +229,10 @@ class RegisterFrame(BaseModel):
     # Static system info (issue #523). Optional for backward compat with
     # older daemons that don't send it.
     system_info: SystemInfo | None = None
+    # #546 — the daemon's own package version, persisted as
+    # ``machine.daemon_version`` for the admin UI. Optional for backward
+    # compat with older daemons that predate this field.
+    daemon_version: str | None = None
 
 
 class AgentActual(BaseModel):
