@@ -48,6 +48,9 @@ server = [
     "pyyaml>=6.0",
     # #302 — cron parsing for the autonomous responsibility scheduler.
     "croniter>=2.0",
+    # #546 — PEP 440 version comparison for the PyPI update-check service
+    # (system/version_service.py). String compare would order 0.10 < 0.9.
+    "packaging>=23",
     # #420 — OpenTelemetry tracing exported over OTLP/HTTP to Langfuse.
     "opentelemetry-sdk>=1.27",
     "opentelemetry-exporter-otlp-proto-http>=1.27",
