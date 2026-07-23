@@ -404,6 +404,15 @@ class Machine(Base):
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
     lan_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     os_platform: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
+    # #550 — server-driven self-update state, surfaced in the admin machine
+    # view. ``updating`` (self_update frame sent) → ``success`` (new
+    # daemon_version confirmed on re-register) / ``failed`` (daemon reported
+    # failure). NULL means no update has ever been triggered.
+    update_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, default=None)
+    update_error: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
+    update_started_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
     # Placement capacity limit. Hidden from UI/API/CLI as of 2026-04-15
     # (issue #2) — kept in the schema so ``placement.py`` can still
     # enforce a soft cap and we can re-expose it later without a
