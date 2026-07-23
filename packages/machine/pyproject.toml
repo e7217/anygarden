@@ -21,6 +21,8 @@ dependencies = [
     "psutil>=5.9",
     "pyyaml>=6.0",
     "argon2-cffi>=23.1",
+    # #550 — PEP 440 validation of the optional self-update target version.
+    "packaging>=23",
 ]
 
 [project.optional-dependencies]

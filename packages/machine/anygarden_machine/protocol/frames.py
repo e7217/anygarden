@@ -189,6 +189,19 @@ class AgentMemorySharedFileDeleteFrame(BaseModel):
     storage_name: str
 
 
+class SelfUpdateFrame(BaseModel):
+    """Server tells the daemon to update itself (#550).
+
+    The daemon reinstalls the fixed ``anygarden-machine`` distribution
+    (never a server-supplied name) into its owned venv, then exits so
+    systemd restarts on the new version. ``target_version`` is optional
+    (default: latest) and is PEP 440-validated by the updater before use.
+    """
+
+    type: Literal["self_update"] = "self_update"
+    target_version: str | None = None
+
+
 ServerFrame = Union[
     SyncDesiredStateFrame,
     SyncBatchFrame,
@@ -198,6 +211,7 @@ ServerFrame = Union[
     RotateTokenFrame,
     AgentMemorySharedFileWriteFrame,
     AgentMemorySharedFileDeleteFrame,
+    SelfUpdateFrame,
 ]
 
 
@@ -322,6 +336,22 @@ class RoomArtifactProducedFrame(BaseModel):
     size_bytes: int
 
 
+class SelfUpdateResultFrame(BaseModel):
+    """Daemon reports the outcome of a ``self_update`` (#550).
+
+    ``updating`` is sent just before the install/restart; ``failed`` is
+    sent if the install could not complete. Success is not reported here —
+    the daemon exits on success and the server infers it from the new
+    ``daemon_version`` on the subsequent ``register``.
+    """
+
+    type: Literal["self_update_result"] = "self_update_result"
+    status: Literal["updating", "failed"]
+    from_version: str
+    to_version: str | None = None
+    error: str | None = None
+
+
 MachineFrame = Union[
     RegisterFrame,
     ReportActualStateFrame,
@@ -329,6 +359,7 @@ MachineFrame = Union[
     RequestReplacementFrame,
     AgentMemoryUpdateFrame,
     RoomArtifactProducedFrame,
+    SelfUpdateResultFrame,
 ]
 
 
@@ -343,6 +374,7 @@ _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
     "rotate_token": RotateTokenFrame,
     "agent_memory_shared_file_write": AgentMemorySharedFileWriteFrame,
     "agent_memory_shared_file_delete": AgentMemorySharedFileDeleteFrame,
+    "self_update": SelfUpdateFrame,
 }
 
 
