@@ -17,6 +17,8 @@ from anygarden_machine import __version__
 from anygarden_machine.config import save_token
 from anygarden_machine.crash_budget import CrashBudget
 from anygarden_machine.detector import detect_engines
+from anygarden_machine.engines.registry import get_lifecycle
+from anygarden_machine.engines.updater import run_engine_update
 from anygarden_machine.manifest_store import ManifestStore
 from anygarden_machine.sysinfo import collect_system_info
 from anygarden_machine.protocol.frames import (
@@ -27,6 +29,8 @@ from anygarden_machine.protocol.frames import (
     ReportActualStateFrame,
     RequestReplacementFrame,
     SelfUpdateResultFrame,
+    EngineCheckResultFrame,
+    EngineUpdateResultFrame,
     SyncDesiredStateFrame,
     TokenRequestFrame,
     parse_server_frame,
@@ -368,6 +372,10 @@ class MachineDaemon:
                 await self._handle_agent_memory_shared_file_delete(frame)
             case "self_update":
                 await self._handle_self_update(frame)
+            case "engine_check":
+                await self._handle_engine_check(frame)
+            case "engine_update":
+                await self._handle_engine_update(frame)
 
     # ── Desired-state handlers ─────────────────────────────────────────
 
@@ -1058,6 +1066,56 @@ class MachineDaemon:
         # Break the serve loop so run() sees the exit flag and returns.
         if self._ws is not None:
             await self._ws.close()
+
+    async def _handle_engine_check(self, frame: Any) -> None:
+        """Report an engine's current (detected) vs latest (registry) version (#553).
+
+        Versions are channel-normalized so the cluster can compare them
+        directly. An unknown engine key is rejected via the registry allowlist.
+        """
+        engine = frame.engine
+        lifecycle = get_lifecycle(engine)
+        if lifecycle is None:
+            await self._send(
+                EngineCheckResultFrame(
+                    engine=engine, error=f"unknown engine: {engine!r}"
+                ).model_dump()
+            )
+            return
+
+        detection = await detect_engines()
+        current_raw = next(
+            (e.version for e in detection.engines if e.engine == engine), None
+        )
+        current = lifecycle.channel.normalize(current_raw) if current_raw else None
+        latest_raw = await lifecycle.channel.latest_version(lifecycle.package)
+        latest = lifecycle.channel.normalize(latest_raw) if latest_raw else None
+        await self._send(
+            EngineCheckResultFrame(
+                engine=engine, current_version=current, latest_version=latest
+            ).model_dump()
+        )
+
+    async def _handle_engine_update(self, frame: Any) -> None:
+        """Update an engine CLI, reporting updating→success/failed (#553).
+
+        Unlike self_update the daemon does not restart — the engine binary is
+        replaced in place and the next detect picks up the new version, so
+        success is reported directly. Running agents keep their current
+        process; respawn to adopt a new engine binary is a follow-up concern.
+        """
+        engine = frame.engine
+        await self._send(
+            EngineUpdateResultFrame(engine=engine, status="updating").model_dump()
+        )
+        # Install blocks; keep the event loop responsive.
+        result = await asyncio.to_thread(run_engine_update, engine)
+        status = "success" if result.ok else "failed"
+        await self._send(
+            EngineUpdateResultFrame(
+                engine=engine, status=status, error=result.error
+            ).model_dump()
+        )
 
     # ── Room shared file handlers (#246) ───────────────────────────────
 

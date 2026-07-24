@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from anygarden_machine.engines.registry import ENGINE_LIFECYCLES
+
 log = structlog.get_logger()
 
 DETECTION_TIMEOUT = 5.0  # seconds
@@ -32,17 +34,14 @@ class DetectionResult:
 
 # ── Binary-based detection ────────────────────────────────────────────
 
+# #553 — derived from the engine lifecycle registry, the single source of
+# truth for how each engine is detected. Binary engines run
+# ``<binary> --version``; the on-disk name may differ from the engine key
+# (claude-code ships the ``claude`` binary, not ``claude-code``).
 BINARY_ENGINES: list[tuple[str, str]] = [
-    # The Claude Code CLI binary is named ``claude`` (not
-    # ``claude-code``) — the "code" is only in the docs and the
-    # install package. Use the real on-disk name so ``shutil.which``
-    # actually finds it.
-    ("claude-code", "claude"),
-    # #496/#506 — codex-cli shells out to ``codex exec --json`` (the SDK
-    # codex engine was removed). Same on-disk ``codex`` binary; lights up
-    # whenever ``codex`` is on PATH.
-    ("codex-cli", "codex"),
-    ("gemini-cli", "gemini"),
+    (lc.engine, lc.detect.binary)
+    for lc in ENGINE_LIFECYCLES.values()
+    if lc.detect.mode == "binary" and lc.detect.binary
 ]
 
 
@@ -61,11 +60,9 @@ BINARY_ENGINES: list[tuple[str, str]] = [
 # version attr is read with ``getattr(..., default="unknown")`` so a
 # minor SDK rev that drops ``__version__`` doesn't disable detection.
 PYTHON_MODULE_ENGINES: list[tuple[str, str, str]] = [
-    # Issue #355 — OpenHands V1 SDK runs in-process via
-    # ``openhands.sdk`` (LLM, Agent, Conversation). Detection is just
-    # "can we import it?" — succeeds whenever ``openhands-sdk`` is
-    # present in the anygarden-agent venv.
-    ("openhands", "openhands.sdk", "__version__"),
+    (lc.engine, lc.detect.import_path, lc.detect.version_attr)
+    for lc in ENGINE_LIFECYCLES.values()
+    if lc.detect.mode == "module" and lc.detect.import_path and lc.detect.version_attr
 ]
 
 

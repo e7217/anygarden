@@ -38,7 +38,13 @@ interface MachineAgent {
 }
 
 interface MachineEngineInfo {
-  engine: string; version?: string | null
+  engine: string
+  version?: string | null
+  // #553 — engine lifecycle, merged from machine_engine_status.
+  latest_version?: string | null
+  update_available?: boolean
+  update_status?: string | null
+  latest_checked_at?: string | null
 }
 
 const ENGINE_LABELS: Record<string, string> = {
@@ -51,6 +57,25 @@ const ENGINE_LABELS: Record<string, string> = {
 
 const DEPRECATED_BADGE_CSS =
   'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[10px] text-[var(--color-warning)]'
+
+// #553 — small engine status pill, mirroring #546's StatusBadge styling.
+function EngineStatusBadge({ info }: { info: MachineEngineInfo }) {
+  const pill = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold'
+  const muted = `${pill} bg-[rgba(0,0,0,0.05)] text-[var(--color-foreground-muted)]`
+  const accent = `${pill} bg-[#f2f9ff] text-[#097fe8]`
+  if (info.update_status === 'updating') return <span className={accent}>updating…</span>
+  if (info.update_status === 'failed')
+    return (
+      <span
+        className={`${pill} bg-[color:color-mix(in_srgb,var(--color-destructive)_10%,transparent)] text-[var(--color-destructive)]`}
+      >
+        update failed
+      </span>
+    )
+  if (info.update_available) return <span className={accent}>update available</span>
+  if (info.latest_checked_at) return <span className={muted}>up to date</span>
+  return null
+}
 
 function statusDot(status: string) {
   if (status === 'online' || status === 'running') return 'bg-[var(--color-success)]'
@@ -68,7 +93,7 @@ function statusLabel(status: string) {
 // ── Main Component ─────────────────────────────────────────────────
 
 export default function AdminMachines() {
-  const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, updateMachineDaemon, regenerateToken } = useMachines()
+  const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, updateMachineDaemon, checkMachineEngine, updateMachineEngine, regenerateToken } = useMachines()
   const {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
     pendingIds,
@@ -119,6 +144,37 @@ export default function AdminMachines() {
     if (enginesResp.ok) setMachineEngines(await enginesResp.json())
     if (activityResp.ok) setMachineActivity(await activityResp.json())
   }, [])
+
+  // #553 — engine check/update in flight (per engine key), disables its row.
+  const [engineBusy, setEngineBusy] = useState<string | null>(null)
+
+  const handleCheckEngine = useCallback(async (engine: string) => {
+    if (!selectedId) return
+    setEngineBusy(engine)
+    try {
+      await checkMachineEngine(selectedId, engine)
+      // Result arrives over WS; re-fetch shortly after to pick it up.
+      setTimeout(() => { if (selectedId) fetchDetail(selectedId) }, 1500)
+    } catch {
+      /* disabled state already conveys failure; refresh reconciles */
+    } finally {
+      setEngineBusy(null)
+    }
+  }, [selectedId, checkMachineEngine, fetchDetail])
+
+  const handleUpdateEngine = useCallback(async (engine: string) => {
+    if (!selectedId) return
+    setEngineBusy(engine)
+    try {
+      await updateMachineEngine(selectedId, engine)
+      await fetchDetail(selectedId)  // reflect "updating" immediately
+      setTimeout(() => { if (selectedId) fetchDetail(selectedId) }, 3000)
+    } catch {
+      /* status stays as-is */
+    } finally {
+      setEngineBusy(null)
+    }
+  }, [selectedId, updateMachineEngine, fetchDetail])
 
   useEffect(() => {
     if (selectedId) fetchDetail(selectedId)
@@ -571,11 +627,15 @@ export default function AdminMachines() {
                 </div>
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">Engines</span>
-                  <div className="flex flex-wrap gap-1 mt-0.5">
-                    {machineEngines.map(e => {
+                  <div className="flex flex-col gap-1.5 mt-0.5">
+                    {sortedMachineEngines.map(e => {
                       const engineMeta = engineMetadataById.get(e.engine)
+                      const busy = engineBusy === e.engine
+                      const online = selectedMachine?.status === 'online'
+                      const btn =
+                        'rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] px-1.5 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:bg-[rgba(0,0,0,0.03)] disabled:opacity-40 disabled:cursor-not-allowed'
                       return (
-                        <span key={e.engine} className="inline-flex items-center gap-1">
+                        <div key={e.engine} className="flex items-center gap-1.5 flex-wrap">
                           <Badge variant="outline" className="text-xs">
                             {ENGINE_LABELS[e.engine] ?? e.engine}
                           </Badge>
@@ -588,10 +648,38 @@ export default function AdminMachines() {
                               Deprecated
                             </Badge>
                           ) : null}
-                        </span>
+                          {e.version && (
+                            <span className="font-mono text-[11px] text-[var(--color-foreground-muted)]">
+                              {e.version}
+                            </span>
+                          )}
+                          {e.update_available && e.latest_version && (
+                            <span className="font-mono text-[11px] text-[#097fe8]">
+                              → {e.latest_version}
+                            </span>
+                          )}
+                          <EngineStatusBadge info={e} />
+                          <button
+                            className={btn}
+                            onClick={() => handleCheckEngine(e.engine)}
+                            disabled={busy || !online}
+                            title={online ? 'Check latest version' : 'Machine is offline'}
+                          >
+                            {busy ? '…' : 'Check'}
+                          </button>
+                          {e.update_available && (
+                            <button
+                              className={`${btn} text-[#097fe8] border-[color:color-mix(in_srgb,#097fe8_35%,transparent)] hover:bg-[#f2f9ff]`}
+                              onClick={() => handleUpdateEngine(e.engine)}
+                              disabled={busy || !online}
+                            >
+                              Update
+                            </button>
+                          )}
+                        </div>
                       )
                     })}
-                    {machineEngines.length === 0 && <span className="text-[var(--color-foreground-subtle)]">-</span>}
+                    {sortedMachineEngines.length === 0 && <span className="text-[var(--color-foreground-subtle)]">-</span>}
                   </div>
                 </div>
                 <div>

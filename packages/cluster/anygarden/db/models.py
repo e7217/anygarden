@@ -458,6 +458,51 @@ class MachineEngine(Base):
     machine: Mapped["Machine"] = relationship("Machine", back_populates="engines")
 
 
+class MachineEngineStatus(Base):
+    """Per-machine, per-engine lifecycle status: latest version + update state (#553).
+
+    Kept separate from :class:`MachineEngine` because ``_handle_register``
+    delete+recreates that table on every reconnect, which would wipe the
+    latest-version cache and the update status. Keyed by (machine_id, engine)
+    so it survives re-register.
+    """
+
+    __tablename__ = "machine_engine_status"
+    __table_args__ = (
+        UniqueConstraint("machine_id", "engine", name="uq_machine_engine_status"),
+        Index("ix_machine_engine_status_machine", "machine_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    machine_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("machines.id", ondelete="CASCADE"), nullable=False
+    )
+    engine: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Latest version from the registry (channel-normalized), refreshed on check.
+    latest_version: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    update_available: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
+    latest_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    latest_error: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, default=None
+    )
+    # Update lifecycle: "updating" | "success" | "failed"; NULL until triggered.
+    update_status: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default=None
+    )
+    update_error: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, default=None
+    )
+    update_started_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+
+
 class MachineToken(Base):
     """Stores hashed machine tokens for daemon authentication."""
     __tablename__ = "machine_tokens"

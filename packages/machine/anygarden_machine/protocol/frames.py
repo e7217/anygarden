@@ -202,6 +202,24 @@ class SelfUpdateFrame(BaseModel):
     target_version: str | None = None
 
 
+class EngineCheckFrame(BaseModel):
+    """Server asks the daemon to report an engine's current vs latest version (#553)."""
+
+    type: Literal["engine_check"] = "engine_check"
+    engine: str
+
+
+class EngineUpdateFrame(BaseModel):
+    """Server asks the daemon to update an engine CLI to its latest version (#553).
+
+    Only the engine key is sent; the daemon resolves it to a package via its
+    own registry allowlist (never a server-supplied package name).
+    """
+
+    type: Literal["engine_update"] = "engine_update"
+    engine: str
+
+
 ServerFrame = Union[
     SyncDesiredStateFrame,
     SyncBatchFrame,
@@ -212,6 +230,8 @@ ServerFrame = Union[
     AgentMemorySharedFileWriteFrame,
     AgentMemorySharedFileDeleteFrame,
     SelfUpdateFrame,
+    EngineCheckFrame,
+    EngineUpdateFrame,
 ]
 
 
@@ -352,6 +372,35 @@ class SelfUpdateResultFrame(BaseModel):
     error: str | None = None
 
 
+class EngineCheckResultFrame(BaseModel):
+    """Daemon reports an engine's current vs latest version (#553).
+
+    Versions are channel-normalized so the cluster can compare them directly.
+    A field is ``None`` when detection or the registry lookup failed.
+    """
+
+    type: Literal["engine_check_result"] = "engine_check_result"
+    engine: str
+    current_version: str | None = None
+    latest_version: str | None = None
+    error: str | None = None
+
+
+class EngineUpdateResultFrame(BaseModel):
+    """Daemon reports the outcome of an ``engine_update`` (#553).
+
+    ``updating`` is sent before install; ``success``/``failed`` after. Unlike
+    the daemon self-update, an engine update does not restart the daemon, so
+    success is reported here directly (the next detect refreshes the stored
+    engine version).
+    """
+
+    type: Literal["engine_update_result"] = "engine_update_result"
+    engine: str
+    status: Literal["updating", "success", "failed"]
+    error: str | None = None
+
+
 MachineFrame = Union[
     RegisterFrame,
     ReportActualStateFrame,
@@ -360,6 +409,8 @@ MachineFrame = Union[
     AgentMemoryUpdateFrame,
     RoomArtifactProducedFrame,
     SelfUpdateResultFrame,
+    EngineCheckResultFrame,
+    EngineUpdateResultFrame,
 ]
 
 
@@ -375,6 +426,8 @@ _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
     "agent_memory_shared_file_write": AgentMemorySharedFileWriteFrame,
     "agent_memory_shared_file_delete": AgentMemorySharedFileDeleteFrame,
     "self_update": SelfUpdateFrame,
+    "engine_check": EngineCheckFrame,
+    "engine_update": EngineUpdateFrame,
 }
 
 
