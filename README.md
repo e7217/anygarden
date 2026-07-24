@@ -38,6 +38,10 @@ Then create a room in the web UI, add an agent (machine + engine + model), and
 machine host (`claude`, `codex`, `gemini`, or the OpenHands SDK) before the daemon
 starts — engines are detected at startup.
 
+Update a machine later from the web UI (**Admin → Machines → Update**) or on the
+host with `anygarden machine update`. The updater auto-detects the install method
+(`uv tool` or `pip`), so the same action works however the daemon was installed.
+
 ### Develop (from a checkout)
 
 ```bash
