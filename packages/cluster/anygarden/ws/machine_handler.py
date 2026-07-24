@@ -13,8 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.machine_token import verify_machine_token_hash
 from anygarden.config import AnygardenSettings
-from anygarden.db.models import Machine, MachineActivityLog, MachineEngine, MachineToken
+from anygarden.db.models import (
+    Machine,
+    MachineActivityLog,
+    MachineEngine,
+    MachineEngineStatus,
+    MachineToken,
+)
 from anygarden.observability.metrics import machines_online
+from anygarden.system.version_service import is_update_available
 
 logger = structlog.get_logger(__name__)
 
@@ -118,6 +125,14 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
             elif frame_type == "self_update_result":
                 # #550 — daemon reported self-update progress/outcome.
                 await _handle_self_update_result(session_factory, machine_id, data)
+
+            elif frame_type == "engine_check_result":
+                # #553 — daemon reported an engine's current vs latest version.
+                await _handle_engine_check_result(session_factory, machine_id, data)
+
+            elif frame_type == "engine_update_result":
+                # #553 — daemon reported engine update progress/outcome.
+                await _handle_engine_update_result(session_factory, machine_id, data)
 
             elif frame_type == "agent_memory_update":
                 # #237 — file → DB sync. Machine observed a change in
@@ -248,6 +263,88 @@ async def _handle_self_update_result(
         elif status == "updating":
             machine.update_status = "updating"
             machine.update_error = None
+        await db.commit()
+
+
+async def _upsert_engine_status(
+    db: AsyncSession, machine_id: str, engine: str
+) -> MachineEngineStatus:
+    """Fetch the (machine_id, engine) status row, creating it if absent.
+
+    Lives in ``machine_engine_status`` (not ``machine_engines``) so it survives
+    the register-time delete+recreate of the detection table (#553).
+    """
+    row = (await db.execute(
+        select(MachineEngineStatus).where(
+            MachineEngineStatus.machine_id == machine_id,
+            MachineEngineStatus.engine == engine,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        row = MachineEngineStatus(machine_id=machine_id, engine=engine)
+        db.add(row)
+    return row
+
+
+async def _handle_engine_check_result(
+    session_factory,
+    machine_id: str,
+    data: dict[str, Any],
+) -> None:
+    """Record an ``engine_check_result``: latest version + availability (#553).
+
+    Versions arrive channel-normalized from the daemon; the comparison reuses
+    the #546 PEP 440 helper. A missing current version yields no availability
+    signal (nothing to compare against).
+    """
+    engine = data.get("engine")
+    if not engine:
+        return
+    current = data.get("current_version")
+    latest = data.get("latest_version")
+    async with session_factory() as db:
+        machine = await db.get(Machine, machine_id)
+        if machine is None:
+            return
+        status = await _upsert_engine_status(db, machine_id, engine)
+        status.latest_version = latest
+        status.latest_checked_at = datetime.now(timezone.utc)
+        status.latest_error = data.get("error")
+        status.update_available = (
+            is_update_available(current, latest) if current else False
+        )
+        await db.commit()
+
+
+async def _handle_engine_update_result(
+    session_factory,
+    machine_id: str,
+    data: dict[str, Any],
+) -> None:
+    """Record an ``engine_update_result``: updating → success/failed (#553).
+
+    On success the availability flag is cleared — the engine is now at latest;
+    the next check will re-derive it.
+    """
+    engine = data.get("engine")
+    result_status = data.get("status")
+    if not engine:
+        return
+    async with session_factory() as db:
+        machine = await db.get(Machine, machine_id)
+        if machine is None:
+            return
+        status = await _upsert_engine_status(db, machine_id, engine)
+        if result_status == "failed":
+            status.update_status = "failed"
+            status.update_error = data.get("error")
+        elif result_status == "success":
+            status.update_status = "success"
+            status.update_error = None
+            status.update_available = False
+        elif result_status == "updating":
+            status.update_status = "updating"
+            status.update_error = None
         await db.commit()
 
 

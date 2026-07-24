@@ -174,6 +174,34 @@ export function useMachines() {
     return updated;
   }, [refreshInBackground]);
 
+  // #553 — trigger an engine-version check on a machine. The daemon replies
+  // asynchronously over WS; callers re-fetch the machine detail to pick up the
+  // recorded result. Returns 409 when the machine is offline.
+  const checkMachineEngine = useCallback(async (machineId: string, engine: string) => {
+    const resp = await apiFetch(
+      `/api/v1/machines/${machineId}/engines/${encodeURIComponent(engine)}/check`,
+      { method: 'POST' },
+    );
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail || `Check failed (${resp.status})`);
+    }
+    return resp.json();
+  }, []);
+
+  // #553 — trigger a server-driven update of an engine CLI on the machine.
+  const updateMachineEngine = useCallback(async (machineId: string, engine: string) => {
+    const resp = await apiFetch(
+      `/api/v1/machines/${machineId}/engines/${encodeURIComponent(engine)}/update`,
+      { method: 'POST' },
+    );
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error(body.detail || `Update failed (${resp.status})`);
+    }
+    return resp.json();
+  }, []);
+
   const deleteMachine = useCallback(async (id: string, force: boolean = false): Promise<{ stopped_agents: string[] }> => {
     const url = force ? `/api/v1/machines/${id}?force=true` : `/api/v1/machines/${id}`;
     const resp = await apiFetch(url, { method: 'DELETE' });
@@ -222,6 +250,8 @@ export function useMachines() {
     registerMachine,
     updateMachine,
     updateMachineDaemon,
+    checkMachineEngine,
+    updateMachineEngine,
     deleteMachine,
     regenerateToken,
     fetchMachines,

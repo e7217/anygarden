@@ -12,7 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
-from anygarden.db.models import Agent, Machine, MachineActivityLog, MachineEngine, MachineToken
+from anygarden.db.models import (
+    Agent,
+    Machine,
+    MachineActivityLog,
+    MachineEngine,
+    MachineEngineStatus,
+    MachineToken,
+)
 from anygarden.dependencies import forbid_guest, get_db
 
 router = APIRouter(prefix="/api/v1/machines", tags=["machines"])
@@ -436,6 +443,12 @@ class MachineAgentOut(BaseModel):
 class MachineEngineOut(BaseModel):
     engine: str
     version: Optional[str] = None
+    # #553 — engine lifecycle, merged from machine_engine_status (all None /
+    # False when the engine has never been checked).
+    latest_version: Optional[str] = None
+    update_available: bool = False
+    update_status: Optional[str] = None
+    latest_checked_at: Optional[datetime] = None
 
 
 @router.get("/{machine_id}/agents", response_model=list[MachineAgentOut])
@@ -498,7 +511,100 @@ async def list_machine_engines(
         select(MachineEngine).where(MachineEngine.machine_id == machine_id)
     )).scalars().all()
 
-    return [MachineEngineOut(engine=r.engine, version=r.version) for r in rows]
+    status_rows = (await db.execute(
+        select(MachineEngineStatus).where(
+            MachineEngineStatus.machine_id == machine_id
+        )
+    )).scalars().all()
+    status_by_engine = {s.engine: s for s in status_rows}
+
+    result = []
+    for r in rows:
+        st = status_by_engine.get(r.engine)
+        result.append(MachineEngineOut(
+            engine=r.engine,
+            version=r.version,
+            latest_version=st.latest_version if st else None,
+            update_available=st.update_available if st else False,
+            update_status=st.update_status if st else None,
+            latest_checked_at=st.latest_checked_at if st else None,
+        ))
+    return result
+
+
+async def _get_or_create_engine_status(
+    db: AsyncSession, machine_id: str, engine: str
+) -> MachineEngineStatus:
+    """Fetch the (machine_id, engine) status row, creating it if absent."""
+    row = (await db.execute(
+        select(MachineEngineStatus).where(
+            MachineEngineStatus.machine_id == machine_id,
+            MachineEngineStatus.engine == engine,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        row = MachineEngineStatus(machine_id=machine_id, engine=engine)
+        db.add(row)
+    return row
+
+
+@router.post("/{machine_id}/engines/{engine}/check", status_code=202)
+async def check_machine_engine(
+    machine_id: str,
+    engine: str,
+    request: Request,
+    # Owner (or admin) only — same policy as the daemon self-update trigger.
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ask the machine to report an engine's current vs latest version (#553).
+
+    Sends an ``engine_check`` frame; the daemon replies asynchronously with an
+    ``engine_check_result`` that the WS handler records. Returns 409 offline.
+    """
+    await _get_owned_machine(db, machine_id, identity)
+    machine_bus = request.app.state.machine_bus
+    sent = await machine_bus.send(
+        machine_id, {"type": "engine_check", "engine": engine}
+    )
+    if not sent:
+        raise HTTPException(status_code=409, detail="Machine is not connected")
+    return {"status": "checking", "engine": engine}
+
+
+@router.post("/{machine_id}/engines/{engine}/update", status_code=202)
+async def update_machine_engine(
+    machine_id: str,
+    engine: str,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger a server-driven update of an engine CLI on the machine (#553).
+
+    Sends an ``engine_update`` frame carrying only the engine key; the daemon
+    resolves it to a package via its own allowlist and runs the channel's
+    install. Records ``update_status="updating"``. Returns 409 offline.
+    """
+    await _get_owned_machine(db, machine_id, identity)
+    machine_bus = request.app.state.machine_bus
+    sent = await machine_bus.send(
+        machine_id, {"type": "engine_update", "engine": engine}
+    )
+    if not sent:
+        raise HTTPException(status_code=409, detail="Machine is not connected")
+
+    status = await _get_or_create_engine_status(db, machine_id, engine)
+    status.update_status = "updating"
+    status.update_error = None
+    status.update_started_at = datetime.now(timezone.utc)
+    db.add(MachineActivityLog(
+        machine_id=machine_id,
+        event_type="engine_update",
+        details={"engine": engine},
+    ))
+    await db.commit()
+    return {"status": "updating", "engine": engine}
 
 
 class MachineActivityOut(BaseModel):
