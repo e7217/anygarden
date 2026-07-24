@@ -34,10 +34,13 @@ PACKAGE_NAME = "anygarden-machine"
 class InstallManifest(BaseModel):
     """Records the self-owned install layout and update method."""
 
-    # v1 only writes "venv-pip" (``python -m venv`` + pip). Kept as a field
-    # so a future "uv-pip" install method extends without a schema change.
+    # ``install.sh``/``bootstrap`` record "venv-pip" (``python -m venv`` + pip).
+    # With no manifest, install_detect resolves the method at runtime
+    # ("uv-tool" / "pip-umbrella", #556); the field lets new install methods
+    # extend without a schema change.
     method: str
-    # Always ``anygarden-machine`` — recorded for transparency/debugging.
+    # The distribution this owned install updates (``anygarden-machine``) —
+    # recorded for transparency/debugging.
     package: str
     # Absolute path to the owned venv's interpreter; the updater runs
     # ``<python> -m pip install -U`` against exactly this environment.
