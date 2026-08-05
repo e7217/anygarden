@@ -73,6 +73,22 @@ export function makeAdapter(engine: string, opts: CliOptions): EngineAdapter {
   }
 }
 
+/** Send a non-empty adapter answer to the message's room/thread boundary. */
+export async function sendAdapterReply(
+  client: ChatClient,
+  msg: MessageOut,
+  reply: string | null,
+): Promise<void> {
+  if (reply && reply.trim().length > 0) {
+    await client.send(
+      msg.room_id,
+      reply,
+      undefined,
+      msg.root_message_id ?? undefined,
+    );
+  }
+}
+
 export async function main(argv: string[]): Promise<number> {
   const cli = buildCli();
   cli.parse(argv, { from: "user" });
@@ -139,9 +155,7 @@ export async function main(argv: string[]): Promise<number> {
     const typingPromise = pingTyping();
     try {
       const reply = await adapter.onMessage(msg);
-      if (reply && reply.trim().length > 0) {
-        await client.send(roomId, reply);
-      }
+      await sendAdapterReply(client, msg, reply);
     } finally {
       typingActive = false;
       try {

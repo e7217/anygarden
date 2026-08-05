@@ -1283,6 +1283,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             ).model_dump_json()
                         )
                         continue
+                # Mention routing authority comes only from the canonical
+                # parser. Always discard caller-supplied/stale values first.
+                metadata.pop("mentions", None)
                 if mentions:
                     metadata["mentions"] = mentions
                 is_thread_reply = frame_in.thread_root_id is not None

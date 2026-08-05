@@ -211,9 +211,14 @@ def _normalize_engine_result(raw: EngineResult) -> tuple[Optional[str], Optional
     return raw, None
 
 
-# #457 — a deferred follow-up: the request_id, its run_engine closure, and
-# the monotonic timestamp it was enqueued at (for TTL skip on drain).
-_QueueItem = Tuple[Optional[str], Callable[[], Awaitable["EngineResult"]], float]
+# #457 — a deferred follow-up: request/thread identity, its run_engine
+# closure, and the monotonic timestamp it was enqueued at (for TTL skip).
+_QueueItem = Tuple[
+    Optional[str],
+    Optional[str],
+    Callable[[], Awaitable["EngineResult"]],
+    float,
+]
 
 
 # User-facing notices. Kept short and tagged so the cluster can render
@@ -247,6 +252,7 @@ class RoomHandlerSupervisor:
         room_id: str,
         request_id: Optional[str],
         run_engine: Callable[[], Awaitable[EngineResult]],
+        thread_root_id: Optional[str] = None,
     ) -> None:
         lock = self._room_locks.setdefault(room_id, asyncio.Lock())
         if lock.locked():
@@ -256,7 +262,9 @@ class RoomHandlerSupervisor:
             # an at-cap queue falls back to the legacy ``rejected`` drop.
             queue = self._queues.setdefault(room_id, deque())
             if len(queue) < _MAX_QUEUE_DEPTH:
-                queue.append((request_id, run_engine, time.monotonic()))
+                queue.append(
+                    (request_id, thread_root_id, run_engine, time.monotonic())
+                )
                 # ``queued`` is a terminal handler_finished result, not a
                 # new lifecycle phase — no user notice (the turn will be
                 # answered for real once it drains).
@@ -280,16 +288,22 @@ class RoomHandlerSupervisor:
             )
             # Symmetric with the timeout/failed paths: notify the user that
             # their message was dropped instead of leaving them in silence.
-            await self._client.send(
+            await self._send_room_message(
                 room_id,
                 _REJECTED_NOTICE,
                 metadata={"request_id": request_id} if request_id else None,
+                thread_root_id=thread_root_id,
             )
             return
         async with lock:
             self._inflight[room_id] = request_id
             try:
-                await self._run(room_id, request_id, run_engine)
+                await self._run(
+                    room_id,
+                    request_id,
+                    run_engine,
+                    thread_root_id=thread_root_id,
+                )
                 # Drain any follow-ups that arrived while this turn ran. The
                 # lock is still held for the whole drain, so a new dispatch
                 # racing in keeps seeing ``lock.locked()`` and enqueues —
@@ -314,7 +328,7 @@ class RoomHandlerSupervisor:
         if queue is None:
             return
         while queue:
-            req_id, run_engine, enqueued_at = queue.popleft()
+            req_id, thread_root_id, run_engine, enqueued_at = queue.popleft()
             if (time.monotonic() - enqueued_at) > _QUEUE_ITEM_TTL_SEC:
                 # Stale — skip rather than answer late. Mirror the rejected
                 # shape: a terminal handler_finished + a user notice.
@@ -325,14 +339,20 @@ class RoomHandlerSupervisor:
                     outcome="rejected",
                     error="queued turn skipped: exceeded TTL",
                 )
-                await self._client.send(
+                await self._send_room_message(
                     room_id,
                     _STALE_NOTICE,
                     metadata={"request_id": req_id} if req_id else None,
+                    thread_root_id=thread_root_id,
                 )
                 continue
             self._inflight[room_id] = req_id
-            await self._run(room_id, req_id, run_engine)
+            await self._run(
+                room_id,
+                req_id,
+                run_engine,
+                thread_root_id=thread_root_id,
+            )
         # Tidy up the empty deque so idle rooms don't accumulate state.
         if not queue:
             self._queues.pop(room_id, None)
@@ -342,6 +362,8 @@ class RoomHandlerSupervisor:
         room_id: str,
         request_id: Optional[str],
         run_engine: Callable[[], Awaitable[EngineResult]],
+        *,
+        thread_root_id: Optional[str] = None,
     ) -> None:
         started = time.monotonic()
         await self._client.sendLifecycle(
@@ -532,17 +554,28 @@ class RoomHandlerSupervisor:
         # were already reclassified to ``failed`` above. ``timeout`` and
         # ``failed`` both notify the user so silence never reads as success.
         if response:
-            await self._client.send(room_id, response, metadata=send_metadata)
+            await self._send_room_message(
+                room_id,
+                response,
+                metadata=send_metadata,
+                thread_root_id=thread_root_id,
+            )
         elif outcome == "timeout":
-            await self._client.send(
-                room_id, _TIMEOUT_NOTICE, metadata=send_metadata
+            await self._send_room_message(
+                room_id,
+                _TIMEOUT_NOTICE,
+                metadata=send_metadata,
+                thread_root_id=thread_root_id,
             )
         elif outcome in ("failed", "retry_exhausted"):
             # #457 — a spent retry surfaces the same failed notice as a
             # one-shot failure; the distinction lives in the outcome label
             # for tracing/metrics, not in the user-facing text.
-            await self._client.send(
-                room_id, _FAILED_NOTICE, metadata=send_metadata
+            await self._send_room_message(
+                room_id,
+                _FAILED_NOTICE,
+                metadata=send_metadata,
+                thread_root_id=thread_root_id,
             )
 
         total = int((time.monotonic() - started) * 1000)
@@ -554,3 +587,19 @@ class RoomHandlerSupervisor:
             duration_ms=total,
             error=error,
         )
+
+    async def _send_room_message(
+        self,
+        room_id: str,
+        content: str,
+        *,
+        metadata: Optional[dict[str, Optional[str]]],
+        thread_root_id: Optional[str],
+    ) -> None:
+        """Send the result/notice back to its triggering thread, if any."""
+        kwargs: dict[str, Any] = {"metadata": metadata}
+        if thread_root_id is not None:
+            # Preserve compatibility with pre-thread client shims for roots by
+            # adding the new keyword only when it carries real information.
+            kwargs["thread_root_id"] = thread_root_id
+        await self._client.send(room_id, content, **kwargs)

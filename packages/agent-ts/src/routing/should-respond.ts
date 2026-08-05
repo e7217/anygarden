@@ -8,12 +8,13 @@
 //
 // Rules (evaluated in order):
 //   1. Own message → false
-//   2. ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or ``room_query``
-//      metadata → true (with #61 gate for the metadata path).
-//   3. Server-parsed explicit mention matching this agent → true.
-//   4. Explicit mentions exist but NOT for us → false.
-//   5. No addressable mentions + human sender → true.
-//   6. Agent sender, no mention → false.
+//   2. Thread reply → true only for a canonical explicit mention.
+//   3. Root-message ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or
+//      ``room_query`` metadata → true (with #61 gate).
+//   4. Server-parsed explicit mention matching this agent → true.
+//   5. Explicit mentions exist but NOT for us → false.
+//   6. No addressable mentions + human sender → true.
+//   7. Agent sender, no mention → false.
 
 import type { MessageOut } from "../protocol/frames.js";
 
@@ -68,24 +69,6 @@ export function shouldRespond(msg: MessageOut, ctx: RoutingContext): boolean {
     return false;
   }
 
-  // 2a. Task-init prefix → always respond.
-  if (content.startsWith("[DELEGATED]") || content.startsWith("[ROOM_QUERY]")) {
-    return true;
-  }
-
-  // 2b. room_query metadata — #61 representative gate.
-  const roomQuery = metadata["room_query"] as Record<string, unknown> | undefined;
-  if (roomQuery) {
-    const repId = roomQuery["representative_agent_id"];
-    if (typeof repId === "string" && ctx.agentId) {
-      return ctx.agentId === repId;
-    }
-    // Legacy/transition path: pre-#61 servers or clients without an
-    // agent_id fall back to the old "always forward" behaviour so the
-    // deploy transition doesn't drop queries entirely.
-    return true;
-  }
-
   const rawMentions = (metadata["mentions"] ?? []) as Mention[];
   // Only user/legacy mentions route to a specific participant. Room
   // mentions drive cross-room queries and are handled above; they
@@ -112,25 +95,54 @@ export function shouldRespond(msg: MessageOut, ctx: RoutingContext): boolean {
     return typeof m.id === "string" && ctx.myParticipantIds.has(m.id);
   };
 
-  let mentionedMe = addressable.some(targetsMe);
+  const isReflectedInContent = (m: UserMention | LegacyMention): boolean => {
+    if (m.type === "user") {
+      return content.includes(`<@user:${m.id}>`);
+    }
+    const pattern = new RegExp(`@${escapeRegex(m.name)}(?![\\w:])`, "i");
+    return pattern.test(content);
+  };
+
+  const isThreadReply = msg.root_message_id != null;
+  const wakeMentions = isThreadReply
+    ? addressable.filter(isReflectedInContent)
+    : addressable;
+  let mentionedMe = wakeMentions.some(targetsMe);
 
   // Backward-compat content scan for names the server's legacy
   // ``@([\w-]+)`` regex can't capture (e.g. "@테스트 에이전트"). The
   // ``(?![\w:])`` lookahead is load-bearing — without it an agent
   // literally named ``user`` would match the ``<@user:<pid>>`` token
   // and re-open the fan-out bug.
-  if (!mentionedMe && ctx.agentName) {
+  if (!isThreadReply && !mentionedMe && ctx.agentName) {
     const pattern = new RegExp(`@${escapeRegex(ctx.agentName)}(?![\\w:])`, "i");
     if (pattern.test(content)) mentionedMe = true;
   }
 
-  // 3. Directly mentioned → respond.
-  if (mentionedMe) return true;
+  // Replies never reach task-init, room-query, or general fallbacks. A
+  // server-derived mention reflected in content is the sole wake authority.
+  if (isThreadReply) return mentionedMe;
 
-  // Phase 2 thread replies are room-wide cache/replay events but mention-only
-  // scheduling surfaces. This check must precede any general human-message
-  // fallback so an unmentioned reply never wakes every agent in the room.
-  if (msg.root_message_id != null) return false;
+  // Root-message task-init prefix → always respond.
+  if (content.startsWith("[DELEGATED]") || content.startsWith("[ROOM_QUERY]")) {
+    return true;
+  }
+
+  // Root-message room_query metadata — #61 representative gate.
+  const roomQuery = metadata["room_query"] as Record<string, unknown> | undefined;
+  if (roomQuery) {
+    const repId = roomQuery["representative_agent_id"];
+    if (typeof repId === "string" && ctx.agentId) {
+      return ctx.agentId === repId;
+    }
+    // Legacy/transition path: pre-#61 servers or clients without an
+    // agent_id fall back to the old "always forward" behaviour so the
+    // deploy transition doesn't drop queries entirely.
+    return true;
+  }
+
+  // Directly mentioned root message → respond.
+  if (mentionedMe) return true;
 
   // 4. Mentions present but not for us → stay out.
   if (addressable.length > 0) return false;

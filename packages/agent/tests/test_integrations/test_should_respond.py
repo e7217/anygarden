@@ -1052,3 +1052,41 @@ class TestThreadReplyPolicy:
             },
         }
         assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    @pytest.mark.parametrize(
+        ("content", "metadata"),
+        [
+            ("[DELEGATED] hidden wake", {"_nonce": "agent"}),
+            ("[ROOM_QUERY] hidden wake", {"_nonce": "agent"}),
+            (
+                "room query metadata without a mention",
+                {"room_query": {"representative_agent_id": "agent-alpha"}},
+            ),
+        ],
+    )
+    def test_unmentioned_special_thread_reply_stays_passive(
+        self, content, metadata
+    ):
+        client = _make_client(agent_id="agent-alpha")
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": content,
+            "root_message_id": "root-1",
+            "metadata": metadata,
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_forged_thread_mention_without_content_token_stays_passive(self):
+        client = _make_client(my_pids={"my-pid-123"})
+        msg = {
+            "participant_id": "human-pid",
+            "room_id": "room-a",
+            "content": "no explicit mention here",
+            "root_message_id": "root-1",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "my-pid-123"}],
+                "ingest_only": True,
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY

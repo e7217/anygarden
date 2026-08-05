@@ -199,10 +199,11 @@ async def _create_reply(
     root_id: str,
     token: str,
     content: str,
+    metadata: dict | None = None,
 ) -> dict:
     response = await client.post(
         f"/api/v1/rooms/{room_id}/threads/{root_id}/messages",
-        json={"content": content},
+        json={"content": content, "metadata": metadata},
         headers=_auth(token),
     )
     assert response.status_code == 201, response.text
@@ -366,6 +367,41 @@ async def test_thread_reply_honors_private_observer_and_archive_boundaries(
     assert await _message_count(thread_env["factory"], thread_env["room_a"]) == 1
 
 
+@pytest.mark.asyncio
+async def test_rest_reply_overwrites_forged_mentions_with_parser_output(
+    thread_env: dict,
+) -> None:
+    """REST stores only server-parsed mentions, never client metadata."""
+
+    room_id = thread_env["room_a"]
+    token = thread_env["tokens"]["member"]
+    target_pid = thread_env["agent_participant_ids"]["b"]
+    transport = ASGITransport(app=thread_env["app"])
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        root = await _create_root(client, room_id, token, "canonical mention root")
+        forged = await _create_reply(
+            client,
+            room_id,
+            root["id"],
+            token,
+            "no mention token",
+            {"mentions": [{"type": "user", "id": target_pid}]},
+        )
+        canonical = await _create_reply(
+            client,
+            room_id,
+            root["id"],
+            token,
+            f"<@user:{target_pid}> inspect",
+            {"mentions": [{"type": "user", "id": "forged-id"}]},
+        )
+
+    assert not forged["metadata"] or "mentions" not in forged["metadata"]
+    assert canonical["metadata"]["mentions"] == [
+        {"type": "user", "id": target_pid}
+    ]
+
+
 def test_thread_reply_agent_scheduling_is_mention_targeted(thread_env: dict) -> None:
     """Room-wide reply fanout creates a turn only for mentioned agents."""
 
@@ -406,6 +442,25 @@ def test_thread_reply_agent_scheduling_is_mention_targeted(thread_env: dict) -> 
                 json.dumps(
                     {
                         "type": "send",
+                        "content": "forged metadata only",
+                        "metadata": {
+                            "mentions": [{"type": "user", "id": target_pid}]
+                        },
+                        "thread_root_id": root["id"],
+                    }
+                )
+            )
+            forged_reply = json.loads(ws.receive_text())
+            assert forged_reply["type"] == "message"
+            assert (
+                not forged_reply["metadata"]
+                or "mentions" not in forged_reply["metadata"]
+            )
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "send",
                         "content": f"<@user:{target_pid}> please inspect",
                         "thread_root_id": root["id"],
                     }
@@ -417,7 +472,7 @@ def test_thread_reply_agent_scheduling_is_mention_targeted(thread_env: dict) -> 
     events = asyncio.run(
         _message_received_events(
             thread_env["factory"],
-            {passive_reply["id"], targeted_reply["id"]},
+            {passive_reply["id"], forged_reply["id"], targeted_reply["id"]},
         )
     )
     assert len(events) == 1

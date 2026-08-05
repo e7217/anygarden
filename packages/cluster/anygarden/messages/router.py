@@ -100,6 +100,9 @@ async def _write_message(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid shared file reference",
         ) from exc
+    # Mentions are server-derived routing data, never client authority. Drop
+    # caller-supplied values even when the canonical parser finds no mentions.
+    metadata.pop("mentions", None)
     mentions = parse_mentions(body.content)
     if identity.kind == "guest":
         mentions = [

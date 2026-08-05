@@ -63,6 +63,7 @@ def test_is_transient_error_classification(detail, expected):
 class _FakeClient:
     lifecycle_events: list[dict] = field(default_factory=list)
     sends: list[tuple[str, str, dict | None]] = field(default_factory=list)
+    thread_root_ids: list[str | None] = field(default_factory=list)
 
     async def sendLifecycle(self, room_id, request_id, event, **details):
         self.lifecycle_events.append({
@@ -72,8 +73,9 @@ class _FakeClient:
             **details,
         })
 
-    async def send(self, room_id, content, metadata=None):
+    async def send(self, room_id, content, metadata=None, thread_root_id=None):
         self.sends.append((room_id, content, metadata))
+        self.thread_root_ids.append(thread_root_id)
 
 
 @pytest.mark.asyncio
@@ -214,6 +216,33 @@ async def test_failed_path_marks_failed_and_notifies_user():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["ok", "timeout", "failed"])
+async def test_thread_root_reaches_normal_and_failure_sends(outcome):
+    client = _FakeClient()
+    timeout = 0.01 if outcome == "timeout" else 5.0
+    sup = RoomHandlerSupervisor(
+        client=client, engine_name="codex", engine_timeout=timeout
+    )
+
+    async def run_engine():
+        if outcome == "timeout":
+            await asyncio.sleep(1)
+        if outcome == "failed":
+            raise EngineError("boom")
+        return "thread answer"
+
+    await sup.dispatch(
+        room_id="r1",
+        request_id="req-thread",
+        run_engine=run_engine,
+        thread_root_id="root-thread",
+    )
+
+    assert len(client.sends) == 1
+    assert client.thread_root_ids == ["root-thread"]
+
+
+@pytest.mark.asyncio
 async def test_engine_error_marks_failed_and_notifies_user():
     # #422 — adapters raise EngineError instead of returning None; the
     # supervisor maps it to failed + notice (same as a bare exception).
@@ -339,6 +368,49 @@ async def test_over_cap_dispatch_notifies_user():
 
     gate.set()
     await first
+
+
+@pytest.mark.asyncio
+async def test_thread_roots_survive_queue_and_over_cap_rejection(monkeypatch):
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_QUEUE_DEPTH", 1)
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex", engine_timeout=5.0)
+    gate = asyncio.Event()
+
+    async def first_engine():
+        await gate.wait()
+        return "first"
+
+    first = asyncio.create_task(
+        sup.dispatch(
+            "r1", "req-first", first_engine, thread_root_id="root-first"
+        )
+    )
+    await asyncio.sleep(0.01)
+    await sup.dispatch(
+        "r1",
+        "req-queued",
+        lambda: asyncio.sleep(0, result="queued answer"),
+        thread_root_id="root-queued",
+    )
+    await sup.dispatch(
+        "r1",
+        "req-rejected",
+        lambda: asyncio.sleep(0, result="never"),
+        thread_root_id="root-rejected",
+    )
+
+    gate.set()
+    await first
+
+    # Rejection notice is immediate; then the active and queued replies run.
+    assert client.thread_root_ids == [
+        "root-rejected",
+        "root-first",
+        "root-queued",
+    ]
 
 
 @pytest.mark.asyncio
