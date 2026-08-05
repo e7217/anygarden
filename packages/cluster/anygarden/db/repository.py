@@ -56,7 +56,6 @@ async def append_message(
             if attempt == _MAX_SEQ_RETRIES - 1:
                 raise
             continue
-        await db.refresh(msg)
         return msg
 
     # Should never reach here due to the raise above, but satisfy type checker

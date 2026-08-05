@@ -117,7 +117,6 @@ async def _write_message(
         thread_root_id=thread_root_id,
     )
     await db.commit()
-    await db.refresh(message)
 
     manager = getattr(request.app.state, "connection_manager", None)
     if manager is not None:
