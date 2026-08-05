@@ -17,6 +17,7 @@ from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
 )
+from anygarden.rooms.authorization import Capability, require_capability
 # #471 — validate ``status`` against the single canonical vocabulary
 # (the same set the MCP ``mark_task_status`` path enforces) so the REST
 # surface can't persist an out-of-band status the rest of the system
@@ -203,6 +204,12 @@ async def create_task(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a task in a room."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.TASK_CREATE,
+    )
     room = (await db.execute(select(Room).where(Room.id == room_id))).scalar_one_or_none()
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
@@ -264,6 +271,12 @@ async def list_tasks(
     ``goal_id`` (#302). The Goal detail's "recent runs" panel uses
     ``?goal_id=<id>`` to scope the room's tasks down to a single
     responsibility — backed by the ``ix_tasks_goal_created`` index."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.TASK_READ,
+    )
     stmt = select(Task).where(Task.room_id == room_id)
     if status:
         stmt = stmt.where(Task.status == status)
@@ -292,6 +305,15 @@ async def update_task(
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    await require_capability(
+        db,
+        room_id=task.room_id,
+        identity=identity,
+        capability=Capability.TASK_UPDATE,
+        task=task,
+        changed_fields=body.model_fields_set,
+    )
 
     previous_assignee = task.assignee_participant_id
     new_assignee_participant: Optional[Participant] = None
@@ -492,6 +514,15 @@ async def delete_task(
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    await require_capability(
+        db,
+        room_id=task.room_id,
+        identity=identity,
+        capability=Capability.TASK_MANAGE,
+        task=task,
+        changed_fields={"delete"},
+    )
 
     # Snapshot the fields the WS frame needs, then drop the row. After
     # the delete the ORM object's attributes are detached, so we resolve

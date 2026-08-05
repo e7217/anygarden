@@ -28,6 +28,7 @@ from anygarden.db.models import (
 from anygarden.agent_availability import render_unavailable_message
 from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
+from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.scheduler.gateway_secrets import openhands_model_id_for_gateway
 
@@ -347,6 +348,17 @@ async def create_agent(
                     status_code=400,
                     detail=f"invalid file path {path!r}: {exc}",
                 )
+
+    # Validate every requested room before writing the Agent, DM, or
+    # Participant rows. This keeps an archived/missing room from producing a
+    # partially-created agent and guarantees the lifecycle is never nudged.
+    for room_id in body.rooms:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.MEMBER_MANAGE,
+        )
 
     agent = Agent(
         name=body.name,
@@ -1002,6 +1014,13 @@ async def add_agent_room(
     db: AsyncSession = Depends(get_db),
 ):
     """Add an agent to a room. Triggers start if agent is idle."""
+    await require_capability(
+        db,
+        room_id=body.room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
+
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if agent is None:
@@ -1073,6 +1092,13 @@ async def remove_agent_room(
     db: AsyncSession = Depends(get_db),
 ):
     """Remove an agent from a room. Stops the agent if no rooms left."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
+
     result = await db.execute(select(Agent).where(Agent.id == agent_id))
     agent = result.scalar_one_or_none()
     if agent is None:

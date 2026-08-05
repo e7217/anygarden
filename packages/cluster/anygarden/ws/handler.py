@@ -8,12 +8,12 @@ from typing import Any
 from uuid import uuid4
 
 import structlog
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from anygarden.auth.dependencies import Identity, get_identity, require_room_member
+from anygarden.auth.dependencies import Identity, get_identity
 from anygarden.config import AnygardenSettings
 from anygarden.db.models import (
     ActivityLog,
@@ -26,6 +26,11 @@ from anygarden.db.models import (
 )
 from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import append_message, replay_since_seq
+from anygarden.rooms.authorization import (
+    Capability,
+    require_capability,
+    room_authorization_session,
+)
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.messages.references import (
     InvalidSharedFileReference,
@@ -253,6 +258,40 @@ _UNRESOLVED_TASK_STATUSES = frozenset({"todo", "in_progress"})
 # per-row mutable counter. count >= MAX → leave the Task as-is for the
 # goals sweeper / a human.
 _MAX_TASK_REDISPATCH = 1
+
+
+def _capability_for_frame(frame: Any) -> Capability:
+    """Map an inbound WS frame to the shared room capability vocabulary."""
+
+    if isinstance(frame, SendFrame):
+        return Capability.MESSAGE_SEND
+    if isinstance(frame, TypingFrame):
+        return Capability.TYPING_SEND
+    if isinstance(frame, LifecycleFrame):
+        return Capability.LIFECYCLE_WRITE
+    # create_room/join_room are not supported on this room endpoint, but still
+    # require current read access before the handler returns the protocol error.
+    return Capability.ROOM_READ
+
+
+async def _require_fresh_frame_access(
+    session_factory: Any,
+    *,
+    room_id: str,
+    identity: Identity,
+    frame: Any,
+):
+    """Re-resolve membership and room state for one inbound WS frame."""
+
+    if isinstance(frame, LifecycleFrame) and frame.room_id != room_id:
+        raise HTTPException(status_code=403, detail="Lifecycle room mismatch")
+    async with room_authorization_session(session_factory) as db:
+        return await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=_capability_for_frame(frame),
+        )
 
 
 async def _redispatch_task_by_request_id(
@@ -867,7 +906,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     participant: Participant | None = None
     auth_error: str | None = None
 
-    async with session_factory() as db:
+    async with room_authorization_session(session_factory) as db:
         try:
             identity = await get_identity(
                 db,
@@ -880,7 +919,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
         if auth_error is None and identity is not None:
             try:
-                participant = await require_room_member(room_id, identity, db)
+                access = await require_capability(
+                    db,
+                    room_id=room_id,
+                    identity=identity,
+                    capability=Capability.ROOM_READ,
+                )
+                participant = access.participant
+                if participant is None:
+                    # Explicit transport exception: global admins may inspect
+                    # rooms over REST, but a WS subscription needs a persisted
+                    # Participant as its sender and delivery identity.
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Room WebSocket requires participant membership",
+                    )
             except Exception as exc:
                 logger.warning("ws.not_member", error=str(exc), identity_kind=identity.kind, identity_id=identity.id, room_id=room_id)
                 auth_error = "Not a room member"
@@ -1128,6 +1181,36 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     ErrorOut(detail=f"Bad frame: {exc}").model_dump_json()
                 )
                 continue
+
+            # Membership and room state are deliberately not cached at the WS
+            # handshake. Removal, role downgrade, or archive must take effect
+            # on the next frame without waiting for a reconnect.
+            assert identity is not None
+            try:
+                fresh_access = await _require_fresh_frame_access(
+                    session_factory,
+                    room_id=room_id,
+                    identity=identity,
+                    frame=frame_in,
+                )
+                if (
+                    fresh_access.participant is None
+                    or fresh_access.participant.id != participant.id
+                ):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Room membership changed; reconnect required",
+                    )
+            except HTTPException as exc:
+                logger.info(
+                    "ws.authorization_revoked",
+                    room_id=room_id,
+                    participant_id=participant.id,
+                    capability=_capability_for_frame(frame_in).value,
+                    detail=str(exc.detail),
+                )
+                await websocket.close(code=4003, reason=str(exc.detail))
+                return
 
             if isinstance(frame_in, SendFrame):
                 is_guest = identity is not None and identity.kind == "guest"

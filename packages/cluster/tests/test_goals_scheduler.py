@@ -123,3 +123,44 @@ async def test_tick_passes_manager_through_to_inject(engine):
     assert any(
         room_id == room.id for room_id, _ in fake.calls
     ), f"expected a room.id={room.id} broadcast; got {fake.calls!r}"
+
+
+@pytest.mark.asyncio
+async def test_tick_pauses_goal_for_archived_room_without_task_or_wake(engine):
+    factory = build_session_factory(engine)
+    async with factory() as db:
+        user = User(email="archived-goal@x", password_hash="x", is_admin=True)
+        agent = Agent(name="archived-goal-bot", engine="codex")
+        room = Room(name="archived-goal-room", archived_at=_utcnow())
+        db.add_all([user, agent, room])
+        await db.flush()
+        db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+        goal = Goal(
+            assignee_agent_id=agent.id,
+            owner_id=user.id,
+            report_room_id=room.id,
+            title="must pause",
+            spec="must not run",
+            status="active",
+            trigger_type="interval",
+            trigger_config={"interval_seconds": 60},
+            materialize="full",
+            next_run_at=_utcnow() - timedelta(seconds=5),
+        )
+        db.add(goal)
+        await db.commit()
+        goal_id = goal.id
+
+    fake = _FakeManager()
+    scheduler = GoalScheduler(factory, manager=fake)  # type: ignore[arg-type]
+    await scheduler._tick()
+
+    async with factory() as db:
+        goal = await db.get(Goal, goal_id)
+        tasks = (
+            await db.execute(select(Task).where(Task.goal_id == goal_id))
+        ).scalars().all()
+        assert goal is not None
+        assert goal.status == "paused"
+        assert tasks == []
+    assert fake.calls == []

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -99,6 +101,8 @@ async def agents_env():
                 "regular": regular,
                 "machine": machine,
                 "bus": bus,
+                "app": app,
+                "lifecycle": lifecycle,
             }
 
     await engine.dispose()
@@ -382,6 +386,116 @@ class TestAgentsAPI:
             headers={"Authorization": f"Bearer {regular_token}"},
         )
         assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_archived_room_blocks_agent_add_remove_and_lifecycle_wake(
+        self, agents_env
+    ) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+
+        created = await client.post(
+            "/api/v1/agents",
+            json={"engine": "echo", "name": "archive-guarded"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 201
+        agent_id = created.json()["id"]
+
+        async with factory() as db:
+            room = Room(
+                name="archived-agent-room",
+                archived_at=datetime.now(timezone.utc),
+            )
+            db.add(room)
+            await db.commit()
+            room_id = room.id
+
+        wake = AsyncMock()
+        agents_env["lifecycle"].on_room_added = wake
+        added = await client.post(
+            f"/api/v1/agents/{agent_id}/rooms",
+            json={"room_id": room_id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert added.status_code == 409
+        wake.assert_not_awaited()
+
+        async with factory() as db:
+            participant = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.agent_id == agent_id,
+                        Participant.room_id == room_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            assert participant is None
+            db.add(
+                Participant(
+                    agent_id=agent_id,
+                    room_id=room_id,
+                    role="member",
+                )
+            )
+            await db.commit()
+
+        removed = await client.delete(
+            f"/api/v1/agents/{agent_id}/rooms/{room_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert removed.status_code == 409
+        async with factory() as db:
+            participant = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.agent_id == agent_id,
+                        Participant.room_id == room_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            assert participant is not None
+
+    @pytest.mark.asyncio
+    async def test_create_agent_preflights_archived_rooms_before_side_effects(
+        self, agents_env
+    ) -> None:
+        client = agents_env["client"]
+        token = agents_env["token"]
+        factory = agents_env["factory"]
+        async with factory() as db:
+            room = Room(
+                name="archived-create-room",
+                archived_at=datetime.now(timezone.utc),
+            )
+            db.add(room)
+            await db.commit()
+            room_id = room.id
+
+        request_start = AsyncMock()
+        agents_env["lifecycle"].request_start = request_start
+        response = await client.post(
+            "/api/v1/agents",
+            json={
+                "engine": "echo",
+                "name": "must-not-exist",
+                "rooms": [room_id],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 409
+        request_start.assert_not_awaited()
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.name == "must-not-exist"))
+            ).scalar_one_or_none()
+            dm = (
+                await db.execute(select(Room).where(Room.name == "DM: must-not-exist"))
+            ).scalar_one_or_none()
+            assert agent is None
+            assert dm is None
 
     @pytest.mark.asyncio
     async def test_remove_agent_from_room_with_messages(self, agents_env) -> None:

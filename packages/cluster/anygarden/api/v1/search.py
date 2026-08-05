@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.dependencies import get_current_identity, get_db
+from anygarden.rooms.authorization import accessible_room_ids
 
 
 def _fts_created_at_to_iso(value: object) -> str:
@@ -60,6 +61,12 @@ async def search_messages(
     the underlying ``OperationalError`` is mapped to a 503 so a missing
     index degrades gracefully instead of leaking a 500 (#473).
     """
+    allowed_room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="search.messages",
+    )
+
     # FTS5 query — use highlight() for snippets.
     # If project_id is given, join through rooms to filter.
     if project_id:
@@ -74,11 +81,17 @@ async def search_messages(
             FROM messages_fts fts
             JOIN rooms r ON r.id = fts.room_id
             WHERE messages_fts MATCH :query
+              AND fts.room_id IN :room_ids
               AND r.project_id = :project_id
             ORDER BY rank
             LIMIT :limit
         """)
-        params = {"query": q, "project_id": project_id, "limit": limit}
+        params = {
+            "query": q,
+            "room_ids": list(allowed_room_ids),
+            "project_id": project_id,
+            "limit": limit,
+        }
     else:
         sql = text("""
             SELECT
@@ -90,10 +103,17 @@ async def search_messages(
                 highlight(messages_fts, 0, '<mark>', '</mark>') as snippet
             FROM messages_fts
             WHERE messages_fts MATCH :query
+              AND room_id IN :room_ids
             ORDER BY rank
             LIMIT :limit
         """)
-        params = {"query": q, "limit": limit}
+        params = {
+            "query": q,
+            "room_ids": list(allowed_room_ids),
+            "limit": limit,
+        }
+
+    sql = sql.bindparams(bindparam("room_ids", expanding=True))
 
     try:
         rows = (await db.execute(sql, params)).all()

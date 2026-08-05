@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import case, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.jwt import (
@@ -161,49 +161,24 @@ async def require_room_member(
     room_id: str,
     identity: Identity,
     db: AsyncSession,
-) -> Participant:
-    """Return the :class:`Participant` row or raise 403.
+) -> Participant | None:
+    """Compatibility wrapper for room-read authorization.
 
-    For guests we impose two checks simultaneously: the caller must
-    hold a Participant row in *room_id* (same as registered users)
-    AND the JWT's ``room_id`` claim must match. Without the claim
-    check, a guest whose Participant happens to exist in more than
-    one room (via a future code path or a hand-edited DB) could
-    authenticate outside its intended room.
+    New code should request an explicit capability from
+    :mod:`anygarden.rooms.authorization`. This wrapper remains for the
+    message-history and legacy WS handshake call sites while they transition
+    to the shared contract. A global admin can read without a Participant,
+    hence the optional return type.
     """
-    stmt = select(Participant).where(Participant.room_id == room_id)
-    if identity.kind in ("user", "guest"):
-        if (
-            identity.kind == "guest"
-            and isinstance(identity.claims, GuestClaims)
-            and identity.claims.room_id != room_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Guest token bound to a different room",
-            )
-        stmt = stmt.where(Participant.user_id == identity.id)
-    else:
-        stmt = stmt.where(Participant.agent_id == identity.id)
+    # Local import avoids a module cycle: rooms.authorization imports the
+    # Identity definition above, while authentication itself must stay below
+    # the room policy layer.
+    from anygarden.rooms.authorization import Capability, require_capability
 
-    # A (room, identity) pair should have exactly one Participant row, but
-    # the table historically had no uniqueness guard (added in migration
-    # 052), so a legacy DB can still hold duplicates. Tolerate them instead
-    # of ``scalar_one_or_none()`` which raises ``MultipleResultsFound`` —
-    # that 500s the REST paths (messages/read) and is swallowed as a false
-    # 4003 on the WS handshake, bricking the whole room (#519). Order
-    # admin/owner first so the returned row preserves the caller's highest
-    # privilege (``role`` feeds downstream authz), then take a single row.
-    stmt = stmt.order_by(
-        case((Participant.role.in_(("admin", "owner")), 0), else_=1),
-        Participant.joined_at.asc(),
-        Participant.id.asc(),
-    ).limit(1)
-    result = await db.execute(stmt)
-    participant = result.scalars().first()
-    if participant is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a member of this room",
-        )
-    return participant
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
+    return access.participant

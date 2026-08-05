@@ -206,6 +206,42 @@ class TestAcceptGuestInvite:
             assert updated_invite.use_count == 1
 
     @pytest.mark.asyncio
+    async def test_archived_room_invite_rejected_before_guest_creation(
+        self, env
+    ) -> None:
+        async with env["session_factory"]() as db:
+            room = await db.get(Room, env["room"].id)
+            assert room is not None
+            room.archived_at = datetime.now(timezone.utc)
+            await db.commit()
+
+        transport = ASGITransport(app=env["app"])
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post(
+                "/api/v1/auth/guest",
+                json={"token": env["invite_token"], "display_name": "Blocked"},
+            )
+        assert response.status_code == 409
+
+        async with env["session_factory"]() as db:
+            guests = (
+                await db.execute(select(User).where(User.is_anonymous.is_(True)))
+            ).scalars().all()
+            invite = await db.get(RoomInviteLink, env["invite"].id)
+            assert guests == []
+            assert invite is not None
+            assert invite.use_count == 0
+            participants = (
+                await db.execute(
+                    select(Participant).where(
+                        Participant.room_id == env["room"].id,
+                        Participant.user_id != env["owner"].id,
+                    )
+                )
+            ).scalars().all()
+            assert participants == []
+
+    @pytest.mark.asyncio
     async def test_bad_token_401(self, env) -> None:
         transport = ASGITransport(app=env["app"])
         async with AsyncClient(transport=transport, base_url="http://test") as client:

@@ -22,10 +22,13 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Participant, Room, Task, TaskBlocker
+from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.skills_library.service import (
     SkillLibraryService,
     SkillNameConflictError,
@@ -439,21 +442,17 @@ async def mark_task_status(
     ).scalar_one_or_none()
     if task is None:
         return _error_result(f"task not found: {task_id}")
-
-    if not task.assignee_participant_id:
-        return _error_result(
-            "forbidden: task has no assignee — it cannot be marked by anyone"
+    try:
+        await require_capability(
+            db,
+            room_id=task.room_id,
+            identity=Identity(kind="agent", id=agent_id),
+            capability=Capability.TASK_UPDATE,
+            task=task,
+            changed_fields={"status"},
         )
-
-    assignee = (
-        await db.execute(
-            select(Participant).where(Participant.id == task.assignee_participant_id)
-        )
-    ).scalar_one_or_none()
-    if assignee is None or assignee.agent_id != agent_id:
-        return _error_result(
-            "forbidden: only the assignee agent may mark this task"
-        )
+    except HTTPException as exc:
+        return _error_result(f"forbidden: {exc.detail}")
 
     now = datetime.now(timezone.utc)
     task.status = status
@@ -540,11 +539,16 @@ async def create_task(
         )
 
     # ── Authorization ────────────────────────────────────────────
-    room = (
-        await db.execute(select(Room).where(Room.id == room_id))
-    ).scalar_one_or_none()
-    if room is None:
-        return _error_result(f"room not found: {room_id}")
+    try:
+        access = await require_capability(
+            db,
+            room_id=room_id,
+            identity=Identity(kind="agent", id=agent_id),
+            capability=Capability.TASK_CREATE,
+        )
+    except HTTPException as exc:
+        return _error_result(f"forbidden: {exc.detail}")
+    room = access.room
     if room.speaker_strategy != "orchestrator":
         return _error_result(
             "forbidden: room speaker strategy is not 'orchestrator'; "

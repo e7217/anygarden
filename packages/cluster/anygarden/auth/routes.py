@@ -13,9 +13,10 @@ from anygarden.auth.dependencies import Identity
 from anygarden.auth.invite_token import verify_invite_token
 from anygarden.auth.jwt import create_guest_token, create_user_token
 from anygarden.auth.password import hash_password, verify_password
-from anygarden.db.models import Participant, RoomInviteLink, User
+from anygarden.db.models import Participant, Room, RoomInviteLink, User
 from anygarden.dependencies import forbid_guest, get_db
 from anygarden.observability.metrics import invites_used_total
+from anygarden.rooms.authorization import require_active_room
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -274,6 +275,16 @@ async def accept_guest_invite(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invite has no uses remaining",
         )
+
+    # An invite may outlive the room's active period. Gate current room state
+    # before creating either the anonymous User or its Participant row.
+    room = await db.get(Room, invite.room_id)
+    if room is None:  # defensive: the FK normally cascades the invite
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired invite",
+        )
+    require_active_room(room)
 
     guest = User(
         email=None,

@@ -61,6 +61,9 @@ class Project(Base):
 
 class Room(Base):
     __tablename__ = "rooms"
+    __table_args__ = (
+        Index("ix_rooms_visibility_archived", "visibility", "archived_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     # #179 — nullable so agent DM rooms aren't tied to any project's
@@ -151,6 +154,28 @@ class Room(Base):
     # by admins when human-assignment workflows are wanted.
     allow_human_assignment: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
+    # Phase 1 room authorization — public discovery/join is deliberately
+    # outside the MVP, so every existing and newly-created room is private.
+    # Keeping the field explicit lets a later public-room design migrate the
+    # policy without inferring visibility from participant rows.
+    visibility: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="private",
+        server_default=sa_text("'private'"),
+    )
+    # Archive is a reversible room state, not deletion. Existing members may
+    # continue to read history while all write capabilities are denied until
+    # an owner/global admin explicitly unarchives the room.
+    archived_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    archived_by: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
@@ -654,6 +679,10 @@ class Participant(Base):
             "pinned",
             "sort_order",
         ),
+        # Authorization resolves a caller's role on every REST request and
+        # every inbound WS frame. Pairing room_id with role keeps role-scoped
+        # admin/observer scans cheap as rooms grow.
+        Index("ix_participants_room_role", "room_id", "role"),
         # A user (or agent) must appear at most once per room. Without
         # this guard duplicate rows crept in via non-idempotent add
         # paths, and ``require_room_member``'s single-row fetch then
@@ -679,6 +708,45 @@ class Participant(Base):
             postgresql_where=sa_text("agent_id IS NOT NULL"),
         ),
     )
+
+
+class RoomAuthorizationAudit(Base):
+    """Append-only record of a global-admin room authorization bypass.
+
+    Actor and room identifiers deliberately have no foreign keys: deleting a
+    user or room must not erase which operator crossed which authorization
+    boundary. ``room_id`` is null for collection/search scopes.
+    """
+
+    __tablename__ = "room_authorization_audits"
+    __table_args__ = (
+        Index(
+            "ix_room_authorization_audits_actor_at",
+            "actor_user_id",
+            "created_at",
+        ),
+        Index(
+            "ix_room_authorization_audits_room_at",
+            "room_id",
+            "created_at",
+        ),
+        Index(
+            "ix_room_authorization_audits_scope_at",
+            "scope",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    actor_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    room_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class Message(Base):

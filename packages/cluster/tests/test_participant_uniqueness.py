@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -99,24 +101,70 @@ class TestMigration052:
             factory = build_session_factory(engine)
             try:
                 async with factory() as db:
-                    project = Project(name="P")
-                    db.add(project)
-                    await db.flush()
-                    room = Room(project_id=project.id, name="R")
-                    user = User(email="dup@test.com", password_hash="x")
-                    db.add_all([room, user])
-                    await db.flush()
+                    # Seed through the 051 schema directly. The current ORM
+                    # includes columns introduced after 051 (notably the room
+                    # authorization fields in 057), so using ORM INSERTs here
+                    # would make this historical migration test invalid.
+                    now = datetime.now(UTC).isoformat()
+                    project_id = str(uuid4())
+                    room_id = str(uuid4())
+                    user_id = str(uuid4())
+                    await db.execute(
+                        text(
+                            "INSERT INTO projects (id, name, created_at) "
+                            "VALUES (:id, 'P', :created_at)"
+                        ),
+                        {"id": project_id, "created_at": now},
+                    )
+                    await db.execute(
+                        text(
+                            "INSERT INTO rooms "
+                            "(id, project_id, name, created_at) "
+                            "VALUES (:id, :project_id, 'R', :created_at)"
+                        ),
+                        {
+                            "id": room_id,
+                            "project_id": project_id,
+                            "created_at": now,
+                        },
+                    )
+                    await db.execute(
+                        text(
+                            "INSERT INTO users "
+                            "(id, email, password_hash, created_at) "
+                            "VALUES (:id, 'dup@test.com', 'x', :created_at)"
+                        ),
+                        {"id": user_id, "created_at": now},
+                    )
                     # Member row joined *after* the admin row; dedupe must
                     # keep the admin row regardless of join order.
-                    db.add(
-                        Participant(room_id=room.id, user_id=user.id, role="admin")
+                    await db.execute(
+                        text(
+                            "INSERT INTO participants "
+                            "(id, room_id, user_id, role, joined_at) "
+                            "VALUES (:id, :room_id, :user_id, 'admin', :joined_at)"
+                        ),
+                        {
+                            "id": str(uuid4()),
+                            "room_id": room_id,
+                            "user_id": user_id,
+                            "joined_at": now,
+                        },
                     )
-                    await db.flush()
-                    db.add(
-                        Participant(room_id=room.id, user_id=user.id, role="member")
+                    await db.execute(
+                        text(
+                            "INSERT INTO participants "
+                            "(id, room_id, user_id, role, joined_at) "
+                            "VALUES (:id, :room_id, :user_id, 'member', :joined_at)"
+                        ),
+                        {
+                            "id": str(uuid4()),
+                            "room_id": room_id,
+                            "user_id": user_id,
+                            "joined_at": now,
+                        },
                     )
                     await db.commit()
-                    room_id, user_id = room.id, user.id
             finally:
                 await engine.dispose()
 

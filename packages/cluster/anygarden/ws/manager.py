@@ -181,6 +181,37 @@ class ConnectionManager:
                 last_seen_at=now,
             )
 
+    async def revoke_room(
+        self,
+        room_id: str,
+        *,
+        code: int = 4003,
+        reason: str = "Room access revoked",
+    ) -> int:
+        """Close every current subscription in *room_id*.
+
+        Used when a room is archived. New read-only connections may still be
+        established afterwards, but sockets that were accepted while the room
+        was active must not retain a stale assumption that writes are allowed.
+        The per-frame authorization gate remains the backstop for races and
+        multi-worker deployments.
+        """
+
+        async with self._lock:
+            participant_ids = [
+                sub.participant_id for sub in self._rooms.get(room_id, [])
+            ]
+            sockets = [sub.ws for sub in self._rooms.get(room_id, [])]
+
+        for ws in sockets:
+            try:
+                await ws.close(code=code, reason=reason)
+            except Exception:  # noqa: BLE001 — best-effort socket revocation
+                pass
+        for participant_id in participant_ids:
+            await self.unsubscribe(participant_id)
+        return len(participant_ids)
+
     async def broadcast(
         self,
         room_id: str,

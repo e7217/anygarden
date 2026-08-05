@@ -342,6 +342,47 @@ class TestDelete:
         )
         assert resp.status_code == 404
 
+    async def test_cross_room_file_id_does_not_delete_row_or_disk(
+        self, client: AsyncClient, shared_files_env
+    ) -> None:
+        env = shared_files_env
+        async with env["session_factory"]() as db:
+            other_room = Room(
+                project_id=env["room"].project_id,
+                name="other-room",
+            )
+            db.add(other_room)
+            await db.flush()
+            db.add(
+                Participant(
+                    room_id=other_room.id,
+                    user_id=env["owner"].id,
+                    role="admin",
+                )
+            )
+            await db.commit()
+            other_room_id = other_room.id
+
+        upload = await client.post(
+            f"/api/v1/rooms/{other_room_id}/files",
+            headers=_auth_headers(env["owner_token"]),
+            files={"upload": ("other.md", b"preserve me", "text/markdown")},
+        )
+        assert upload.status_code == 201, upload.text
+        file_id = upload.json()["id"]
+        on_disk = env["config"].room_files_dir / other_room_id / file_id
+        assert on_disk.read_bytes() == b"preserve me"
+
+        response = await client.delete(
+            f"/api/v1/rooms/{env['room'].id}/files/{file_id}",
+            headers=_auth_headers(env["owner_token"]),
+        )
+        assert response.status_code == 404
+
+        async with env["session_factory"]() as db:
+            assert await db.get(RoomSharedFile, file_id) is not None
+        assert on_disk.read_bytes() == b"preserve me"
+
     async def test_outsider_delete_forbidden(
         self, client: AsyncClient, shared_files_env
     ) -> None:
