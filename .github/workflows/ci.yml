@@ -16,14 +16,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up CPython 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Show Python version
+        run: python --version
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
+          version: "0.12.1"
           enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Check lockfile
+        run: uv lock --check
 
       - name: Sync workspace
-        run: uv sync --all-packages --all-extras
+        run: uv sync --frozen --all-packages --all-extras
 
       - name: Test machine
         working-directory: packages/machine
@@ -43,14 +57,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up CPython 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Show Python version
+        run: python --version
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:
+          version: "0.12.1"
           enable-cache: true
-          cache-dependency-glob: "**/pyproject.toml"
+          cache-dependency-glob: |
+            uv.lock
+            **/pyproject.toml
+
+      - name: Check lockfile
+        run: uv lock --check
 
       - name: Sync workspace
-        run: uv sync --all-packages --all-extras
+        run: uv sync --frozen --all-packages --all-extras
 
       # Windows scope is intentionally narrow: only the test files this
       # PR introduces (safefs Windows backend + cross-platform
