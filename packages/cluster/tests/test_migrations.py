@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "056"
+                assert version == "057"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -77,6 +77,27 @@ class TestMigrations:
                     for row in conn.execute(text("PRAGMA table_info(participants)"))
                 }
                 assert participant_columns["last_read_message_seq"].upper() == "BIGINT"
+
+                room_columns = {
+                    row[1]: row
+                    for row in conn.execute(text("PRAGMA table_info(rooms)"))
+                }
+                assert room_columns["visibility"][3] == 1  # NOT NULL
+                assert room_columns["visibility"][4].strip("'") == "private"
+                assert "archived_at" in room_columns
+                assert "archived_by" in room_columns
+
+                indexes = {
+                    row[0]
+                    for row in conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type='index'"
+                        )
+                    )
+                }
+                assert "ix_rooms_visibility_archived" in indexes
+                assert "ix_participants_room_role" in indexes
             engine.dispose()
         finally:
             try:
@@ -405,9 +426,9 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                # Head is now 049 (#493); the cost_usd column added by 047
+                # Head is now 057; the cost_usd column added by 047
                 # is still present after upgrading through to head.
-                assert version == "056"
+                assert version == "057"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -467,7 +488,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "056"
+                assert version == "057"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -514,7 +535,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "056"
+                assert version == "057"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -595,7 +616,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "056"
+                assert version == "057"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -635,7 +656,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "056"
+                assert version == "057"
             sync_engine.dispose()
         finally:
             try:
@@ -669,7 +690,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "056"
+            assert head == "057"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -771,7 +792,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "056"
+                assert version == "057"
             sync_engine.dispose()
         finally:
             try:

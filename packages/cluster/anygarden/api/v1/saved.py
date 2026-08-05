@@ -12,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Message, Participant, SavedMessage
 from anygarden.dependencies import forbid_guest, get_db
+from anygarden.rooms.authorization import (
+    Capability,
+    accessible_room_ids,
+    require_capability,
+)
 
 router = APIRouter(prefix="/api/v1/saved", tags=["saved"])
 
@@ -46,6 +51,12 @@ async def save_message(
     msg = (await db.execute(select(Message).where(Message.id == body.message_id))).scalar_one_or_none()
     if msg is None:
         raise HTTPException(status_code=404, detail="Message not found")
+    await require_capability(
+        db,
+        room_id=msg.room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
 
     existing = (await db.execute(
         select(SavedMessage).where(
@@ -96,10 +107,17 @@ async def list_saved_messages(
     if identity.kind != "user":
         raise HTTPException(status_code=403, detail="Only users can list saved messages")
 
+    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    if not allowed_room_ids:
+        return []
+
     stmt = (
         select(SavedMessage, Message)
         .join(Message, Message.id == SavedMessage.message_id)
-        .where(SavedMessage.user_id == identity.id)
+        .where(
+            SavedMessage.user_id == identity.id,
+            Message.room_id.in_(allowed_room_ids),
+        )
         .order_by(SavedMessage.saved_at.desc())
     )
     rows = (await db.execute(stmt)).all()

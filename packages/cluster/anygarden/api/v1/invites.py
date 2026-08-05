@@ -36,6 +36,7 @@ from anygarden.auth.invite_token import generate_invite_token, hash_invite_token
 from anygarden.db.models import Participant, Room, RoomInviteLink
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.observability.metrics import invites_created_total
+from anygarden.rooms.authorization import Capability, require_capability
 
 router = APIRouter(tags=["invites"])
 
@@ -133,36 +134,13 @@ async def _require_room_admin_or_owner(
     Global admins pass without a Participant row (return ``None``);
     room-level admins/owners pass with their matching row.
     """
-    # Block guests before touching the DB — defence in depth. The
-    # guest identity kind lands in PR C, but writing the guard here
-    # means merging PR C doesn't re-open this endpoint.
-    if identity.kind == "guest":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-
-    if (
-        identity.kind == "user"
-        and identity.claims is not None
-        and identity.claims.is_admin
-    ):
-        return None
-
-    stmt = select(Participant).where(Participant.room_id == room_id)
-    if identity.kind == "user":
-        stmt = stmt.where(Participant.user_id == identity.id)
-    elif identity.kind == "agent":
-        # Agents are room members but never room administrators for
-        # this feature — explicitly rejected below.
-        stmt = stmt.where(Participant.agent_id == identity.id)
-    else:  # pragma: no cover — should not reach here
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
-
-    part = (await db.execute(stmt)).scalar_one_or_none()
-    if part is None or part.role not in ("admin", "owner"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Room admin or owner required",
-        )
-    return part
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.INVITE_MANAGE,
+    )
+    return access.participant
 
 
 def _active_invite_predicate(now: datetime):

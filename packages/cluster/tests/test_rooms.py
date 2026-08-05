@@ -75,6 +75,15 @@ async def room_env(config: AnygardenSettings):
 # -- Room CRUD Tests ----------------------------------------------------------
 
 
+async def _set_participant_role(app, participant_id: str, role: str) -> None:
+    """Set a fixture participant role for role-specific authorization tests."""
+    async with app.state.session_factory() as db:
+        participant = await db.get(Participant, participant_id)
+        assert participant is not None
+        participant.role = role
+        await db.commit()
+
+
 class TestRoomCRUD:
     @pytest.mark.asyncio
     async def test_create_room(self, room_env) -> None:
@@ -169,6 +178,12 @@ class TestRoomCRUD:
             async with sf() as db:
                 dm = RoomModel(project_id=project.id, name="DM: test-bot", is_dm=True)
                 db.add(dm)
+                await db.flush()
+                db.add(Participant(
+                    room_id=dm.id,
+                    user_id=room_env["user"].id,
+                    role="member",
+                ))
                 await db.commit()
 
             # is_dm=false should NOT include the DM
@@ -611,7 +626,67 @@ class TestRoomCRUD:
                 f"/api/v1/rooms/{room_id}",
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 404
+            # 403-before-404 keeps room existence hidden once membership is
+            # gone, including immediately after deletion.
+            assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_archive_is_read_only_until_owner_unarchives(self, room_env) -> None:
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            archived = await client.post(
+                f"/api/v1/rooms/{room.id}/archive", headers=headers
+            )
+            assert archived.status_code == 200
+            assert archived.json()["archived_at"] is not None
+            assert archived.json()["archived_by"] == room_env["user"].id
+
+            read = await client.get(f"/api/v1/rooms/{room.id}", headers=headers)
+            assert read.status_code == 200
+
+            write = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"name": "blocked"},
+                headers=headers,
+            )
+            assert write.status_code == 409
+
+            restored = await client.post(
+                f"/api/v1/rooms/{room.id}/unarchive", headers=headers
+            )
+            assert restored.status_code == 200
+            assert restored.json()["archived_at"] is None
+
+            write = await client.patch(
+                f"/api/v1/rooms/{room.id}",
+                json={"name": "restored"},
+                headers=headers,
+            )
+            assert write.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_room_admin_can_archive_but_not_unarchive(self, room_env) -> None:
+        app = room_env["app"]
+        room = room_env["room"]
+        token = room_env["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        await _set_participant_role(app, room_env["participant"].id, "admin")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            archived = await client.post(
+                f"/api/v1/rooms/{room.id}/archive", headers=headers
+            )
+            assert archived.status_code == 200
+            restored = await client.post(
+                f"/api/v1/rooms/{room.id}/unarchive", headers=headers
+            )
+            assert restored.status_code == 403
 
     @pytest.mark.asyncio
     async def test_delete_room_member_forbidden(self, room_env) -> None:
@@ -1151,6 +1226,9 @@ class TestRoomSpeakerStrategy:
         ``speaker_strategy`` — matches the DESIGN.md admin-only
         contract for dispatch-mode changes."""
         app, room, token = room_env["app"], room_env["room"], room_env["token"]
+        await _set_participant_role(
+            app, room_env["participant"].id, "member"
+        )
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.patch(
@@ -1164,6 +1242,9 @@ class TestRoomSpeakerStrategy:
     async def test_non_admin_cannot_change_orchestrator(self, room_env) -> None:
         """Same gate applies to ``orchestrator_agent_id``."""
         app, room, token = room_env["app"], room_env["room"], room_env["token"]
+        await _set_participant_role(
+            app, room_env["participant"].id, "member"
+        )
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.patch(
@@ -1174,10 +1255,12 @@ class TestRoomSpeakerStrategy:
             assert resp.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_non_admin_can_still_rename(self, room_env) -> None:
-        """Regression: the tighter admin gate only applies to the new
-        fields. Non-admin members keep the existing rename capability."""
+    async def test_non_admin_cannot_rename(self, room_env) -> None:
+        """Room metadata is a settings capability, not a member write."""
         app, room, token = room_env["app"], room_env["room"], room_env["token"]
+        await _set_participant_role(
+            app, room_env["participant"].id, "member"
+        )
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.patch(
@@ -1185,8 +1268,7 @@ class TestRoomSpeakerStrategy:
                 json={"name": "renamed-by-member"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 200
-            assert resp.json()["name"] == "renamed-by-member"
+            assert resp.status_code == 403
 
     @pytest.mark.asyncio
     async def test_patch_broadcasts_room_settings_changed(self, rep_env) -> None:
@@ -1414,6 +1496,9 @@ class TestRoomContextWindow:
         app = room_env["app"]
         room = room_env["room"]
         token = room_env["token"]
+        await _set_participant_role(
+            app, room_env["participant"].id, "member"
+        )
 
         # Snapshot the current stored flag so we can assert invariance
         # across the failed PATCH.
@@ -1440,13 +1525,14 @@ class TestRoomContextWindow:
             assert after.context_window_enabled == before_flag
 
     @pytest.mark.asyncio
-    async def test_non_admin_rename_without_flag_succeeds(self, room_env) -> None:
-        """Regression guard for #225 — the admin gate must only fire
-        when an admin-only field is present in the payload. A pure
-        rename by a non-admin member still returns 200."""
+    async def test_non_admin_rename_without_flag_is_forbidden(self, room_env) -> None:
+        """A pure rename still requires room settings capability."""
         app = room_env["app"]
         room = room_env["room"]
         token = room_env["token"]
+        await _set_participant_role(
+            app, room_env["participant"].id, "member"
+        )
 
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1455,8 +1541,7 @@ class TestRoomContextWindow:
                 json={"name": "renamed-by-member"},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert resp.status_code == 200
-            assert resp.json()["name"] == "renamed-by-member"
+            assert resp.status_code == 403
 
 
 class TestRemoveParticipant:

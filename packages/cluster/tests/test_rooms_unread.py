@@ -240,7 +240,7 @@ class TestListRoomsHasUpdates:
         by_id = {room["id"]: room for room in resp.json()}
         assert by_id[unread_env["room"].id]["has_updates"] is True
         assert by_id[unread_env["empty_room"].id]["has_updates"] is False
-        assert by_id[unread_env["other_room"].id]["has_updates"] is False
+        assert unread_env["other_room"].id not in by_id
 
     @pytest.mark.asyncio
     async def test_list_rooms_has_updates_false_after_mark_read(self, unread_env) -> None:
@@ -271,4 +271,5 @@ class TestListRoomsHasUpdates:
         assert resp.status_code == 200
         by_id = {room["id"]: room for room in resp.json()}
         assert by_id[unread_env["other_room"].id]["has_updates"] is True
-        assert by_id[unread_env["room"].id]["has_updates"] is False
+        assert unread_env["room"].id not in by_id
+        assert unread_env["empty_room"].id not in by_id

@@ -220,9 +220,8 @@ class TestListRoomsGuestScope:
             assert resp.json() == []
 
     @pytest.mark.asyncio
-    async def test_user_still_sees_everything(self, env) -> None:
-        """Regression guard: the guest branch must not affect the
-        registered-user code path."""
+    async def test_user_sees_only_participating_private_rooms(self, env) -> None:
+        """Private rooms are filtered by membership for registered users too."""
         transport = ASGITransport(app=env["app"])
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -231,8 +230,7 @@ class TestListRoomsGuestScope:
             )
             assert resp.status_code == 200
             ids = {r["id"] for r in resp.json()}
-            # Owner sees main, other, and the sub-room.
-            assert ids >= {env["room"].id, env["other_room"].id, env["sub_room"].id}
+            assert ids == {env["room"].id}
 
 
 # ── /rooms/{id} detail ──────────────────────────────────────────────
@@ -288,7 +286,7 @@ class TestSubRoomListGuest:
             assert resp.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_user_still_allowed(self, env) -> None:
+    async def test_user_cannot_enumerate_nonmember_sub_rooms(self, env) -> None:
         transport = ASGITransport(app=env["app"])
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -297,7 +295,7 @@ class TestSubRoomListGuest:
             )
             assert resp.status_code == 200
             ids = [r["id"] for r in resp.json()]
-            assert env["sub_room"].id in ids
+            assert env["sub_room"].id not in ids
 
 
 # ── /projects ───────────────────────────────────────────────────────

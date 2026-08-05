@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 
 from fastapi import (
@@ -16,12 +16,11 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from anygarden.api.v1.invites import _require_room_admin_or_owner
 from anygarden.auth.dependencies import Identity, GuestClaims
 from anygarden.api.v1.agents import ActivityLogOut
 from anygarden.db.models import (
@@ -45,6 +44,12 @@ from anygarden.rooms import (
     shared_files as shared_files_service,
 )
 from anygarden.rooms import artifact_storage
+from anygarden.rooms.authorization import (
+    Capability,
+    accessible_room_ids,
+    require_capability,
+    validate_room_role,
+)
 from anygarden.rooms.file_storage import FileTooLargeError
 from anygarden.rooms.membership import add_user_to_room, ensure_agent_in_room
 from anygarden.rooms.service import (
@@ -77,6 +82,8 @@ class ParticipantAdd(BaseModel):
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     role: str = "member"
+
+    _check_role = field_validator("role")(validate_room_role)
 
 
 class SubRoomCreate(BaseModel):
@@ -133,6 +140,9 @@ class RoomOut(BaseModel):
     # the primary mode). Surfaced here so the frontend can hide the
     # human group without a second round-trip.
     allow_human_assignment: bool = False
+    visibility: str = "private"
+    archived_at: Optional[datetime] = None
+    archived_by: Optional[str] = None
     model_config = {"from_attributes": True}
 
 
@@ -229,9 +239,11 @@ async def create_room(
     await db.flush()
 
     if identity.kind == "user":
-        db.add(Participant(room_id=room.id, user_id=identity.id, role="admin"))
+        db.add(Participant(room_id=room.id, user_id=identity.id, role="owner"))
     elif identity.kind == "agent":
-        db.add(Participant(room_id=room.id, agent_id=identity.id, role="admin"))
+        # Agents are always ordinary members even when they create the room;
+        # they never gain membership, invite, visibility, or lifecycle admin.
+        db.add(Participant(room_id=room.id, agent_id=identity.id, role="member"))
 
     await db.commit()
     await db.refresh(room)
@@ -257,7 +269,10 @@ async def list_rooms(
     to a specific agent. Combined with ``is_dm=true`` this returns the
     caller's full DM list for that agent (sidebar multi-DM view).
     """
-    query = select(Room)
+    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    if not allowed_room_ids:
+        return []
+    query = select(Room).where(Room.id.in_(allowed_room_ids))
     if identity.kind == "guest" and isinstance(identity.claims, GuestClaims):
         # Explicit room-id pin — even a spoofed ``project_id`` query
         # parameter cannot widen the result set beyond the JWT's
@@ -269,7 +284,7 @@ async def list_rooms(
         query = query.where(Room.is_dm == is_dm)
     if representative_agent_id is not None:
         query = query.where(Room.representative_agent_id == representative_agent_id)
-    query = query.order_by(Room.created_at)
+    query = query.distinct().order_by(Room.created_at)
     result = await db.execute(query)
     rooms = list(result.scalars().all())
 
@@ -316,6 +331,9 @@ async def list_rooms(
                 speaker_strategy=r.speaker_strategy,
                 orchestrator_agent_id=r.orchestrator_agent_id,
                 ephemeral=r.ephemeral,
+                visibility=r.visibility,
+                archived_at=r.archived_at,
+                archived_by=r.archived_by,
             )
         )
     return out
@@ -330,6 +348,13 @@ async def mark_room_read_endpoint(
     """Mark the caller's room messages as read up to the latest seq."""
     if identity.kind != "user":
         raise HTTPException(status_code=403, detail="Only users can mark rooms read")
+
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.SELF_STATE_WRITE,
+    )
 
     seq = await mark_room_read(db, user_id=identity.id, room_id=room_id)
     if seq is None:
@@ -361,15 +386,12 @@ async def get_room(
     the claim BEFORE the DB lookup so a guest can't learn whether
     an unrelated room id exists by comparing 403 vs 404.
     """
-    if identity.kind == "guest":
-        if (
-            not isinstance(identity.claims, GuestClaims)
-            or identity.claims.room_id != room_id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Guest token bound to a different room",
-            )
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
 
     result = await db.execute(
         select(Room)
@@ -456,6 +478,9 @@ async def get_room(
         speaker_strategy=room.speaker_strategy,
         orchestrator_agent_id=room.orchestrator_agent_id,
         ephemeral=room.ephemeral,
+        visibility=room.visibility,
+        archived_at=room.archived_at,
+        archived_by=room.archived_by,
         participants=participant_outs,
     )
 
@@ -472,6 +497,19 @@ async def add_participant(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a participant (user or agent) to a room."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
+    if body.role in {"admin", "owner"}:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.ROOM_ROLE_MANAGE,
+        )
     # Verify room exists
     result = await db.execute(select(Room).where(Room.id == room_id))
     if result.scalar_one_or_none() is None:
@@ -584,7 +622,12 @@ async def remove_participant(
     """
     # 1. Authz FIRST — do not leak room/participant existence to
     #    callers who would 403 regardless. Matches invites.py ordering.
-    await _require_room_admin_or_owner(room_id, identity, db)
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
 
     # 2. Load the target participant row.
     target_stmt = select(Participant).where(
@@ -594,6 +637,14 @@ async def remove_participant(
     target = (await db.execute(target_stmt)).scalar_one_or_none()
     if target is None:
         raise HTTPException(status_code=404, detail="Participant not found")
+
+    if target.role in {"admin", "owner"}:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.ROOM_ROLE_MANAGE,
+        )
 
     # 3. Self-removal guard — direct this to the (future) leave flow.
     if (
@@ -702,21 +753,15 @@ async def remove_participant(
 class RoomUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    # #148 — ``None`` means "don't touch" so a rename PATCH can't
-    # accidentally reset the ambient-sharing flag. Explicit ``True``/
-    # ``False`` toggles it. #225 promoted this to an admin-only field
-    # (enforced in the handler below alongside the #159 Phase C fields)
-    # because flipping it affects token cost for the entire room.
+    # ``None`` means "don't touch" so a partial PATCH cannot accidentally
+    # reset the ambient-sharing flag. Room settings require a room admin.
     context_window_enabled: bool | None = None
-    # #159 Phase C — room-scoped speaker strategy. Admin-only: the
-    # handler rejects non-admin callers when either of these fields
-    # is present so a member rename PATCH still works. ``None`` means
-    # "don't touch" following the context_window pattern above.
+    # #159 Phase C — room-scoped speaker strategy. ``None`` means "don't
+    # touch" following the context_window pattern above.
     speaker_strategy: str | None = None
     orchestrator_agent_id: str | None = None
-    # #237 — ephemeral toggle. For DM rooms any member (the DM owner)
-    # can flip this; for non-DM rooms admin required. ``None`` means
-    # "don't touch" following the context_window pattern above.
+    # #237 — ephemeral toggle. ``None`` means "don't touch" following the
+    # context_window pattern above.
     ephemeral: bool | None = None
 
 
@@ -729,6 +774,105 @@ _VALID_SPEAKER_STRATEGIES: frozenset[str] = frozenset(
 )
 
 
+async def _archive_descendants(
+    db: AsyncSession,
+    *,
+    parent_room_id: str,
+    archived_at: datetime,
+    archived_by: str,
+) -> list[str]:
+    """Archive every descendant so a child cannot outlive parent policy."""
+
+    archived_ids: list[str] = []
+    frontier = [parent_room_id]
+    visited = {parent_room_id}
+    while frontier:
+        parent_id = frontier.pop()
+        children = list(
+            (
+                await db.execute(
+                    select(Room).where(Room.parent_room_id == parent_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for child in children:
+            if child.id in visited:
+                continue
+            visited.add(child.id)
+            child.archived_at = archived_at
+            child.archived_by = archived_by
+            archived_ids.append(child.id)
+            frontier.append(child.id)
+    return archived_ids
+
+
+@router.post("/{room_id}/archive", response_model=RoomOut)
+async def archive_room(
+    room_id: str,
+    request: Request,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Archive a room and descendants, preserving read-only history."""
+
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_ARCHIVE,
+    )
+    now = datetime.now(UTC)
+    access.room.archived_at = now
+    access.room.archived_by = identity.id
+    descendant_ids = await _archive_descendants(
+        db,
+        parent_room_id=room_id,
+        archived_at=now,
+        archived_by=identity.id,
+    )
+    await db.commit()
+    await db.refresh(access.room)
+
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        for archived_room_id in [room_id, *descendant_ids]:
+            await manager.revoke_room(
+                archived_room_id, reason="Room was archived"
+            )
+    return access.room
+
+
+@router.post("/{room_id}/unarchive", response_model=RoomOut)
+async def unarchive_room(
+    room_id: str,
+    identity: Identity = Depends(forbid_guest),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unarchive a room; an archived parent must be restored first."""
+
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_UNARCHIVE,
+    )
+    room = access.room
+    if room.parent_room_id is not None:
+        parent = await db.get(Room, room.parent_room_id)
+        if parent is not None and parent.archived_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot unarchive a child of an archived room",
+            )
+    room.archived_at = None
+    room.archived_by = None
+    await db.commit()
+    await db.refresh(room)
+    return room
+
+
 @router.patch("/{room_id}", response_model=RoomOut)
 async def update_room(
     room_id: str,
@@ -738,83 +882,14 @@ async def update_room(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update room metadata.
-
-    Fields split by permission tier:
-
-    - Open to every member: ``name``, ``description``.
-    - Admin-only (#159 Phase C, #225): ``speaker_strategy``,
-      ``orchestrator_agent_id``, ``context_window_enabled``.
-      Touching any of these requires ``identity.is_admin`` — mirrors
-      the DESIGN.md guidance that dispatch-mode controls stay on the
-      admin surface because a mistaken flip silently reroutes who
-      replies or balloons token cost.
-
-    The admin gate is enforced inside the handler (not via
-    ``get_admin_identity``) so a member PATCH that only renames the
-    room stays open. Sending an admin-only field as a non-admin
-    returns ``403`` with no partial write.
-    """
-    result = await db.execute(select(Room).where(Room.id == room_id))
-    room = result.scalar_one_or_none()
-    if room is None:
-        raise HTTPException(status_code=404, detail="Room not found")
-
-    admin_only_fields_present = (
-        body.speaker_strategy is not None
-        or body.orchestrator_agent_id is not None
-        or body.context_window_enabled is not None
+    """Update room metadata; requires room-admin settings capability."""
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_SETTINGS_MANAGE,
     )
-    if admin_only_fields_present:
-        # Mirror ``get_admin_identity``'s shape but as an inline gate —
-        # using the dep directly would reject every non-admin rename
-        # too, and we want the rename surface to stay open.
-        is_admin = (
-            identity.kind == "user"
-            and identity.claims is not None
-            and getattr(identity.claims, "is_admin", False)
-        )
-        if not is_admin:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Admin required to change speaker_strategy, "
-                    "orchestrator_agent_id, or context_window_enabled"
-                ),
-            )
-
-    # #237 — ephemeral toggle: DM owner can toggle their own DM;
-    # admin can toggle any room. "DM owner" = user participant of the
-    # DM room. Non-DM rooms fall back to admin-only to match the
-    # ``context_window_enabled`` trust tier.
-    if body.ephemeral is not None:
-        is_admin = (
-            identity.kind == "user"
-            and identity.claims is not None
-            and getattr(identity.claims, "is_admin", False)
-        )
-        if not is_admin:
-            if not room.is_dm:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Admin required to toggle ephemeral on non-DM rooms",
-                )
-            # DM room: caller must be a participant (owner or member).
-            if identity.kind != "user":
-                raise HTTPException(
-                    status_code=403,
-                    detail="Only room members can toggle ephemeral on a DM",
-                )
-            part_stmt = select(Participant).where(
-                Participant.room_id == room_id,
-                Participant.user_id == identity.id,
-            )
-            part = (await db.execute(part_stmt)).scalar_one_or_none()
-            if part is None:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Only room members can toggle ephemeral on a DM",
-                )
+    room = access.room
 
     if body.speaker_strategy is not None:
         if body.speaker_strategy not in _VALID_SPEAKER_STRATEGIES:
@@ -894,14 +969,17 @@ class RepresentativeSet(BaseModel):
 async def set_representative(
     room_id: str,
     body: RepresentativeSet,
-    identity: Identity = Depends(get_admin_identity),
+    identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Set or clear the representative agent for a room. Admin only."""
-    result = await db.execute(select(Room).where(Room.id == room_id))
-    room = result.scalar_one_or_none()
-    if room is None:
-        raise HTTPException(status_code=404, detail="Room not found")
+    """Set or clear the representative agent for a room. Room-admin only."""
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_SETTINGS_MANAGE,
+    )
+    room = access.room
 
     if body.agent_id is not None:
         # Verify agent is a participant of this room
@@ -926,7 +1004,7 @@ async def set_representative(
 async def delete_room(
     room_id: str,
     request: Request,
-    # ``forbid_guest`` is the dep gate; the per-room admin/owner
+    # ``forbid_guest`` is the dep gate; the per-room owner
     # check happens below before any DB write so a non-member
     # outsider gets 403, not 404 (no room-existence oracle).
     identity: Identity = Depends(forbid_guest),
@@ -934,28 +1012,22 @@ async def delete_room(
 ):
     """Delete a room, cascading: archive child rooms.
 
-    Authorisation: global admin OR a room-level ``admin``/``owner``
-    Participant. Same rule as invite issuance and participant
-    removal — see ``api/v1/invites.py::_require_room_admin_or_owner``.
-    Anyone else (rank-and-file member, outsider, agent, guest) is
-    rejected with 403.
+    Authorisation: global admin OR a room-level ``owner`` Participant.
+    Anyone else (room admin, member, outsider, agent, guest) is rejected
+    with 403.
 
     On success we broadcast ``RoomDeletedOut`` so any user with a
     live WS in this room (or any of its participants reached via a
     sibling-room WS) can remove the room from their tree without
     waiting for a polled refetch.
     """
-    # Lazy import keeps the module dependency graph flat — same
-    # pattern the membership-change broadcast follows in
-    # ``add_participant``.
-    from anygarden.api.v1.invites import _require_room_admin_or_owner
-
-    await _require_room_admin_or_owner(room_id, identity, db)
-
-    result = await db.execute(select(Room).where(Room.id == room_id))
-    room = result.scalar_one_or_none()
-    if room is None:
-        raise HTTPException(status_code=404, detail="Room not found")
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_DELETE,
+    )
+    room = access.room
 
     # Capture the audience BEFORE we delete the participant rows. We
     # need:
@@ -1014,9 +1086,12 @@ async def stop_all_agents_in_room(
     db: AsyncSession = Depends(get_db),
 ):
     """Stop all running agents in a room."""
-    result = await db.execute(select(Room).where(Room.id == room_id))
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=404, detail="Room not found")
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.AGENT_WAKE,
+    )
 
     # Find all agent participants in this room
     stmt = (
@@ -1051,7 +1126,17 @@ async def list_sub_rooms(
     db: AsyncSession = Depends(get_db),
 ):
     """List sub-rooms of a room, optionally filtered by name."""
-    query = select(Room).where(Room.parent_room_id == room_id)
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
+    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    query = select(Room).where(
+        Room.parent_room_id == room_id,
+        Room.id.in_(allowed_room_ids),
+    )
     if name:
         query = query.where(Room.name == name)
     query = query.order_by(Room.created_at)
@@ -1072,6 +1157,12 @@ async def create_sub_room_endpoint(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a sub-room under an existing room with permission inheritance."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.SUBROOM_CREATE,
+    )
     child, agent_ids = await create_sub_room(
         db,
         parent_room_id=room_id,
@@ -1162,6 +1253,12 @@ async def toggle_room_pin(
     """Toggle sidebar pin for the caller's participation in ``room_id``."""
     if identity.kind != "user":
         raise HTTPException(status_code=403, detail="Only users can pin rooms")
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.SELF_STATE_WRITE,
+    )
     pinned_ids = await set_room_pinned(
         db, user_id=identity.id, room_id=room_id, pinned=body.pinned
     )
@@ -1183,6 +1280,13 @@ async def set_pin_order(
     """Rewrite the caller's pinned-section order from a full snapshot."""
     if identity.kind != "user":
         raise HTTPException(status_code=403, detail="Only users can reorder pinned rooms")
+    for room_id in body.room_ids:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.SELF_STATE_WRITE,
+        )
     pinned_ids = await reorder_pinned_rooms(
         db, user_id=identity.id, room_ids=body.room_ids
     )
@@ -1354,39 +1458,18 @@ def _schedule_shared_files_delete_for_agent(
 
 
 async def _require_room_participant(
-    room_id: str, identity: Identity, db: AsyncSession
+    room_id: str,
+    identity: Identity,
+    db: AsyncSession,
+    capability: Capability = Capability.ROOM_READ,
 ) -> None:
-    """Raise 403 when ``identity`` is not a participant of ``room_id``.
-
-    Global admins pass unconditionally. Guests are always rejected —
-    the shared-file feature isn't scoped to guest sessions.
-    """
-    if identity.kind == "guest":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
-        )
-    if (
-        identity.kind == "user"
-        and identity.claims is not None
-        and getattr(identity.claims, "is_admin", False)
-    ):
-        return
-
-    stmt = select(Participant).where(Participant.room_id == room_id)
-    if identity.kind == "user":
-        stmt = stmt.where(Participant.user_id == identity.id)
-    elif identity.kind == "agent":
-        stmt = stmt.where(Participant.agent_id == identity.id)
-    else:  # pragma: no cover — unknown identity kind
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden"
-        )
-    row = (await db.execute(stmt)).scalar_one_or_none()
-    if row is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not a participant of this room",
-        )
+    """Compatibility wrapper around the shared capability service."""
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=capability,
+    )
 
 
 @router.post(
@@ -1409,7 +1492,9 @@ async def upload_room_shared_file(
     Same filename re-uploaded = upsert: the file's bytes are replaced
     atomically and a fresh write-frame goes to every agent.
     """
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(
+        room_id, identity, db, Capability.FILE_MANAGE
+    )
 
     room = await db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
@@ -1477,7 +1562,7 @@ async def list_room_shared_files(
     db: AsyncSession = Depends(get_db),
 ) -> list[RoomSharedFileOut]:
     """List shared files attached to the room. Participants only."""
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(room_id, identity, db, Capability.FILE_READ)
     rows = await shared_files_service.list_shared_files(db, room_id=room_id)
     return [RoomSharedFileOut.from_row(r) for r in rows]
 
@@ -1500,7 +1585,9 @@ async def delete_room_shared_file(
     fan-out to participating agents is scheduled in the background so
     their ``memory/shared/<storage_name>`` copies are pruned too.
     """
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(
+        room_id, identity, db, Capability.FILE_MANAGE
+    )
 
     config = request.app.state.config
     machine_bus = request.app.state.machine_bus
@@ -1570,7 +1657,9 @@ async def list_room_artifacts(
     db: AsyncSession = Depends(get_db),
 ) -> list[RoomArtifactOut]:
     """List artifacts produced into the room. Participants only."""
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(
+        room_id, identity, db, Capability.ARTIFACT_READ
+    )
     rows = await artifacts_service.list_artifacts(db, room_id=room_id)
     return [RoomArtifactOut.from_row(r) for r in rows]
 
@@ -1590,7 +1679,9 @@ async def download_room_artifact(
     """
     from fastapi.responses import Response
 
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(
+        room_id, identity, db, Capability.ARTIFACT_READ
+    )
     row = await artifacts_service.get_artifact(
         db, room_id=room_id, artifact_id=artifact_id
     )
@@ -1638,7 +1729,9 @@ async def delete_room_artifact(
     Broadcasts ``room_artifact.removed`` so other subscribers refresh
     their panel without having to poll.
     """
-    await _require_room_participant(room_id, identity, db)
+    await _require_room_participant(
+        room_id, identity, db, Capability.ARTIFACT_MANAGE
+    )
     config = request.app.state.config
     ok = await artifacts_service.delete_artifact(
         db,

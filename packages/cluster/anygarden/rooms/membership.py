@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Participant, Room
 from anygarden.observability.metrics import agent_joinroom_drop_total
+from anygarden.rooms.authorization import validate_room_role
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
 
@@ -54,6 +55,11 @@ async def ensure_agent_in_room(
     If *manager* is ``None`` (e.g. unit tests that don't wire a real
     connection manager) the notification step is skipped.
     """
+    role = validate_room_role(role)
+    # Agents cannot acquire an administrative room role through any caller.
+    if role in {"admin", "owner"}:
+        role = "member"
+
     existing_stmt = select(Participant).where(
         Participant.room_id == room_id,
         Participant.agent_id == agent_id,
@@ -201,6 +207,7 @@ async def add_user_to_room(
 
     If *manager* is ``None`` the notification step is skipped.
     """
+    role = validate_room_role(role)
     participant = Participant(
         room_id=room_id,
         user_id=user_id,

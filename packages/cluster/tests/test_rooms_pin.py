@@ -360,7 +360,7 @@ class TestPinEndpoints:
             assert r.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_patch_pin_non_member_returns_404(self, pin_env) -> None:
+    async def test_patch_pin_non_member_returns_403(self, pin_env) -> None:
         app = pin_env["app"]
         token = pin_env["token"]
         agent_room = pin_env["agent_room"]
@@ -371,4 +371,4 @@ class TestPinEndpoints:
                 json={"pinned": True},
                 headers={"Authorization": f"Bearer {token}"},
             )
-            assert r.status_code == 404
+            assert r.status_code == 403
