@@ -6,13 +6,33 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity, get_identity
+from anygarden.rooms.authorization import (
+    persist_room_authorization_audits,
+    take_pending_room_authorization_audits,
+)
 
 
 async def get_db(request: Request) -> AsyncSession:
-    """Yield a scoped DB session from the app-level session factory."""
+    """Yield a DB session, then persist buffered authorization audits.
+
+    The caller session is closed before the audit writer checks out another
+    pooled connection. This keeps business rollback independent from audit
+    durability without risking nested pool-checkout deadlocks.
+    """
+
     session_factory = request.app.state.session_factory
-    async with session_factory() as session:
-        yield session
+    pending_audits = ()
+    try:
+        async with session_factory() as session:
+            try:
+                yield session
+            finally:
+                pending_audits = take_pending_room_authorization_audits(session)
+    finally:
+        await persist_room_authorization_audits(
+            session_factory,
+            pending_audits,
+        )
 
 
 async def get_current_identity(

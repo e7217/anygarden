@@ -18,7 +18,7 @@ from enum import StrEnum
 
 from fastapi import HTTPException, status
 from sqlalchemy import case, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.jwt import GuestClaims
@@ -132,6 +132,21 @@ class RoomAccess:
         return self.room.archived_at is not None
 
 
+@dataclass(frozen=True, slots=True)
+class _RoomAuthorizationAuditEvent:
+    """Immutable payload buffered until the caller releases its connection."""
+
+    actor_user_id: str
+    room_id: str | None
+    scope: str
+    capability: str
+    outcome: str
+    details: dict | None
+
+
+_AUDIT_SESSION_INFO_KEY = "room_authorization_audit_events"
+
+
 def is_global_admin(identity: Identity) -> bool:
     """Return whether *identity* carries the operator-level bypass claim."""
 
@@ -142,7 +157,7 @@ def is_global_admin(identity: Identity) -> bool:
     )
 
 
-async def _record_global_admin_bypass(
+def _record_global_admin_bypass(
     db: AsyncSession,
     *,
     identity: Identity,
@@ -151,28 +166,54 @@ async def _record_global_admin_bypass(
     capability: Capability,
     details: dict | None = None,
 ) -> None:
-    """Durably audit an allowed operator bypass before control returns.
+    """Buffer an allowed operator bypass on the caller's scoped session.
 
-    The audit uses a session and transaction independent from the caller's
-    business session. A later 404, exception, or rollback therefore cannot
-    erase evidence that elevated authority was granted, while incomplete
-    business mutations remain rollback-able.
+    ``get_db`` drains this payload only after closing the caller session, then
+    commits it through an independent audit transaction. Deferring the second
+    pool checkout prevents nested-checkout deadlocks at pool capacity while
+    keeping downstream errors and business rollbacks from erasing the audit.
     """
 
-    bind = db.bind
-    if bind is None:  # pragma: no cover - application sessions are always bound
-        raise RuntimeError("Room authorization audit requires a bound DB session")
+    events = db.info.setdefault(_AUDIT_SESSION_INFO_KEY, [])
+    events.append(
+        _RoomAuthorizationAuditEvent(
+            actor_user_id=identity.id,
+            room_id=room_id,
+            scope=scope,
+            capability=capability.value,
+            outcome="allowed",
+            details=dict(details) if details is not None else None,
+        )
+    )
 
-    async with AsyncSession(bind=bind, expire_on_commit=False) as audit_db:
-        audit_db.add(
+
+def take_pending_room_authorization_audits(
+    db: AsyncSession,
+) -> tuple[_RoomAuthorizationAuditEvent, ...]:
+    """Remove and return buffered audit payloads before session teardown."""
+
+    return tuple(db.info.pop(_AUDIT_SESSION_INFO_KEY, ()))
+
+
+async def persist_room_authorization_audits(
+    session_factory: async_sessionmaker[AsyncSession],
+    events: tuple[_RoomAuthorizationAuditEvent, ...],
+) -> None:
+    """Commit buffered audit payloads through a fresh pooled connection."""
+
+    if not events:
+        return
+    async with session_factory() as audit_db:
+        audit_db.add_all(
             RoomAuthorizationAudit(
-                actor_user_id=identity.id,
-                room_id=room_id,
-                scope=scope,
-                capability=capability.value,
-                outcome="allowed",
-                details=details,
+                actor_user_id=event.actor_user_id,
+                room_id=event.room_id,
+                scope=event.scope,
+                capability=event.capability,
+                outcome=event.outcome,
+                details=event.details,
             )
+            for event in events
         )
         await audit_db.commit()
 
@@ -351,7 +392,7 @@ async def accessible_room_ids(
         )
         bypassed_room_ids = room_ids - participant_room_ids
         if bypassed_room_ids:
-            await _record_global_admin_bypass(
+            _record_global_admin_bypass(
                 db,
                 identity=identity,
                 room_id=None,
@@ -524,7 +565,7 @@ async def require_capability(
         )
 
     if _uses_global_admin_bypass(access, capability):
-        await _record_global_admin_bypass(
+        _record_global_admin_bypass(
             db,
             identity=identity,
             room_id=room_id,
@@ -542,9 +583,11 @@ __all__ = [
     "RoomAccess",
     "accessible_room_ids",
     "is_global_admin",
+    "persist_room_authorization_audits",
     "require_active_room",
     "require_capability",
     "resolve_access",
+    "take_pending_room_authorization_audits",
     "validate_room_role",
     "validate_room_visibility",
 ]

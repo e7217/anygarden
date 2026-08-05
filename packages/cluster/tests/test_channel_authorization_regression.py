@@ -17,9 +17,11 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 from anygarden.app import create_app
+from anygarden.auth.dependencies import Identity
 from anygarden.auth.jwt import create_user_token
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
+from anygarden.dependencies import forbid_guest, get_db
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import create_message_fts
 from anygarden.db.models import (
@@ -35,8 +37,15 @@ from anygarden.db.models import (
     Task,
     User,
 )
+from anygarden.rooms.authorization import (
+    Capability,
+    require_capability,
+    resolve_access,
+)
+from fastapi import Depends, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -440,11 +449,28 @@ async def test_failed_global_admin_write_audits_nonmember_and_role_delta(
     app.state.machine_bus = object()
     headers = _auth(authorization_env["tokens"]["global_admin"])
     room_id = authorization_env["room_id"]
+    failed_task_id = "failed-business-task"
+
+    @app.post("/_test/authorization/audit-rollback")
+    async def fail_after_bypass(
+        identity: Identity = Depends(forbid_guest),
+        db: AsyncSession = Depends(get_db),
+    ) -> None:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.FILE_MANAGE,
+        )
+        db.add(Task(id=failed_task_id, room_id=room_id, title="must rollback"))
+        await db.flush()
+        raise HTTPException(status_code=404, detail="downstream failure")
+
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        nonmember_failure = await client.delete(
-            f"/api/v1/rooms/{room_id}/files/missing-nonmember",
+        nonmember_failure = await client.post(
+            "/_test/authorization/audit-rollback",
             headers=headers,
         )
     assert nonmember_failure.status_code == 404
@@ -489,6 +515,105 @@ async def test_failed_global_admin_write_audits_nonmember_and_role_delta(
         assert all(audit.scope == "room" for audit in audits)
         assert all(audit.capability == "file.manage" for audit in audits)
         assert all(audit.outcome == "allowed" for audit in audits)
+        assert await db.scalar(select(Task).where(Task.id == failed_task_id)) is None
+
+
+@pytest.mark.asyncio
+async def test_audit_flush_releases_callers_before_second_pool_checkout(
+    tmp_path,
+) -> None:
+    """Pool-sized concurrent bypasses cannot deadlock on nested checkouts."""
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'authorization-pool.db'}"
+    config = AnygardenSettings(
+        db_url=db_url,
+        jwt_secret=secrets.token_urlsafe(32),
+        log_level="DEBUG",
+    )
+    engine = create_async_engine(
+        db_url,
+        connect_args={"check_same_thread": False},
+        pool_size=2,
+        max_overflow=0,
+        pool_timeout=1,
+    )
+    factory = build_session_factory(engine)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        async with factory() as db:
+            project = Project(name="audit-pool-project")
+            room = Room(project=project, name="audit-pool-room")
+            admin = User(
+                email="audit-pool-admin@example.test",
+                password_hash="x",
+                is_admin=True,
+            )
+            db.add_all([project, room, admin])
+            await db.commit()
+            room_id = room.id
+            token = create_user_token(
+                admin.id,
+                admin.email or "",
+                True,
+                secret=config.jwt_secret,
+            )
+
+        app = create_app(config)
+        app.state.engine = engine
+        app.state.session_factory = factory
+        entered = 0
+        entered_lock = asyncio.Lock()
+        all_callers_hold_connections = asyncio.Event()
+
+        @app.get("/_test/authorization/pool-capacity")
+        async def bypass_at_pool_capacity(
+            identity: Identity = Depends(forbid_guest),
+            db: AsyncSession = Depends(get_db),
+        ) -> dict[str, bool]:
+            nonlocal entered
+            await resolve_access(db, room_id=room_id, identity=identity)
+            async with entered_lock:
+                entered += 1
+                if entered == 2:
+                    all_callers_hold_connections.set()
+            await asyncio.wait_for(all_callers_hold_connections.wait(), timeout=2)
+            await require_capability(
+                db,
+                room_id=room_id,
+                identity=identity,
+                capability=Capability.ROOM_READ,
+            )
+            return {"ok": True}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            responses = await asyncio.wait_for(
+                asyncio.gather(
+                    client.get(
+                        "/_test/authorization/pool-capacity",
+                        headers=_auth(token),
+                    ),
+                    client.get(
+                        "/_test/authorization/pool-capacity",
+                        headers=_auth(token),
+                    ),
+                ),
+                timeout=5,
+            )
+        assert [response.status_code for response in responses] == [200, 200]
+
+        async with factory() as db:
+            audits = (await db.scalars(select(RoomAuthorizationAudit))).all()
+            assert len(audits) == 2
+            assert all(audit.actor_user_id == admin.id for audit in audits)
+            assert all(audit.room_id == room_id for audit in audits)
+            assert all(audit.scope == "room" for audit in audits)
+            assert all(audit.capability == "room.read" for audit in audits)
+            assert all(audit.outcome == "allowed" for audit in audits)
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,6 @@ from anygarden.db.models import (
     Participant,
     Project,
     Room,
-    RoomAuthorizationAudit,
     Task,
     User,
 )
@@ -21,6 +20,7 @@ from anygarden.rooms.authorization import (
     accessible_room_ids,
     require_capability,
     resolve_access,
+    take_pending_room_authorization_audits,
     validate_room_role,
     validate_room_visibility,
 )
@@ -134,7 +134,7 @@ async def test_global_admin_bypasses_membership_but_not_missing_room(db) -> None
     assert access.is_global_admin is True
     assert access.participant is None
 
-    audit = (await db.scalars(select(RoomAuthorizationAudit))).one()
+    audit = take_pending_room_authorization_audits(db)[0]
     assert audit.actor_user_id == identity.id
     assert audit.room_id == env["room"].id
     assert audit.scope == "room"
@@ -162,6 +162,7 @@ async def test_global_admin_audit_survives_business_rollback_and_tracks_role_del
         identity=identity,
         capability=Capability.MEMBER_MANAGE,
     )
+    nonmember_audits = take_pending_room_authorization_audits(db)
     failed_task = Task(room_id=room_id, title="must rollback")
     db.add(failed_task)
     await db.flush()
@@ -187,14 +188,7 @@ async def test_global_admin_audit_survives_business_rollback_and_tracks_role_del
     )
 
     assert await db.scalar(select(Task).where(Task.id == failed_task_id)) is None
-    audits = (
-        await db.scalars(
-            select(RoomAuthorizationAudit).order_by(
-                RoomAuthorizationAudit.created_at,
-                RoomAuthorizationAudit.id,
-            )
-        )
-    ).all()
+    audits = (*nonmember_audits, *take_pending_room_authorization_audits(db))
     assert len(audits) == 2
     assert all(audit.actor_user_id == identity.id for audit in audits)
     assert all(audit.room_id == room_id for audit in audits)
