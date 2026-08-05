@@ -710,6 +710,45 @@ class Participant(Base):
     )
 
 
+class RoomAuthorizationAudit(Base):
+    """Append-only record of a global-admin room authorization bypass.
+
+    Actor and room identifiers deliberately have no foreign keys: deleting a
+    user or room must not erase which operator crossed which authorization
+    boundary. ``room_id`` is null for collection/search scopes.
+    """
+
+    __tablename__ = "room_authorization_audits"
+    __table_args__ = (
+        Index(
+            "ix_room_authorization_audits_actor_at",
+            "actor_user_id",
+            "created_at",
+        ),
+        Index(
+            "ix_room_authorization_audits_room_at",
+            "room_id",
+            "created_at",
+        ),
+        Index(
+            "ix_room_authorization_audits_scope_at",
+            "scope",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    actor_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    room_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, default=None
+    )
+    scope: Mapped[str] = mapped_column(String(64), nullable=False)
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (

@@ -269,7 +269,11 @@ async def list_rooms(
     to a specific agent. Combined with ``is_dm=true`` this returns the
     caller's full DM list for that agent (sidebar multi-DM view).
     """
-    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    allowed_room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="rooms.collection",
+    )
     if not allowed_room_ids:
         return []
     query = select(Room).where(Room.id.in_(allowed_room_ids))
@@ -1132,7 +1136,11 @@ async def list_sub_rooms(
         identity=identity,
         capability=Capability.ROOM_READ,
     )
-    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    allowed_room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="rooms.subrooms",
+    )
     query = select(Room).where(
         Room.parent_room_id == room_id,
         Room.id.in_(allowed_room_ids),

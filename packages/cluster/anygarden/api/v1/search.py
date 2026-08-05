@@ -61,7 +61,11 @@ async def search_messages(
     the underlying ``OperationalError`` is mapped to a 503 so a missing
     index degrades gracefully instead of leaking a 500 (#473).
     """
-    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    allowed_room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="search.messages",
+    )
 
     # FTS5 query — use highlight() for snippets.
     # If project_id is given, join through rooms to filter.

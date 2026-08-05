@@ -107,7 +107,11 @@ async def list_saved_messages(
     if identity.kind != "user":
         raise HTTPException(status_code=403, detail="Only users can list saved messages")
 
-    allowed_room_ids = await accessible_room_ids(db, identity=identity)
+    allowed_room_ids = await accessible_room_ids(
+        db,
+        identity=identity,
+        scope="saved.messages",
+    )
     if not allowed_room_ids:
         return []
 

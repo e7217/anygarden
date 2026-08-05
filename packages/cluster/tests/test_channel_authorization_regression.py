@@ -30,6 +30,7 @@ from anygarden.db.models import (
     Participant,
     Project,
     Room,
+    RoomAuthorizationAudit,
     SavedMessage,
     Task,
     User,
@@ -178,6 +179,7 @@ async def authorization_env() -> AsyncIterator[dict]:
             "project_id": project.id,
             "room_id": room.id,
             "child_room_id": child_room.id,
+            "global_admin_id": global_admin.id,
             "message_id": message.id,
             "own_task_id": own_task.id,
             "other_task_id": other_task.id,
@@ -328,6 +330,104 @@ async def test_roles_and_agent_task_update_scope_are_enforced_over_rest(
                 headers=agent_headers,
             )
             assert denied.status_code == 403, denied.text
+
+
+@pytest.mark.asyncio
+async def test_only_global_admin_nonmember_bypass_is_audited(
+    authorization_env: dict,
+) -> None:
+    """Single-room and collection/search bypasses leave durable evidence."""
+
+    token = authorization_env["tokens"]["global_admin"]
+    headers = _auth(token)
+    transport = ASGITransport(app=authorization_env["app"])
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        room = await client.get(
+            f"/api/v1/rooms/{authorization_env['room_id']}",
+            headers=headers,
+        )
+        rooms = await client.get(
+            "/api/v1/rooms",
+            params={"project_id": authorization_env["project_id"]},
+            headers=headers,
+        )
+        search = await client.get(
+            "/api/v1/search",
+            params={"q": "authorizationneedle"},
+            headers=headers,
+        )
+    assert room.status_code == 200
+    assert rooms.status_code == 200
+    assert search.status_code == 200
+
+    async with authorization_env["factory"]() as db:
+        audits = (
+            await db.execute(
+                select(RoomAuthorizationAudit).order_by(
+                    RoomAuthorizationAudit.created_at,
+                    RoomAuthorizationAudit.id,
+                )
+            )
+        ).scalars().all()
+        assert len(audits) == 3
+        by_scope = {audit.scope: audit for audit in audits}
+        assert set(by_scope) == {"room", "rooms.collection", "search.messages"}
+        assert all(
+            audit.actor_user_id == authorization_env["global_admin_id"]
+            for audit in audits
+        )
+        assert all(audit.capability == "room.read" for audit in audits)
+        assert all(audit.outcome == "allowed" for audit in audits)
+        assert by_scope["room"].room_id == authorization_env["room_id"]
+        assert by_scope["rooms.collection"].room_id is None
+        assert by_scope["search.messages"].room_id is None
+        assert by_scope["rooms.collection"].details == {
+            "bypassed_room_count": 2,
+            "visible_room_count": 2,
+        }
+
+        # Membership in every room makes these ordinary allowed reads rather
+        # than operator bypasses, so the audit stream must stay unchanged.
+        db.add_all(
+            [
+                Participant(
+                    room_id=authorization_env["room_id"],
+                    user_id=authorization_env["global_admin_id"],
+                    role="member",
+                ),
+                Participant(
+                    room_id=authorization_env["child_room_id"],
+                    user_id=authorization_env["global_admin_id"],
+                    role="member",
+                ),
+            ]
+        )
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (
+            await client.get(
+                f"/api/v1/rooms/{authorization_env['room_id']}",
+                headers=headers,
+            )
+        ).status_code == 200
+        assert (
+            await client.get(
+                "/api/v1/rooms",
+                params={"project_id": authorization_env["project_id"]},
+                headers=headers,
+            )
+        ).status_code == 200
+        assert (
+            await client.get(
+                "/api/v1/search",
+                params={"q": "authorizationneedle"},
+                headers=headers,
+            )
+        ).status_code == 200
+
+    async with authorization_env["factory"]() as db:
+        assert len((await db.scalars(select(RoomAuthorizationAudit))).all()) == 3
 
 
 @pytest.mark.asyncio

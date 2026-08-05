@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "057"
+                assert version == "058"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -68,6 +68,7 @@ class TestMigrations:
                     "machine_tokens",
                     "agent_tokens",
                     "room_invite_links",
+                    "room_authorization_audits",
                 }
                 missing = expected - tables
                 assert not missing, f"Missing tables after upgrade: {missing}"
@@ -98,6 +99,9 @@ class TestMigrations:
                 }
                 assert "ix_rooms_visibility_archived" in indexes
                 assert "ix_participants_room_role" in indexes
+                assert "ix_room_authorization_audits_actor_at" in indexes
+                assert "ix_room_authorization_audits_room_at" in indexes
+                assert "ix_room_authorization_audits_scope_at" in indexes
             engine.dispose()
         finally:
             try:
@@ -426,9 +430,9 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                # Head is now 057; the cost_usd column added by 047
+                # Head is now 058; the cost_usd column added by 047
                 # is still present after upgrading through to head.
-                assert version == "057"
+                assert version == "058"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -488,7 +492,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "057"
+                assert version == "058"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -535,7 +539,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "057"
+                assert version == "058"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -616,7 +620,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "057"
+                assert version == "058"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -656,7 +660,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "057"
+                assert version == "058"
             sync_engine.dispose()
         finally:
             try:
@@ -690,7 +694,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "057"
+            assert head == "058"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -792,7 +796,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "057"
+                assert version == "058"
             sync_engine.dispose()
         finally:
             try:

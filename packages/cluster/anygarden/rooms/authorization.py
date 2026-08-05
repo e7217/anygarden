@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.jwt import GuestClaims
-from anygarden.db.models import Participant, Room, Task
+from anygarden.db.models import Participant, Room, RoomAuthorizationAudit, Task
 
 ROOM_VISIBILITY_VALUES: frozenset[str] = frozenset({"private"})
 ROOM_ROLE_VALUES: frozenset[str] = frozenset({"observer", "member", "admin", "owner"})
@@ -140,6 +140,36 @@ def is_global_admin(identity: Identity) -> bool:
         and identity.claims is not None
         and getattr(identity.claims, "is_admin", False)
     )
+
+
+def _record_global_admin_bypass(
+    db: AsyncSession,
+    *,
+    identity: Identity,
+    room_id: str | None,
+    scope: str,
+    capability: Capability,
+    details: dict | None = None,
+) -> None:
+    """Stage a durable audit for an allowed nonmember operator bypass.
+
+    ``get_db`` commits marked read sessions after a successful response;
+    mutation endpoints commit this row with their existing transaction. The
+    call is intentionally skipped for global admins acting through an actual
+    Participant row, so ordinary room authorization does not create noise.
+    """
+
+    db.add(
+        RoomAuthorizationAudit(
+            actor_user_id=identity.id,
+            room_id=room_id,
+            scope=scope,
+            capability=capability.value,
+            outcome="allowed",
+            details=details,
+        )
+    )
+    db.info["room_authorization_audit_pending"] = True
 
 
 def validate_room_role(role: str) -> str:
@@ -292,6 +322,7 @@ async def accessible_room_ids(
     db: AsyncSession,
     *,
     identity: Identity,
+    scope: str = "rooms.collection",
 ) -> frozenset[str]:
     """Return rooms whose read capability is currently available.
 
@@ -302,8 +333,30 @@ async def accessible_room_ids(
     """
 
     if is_global_admin(identity):
-        rows = await db.scalars(select(Room.id))
-        return frozenset(rows.all())
+        room_ids = frozenset((await db.scalars(select(Room.id))).all())
+        participant_room_ids = frozenset(
+            (
+                await db.scalars(
+                    select(Participant.room_id).where(
+                        Participant.user_id == identity.id
+                    )
+                )
+            ).all()
+        )
+        bypassed_room_ids = room_ids - participant_room_ids
+        if bypassed_room_ids:
+            _record_global_admin_bypass(
+                db,
+                identity=identity,
+                room_id=None,
+                scope=scope,
+                capability=Capability.ROOM_READ,
+                details={
+                    "bypassed_room_count": len(bypassed_room_ids),
+                    "visible_room_count": len(room_ids),
+                },
+            )
+        return room_ids
 
     if identity.kind == "guest":
         if not isinstance(identity.claims, GuestClaims):
@@ -441,6 +494,15 @@ async def require_capability(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Lifecycle frames require an agent identity",
+        )
+
+    if access.is_global_admin and access.participant is None:
+        _record_global_admin_bypass(
+            db,
+            identity=identity,
+            room_id=room_id,
+            scope="room",
+            capability=capability,
         )
 
     return access

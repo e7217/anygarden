@@ -7,7 +7,15 @@ from datetime import UTC, datetime
 import pytest
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.jwt import GuestClaims, UserClaims
-from anygarden.db.models import Agent, Participant, Project, Room, Task, User
+from anygarden.db.models import (
+    Agent,
+    Participant,
+    Project,
+    Room,
+    RoomAuthorizationAudit,
+    Task,
+    User,
+)
 from anygarden.rooms.authorization import (
     Capability,
     accessible_room_ids,
@@ -17,6 +25,7 @@ from anygarden.rooms.authorization import (
     validate_room_visibility,
 )
 from fastapi import HTTPException
+from sqlalchemy import select
 
 
 async def _seed_room(db):
@@ -123,6 +132,13 @@ async def test_global_admin_bypasses_membership_but_not_missing_room(db) -> None
     )
     assert access.is_global_admin is True
     assert access.participant is None
+
+    audit = (await db.scalars(select(RoomAuthorizationAudit))).one()
+    assert audit.actor_user_id == identity.id
+    assert audit.room_id == env["room"].id
+    assert audit.scope == "room"
+    assert audit.capability == Capability.MEMBER_MANAGE.value
+    assert audit.outcome == "allowed"
 
     with pytest.raises(HTTPException) as exc:
         await resolve_access(db, room_id="does-not-exist", identity=identity)
