@@ -442,7 +442,8 @@ async def test_agent_reservation_claim_transition_and_assignment_wake_are_scoped
             json={"status": "in_progress"},
             headers=_auth(claim_env["tokens"]["agent_a"]),
         )
-        assert reopened_by_agent.status_code == 403, reopened_by_agent.text
+        assert reopened_by_agent.status_code == 409, reopened_by_agent.text
+        assert _error_code(reopened_by_agent) == "TASK_CLAIM_REQUIRED"
 
     assignments = await _task_assignments(
         claim_env["factory"], claim_env["room_id"], task_id
