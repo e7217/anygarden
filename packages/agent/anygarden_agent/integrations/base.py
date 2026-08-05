@@ -483,12 +483,14 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
 
     Rules (evaluated in order):
     1. Own message → SKIP (self-echo prevention).
-    2. ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or ``room_query``
-       metadata → RESPOND (task initiation / room-routed query
-       always processed).
+    2. Thread replies wake only on a server-derived explicit mention.
+       Unmentioned replies become INGEST_ONLY before task-init,
+       room-query, or speaker-strategy fallbacks can run.
+    3. For root messages, ``[DELEGATED]`` / ``[ROOM_QUERY]`` prefix or
+       ``room_query`` metadata → RESPOND.
     2d. Cycle detection (#157 Phase B) → SKIP when the same
         (sender, content_hash) repeats within a small window.
-    3. Server-parsed explicit mention matching this agent → RESPOND.
+    4. Server-parsed explicit mention matching this agent → RESPOND.
        The server's ``parse_mentions`` (``orchestration/rules.py``)
        drops non-word ``@`` tokens — e.g. ``alice@example.com`` or
        ``@dataclass`` — so we only see addressable mentions here.
@@ -534,30 +536,6 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if sender and sender in client._my_participant_ids:
         return MessagePolicy.SKIP
 
-    # 2. [DELEGATED] or [ROOM_QUERY] task → always respond
-    if content.startswith("[DELEGATED]") or content.startswith("[ROOM_QUERY]"):
-        return MessagePolicy.RESPOND
-
-    # 2b. room_query metadata → only the representative agent forwards.
-    # Issue #61 — the server now tags the broadcast with
-    # ``representative_agent_id``. Non-representative agents in the
-    # same source room MUST stay out, otherwise each fans out a
-    # duplicate ``[ROOM_QUERY]`` to the target room. The legacy
-    # fallback (``True``) covers two transition cases:
-    # 1. Pre-#61 servers don't set ``representative_agent_id``.
-    # 2. Pre-#61 clients don't populate ``_agent_id``.
-    # Both can be removed once the whole fleet is on ≥#61.
-    room_query = metadata.get("room_query")
-    if room_query:
-        rep_id = room_query.get("representative_agent_id")
-        my_agent_id = getattr(client, "_agent_id", None)
-        if rep_id and my_agent_id:
-            return (
-                MessagePolicy.RESPOND if my_agent_id == rep_id
-                else MessagePolicy.SKIP
-            )
-        return MessagePolicy.RESPOND
-
     agent_name = client._agent_name
     raw_mentions = metadata.get("mentions") or []
 
@@ -596,7 +574,26 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
             return bool(target) and target in client._my_participant_ids
         return False
 
-    mentioned_me = any(_targets_me(m) for m in addressable)
+    def _is_reflected_in_content(m: dict[str, Any]) -> bool:
+        """Reject forged mention metadata on the thread wake boundary."""
+        if m.get("type") == "user":
+            target = m.get("id")
+            return isinstance(target, str) and f"<@user:{target}>" in content
+        if m.get("type") == "legacy":
+            name = m.get("name")
+            if not isinstance(name, str):
+                return False
+            pattern = rf"@{re.escape(name)}(?![\w:])"
+            return re.search(pattern, content, re.IGNORECASE) is not None
+        return False
+
+    is_thread_reply = msg.get("root_message_id") is not None
+    wake_mentions = (
+        [m for m in addressable if _is_reflected_in_content(m)]
+        if is_thread_reply
+        else addressable
+    )
+    mentioned_me = any(_targets_me(m) for m in wake_mentions)
     # Backward-compat: the server's legacy pattern ``@([\w-]+)`` can't
     # span whitespace, so names like "@테스트 에이전트" never land in
     # ``addressable`` as a single mention. The content scan is a
@@ -608,10 +605,33 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     # re-opening the fan-out bug. A word-or-colon lookahead stops
     # the match at ``@user`` followed by ``:``, while still
     # allowing ``@테스트 에이전트 안녕`` (space after the name).
-    if not mentioned_me and agent_name:
+    if not is_thread_reply and not mentioned_me and agent_name:
         pattern = rf"@{re.escape(agent_name)}(?![\w:])"
         if re.search(pattern, content, re.IGNORECASE):
             mentioned_me = True
+
+    # Thread replies are room-wide context, but only a canonical explicit
+    # mention wakes this agent. This precedes every special routing fallback.
+    if is_thread_reply and not mentioned_me:
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
+
+    # Root-message task-init prefixes retain their legacy eager behaviour.
+    if not is_thread_reply and content.startswith(("[DELEGATED]", "[ROOM_QUERY]")):
+        return MessagePolicy.RESPOND
+
+    # Root-message room_query metadata → only the representative forwards.
+    room_query = metadata.get("room_query")
+    if not is_thread_reply and room_query:
+        rep_id = room_query.get("representative_agent_id")
+        my_agent_id = getattr(client, "_agent_id", None)
+        if rep_id and my_agent_id:
+            return (
+                MessagePolicy.RESPOND if my_agent_id == rep_id
+                else MessagePolicy.SKIP
+            )
+        return MessagePolicy.RESPOND
 
     # 2d. Semantic cycle detection (#157 Phase B). The same (sender,
     # content_hash) pair repeating within a small window is a loop

@@ -51,6 +51,7 @@ from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
 )
+from anygarden.messages.serialization import message_to_frame
 from anygarden.routing.protocol import (
     RoutingResult,
     _AgentLine,
@@ -232,17 +233,7 @@ async def auto_route_unassigned(
     # Broadcast the mention so the rep's WS subscription wakes up.
     manager = getattr(request.app.state, "connection_manager", None)
     if manager is not None:
-        from anygarden.ws.protocol import MessageOut
-
-        out = MessageOut(
-            id=inject_msg.id,
-            room_id=inject_msg.room_id,
-            participant_id=inject_msg.participant_id,
-            content=inject_msg.content,
-            seq=inject_msg.seq,
-            created_at=inject_msg.created_at,
-            metadata=inject_msg.extra_metadata,
-        )
+        out = message_to_frame(inject_msg)
         await manager.broadcast(room_id, out)
 
     log.info(

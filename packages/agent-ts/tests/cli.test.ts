@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { buildCli, makeAdapter } from "../src/cli.js";
+import { describe, it, expect, vi } from "vitest";
+import { buildCli, makeAdapter, sendAdapterReply } from "../src/cli.js";
+import type { ChatClient } from "../src/client.js";
 import type { EngineAdapter } from "../src/engines/types.js";
 
 describe("buildCli", () => {
@@ -60,5 +61,35 @@ describe("makeAdapter", () => {
     expect(() =>
       makeAdapter("mystery", { engine: "mystery", name: "", server: "" }),
     ).toThrow(/unknown engine/);
+  });
+});
+
+describe("sendAdapterReply", () => {
+  it("sends an agent answer back to the inbound thread root", async () => {
+    const send = vi.fn(async () => undefined);
+    const client = { send } as unknown as ChatClient;
+
+    await sendAdapterReply(
+      client,
+      {
+        type: "message",
+        id: "reply-id",
+        room_id: "room-a",
+        participant_id: "human-pid",
+        content: "<@user:me-pid> thread question",
+        root_message_id: "root-1",
+        seq: 2,
+        created_at: "2026-08-05T00:00:00Z",
+        metadata: null,
+      },
+      "thread answer",
+    );
+
+    expect(send).toHaveBeenCalledWith(
+      "room-a",
+      "thread answer",
+      undefined,
+      "root-1",
+    );
   });
 });

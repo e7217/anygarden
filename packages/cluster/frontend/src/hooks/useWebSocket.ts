@@ -5,7 +5,10 @@ export interface ChatMessage {
   type: string; id: string; room_id: string;
   /** null if the original sender was removed from the room (FK SET NULL). */
   participant_id: string | null;
-  content: string; seq: number; created_at: string;
+  content: string;
+  parent_message_id?: string | null;
+  root_message_id?: string | null;
+  seq: number; created_at: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -189,9 +192,14 @@ export function useWebSocket(roomId: string | null) {
     };
   }, [roomId, connect]);
 
-  const send = useCallback((content: string, metadata?: Record<string, unknown>) => {
+  const send = useCallback((
+    content: string,
+    metadata?: Record<string, unknown>,
+    threadRootId?: string,
+  ) => {
     const frame: Record<string, unknown> = { type: 'send', content }
     if (metadata && Object.keys(metadata).length > 0) frame.metadata = metadata
+    if (threadRootId) frame.thread_root_id = threadRootId
     wsRef.current?.send(JSON.stringify(frame));
   }, []);
 

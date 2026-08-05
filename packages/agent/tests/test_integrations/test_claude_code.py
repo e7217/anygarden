@@ -1125,6 +1125,57 @@ class TestIngestContext:
         assert len(fake_sdk) == 1
         assert "[참고]" in fake_sdk[0]["prompt"]
 
+    @pytest.mark.asyncio
+    async def test_mentioned_thread_reply_stays_in_same_thread(
+        self,
+        fake_sdk: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A reply that wakes the agent must keep the inbound thread root."""
+        from anygarden_agent.client import ChatClient
+
+        client = ChatClient("ws://localhost:8000", token="t", agent_name="Bot")
+        client._my_participant_ids = {"me-pid"}
+        sent: list[tuple[str, str, dict[str, Any] | None, str | None]] = []
+
+        async def _fake_send(
+            room_id: str,
+            content: str,
+            metadata: dict[str, Any] | None = None,
+            thread_root_id: str | None = None,
+        ) -> None:
+            sent.append((room_id, content, metadata, thread_root_id))
+
+        async def _fake_typing(room_id: str, is_typing: bool) -> None:
+            return None
+
+        monkeypatch.setattr(client, "send", _fake_send)
+        monkeypatch.setattr(client, "sendTyping", _fake_typing)
+
+        await integrate_with_claude_code(client, {"name": "Bot"})
+        handler = client._message_handlers[0]
+        await handler({
+            "room_id": "room-a",
+            "participant_id": "human-pid",
+            "content": "<@user:me-pid> thread question",
+            "root_message_id": "root-1",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "me-pid"}],
+                "ingest_only": True,
+                "request_id": "request-1",
+            },
+        })
+
+        assert len(fake_sdk) == 1
+        assert sent == [
+            (
+                "room-a",
+                "hello from fake claude",
+                {"request_id": "request-1"},
+                "root-1",
+            )
+        ]
+
 
 class TestRoomConversationWrapper:
     """Issue #284 — drained pending context is wrapped in a

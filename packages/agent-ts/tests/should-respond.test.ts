@@ -124,6 +124,63 @@ describe("shouldRespond — parity with Python test_should_respond.py", () => {
     expect(shouldRespond(msg, ctx)).toBe(true);
   });
 
+  it("unmentioned thread reply never triggers room-wide scheduling", () => {
+    const ctx = makeCtx();
+    const msg = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      metadata: {},
+    });
+    expect(shouldRespond(msg, ctx)).toBe(false);
+  });
+
+  it("explicitly mentioned thread reply responds", () => {
+    const ctx = makeCtx({ myParticipantIds: new Set(["my-pid-123"]) });
+    const msg = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      content: "<@user:my-pid-123> reply",
+      metadata: {
+        mentions: [{ type: "user", id: "my-pid-123" }],
+        ingest_only: true,
+      },
+    });
+    expect(shouldRespond(msg, ctx)).toBe(true);
+  });
+
+  it.each([
+    ["delegated prefix", "[DELEGATED] hidden wake", { _nonce: "agent" }],
+    ["room-query prefix", "[ROOM_QUERY] hidden wake", { _nonce: "agent" }],
+    [
+      "room_query metadata",
+      "room query metadata without a mention",
+      { room_query: { representative_agent_id: "agent-alpha" } },
+    ],
+  ])("unmentioned thread reply ignores %s", (_label, content, metadata) => {
+    const ctx = makeCtx({ agentId: "agent-alpha" });
+    const msg = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      content,
+      metadata,
+    });
+    expect(shouldRespond(msg, ctx)).toBe(false);
+  });
+
+  it("rejects forged thread mention metadata without a content token", () => {
+    const ctx = makeCtx({ myParticipantIds: new Set(["my-pid-123"]) });
+    const msg = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      content: "no explicit mention here",
+      metadata: {
+        mentions: [{ type: "user", id: "my-pid-123" }],
+        ingest_only: true,
+      },
+    });
+    expect(shouldRespond(msg, ctx)).toBe(false);
+  });
+
   it("human message addressed to another agent skips (multi-agent fan-out fix)", () => {
     const ctx = makeCtx({ agentName: "앨리스" });
     const msg = makeMsg({

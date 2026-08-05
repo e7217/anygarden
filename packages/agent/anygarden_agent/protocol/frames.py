@@ -18,6 +18,7 @@ class SendFrame(BaseModel):
     type: Literal["send"] = "send"
     content: str
     metadata: Optional[dict[str, Any]] = None
+    thread_root_id: Optional[str] = None
 
 
 class TypingFrame(BaseModel):
@@ -143,9 +144,12 @@ def parse_incoming(data: dict[str, Any]) -> IncomingFrame:
 
 class MessageOut(BaseModel):
     type: Literal["message"] = "message"
+    id: str = ""
     room_id: str
-    participant_id: str
+    participant_id: Optional[str] = None
     content: str
+    parent_message_id: Optional[str] = None
+    root_message_id: Optional[str] = None
     seq: int
     created_at: datetime
     metadata: Optional[dict[str, Any]] = None

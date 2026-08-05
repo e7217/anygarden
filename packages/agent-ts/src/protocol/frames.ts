@@ -20,6 +20,7 @@ export const SendFrameSchema = z.object({
   type: z.literal("send"),
   content: z.string(),
   metadata: z.record(z.string(), z.unknown()).nullish(),
+  thread_root_id: z.string().nullish(),
 });
 export type SendFrame = z.infer<typeof SendFrameSchema>;
 
@@ -59,6 +60,8 @@ export const MessageOutSchema = z.object({
   room_id: z.string(),
   participant_id: z.string().nullable(),
   content: z.string(),
+  parent_message_id: z.string().nullish(),
+  root_message_id: z.string().nullish(),
   seq: z.number(),
   // server emits ISO-8601 datetime; we keep it as a string so we don't
   // need a date adapter in hot paths.

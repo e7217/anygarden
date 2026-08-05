@@ -14,6 +14,7 @@ class TestProtocolCompat:
         assert f.type == "send"
         assert f.content == "test"
         assert f.metadata is None
+        assert f.thread_root_id is None
 
     def test_message_out_fields(self) -> None:
         """MessageOut has the expected fields."""
@@ -28,6 +29,8 @@ class TestProtocolCompat:
         )
         assert f.type == "message"
         assert f.seq == 1
+        assert f.parent_message_id is None
+        assert f.root_message_id is None
 
     def test_parse_incoming_send(self) -> None:
         """parse_incoming correctly dispatches a send frame."""

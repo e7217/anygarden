@@ -676,6 +676,7 @@ async def integrate_with_gemini_cli(
             room_id=room_id,
             request_id=request_id,
             run_engine=run_engine,
+            thread_root_id=msg.get("root_message_id"),
         )
 
     return adapter

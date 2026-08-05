@@ -152,12 +152,18 @@ export class ChatClient {
     roomId: string,
     content: string,
     metadata?: Record<string, unknown> | null,
+    threadRootId?: string | null,
   ): Promise<void> {
     const ws = this.connections.get(roomId);
     if (!ws) throw new Error(`Not connected to room ${roomId}`);
     const md: Record<string, unknown> = metadata ? { ...metadata } : {};
     md._nonce = this.nonceTracker.allocate();
-    const frame = { type: "send", content, metadata: md };
+    const frame = {
+      type: "send",
+      content,
+      metadata: md,
+      ...(threadRootId ? { thread_root_id: threadRootId } : {}),
+    };
     ws.send(JSON.stringify(frame));
   }
 

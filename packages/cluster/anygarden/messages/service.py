@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,12 +20,64 @@ if TYPE_CHECKING:
 async def append_message(
     db: AsyncSession,
     room_id: str,
-    participant_id: str,
+    participant_id: str | None,
     content: str,
     metadata: dict | None = None,
+    *,
+    thread_root_id: str | None = None,
 ) -> Message:
-    """Persist a new message and return it with the assigned seq."""
-    return await _repo_append(db, room_id, participant_id, content, metadata)
+    """Persist a root or direct reply and return it with assigned room seq.
+
+    Clients provide only ``thread_root_id``. The server locks and validates
+    that it names a top-level message in the same room, then derives both
+    stored relationship columns. This rejects cross-room and nested replies.
+    """
+    parent_message_id: str | None = None
+    root_message_id: str | None = None
+    if thread_root_id is not None:
+        root = await get_thread_root(db, room_id, thread_root_id, for_update=True)
+        parent_message_id = root.id
+        root_message_id = root.id
+    return await _repo_append(
+        db,
+        room_id,
+        participant_id,
+        content,
+        metadata,
+        parent_message_id=parent_message_id,
+        root_message_id=root_message_id,
+    )
+
+
+async def get_thread_root(
+    db: AsyncSession,
+    room_id: str,
+    root_message_id: str,
+    *,
+    for_update: bool = False,
+) -> Message:
+    """Return a same-room top-level message or raise a stable API error."""
+
+    stmt = select(Message).where(
+        Message.id == root_message_id,
+        Message.room_id == room_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    root = await db.scalar(stmt)
+    if root is None:
+        # Same response for an unknown id and a root in another room so the
+        # endpoint does not become a cross-room message-id oracle.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thread root not found",
+        )
+    if root.root_message_id is not None or root.parent_message_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Thread root must be a top-level message",
+        )
+    return root
 
 
 async def get_message_history(
@@ -51,6 +104,53 @@ async def get_message_history(
     messages = list(result.scalars().all())
     messages.reverse()
     return messages
+
+
+async def get_thread_roots(
+    db: AsyncSession,
+    room_id: str,
+    since_seq: int = 0,
+    limit: int = 50,
+) -> list[Message]:
+    """Return root timeline rows in room-seq order.
+
+    With the zero cursor, mirror legacy history behavior by returning the
+    latest page and reordering it ascending. A positive cursor streams forward.
+    """
+
+    stmt = select(Message).where(
+        Message.room_id == room_id,
+        Message.root_message_id.is_(None),
+        Message.parent_message_id.is_(None),
+    )
+    if since_seq > 0:
+        rows = await db.scalars(
+            stmt.where(Message.seq > since_seq).order_by(Message.seq.asc()).limit(limit)
+        )
+        return list(rows.all())
+    rows = await db.scalars(stmt.order_by(Message.seq.desc()).limit(limit))
+    messages = list(rows.all())
+    messages.reverse()
+    return messages
+
+
+async def get_thread_messages(
+    db: AsyncSession,
+    room_id: str,
+    root_message_id: str,
+    since_seq: int = 0,
+    limit: int = 50,
+) -> list[Message]:
+    """Return direct replies for one validated root in room-seq order."""
+
+    await get_thread_root(db, room_id, root_message_id)
+    stmt = select(Message).where(
+        Message.room_id == room_id,
+        Message.root_message_id == root_message_id,
+        Message.seq > since_seq,
+    )
+    rows = await db.scalars(stmt.order_by(Message.seq.asc()).limit(limit))
+    return list(rows.all())
 
 
 # ── Task assignment injection (#266) ─────────────────────────────────
@@ -194,17 +294,9 @@ async def inject_task_assignment_message(
     # already carries the full message content (no DB lookup needed)
     # and any reconnect will reconcile via ``replay_since_seq``.
     if manager is not None:
-        from anygarden.ws.protocol import MessageOut
+        from anygarden.messages.serialization import message_to_frame
 
-        frame = MessageOut(
-            id=msg.id,
-            room_id=msg.room_id,
-            participant_id=msg.participant_id,
-            content=msg.content,
-            seq=msg.seq,
-            created_at=msg.created_at,
-            metadata=msg.extra_metadata,
-        )
+        frame = message_to_frame(msg)
         await manager.broadcast(room.id, frame)
 
     return msg

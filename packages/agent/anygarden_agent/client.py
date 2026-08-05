@@ -295,6 +295,7 @@ class ChatClient:
         room_id: str,
         content: str,
         metadata: dict | None = None,
+        thread_root_id: str | None = None,
     ) -> None:
         """Send a message to a room."""
         ws = self._connections.get(room_id)
@@ -305,7 +306,11 @@ class ChatClient:
         metadata = dict(metadata) if metadata else {}
         metadata["_nonce"] = nonce
         self._sent_nonces.add(nonce)
-        frame = SendFrame(content=content, metadata=metadata)
+        frame = SendFrame(
+            content=content,
+            metadata=metadata,
+            thread_root_id=thread_root_id,
+        )
         await ws.send(frame.model_dump_json())
 
     async def sendTyping(self, room_id: str, is_typing: bool) -> None:

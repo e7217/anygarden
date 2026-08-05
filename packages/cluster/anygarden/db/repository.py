@@ -17,6 +17,9 @@ async def append_message(
     participant_id: str | None,
     content: str,
     metadata: dict | None = None,
+    *,
+    parent_message_id: str | None = None,
+    root_message_id: str | None = None,
 ) -> Message:
     """Persist a new message with an auto-assigned room-scoped sequence number.
 
@@ -41,6 +44,8 @@ async def append_message(
             participant_id=participant_id,
             content=content,
             extra_metadata=metadata,
+            parent_message_id=parent_message_id,
+            root_message_id=root_message_id,
             seq=next_seq,
         )
         db.add(msg)
@@ -51,7 +56,6 @@ async def append_message(
             if attempt == _MAX_SEQ_RETRIES - 1:
                 raise
             continue
-        await db.refresh(msg)
         return msg
 
     # Should never reach here due to the raise above, but satisfy type checker

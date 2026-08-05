@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "058"
+                assert version == "059"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -69,6 +69,7 @@ class TestMigrations:
                     "agent_tokens",
                     "room_invite_links",
                     "room_authorization_audits",
+                    "thread_participant_states",
                 }
                 missing = expected - tables
                 assert not missing, f"Missing tables after upgrade: {missing}"
@@ -102,6 +103,29 @@ class TestMigrations:
                 assert "ix_room_authorization_audits_actor_at" in indexes
                 assert "ix_room_authorization_audits_room_at" in indexes
                 assert "ix_room_authorization_audits_scope_at" in indexes
+                assert "ix_messages_room_root_seq" in indexes
+                assert "ix_thread_participant_states_root_read" in indexes
+
+                fts_triggers = {
+                    row[0]
+                    for row in conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type='trigger' AND name LIKE 'messages_fts_%'"
+                        )
+                    )
+                }
+                assert fts_triggers == {
+                    "messages_fts_insert",
+                    "messages_fts_delete",
+                    "messages_fts_update",
+                }
+
+                message_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(messages)"))
+                }
+                assert {"parent_message_id", "root_message_id"} <= message_columns
 
                 # Authorization audits are append-only historical evidence.
                 # Actor and room deletion must never cascade into this table.
@@ -439,9 +463,9 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                # Head is now 058; the cost_usd column added by 047
+                # Head is now 059; the cost_usd column added by 047
                 # is still present after upgrading through to head.
-                assert version == "058"
+                assert version == "059"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -501,7 +525,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "058"
+                assert version == "059"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -548,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "058"
+                assert version == "059"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -629,7 +653,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "058"
+                assert version == "059"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -669,7 +693,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "058"
+                assert version == "059"
             sync_engine.dispose()
         finally:
             try:
@@ -703,7 +727,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "058"
+            assert head == "059"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -805,7 +829,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "058"
+                assert version == "059"
             sync_engine.dispose()
         finally:
             try:

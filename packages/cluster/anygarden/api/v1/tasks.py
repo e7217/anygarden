@@ -17,6 +17,7 @@ from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
 )
+from anygarden.messages.serialization import message_to_frame
 from anygarden.rooms.authorization import Capability, require_capability
 # #471 — validate ``status`` against the single canonical vocabulary
 # (the same set the MCP ``mark_task_status`` path enforces) so the REST
@@ -184,15 +185,7 @@ def _connection_manager(request: Request):
 
 
 def _message_to_frame(msg: Message) -> MessageOut:
-    return MessageOut(
-        id=msg.id,
-        room_id=msg.room_id,
-        participant_id=msg.participant_id,
-        content=msg.content,
-        seq=msg.seq,
-        created_at=msg.created_at,
-        metadata=msg.extra_metadata,
-    )
+    return message_to_frame(msg)
 
 
 @router.post("/api/v1/rooms/{room_id}/tasks", status_code=201, response_model=TaskOut)
