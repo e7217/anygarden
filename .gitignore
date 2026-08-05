@@ -31,6 +31,8 @@ htmlcov/
 node_modules/
 .vite/
 *.tsbuildinfo
+playwright-report/
+test-results/
 
 # Anygarden runtime
 .anygarden/
