@@ -12,7 +12,9 @@ can therefore share it without creating an API-layer dependency cycle.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from collections.abc import Set as AbstractSet
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -216,6 +218,32 @@ async def persist_room_authorization_audits(
             for event in events
         )
         await audit_db.commit()
+
+
+@asynccontextmanager
+async def room_authorization_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """Yield a caller session, then flush its audits after releasing it.
+
+    HTTP dependencies and raw authorization paths such as WebSocket handshake
+    and per-frame fresh gates must share this teardown. Keeping the caller
+    checkout and audit-writer checkout sequential preserves both business
+    rollback isolation and bounded-pool liveness.
+    """
+
+    pending_audits = ()
+    try:
+        async with session_factory() as session:
+            try:
+                yield session
+            finally:
+                pending_audits = take_pending_room_authorization_audits(session)
+    finally:
+        await persist_room_authorization_audits(
+            session_factory,
+            pending_audits,
+        )
 
 
 def validate_room_role(role: str) -> str:
@@ -587,6 +615,7 @@ __all__ = [
     "require_active_room",
     "require_capability",
     "resolve_access",
+    "room_authorization_session",
     "take_pending_room_authorization_audits",
     "validate_room_role",
     "validate_room_visibility",

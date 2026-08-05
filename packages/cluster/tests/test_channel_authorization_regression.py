@@ -18,10 +18,9 @@ import pytest
 import pytest_asyncio
 from anygarden.app import create_app
 from anygarden.auth.dependencies import Identity
-from anygarden.auth.jwt import create_user_token
+from anygarden.auth.jwt import UserClaims, create_user_token
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
-from anygarden.dependencies import forbid_guest, get_db
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import create_message_fts
 from anygarden.db.models import (
@@ -37,11 +36,14 @@ from anygarden.db.models import (
     Task,
     User,
 )
+from anygarden.dependencies import forbid_guest, get_db
 from anygarden.rooms.authorization import (
     Capability,
     require_capability,
     resolve_access,
 )
+from anygarden.ws.handler import _require_fresh_frame_access
+from anygarden.ws.protocol import SendFrame
 from fastapi import Depends, HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
@@ -216,6 +218,18 @@ async def _message_count(factory, room_id: str) -> int:
             )
             or 0
         )
+
+
+async def _authorization_audits(factory) -> list[RoomAuthorizationAudit]:
+    async with factory() as db:
+        return (
+            await db.scalars(
+                select(RoomAuthorizationAudit).order_by(
+                    RoomAuthorizationAudit.created_at,
+                    RoomAuthorizationAudit.id,
+                )
+            )
+        ).all()
 
 
 @pytest.mark.asyncio
@@ -519,6 +533,44 @@ async def test_failed_global_admin_write_audits_nonmember_and_role_delta(
 
 
 @pytest.mark.asyncio
+async def test_ws_fresh_gate_persists_global_admin_role_delta_audit(
+    authorization_env: dict,
+) -> None:
+    """Raw WS authorization sessions share the durable audit teardown."""
+
+    room_id = authorization_env["room_id"]
+    admin_id = authorization_env["global_admin_id"]
+    async with authorization_env["factory"]() as db:
+        db.add(Participant(room_id=room_id, user_id=admin_id, role="observer"))
+        await db.commit()
+
+    identity = Identity(
+        kind="user",
+        id=admin_id,
+        claims=UserClaims(
+            user_id=admin_id,
+            email="global-admin@authorization.test",
+            is_admin=True,
+        ),
+    )
+    access = await _require_fresh_frame_access(
+        authorization_env["factory"],
+        room_id=room_id,
+        identity=identity,
+        frame=SendFrame(content="operator role delta"),
+    )
+    assert access.effective_role == "observer"
+
+    async with authorization_env["factory"]() as db:
+        audit = (await db.scalars(select(RoomAuthorizationAudit))).one()
+        assert audit.actor_user_id == admin_id
+        assert audit.room_id == room_id
+        assert audit.scope == "room"
+        assert audit.capability == "message.send"
+        assert audit.outcome == "allowed"
+
+
+@pytest.mark.asyncio
 async def test_audit_flush_releases_callers_before_second_pool_checkout(
     tmp_path,
 ) -> None:
@@ -728,6 +780,15 @@ def test_global_admin_rest_bypass_does_not_create_websocket_identity(
         ):
             pytest.fail("a nonmember global admin must not receive a WS welcome")
         assert exc.value.code == 4003
+
+    audits = asyncio.run(_authorization_audits(authorization_env["factory"]))
+    assert len(audits) == 2
+    assert all(
+        audit.actor_user_id == authorization_env["global_admin_id"] for audit in audits
+    )
+    assert all(audit.room_id == room_id for audit in audits)
+    assert all(audit.capability == "room.read" for audit in audits)
+    assert all(audit.outcome == "allowed" for audit in audits)
 
 
 def test_archive_immediately_revokes_open_websocket(

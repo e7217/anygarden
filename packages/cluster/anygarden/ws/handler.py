@@ -26,7 +26,11 @@ from anygarden.db.models import (
 )
 from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import append_message, replay_since_seq
-from anygarden.rooms.authorization import Capability, require_capability
+from anygarden.rooms.authorization import (
+    Capability,
+    require_capability,
+    room_authorization_session,
+)
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.messages.references import (
     InvalidSharedFileReference,
@@ -281,7 +285,7 @@ async def _require_fresh_frame_access(
 
     if isinstance(frame, LifecycleFrame) and frame.room_id != room_id:
         raise HTTPException(status_code=403, detail="Lifecycle room mismatch")
-    async with session_factory() as db:
+    async with room_authorization_session(session_factory) as db:
         return await require_capability(
             db,
             room_id=room_id,
@@ -902,7 +906,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     participant: Participant | None = None
     auth_error: str | None = None
 
-    async with session_factory() as db:
+    async with room_authorization_session(session_factory) as db:
         try:
             identity = await get_identity(
                 db,

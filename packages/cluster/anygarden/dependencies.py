@@ -6,10 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity, get_identity
-from anygarden.rooms.authorization import (
-    persist_room_authorization_audits,
-    take_pending_room_authorization_audits,
-)
+from anygarden.rooms.authorization import room_authorization_session
 
 
 async def get_db(request: Request) -> AsyncSession:
@@ -21,18 +18,8 @@ async def get_db(request: Request) -> AsyncSession:
     """
 
     session_factory = request.app.state.session_factory
-    pending_audits = ()
-    try:
-        async with session_factory() as session:
-            try:
-                yield session
-            finally:
-                pending_audits = take_pending_room_authorization_audits(session)
-    finally:
-        await persist_room_authorization_audits(
-            session_factory,
-            pending_audits,
-        )
+    async with room_authorization_session(session_factory) as session:
+        yield session
 
 
 async def get_current_identity(
