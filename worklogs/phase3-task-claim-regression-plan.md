@@ -3,10 +3,11 @@
 ## Purpose
 
 This is the independent QA completion contract for Phase 3. It is written
-against merged Phase 2 (`2a593520`) before the final Phase 3 API/model
-contract is published in task #23. Tests will be made executable on the
-implementation head and any provisional route or error code below will be
-replaced by that contract rather than inferred from the current Task API.
+against merged Phase 2 (`2a593520`) and task #23's final model/API contract.
+The executable HTTP/WS regressions live in
+`packages/cluster/tests/test_task_claim_regression.py`; they intentionally
+fail on the pre-Phase-3 baseline because that baseline has neither the linked
+Task endpoint nor the CAS claim endpoint.
 
 ## Current baseline and required additive behavior
 
@@ -25,13 +26,12 @@ Task and target only the assigned agent; it must be replay-safe and idempotent.
 
 ### A. Message ↔ Task relation
 
-1. Creating a Task from an accessible message persists one non-null durable
-   link and returns the same identifier in create, direct, list, and relevant
-   WS task payloads.
-2. A message has at most one linked Task. Repeat creation using the agreed
-   idempotency key returns the original Task without another assignment
-   message/wake; a distinct conflicting request receives the contract's
-   conflict response and also creates no duplicate.
+1. `POST /api/v1/rooms/{room_id}/messages/{message_id}/task` creates a Task
+   from an accessible, same-room root or direct reply and returns both
+   `source_message_id` and derived `source_thread_root_id` in `TaskOut`.
+2. A message has at most one linked Task. A repeat returns 409
+   `TASK_SOURCE_ALREADY_LINKED` and identifies the original Task without a
+   second assignment message/wake.
 3. A cross-room message ID, inaccessible message, reply/root shape disallowed
    by contract, or deleted/invalid ID cannot mint or disclose a Task. The test
    verifies the Task/message counts do not change.
@@ -44,8 +44,8 @@ Task and target only the assigned agent; it must be replay-safe and idempotent.
    using a start barrier. Exactly one conditional update succeeds; the loser
    receives the documented conflict/current-state result. Persisted assignee,
    status, timestamps, event log, and WS task event name identify one winner.
-2. A retry by the winner with the same idempotency material is a no-op: no
-   second state transition, assignment mention, agent wake, or replay record.
+2. A retry by the winner is a conflict: no second state transition,
+   assignment mention, agent wake, or replay record.
 3. A retry by the losing actor remains a conflict and cannot overwrite the
    winner. Concurrent claim against already terminal/cancelled rows likewise
    cannot reopen it unless the final contract explicitly permits that
@@ -56,9 +56,10 @@ Task and target only the assigned agent; it must be replay-safe and idempotent.
 
 ### C. State and authority boundaries
 
-1. The contract's transition table is covered for `todo`, claimed/in-progress,
-   terminal, retry/requeue, and assignment/unassignment paths. Invalid
-   transitions return the documented 4xx response with no mutation.
+1. The contract's transition table is covered for `todo` → `in_progress` →
+   `blocked`/`done`/`failed`, blocked resolution/requeue, and
+   assignment/unassignment paths. Invalid transitions return the documented
+   4xx response with no mutation.
 2. A member may perform only its own allowed claim/assignment operation; it
    cannot claim for another participant, reassign an owned Task, edit title,
    or alter unrelated status. An agent is restricted to the existing
@@ -99,18 +100,18 @@ Task and target only the assigned agent; it must be replay-safe and idempotent.
 | Agent integration | Assignment wake and dedup, Python/TS thread-root propagation where applicable |
 | Browser E2E | Deterministic two-session claim race and visible single owner/state, with API-local fixtures to avoid LLM timing |
 
-## Contract values awaiting task #23
+## Fixed contract and implementation gate
 
-- canonical migration number and relation direction (`tasks.message_id` versus
-  a join/link table), including root/reply eligibility;
-- create/link and claim endpoint/frame names, request idempotency field, and
-  success/conflict/status codes;
-- exact claim transition/state vocabulary and timestamp/audit payload;
-- whether a successful claimant is automatically assigned, and whether agent
-  self-claim is permitted;
-- direct-id/list/search/saved exposure for linked Task references and the
-  expected WS replay frame shape.
-
-When these values are fixed, this plan becomes the focused regression module
-and the same test identifiers are run again on the final implementation head
-followed by the full cluster and deterministic browser suites.
+- The nullable `tasks.source_message_id` FK is unique; legacy/scheduler/Goal
+  tasks remain unlinked. System task-assignment/routing messages are forbidden
+  sources and cross-room/nonexistent sources both resolve to 404.
+- Claim is `POST /api/v1/tasks/{task_id}/claim`; it uses one conditional
+  update over `todo` plus an unassigned/self reservation and returns a 409
+  `TASK_CLAIM_CONFLICT` to the loser. Archive writes are 409 and stale WS
+  gates revoke with 4003.
+- A successful claim sets the caller as assignee and moves to `in_progress`;
+  it is chat-quiet but publishes one live `task.updated(event="claimed")`.
+  Admin/owner assignment wakes an agent by a direct reply on the source root.
+- The final GO/NO-GO is made only against task #25's exact implementation
+  head. On that head, these focused tests are followed by the server/agent
+  suites and the deterministic browser scope where a UI surface exists.
