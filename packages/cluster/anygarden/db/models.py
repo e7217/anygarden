@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -753,6 +754,18 @@ class Message(Base):
     __tablename__ = "messages"
     __table_args__ = (
         UniqueConstraint("room_id", "seq", name="uq_room_seq"),
+        CheckConstraint(
+            "((parent_message_id IS NULL AND root_message_id IS NULL) OR "
+            "(parent_message_id IS NOT NULL AND "
+            "parent_message_id = root_message_id))",
+            name="ck_messages_thread_shape",
+        ),
+        Index(
+            "ix_messages_room_root_seq",
+            "room_id",
+            "root_message_id",
+            "seq",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -766,12 +779,72 @@ class Message(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     extra_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    # A root message leaves both columns NULL. A direct reply points both
+    # columns at the same top-level root; nested replies are rejected by the
+    # service before insert and the CHECK prevents arbitrary parent shapes.
+    parent_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("messages.id", ondelete="RESTRICT"),
+        nullable=True,
+        default=None,
+    )
+    root_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("messages.id", ondelete="RESTRICT"),
+        nullable=True,
+        default=None,
+    )
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     room: Mapped["Room"] = relationship("Room", back_populates="messages")
     participant: Mapped[Optional["Participant"]] = relationship(
         "Participant", back_populates="messages"
+    )
+
+
+class ThreadParticipantState(Base):
+    """Per-participant follow/read cursor for a top-level message thread.
+
+    Phase 2 establishes the durable storage boundary only. Automatic follow,
+    notification, and wake policies remain intentionally outside this phase.
+    """
+
+    __tablename__ = "thread_participant_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "participant_id",
+            "root_message_id",
+            name="uq_thread_participant_state",
+        ),
+        Index(
+            "ix_thread_participant_states_root_read",
+            "root_message_id",
+            "last_read_seq",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    participant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    root_message_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    last_read_seq: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        nullable=True,
+        default=None,
+    )
+    followed_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime,
+        default=_utcnow,
+        onupdate=_utcnow,
     )
 
 

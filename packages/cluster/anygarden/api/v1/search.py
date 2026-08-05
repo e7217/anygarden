@@ -41,6 +41,9 @@ class SearchResult(BaseModel):
     message_id: str
     room_id: str
     participant_id: str | None = None
+    parent_message_id: str | None = None
+    root_message_id: str | None = None
+    seq: int
     content: str
     created_at: str
     snippet: str
@@ -77,8 +80,12 @@ async def search_messages(
                 fts.participant_id,
                 fts.content,
                 fts.created_at,
+                m.parent_message_id,
+                m.root_message_id,
+                m.seq,
                 highlight(messages_fts, 0, '<mark>', '</mark>') as snippet
             FROM messages_fts fts
+            JOIN messages m ON m.id = fts.message_id
             JOIN rooms r ON r.id = fts.room_id
             WHERE messages_fts MATCH :query
               AND fts.room_id IN :room_ids
@@ -95,13 +102,17 @@ async def search_messages(
     else:
         sql = text("""
             SELECT
-                message_id,
-                room_id,
-                participant_id,
-                content,
-                created_at,
+                fts.message_id,
+                fts.room_id,
+                fts.participant_id,
+                fts.content,
+                fts.created_at,
+                m.parent_message_id,
+                m.root_message_id,
+                m.seq,
                 highlight(messages_fts, 0, '<mark>', '</mark>') as snippet
-            FROM messages_fts
+            FROM messages_fts fts
+            JOIN messages m ON m.id = fts.message_id
             WHERE messages_fts MATCH :query
               AND room_id IN :room_ids
             ORDER BY rank
@@ -127,6 +138,9 @@ async def search_messages(
             message_id=row.message_id,
             room_id=row.room_id,
             participant_id=row.participant_id,
+            parent_message_id=row.parent_message_id,
+            root_message_id=row.root_message_id,
+            seq=row.seq,
             content=row.content,
             created_at=_fts_created_at_to_iso(row.created_at),
             snippet=row.snippet,

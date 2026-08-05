@@ -1182,8 +1182,8 @@ async def notify_and_redispatch_orphans(
     # order cycle-free (mirrors the ws handler's lazy ``messages.service``
     # import on its re-dispatch path).
     from anygarden.db.repository import append_message
+    from anygarden.messages.serialization import message_to_frame
     from anygarden.ws.handler import _redispatch_task_by_request_id
-    from anygarden.ws.protocol import MessageOut
 
     for row in rows:
         # --- 1. visibility: room system notice ---
@@ -1201,15 +1201,7 @@ async def notify_and_redispatch_orphans(
                         },
                     )
                     await db.commit()
-                    frame = MessageOut(
-                        id=msg.id,
-                        room_id=msg.room_id,
-                        participant_id=msg.participant_id,
-                        content=msg.content,
-                        seq=msg.seq,
-                        created_at=msg.created_at,
-                        metadata=msg.extra_metadata,
-                    )
+                    frame = message_to_frame(msg)
                 await manager.broadcast(row.room_id, frame)
             except Exception as exc:  # noqa: BLE001 — notice is best-effort
                 logger.warning(

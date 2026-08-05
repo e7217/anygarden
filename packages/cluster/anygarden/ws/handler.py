@@ -25,7 +25,9 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.agent_availability import room_notice_for_unavailable
-from anygarden.db.repository import append_message, replay_since_seq
+from anygarden.db.repository import replay_since_seq
+from anygarden.messages.serialization import message_to_frame
+from anygarden.messages.service import append_message
 from anygarden.rooms.authorization import (
     Capability,
     require_capability,
@@ -118,15 +120,7 @@ async def _notify_unavailable_responders(
                     },
                 )
                 await db.commit()
-                frame = MessageOut(
-                    id=msg.id,
-                    room_id=msg.room_id,
-                    participant_id=msg.participant_id,
-                    content=msg.content,
-                    seq=msg.seq,
-                    created_at=msg.created_at,
-                    metadata=msg.extra_metadata,
-                )
+                frame = message_to_frame(msg)
             await manager.broadcast(room_id, frame)
         except Exception as exc:  # noqa: BLE001 — notice is best-effort
             logger.warning(
@@ -1132,15 +1126,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         truncated = False
                         break
                     for msg in page:
-                        frame = MessageOut(
-                            id=msg.id,
-                            room_id=msg.room_id,
-                            participant_id=msg.participant_id,
-                            content=msg.content,
-                            seq=msg.seq,
-                            created_at=msg.created_at,
-                            metadata=msg.extra_metadata,
-                        )
+                        frame = message_to_frame(msg)
                         await websocket.send_text(frame.model_dump_json())
                         cursor = msg.seq
                         replayed += 1
@@ -1299,6 +1285,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         continue
                 if mentions:
                     metadata["mentions"] = mentions
+                is_thread_reply = frame_in.thread_root_id is not None
+                if is_thread_reply:
+                    # Replies still fan out room-wide for cache/replay
+                    # consistency, but only an explicit mention wakes an agent.
+                    metadata["ingest_only"] = True
 
                 # Issue #279 — peer-mention safety net.
                 #
@@ -1326,7 +1317,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 is_agent_for_peer = (
                     identity is not None and identity.kind == "agent"
                 )
-                if is_agent_for_peer and mentions and peer_handoff_budget is not None:
+                if (
+                    not is_thread_reply
+                    and is_agent_for_peer
+                    and mentions
+                    and peer_handoff_budget is not None
+                ):
                     async with session_factory() as peer_db:
                         peer_rows = (
                             await peer_db.execute(
@@ -1401,7 +1397,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 "peer_query" if used == 1 else "peer_response"
                             )
                 elif (
-                    not is_agent_for_peer
+                    not is_thread_reply
+                    and not is_agent_for_peer
                     and not is_guest
                     and peer_handoff_budget is not None
                 ):
@@ -1445,7 +1442,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 is_agent = identity is not None and identity.kind == "agent"
                 room_mentions = (
                     [m for m in mentions if m.get("type") == "room"]
-                    if not is_guest and not is_agent
+                    if not is_thread_reply and not is_guest and not is_agent
                     else []
                 )
                 if room_mentions:
@@ -1589,7 +1586,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         identity is not None and identity.kind == "agent"
                     )
                     if (
-                        context_window_enabled
+                        not is_thread_reply
+                        and context_window_enabled
                         and _is_ambient_candidate(
                             frame_in.content,
                             metadata,
@@ -1615,7 +1613,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # immediately, rather than wherever the cursor
                     # happened to stop before. See
                     # ``_compute_round_robin_next`` for the details.
-                    if speaker_strategy == "round_robin":
+                    if not is_thread_reply and speaker_strategy == "round_robin":
                         sender_is_human = (
                             identity is not None and identity.kind == "user"
                         )
@@ -1654,14 +1652,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         if identity is not None and identity.kind == "agent"
                         else None
                     )
-                    handoff_pid = await _apply_orchestrator_handoff(
-                        db,
-                        room_id=room_id,
-                        content=frame_in.content,
-                        metadata=metadata,
-                        orchestrator_agent_id=orchestrator_agent_id,
-                        sender_agent_id=sender_agent_id,
-                    )
+                    handoff_pid = None
+                    if not is_thread_reply:
+                        handoff_pid = await _apply_orchestrator_handoff(
+                            db,
+                            room_id=room_id,
+                            content=frame_in.content,
+                            metadata=metadata,
+                            orchestrator_agent_id=orchestrator_agent_id,
+                            sender_agent_id=sender_agent_id,
+                        )
                     if handoff_pid is not None:
                         nominated_pid = handoff_pid
 
@@ -1679,7 +1679,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # the orchestrator omit the mention token from
                     # the second handoff onward in 5/5 trials, even
                     # with persona reinforcement).
-                    if speaker_strategy == "orchestrator":
+                    if not is_thread_reply and speaker_strategy == "orchestrator":
                         fallback_info = (
                             await _apply_orchestrator_fallback_nominate(
                                 db,
@@ -1709,7 +1709,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # chat thread (it's an internal protocol echo,
                     # not user-facing). Non-routing messages walk
                     # through unchanged.
-                    if identity is not None and identity.kind == "agent":
+                    if (
+                        not is_thread_reply
+                        and identity is not None
+                        and identity.kind == "agent"
+                    ):
                         from anygarden.routing.protocol import (
                             try_parse_routing_response,
                         )
@@ -1729,13 +1733,20 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             metadata["system_origin"] = "auto_route_response"
                             metadata["routing_request_id"] = request_id
 
-                    msg = await append_message(
-                        db,
-                        room_id=room_id,
-                        participant_id=participant.id,
-                        content=frame_in.content,
-                        metadata=metadata or None,
-                    )
+                    try:
+                        msg = await append_message(
+                            db,
+                            room_id=room_id,
+                            participant_id=participant.id,
+                            content=frame_in.content,
+                            metadata=metadata or None,
+                            thread_root_id=frame_in.thread_root_id,
+                        )
+                    except HTTPException as exc:
+                        await websocket.send_text(
+                            ErrorOut(detail=str(exc.detail)).model_dump_json()
+                        )
+                        continue
                     # #425 — bind the message id so ingest/broadcast logs
                     # below carry it (cleared next loop iteration).
                     structlog.contextvars.bind_contextvars(message_id=msg.id)
@@ -1753,6 +1764,27 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # ``response_sent`` so the full lifecycle chain
                     # resolves under one identifier.
                     request_id_by_participant: dict[str, str] = {}
+                    mentioned_participant_ids = {
+                        str(mention["id"])
+                        for mention in mentions
+                        if mention.get("type") == "user" and mention.get("id")
+                    }
+                    thread_agent_parts: list[tuple[str, str]] = []
+                    if is_thread_reply and mentioned_participant_ids:
+                        thread_agent_parts = list(
+                            (
+                                await db.execute(
+                                    select(
+                                        Participant.id,
+                                        Participant.agent_id,
+                                    ).where(
+                                        Participant.room_id == room_id,
+                                        Participant.id.in_(mentioned_participant_ids),
+                                        Participant.agent_id.isnot(None),
+                                    )
+                                )
+                            ).all()
+                        )
                     if identity and identity.kind == "agent":
                         echoed_rid = None
                         if isinstance(metadata, dict):
@@ -1784,47 +1816,69 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # nomination (single-agent round_robin wraps to the
                         # sender) is skipped: a turn must not causally link
                         # to its own author.
-                        next_pid = nominated_pid
-                        if next_pid and next_pid != participant.id:
-                            next_aid = (await db.execute(
-                                select(Participant.agent_id).where(
-                                    Participant.id == next_pid,
+                        if is_thread_reply:
+                            next_agent_parts = [
+                                (pid, aid)
+                                for pid, aid in thread_agent_parts
+                                if pid != participant.id
+                            ]
+                        else:
+                            next_pid = nominated_pid
+                            next_aid = None
+                            if next_pid and next_pid != participant.id:
+                                next_aid = (
+                                    await db.execute(
+                                        select(Participant.agent_id).where(
+                                            Participant.id == next_pid,
+                                            Participant.room_id == room_id,
+                                            Participant.agent_id.isnot(None),
+                                        )
+                                    )
+                                ).scalar_one_or_none()
+                            next_agent_parts = (
+                                [(next_pid, next_aid)]
+                                if next_pid and next_aid is not None
+                                else []
+                            )
+                        for next_pid, next_aid in next_agent_parts:
+                            rid = str(uuid4())
+                            request_id_by_participant[next_pid] = rid
+                            db.add(ActivityLog(
+                                agent_id=next_aid,
+                                event_type="message_received",
+                                request_id=rid,
+                                room_id=room_id,
+                                details={
+                                    "room_id": room_id,
+                                    "from_participant_id": participant.id,
+                                    "trigger_message_id": msg.id,
+                                    # #431 — the turn that triggered
+                                    # this one, so the flow view /
+                                    # trace can draw A→B.
+                                    "parent_request_id": echoed_rid,
+                                },
+                            ))
+                            if tracing is not None:
+                                tracing.start_request(
+                                    rid,
+                                    room_id=room_id,
+                                    agent_id=next_aid,
+                                    parent_request_id=echoed_rid,
+                                )
+                    elif identity and identity.kind in {"user", "guest"}:
+                        agent_parts = (
+                            thread_agent_parts
+                            if is_thread_reply
+                            else (await db.execute(
+                                select(
+                                    Participant.id,
+                                    Participant.agent_id,
+                                ).where(
                                     Participant.room_id == room_id,
                                     Participant.agent_id.isnot(None),
                                 )
-                            )).scalar_one_or_none()
-                            if next_aid is not None:
-                                rid = str(uuid4())
-                                request_id_by_participant[next_pid] = rid
-                                db.add(ActivityLog(
-                                    agent_id=next_aid,
-                                    event_type="message_received",
-                                    request_id=rid,
-                                    room_id=room_id,
-                                    details={
-                                        "room_id": room_id,
-                                        "from_participant_id": participant.id,
-                                        "trigger_message_id": msg.id,
-                                        # #431 — the turn that triggered
-                                        # this one, so the flow view /
-                                        # trace can draw A→B.
-                                        "parent_request_id": echoed_rid,
-                                    },
-                                ))
-                                if tracing is not None:
-                                    tracing.start_request(
-                                        rid,
-                                        room_id=room_id,
-                                        agent_id=next_aid,
-                                        parent_request_id=echoed_rid,
-                                    )
-                    elif identity and identity.kind == "user":
-                        agent_parts = (await db.execute(
-                            select(Participant.id, Participant.agent_id).where(
-                                Participant.room_id == room_id,
-                                Participant.agent_id.isnot(None),
-                            )
-                        )).all()
+                            )).all()
+                        )
                         # #516 — of the agents expected to respond, which
                         # can't? Collected here, warned in-room after broadcast.
                         if agent_parts:
@@ -1887,15 +1941,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     meta = dict(base_metadata) if base_metadata else {}
                     if rid is not None:
                         meta["request_id"] = rid
-                    return MessageOut(
-                        id=msg.id,
-                        room_id=msg.room_id,
-                        participant_id=msg.participant_id,
-                        content=msg.content,
-                        seq=msg.seq,
-                        created_at=msg.created_at,
-                        metadata=meta or None,
-                    )
+                    return message_to_frame(msg, metadata=meta or None)
 
                 await manager.broadcast_tailored(room_id, _make_out)
 

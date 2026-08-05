@@ -234,21 +234,13 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                     # frame (so the 1차/2차 task views reflect todo again).
                     for w_task, w_room, w_msg in woken_payloads:
                         if manager is not None and w_msg is not None:
-                            from anygarden.ws.protocol import (
-                                MessageOut as _MessageOut,
+                            from anygarden.messages.serialization import (
+                                message_to_frame as _message_to_frame,
                             )
 
                             await manager.broadcast(
                                 w_task.room_id,
-                                _MessageOut(
-                                    id=w_msg.id,
-                                    room_id=w_msg.room_id,
-                                    participant_id=w_msg.participant_id,
-                                    content=w_msg.content,
-                                    seq=w_msg.seq,
-                                    created_at=w_msg.created_at,
-                                    metadata=w_msg.extra_metadata,
-                                ),
+                                _message_to_frame(w_msg),
                             )
                         await _fanout_task_event(
                             db,
@@ -309,8 +301,8 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                             from anygarden.db.models import (
                                 Message as _Message,
                             )
-                            from anygarden.ws.protocol import (
-                                MessageOut as _MessageOut,
+                            from anygarden.messages.serialization import (
+                                message_to_frame as _message_to_frame,
                             )
 
                             # The injection helper persisted exactly
@@ -334,15 +326,7 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                                 ):
                                     await manager.broadcast(
                                         task_obj.room_id,
-                                        _MessageOut(
-                                            id=m.id,
-                                            room_id=m.room_id,
-                                            participant_id=m.participant_id,
-                                            content=m.content,
-                                            seq=m.seq,
-                                            created_at=m.created_at,
-                                            metadata=m.extra_metadata,
-                                        ),
+                                        _message_to_frame(m),
                                     )
                                     break
                         await _fanout_task_event(

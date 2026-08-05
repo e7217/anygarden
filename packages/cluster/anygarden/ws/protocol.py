@@ -15,6 +15,9 @@ class SendFrame(BaseModel):
     type: Literal["send"] = "send"
     content: str
     metadata: Optional[dict[str, Any]] = None
+    # Clients provide only the top-level root id. The server derives both
+    # persisted relationship columns and rejects nested/cross-room replies.
+    thread_root_id: Optional[str] = None
 
 
 class TypingFrame(BaseModel):
@@ -128,6 +131,8 @@ class MessageOut(BaseModel):
     # None if the original sender has been removed from the room (FK SET NULL).
     participant_id: Optional[str] = None
     content: str
+    parent_message_id: Optional[str] = None
+    root_message_id: Optional[str] = None
     seq: int
     created_at: datetime
     metadata: Optional[dict[str, Any]] = None

@@ -42,6 +42,15 @@ describe("protocol/frames — incoming (agent → server)", () => {
     expect(parsed.metadata).toBeUndefined();
   });
 
+  it("parses a thread reply SendFrame", () => {
+    const parsed = SendFrameSchema.parse({
+      type: "send",
+      content: "reply",
+      thread_root_id: "root-1",
+    });
+    expect(parsed.thread_root_id).toBe("root-1");
+  });
+
   it("parses a TypingFrame with default is_typing", () => {
     const parsed = TypingFrameSchema.parse({ type: "typing" });
     expect(parsed.is_typing).toBe(true);

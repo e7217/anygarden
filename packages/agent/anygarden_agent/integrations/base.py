@@ -646,6 +646,13 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if mentioned_me:
         return MessagePolicy.RESPOND
 
+    # Thread replies are room-wide context but only explicit mentions wake
+    # agents. Keep the ambient-context opt-out behavior for passive replies.
+    if msg.get("root_message_id") is not None:
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
+
     # 4a. Strategy-forced RESPOND (#233). The server has already
     # singled this agent out as the rightful speaker for this frame
     # — either by pinning us as the room's orchestrator (O1 path)

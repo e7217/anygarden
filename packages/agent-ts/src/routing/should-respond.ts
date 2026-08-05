@@ -127,6 +127,11 @@ export function shouldRespond(msg: MessageOut, ctx: RoutingContext): boolean {
   // 3. Directly mentioned → respond.
   if (mentionedMe) return true;
 
+  // Phase 2 thread replies are room-wide cache/replay events but mention-only
+  // scheduling surfaces. This check must precede any general human-message
+  // fallback so an unmentioned reply never wakes every agent in the room.
+  if (msg.root_message_id != null) return false;
+
   // 4. Mentions present but not for us → stay out.
   if (addressable.length > 0) return false;
 
