@@ -16,9 +16,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, select
-
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.auth.token import generate_token, hash_agent_token
@@ -37,6 +34,8 @@ from anygarden.db.models import (
     Task,
     User,
 )
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 
 def _auth(token: str) -> dict[str, str]:
