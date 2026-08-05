@@ -122,6 +122,7 @@ async def test_outsider_gets_403_before_room_existence_is_revealed(db) -> None:
 @pytest.mark.asyncio
 async def test_global_admin_bypasses_membership_but_not_missing_room(db) -> None:
     env = await _seed_room(db)
+    await db.commit()
     identity = _user_identity(env["users"]["admin"])
 
     access = await require_capability(
@@ -143,6 +144,63 @@ async def test_global_admin_bypasses_membership_but_not_missing_room(db) -> None
     with pytest.raises(HTTPException) as exc:
         await resolve_access(db, room_id="does-not-exist", identity=identity)
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_global_admin_audit_survives_business_rollback_and_tracks_role_delta(
+    db,
+) -> None:
+    env = await _seed_room(db)
+    await db.commit()
+    identity = _user_identity(env["users"]["admin"])
+    room_id = env["room"].id
+
+    # A nonmember grant is durably audited before downstream work begins.
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
+    failed_task = Task(room_id=room_id, title="must rollback")
+    db.add(failed_task)
+    await db.flush()
+    failed_task_id = failed_task.id
+    await db.rollback()
+
+    # Membership only suppresses the audit when that role itself grants the
+    # requested capability. A member using MEMBER_MANAGE still needs the
+    # operator claim and is therefore a real privilege delta.
+    db.add(Participant(room_id=room_id, user_id=identity.id, role="member"))
+    await db.commit()
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MEMBER_MANAGE,
+    )
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
+
+    assert await db.scalar(select(Task).where(Task.id == failed_task_id)) is None
+    audits = (
+        await db.scalars(
+            select(RoomAuthorizationAudit).order_by(
+                RoomAuthorizationAudit.created_at,
+                RoomAuthorizationAudit.id,
+            )
+        )
+    ).all()
+    assert len(audits) == 2
+    assert all(audit.actor_user_id == identity.id for audit in audits)
+    assert all(audit.room_id == room_id for audit in audits)
+    assert all(audit.scope == "room" for audit in audits)
+    assert all(audit.capability == Capability.MEMBER_MANAGE.value for audit in audits)
+    assert all(audit.outcome == "allowed" for audit in audits)
 
 
 @pytest.mark.asyncio

@@ -9,23 +9,10 @@ from anygarden.auth.dependencies import Identity, get_identity
 
 
 async def get_db(request: Request) -> AsyncSession:
-    """Yield a scoped DB session from the app-level session factory.
-
-    Read endpoints normally close without committing. The authorization
-    service marks sessions that contain a global-admin bypass audit so those
-    append-only rows remain durable after a successful read response. Write
-    endpoints keep their existing explicit transaction boundaries.
-    """
+    """Yield a scoped DB session from the app-level session factory."""
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        try:
-            yield session
-        except Exception:
-            await session.rollback()
-            raise
-        else:
-            if session.info.pop("room_authorization_audit_pending", False):
-                await session.commit()
+        yield session
 
 
 async def get_current_identity(

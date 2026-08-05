@@ -142,7 +142,7 @@ def is_global_admin(identity: Identity) -> bool:
     )
 
 
-def _record_global_admin_bypass(
+async def _record_global_admin_bypass(
     db: AsyncSession,
     *,
     identity: Identity,
@@ -151,25 +151,30 @@ def _record_global_admin_bypass(
     capability: Capability,
     details: dict | None = None,
 ) -> None:
-    """Stage a durable audit for an allowed nonmember operator bypass.
+    """Durably audit an allowed operator bypass before control returns.
 
-    ``get_db`` commits marked read sessions after a successful response;
-    mutation endpoints commit this row with their existing transaction. The
-    call is intentionally skipped for global admins acting through an actual
-    Participant row, so ordinary room authorization does not create noise.
+    The audit uses a session and transaction independent from the caller's
+    business session. A later 404, exception, or rollback therefore cannot
+    erase evidence that elevated authority was granted, while incomplete
+    business mutations remain rollback-able.
     """
 
-    db.add(
-        RoomAuthorizationAudit(
-            actor_user_id=identity.id,
-            room_id=room_id,
-            scope=scope,
-            capability=capability.value,
-            outcome="allowed",
-            details=details,
+    bind = db.bind
+    if bind is None:  # pragma: no cover - application sessions are always bound
+        raise RuntimeError("Room authorization audit requires a bound DB session")
+
+    async with AsyncSession(bind=bind, expire_on_commit=False) as audit_db:
+        audit_db.add(
+            RoomAuthorizationAudit(
+                actor_user_id=identity.id,
+                room_id=room_id,
+                scope=scope,
+                capability=capability.value,
+                outcome="allowed",
+                details=details,
+            )
         )
-    )
-    db.info["room_authorization_audit_pending"] = True
+        await audit_db.commit()
 
 
 def validate_room_role(role: str) -> str:
@@ -338,14 +343,15 @@ async def accessible_room_ids(
             (
                 await db.scalars(
                     select(Participant.room_id).where(
-                        Participant.user_id == identity.id
+                        Participant.user_id == identity.id,
+                        Participant.role.in_(ROOM_ROLE_VALUES),
                     )
                 )
             ).all()
         )
         bypassed_room_ids = room_ids - participant_room_ids
         if bypassed_room_ids:
-            _record_global_admin_bypass(
+            await _record_global_admin_bypass(
                 db,
                 identity=identity,
                 room_id=None,
@@ -399,9 +405,9 @@ def require_active_room(access: RoomAccess | Room) -> RoomAccess | Room:
     return access
 
 
-def _role_capabilities(access: RoomAccess) -> AbstractSet[Capability]:
-    if access.is_global_admin:
-        return frozenset(Capability)
+def _participant_capabilities(access: RoomAccess) -> AbstractSet[Capability]:
+    """Capabilities supplied by the stored Participant, ignoring bypass."""
+
     if access.identity.kind == "guest":
         # A guest token is single-room scoped and intentionally has no Task,
         # file-management, settings, or administration surface.
@@ -424,6 +430,27 @@ def _role_capabilities(access: RoomAccess) -> AbstractSet[Capability]:
     if access.effective_role == "owner":
         return _OWNER_CAPABILITIES
     return frozenset()
+
+
+def _role_capabilities(access: RoomAccess) -> AbstractSet[Capability]:
+    if access.is_global_admin:
+        return frozenset(Capability)
+    return _participant_capabilities(access)
+
+
+def _uses_global_admin_bypass(
+    access: RoomAccess,
+    capability: Capability,
+) -> bool:
+    """Whether this grant is stronger than the Participant alone permits."""
+
+    return bool(
+        access.is_global_admin
+        and (
+            access.participant is None
+            or capability not in _participant_capabilities(access)
+        )
+    )
 
 
 def _require_task_update_scope(
@@ -496,8 +523,8 @@ async def require_capability(
             detail="Lifecycle frames require an agent identity",
         )
 
-    if access.is_global_admin and access.participant is None:
-        _record_global_admin_bypass(
+    if _uses_global_admin_bypass(access, capability):
+        await _record_global_admin_bypass(
             db,
             identity=identity,
             room_id=room_id,

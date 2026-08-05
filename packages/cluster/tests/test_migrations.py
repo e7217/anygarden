@@ -102,6 +102,15 @@ class TestMigrations:
                 assert "ix_room_authorization_audits_actor_at" in indexes
                 assert "ix_room_authorization_audits_room_at" in indexes
                 assert "ix_room_authorization_audits_scope_at" in indexes
+
+                # Authorization audits are append-only historical evidence.
+                # Actor and room deletion must never cascade into this table.
+                audit_foreign_keys = list(
+                    conn.execute(
+                        text("PRAGMA foreign_key_list(room_authorization_audits)")
+                    )
+                )
+                assert audit_foreign_keys == []
             engine.dispose()
         finally:
             try:

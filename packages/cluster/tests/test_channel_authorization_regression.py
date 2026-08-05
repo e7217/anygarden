@@ -333,7 +333,7 @@ async def test_roles_and_agent_task_update_scope_are_enforced_over_rest(
 
 
 @pytest.mark.asyncio
-async def test_only_global_admin_nonmember_bypass_is_audited(
+async def test_global_admin_bypasses_are_audited_but_role_grants_are_not(
     authorization_env: dict,
 ) -> None:
     """Single-room and collection/search bypasses leave durable evidence."""
@@ -362,13 +362,13 @@ async def test_only_global_admin_nonmember_bypass_is_audited(
 
     async with authorization_env["factory"]() as db:
         audits = (
-            await db.execute(
+            await db.scalars(
                 select(RoomAuthorizationAudit).order_by(
                     RoomAuthorizationAudit.created_at,
                     RoomAuthorizationAudit.id,
                 )
             )
-        ).scalars().all()
+        ).all()
         assert len(audits) == 3
         by_scope = {audit.scope: audit for audit in audits}
         assert set(by_scope) == {"room", "rooms.collection", "search.messages"}
@@ -428,6 +428,67 @@ async def test_only_global_admin_nonmember_bypass_is_audited(
 
     async with authorization_env["factory"]() as db:
         assert len((await db.scalars(select(RoomAuthorizationAudit))).all()) == 3
+
+
+@pytest.mark.asyncio
+async def test_failed_global_admin_write_audits_nonmember_and_role_delta(
+    authorization_env: dict,
+) -> None:
+    """A downstream 404 cannot roll back either kind of operator grant."""
+
+    app = authorization_env["app"]
+    app.state.machine_bus = object()
+    headers = _auth(authorization_env["tokens"]["global_admin"])
+    room_id = authorization_env["room_id"]
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        nonmember_failure = await client.delete(
+            f"/api/v1/rooms/{room_id}/files/missing-nonmember",
+            headers=headers,
+        )
+    assert nonmember_failure.status_code == 404
+
+    async with authorization_env["factory"]() as db:
+        db.add(
+            Participant(
+                room_id=room_id,
+                user_id=authorization_env["global_admin_id"],
+                role="member",
+            )
+        )
+        await db.commit()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        role_delta_failure = await client.delete(
+            f"/api/v1/rooms/{room_id}/files/missing-role-delta",
+            headers=headers,
+        )
+        role_granted_read = await client.get(
+            f"/api/v1/rooms/{room_id}",
+            headers=headers,
+        )
+    assert role_delta_failure.status_code == 404
+    assert role_granted_read.status_code == 200
+
+    async with authorization_env["factory"]() as db:
+        audits = (
+            await db.scalars(
+                select(RoomAuthorizationAudit).order_by(
+                    RoomAuthorizationAudit.created_at,
+                    RoomAuthorizationAudit.id,
+                )
+            )
+        ).all()
+        assert len(audits) == 2
+        assert all(
+            audit.actor_user_id == authorization_env["global_admin_id"]
+            for audit in audits
+        )
+        assert all(audit.room_id == room_id for audit in audits)
+        assert all(audit.scope == "room" for audit in audits)
+        assert all(audit.capability == "file.manage" for audit in audits)
+        assert all(audit.outcome == "allowed" for audit in audits)
 
 
 @pytest.mark.asyncio
