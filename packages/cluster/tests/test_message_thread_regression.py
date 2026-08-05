@@ -12,6 +12,7 @@ import asyncio
 import json
 import secrets
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -20,7 +21,16 @@ from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import create_message_fts
-from anygarden.db.models import Base, Message, Participant, Project, Room, User
+from anygarden.db.models import (
+    ActivityLog,
+    Agent,
+    Base,
+    Message,
+    Participant,
+    Project,
+    Room,
+    User,
+)
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 
@@ -30,11 +40,14 @@ def _auth(token: str) -> dict[str, str]:
 
 
 @pytest_asyncio.fixture()
-async def thread_env() -> AsyncIterator[dict]:
+async def thread_env(tmp_path: Path) -> AsyncIterator[dict]:
     """Two private rooms with member, observer, and outsider identities."""
 
     config = AnygardenSettings(
-        db_url="sqlite+aiosqlite://",
+        # The final regression mixes TestClient's portal thread with async
+        # fixture helpers. A file-backed DB keeps both connections on the same
+        # database; an in-memory URL can allocate one database per connection.
+        db_url=f"sqlite+aiosqlite:///{tmp_path / 'threads.db'}",
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
     )
@@ -52,7 +65,21 @@ async def thread_env() -> AsyncIterator[dict]:
         member = User(email="thread-member@example.test", password_hash="x")
         observer = User(email="thread-observer@example.test", password_hash="x")
         outsider = User(email="thread-outsider@example.test", password_hash="x")
-        db.add_all([project, room_a, room_b, owner, member, observer, outsider])
+        agent_a = Agent(name="thread-agent-a", engine="codex")
+        agent_b = Agent(name="thread-agent-b", engine="codex")
+        db.add_all(
+            [
+                project,
+                room_a,
+                room_b,
+                owner,
+                member,
+                observer,
+                outsider,
+                agent_a,
+                agent_b,
+            ]
+        )
         await db.flush()
 
         participants = {
@@ -73,6 +100,16 @@ async def thread_env() -> AsyncIterator[dict]:
                 room_id=room_a.id,
                 user_id=observer.id,
                 role="observer",
+            ),
+            "agent_a": Participant(
+                room_id=room_a.id,
+                agent_id=agent_a.id,
+                role="member",
+            ),
+            "agent_b": Participant(
+                room_id=room_a.id,
+                agent_id=agent_b.id,
+                role="member",
             ),
         }
         db.add_all(participants.values())
@@ -96,6 +133,11 @@ async def thread_env() -> AsyncIterator[dict]:
             "room_a": room_a.id,
             "room_b": room_b.id,
             "member_a_participant": participants["member_a"].id,
+            "agent_ids": {"a": agent_a.id, "b": agent_b.id},
+            "agent_participant_ids": {
+                "a": participants["agent_a"].id,
+                "b": participants["agent_b"].id,
+            },
             "tokens": {
                 "owner": token(owner),
                 "member": token(member),
@@ -125,6 +167,18 @@ async def _remove_participant(factory, participant_id: str) -> None:
         assert participant is not None
         await db.delete(participant)
         await db.commit()
+
+
+async def _message_received_events(factory, message_ids: set[str]) -> list[ActivityLog]:
+    async with factory() as db:
+        rows = await db.scalars(
+            select(ActivityLog).where(ActivityLog.event_type == "message_received")
+        )
+        return [
+            row
+            for row in rows.all()
+            if (row.details or {}).get("trigger_message_id") in message_ids
+        ]
 
 
 async def _create_root(
@@ -310,6 +364,65 @@ async def test_thread_reply_honors_private_observer_and_archive_boundaries(
     assert archived.status_code == 200, archived.text
     assert archived_reply.status_code == 409, archived_reply.text
     assert await _message_count(thread_env["factory"], thread_env["room_a"]) == 1
+
+
+def test_thread_reply_agent_scheduling_is_mention_targeted(thread_env: dict) -> None:
+    """Room-wide reply fanout creates a turn only for mentioned agents."""
+
+    from starlette.testclient import TestClient
+
+    room_id = thread_env["room_a"]
+    member_token = thread_env["tokens"]["member"]
+    owner_token = thread_env["tokens"]["owner"]
+    target_pid = thread_env["agent_participant_ids"]["b"]
+
+    with TestClient(thread_env["app"]) as client:
+        root_response = client.post(
+            f"/api/v1/rooms/{room_id}/messages",
+            json={"content": "scheduling root"},
+            headers=_auth(owner_token),
+        )
+        assert root_response.status_code == 201, root_response.text
+        root = root_response.json()
+
+        with client.websocket_connect(
+            f"/ws/rooms/{room_id}",
+            subprotocols=["anygarden.v1", f"bearer.{member_token}"],
+        ) as ws:
+            assert json.loads(ws.receive_text())["type"] == "welcome"
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "send",
+                        "content": "passive thread context",
+                        "thread_root_id": root["id"],
+                    }
+                )
+            )
+            passive_reply = json.loads(ws.receive_text())
+            assert passive_reply["type"] == "message"
+
+            ws.send_text(
+                json.dumps(
+                    {
+                        "type": "send",
+                        "content": f"<@user:{target_pid}> please inspect",
+                        "thread_root_id": root["id"],
+                    }
+                )
+            )
+            targeted_reply = json.loads(ws.receive_text())
+            assert targeted_reply["type"] == "message"
+
+    events = asyncio.run(
+        _message_received_events(
+            thread_env["factory"],
+            {passive_reply["id"], targeted_reply["id"]},
+        )
+    )
+    assert len(events) == 1
+    assert events[0].agent_id == thread_env["agent_ids"]["b"]
+    assert events[0].details["trigger_message_id"] == targeted_reply["id"]
 
 
 def test_websocket_reply_replay_and_removed_member_fresh_gate(thread_env: dict) -> None:
