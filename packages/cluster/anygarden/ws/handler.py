@@ -13,7 +13,7 @@ from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from anygarden.auth.dependencies import Identity, get_identity, require_room_member
+from anygarden.auth.dependencies import Identity, get_identity
 from anygarden.config import AnygardenSettings
 from anygarden.db.models import (
     ActivityLog,
@@ -915,7 +915,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
         if auth_error is None and identity is not None:
             try:
-                participant = await require_room_member(room_id, identity, db)
+                access = await require_capability(
+                    db,
+                    room_id=room_id,
+                    identity=identity,
+                    capability=Capability.ROOM_READ,
+                )
+                participant = access.participant
+                if participant is None:
+                    # Explicit transport exception: global admins may inspect
+                    # rooms over REST, but a WS subscription needs a persisted
+                    # Participant as its sender and delivery identity.
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Room WebSocket requires participant membership",
+                    )
             except Exception as exc:
                 logger.warning("ws.not_member", error=str(exc), identity_kind=identity.kind, identity_id=identity.id, room_id=room_id)
                 auth_error = "Not a room member"

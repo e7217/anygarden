@@ -38,6 +38,7 @@ from anygarden.goals.policy import (
     compute_next_run_at,
     validate_trigger_config,
 )
+from anygarden.rooms.authorization import require_active_room
 
 router = APIRouter(tags=["goals"])
 
@@ -142,6 +143,7 @@ async def _ensure_agent_in_room(
     room = await db.get(Room, room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="report_room_id not found")
+    require_active_room(room)
     p = (
         await db.execute(
             select(Participant).where(

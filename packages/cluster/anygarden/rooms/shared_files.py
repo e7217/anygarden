@@ -201,12 +201,20 @@ async def delete_shared_file(
     session: AsyncSession,
     *,
     room_files_dir: Path,
+    room_id: str,
     file_id: str,
 ) -> RoomSharedFile | None:
-    """Remove the DB row + on-disk bytes. Returns the deleted row so
-    the caller can trigger a delete fan-out, or ``None`` when the
-    file was already gone."""
-    row = await session.get(RoomSharedFile, file_id)
+    """Remove one room-scoped DB row and its on-disk bytes.
+
+    The lookup includes both ``room_id`` and ``file_id`` so a caller cannot
+    mutate another room's file and discover the mismatch only after commit.
+    """
+    row = await session.scalar(
+        select(RoomSharedFile).where(
+            RoomSharedFile.id == file_id,
+            RoomSharedFile.room_id == room_id,
+        )
+    )
     if row is None:
         return None
 

@@ -1593,13 +1593,12 @@ async def delete_room_shared_file(
     machine_bus = request.app.state.machine_bus
 
     removed = await shared_files_service.delete_shared_file(
-        db, room_files_dir=config.room_files_dir, file_id=file_id
+        db,
+        room_files_dir=config.room_files_dir,
+        room_id=room_id,
+        file_id=file_id,
     )
     if removed is None:
-        raise HTTPException(status_code=404, detail="File not found")
-    if removed.room_id != room_id:
-        # Rare — the ``file_id`` belongs to a different room. Surface
-        # as 404 rather than leaking the cross-room existence.
         raise HTTPException(status_code=404, detail="File not found")
 
     storage_name = removed.storage_name
@@ -1770,6 +1769,12 @@ async def get_room_activity(
     per-turn timelines (``splitLogs``); cross-agent causal linking lands
     in Phase 3.
     """
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.ROOM_READ,
+    )
     stmt = (
         select(ActivityLog)
         .where(ActivityLog.room_id == room_id)

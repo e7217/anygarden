@@ -416,6 +416,34 @@ def test_websocket_nonmember_and_observer_writes_do_not_leak_events(
     assert asyncio.run(_message_count(authorization_env["factory"], room_id)) == 1
 
 
+def test_global_admin_rest_bypass_does_not_create_websocket_identity(
+    authorization_env: dict,
+) -> None:
+    """REST inspection is privileged; WS still needs a Participant identity."""
+
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    room_id = authorization_env["room_id"]
+    token = authorization_env["tokens"]["global_admin"]
+    with TestClient(authorization_env["app"]) as client:
+        room = client.get(
+            f"/api/v1/rooms/{room_id}",
+            headers=_auth(token),
+        )
+        assert room.status_code == 200
+
+        with (
+            pytest.raises(WebSocketDisconnect) as exc,
+            client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ),
+        ):
+            pytest.fail("a nonmember global admin must not receive a WS welcome")
+        assert exc.value.code == 4003
+
+
 def test_archive_immediately_revokes_open_websocket(
     authorization_env: dict,
 ) -> None:

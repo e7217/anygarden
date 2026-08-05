@@ -11,6 +11,7 @@ cap query) end-to-end against the in-memory SQLite app.
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 from typing import AsyncIterator
 
 import pytest
@@ -203,3 +204,29 @@ async def test_per_owner_active_goal_cap_rejects(goals_env):
     )
     assert rejected.status_code == 422, rejected.text
     assert "active goal limit" in rejected.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_goal_rejects_archived_report_room(goals_env):
+    async with goals_env["factory"]() as db:
+        room = await db.get(Room, goals_env["room_id"])
+        assert room is not None
+        room.archived_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    response = await goals_env["client"].post(
+        f"/api/v1/agents/{goals_env['agent_id']}/goals",
+        json={
+            "title": "must not register",
+            "spec": "must not run",
+            "trigger_type": "manual",
+            "trigger_config": {},
+            "report_room_id": goals_env["room_id"],
+        },
+        headers=_auth(goals_env["token"]),
+    )
+    assert response.status_code == 409
+
+    async with goals_env["factory"]() as db:
+        goals = (await db.execute(select(Goal))).scalars().all()
+        assert goals == []

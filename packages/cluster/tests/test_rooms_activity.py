@@ -76,3 +76,13 @@ async def test_room_activity_is_admin_gated(env):
             headers={"Authorization": f"Bearer {env['member']}"},
         )
     assert r.status_code == 403
+
+
+async def test_room_activity_missing_room_returns_404_for_global_admin(env):
+    transport = ASGITransport(app=env["app"])
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        response = await c.get(
+            "/api/v1/rooms/does-not-exist/activity",
+            headers={"Authorization": f"Bearer {env['admin']}"},
+        )
+    assert response.status_code == 404

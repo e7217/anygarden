@@ -329,10 +329,16 @@ async def accessible_room_ids(
     return frozenset(rows.all())
 
 
-def require_active_room(access: RoomAccess) -> RoomAccess:
-    """Require the resolved room to be active for a write operation."""
+def require_active_room(access: RoomAccess | Room) -> RoomAccess | Room:
+    """Require a room or resolved access object to be active for a write.
 
-    if access.is_archived:
+    Most callers already have :class:`RoomAccess`; token redemption and
+    scheduler paths sometimes resolve a trusted Room row before an identity
+    exists. Accepting either keeps the archive-state decision centralized.
+    """
+
+    room = access.room if isinstance(access, RoomAccess) else access
+    if room.archived_at is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Room is archived",

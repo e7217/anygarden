@@ -29,6 +29,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,7 @@ from anygarden.goals.policy import (
     materialize_decision,
 )
 from anygarden.messages.service import inject_task_assignment_message
+from anygarden.rooms.authorization import require_active_room
 
 if TYPE_CHECKING:
     from anygarden.ws.manager import ConnectionManager
@@ -120,6 +122,19 @@ async def trigger_goal(
             f"goal {goal.id} has no report_room_id — cannot fire"
         )
 
+    room = await db.get(Room, goal.report_room_id)
+    if room is None:
+        raise GoalExecutionError(
+            f"room {goal.report_room_id} no longer exists — pausing "
+            f"goal {goal.id}"
+        )
+    try:
+        require_active_room(room)
+    except HTTPException as exc:
+        raise GoalExecutionError(
+            f"room {goal.report_room_id} is archived — pausing goal {goal.id}"
+        ) from exc
+
     participant = await find_assignee_participant(
         db, room_id=goal.report_room_id, agent_id=goal.assignee_agent_id
     )
@@ -127,13 +142,6 @@ async def trigger_goal(
         raise GoalExecutionError(
             f"agent {goal.assignee_agent_id} is not a participant of "
             f"room {goal.report_room_id} — pausing goal {goal.id}"
-        )
-
-    room = await db.get(Room, goal.report_room_id)
-    if room is None:
-        raise GoalExecutionError(
-            f"room {goal.report_room_id} no longer exists — pausing "
-            f"goal {goal.id}"
         )
 
     now = _utcnow()
