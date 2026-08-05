@@ -19,6 +19,34 @@ branch_labels: tuple[str, ...] | None = None
 depends_on: str | None = None
 
 
+def _restore_message_fts_triggers() -> None:
+    """Recreate triggers dropped by SQLite's batch table replacement.
+
+    The FTS virtual table and indexed rows survive, but triggers attached to
+    ``messages`` do not. Keep these frozen statements aligned with migration
+    008 so inserts remain searchable immediately after either direction.
+    """
+
+    op.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(content, room_id, participant_id, message_id, created_at)
+            VALUES (NEW.content, NEW.room_id, NEW.participant_id, NEW.id, NEW.created_at);
+        END
+    """)
+    op.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+            DELETE FROM messages_fts WHERE message_id = OLD.id;
+        END
+    """)
+    op.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF content ON messages BEGIN
+            DELETE FROM messages_fts WHERE message_id = OLD.id;
+            INSERT INTO messages_fts(content, room_id, participant_id, message_id, created_at)
+            VALUES (NEW.content, NEW.room_id, NEW.participant_id, NEW.id, NEW.created_at);
+        END
+    """)
+
+
 def upgrade() -> None:
     # SQLite needs batch mode to add named self-referential foreign keys and
     # the shape CHECK while retaining the existing room/participant FKs.
@@ -84,6 +112,7 @@ def upgrade() -> None:
         "thread_participant_states",
         ["root_message_id", "last_read_seq"],
     )
+    _restore_message_fts_triggers()
 
 
 def downgrade() -> None:
@@ -108,3 +137,4 @@ def downgrade() -> None:
         )
         batch.drop_column("root_message_id")
         batch.drop_column("parent_message_id")
+    _restore_message_fts_triggers()

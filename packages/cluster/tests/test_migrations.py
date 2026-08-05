@@ -106,6 +106,21 @@ class TestMigrations:
                 assert "ix_messages_room_root_seq" in indexes
                 assert "ix_thread_participant_states_root_read" in indexes
 
+                fts_triggers = {
+                    row[0]
+                    for row in conn.execute(
+                        text(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE type='trigger' AND name LIKE 'messages_fts_%'"
+                        )
+                    )
+                }
+                assert fts_triggers == {
+                    "messages_fts_insert",
+                    "messages_fts_delete",
+                    "messages_fts_update",
+                }
+
                 message_columns = {
                     row[1]
                     for row in conn.execute(text("PRAGMA table_info(messages)"))
