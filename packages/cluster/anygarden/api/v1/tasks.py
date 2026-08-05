@@ -119,6 +119,30 @@ def _raise_conflict(exc: TaskMutationConflict) -> None:
     raise HTTPException(status_code=409, detail=exc.api_detail()) from exc
 
 
+async def _raise_fresh_claim_conflict(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    exc: TaskMutationConflict,
+) -> None:
+    """Report the committed winner, not the loser's stale read snapshot.
+
+    SQLite can retain the transaction snapshot established by the pre-CAS
+    task lookup even after a competing writer commits.  The failed UPDATE
+    changed nothing, so end that request transaction before reading the row
+    used in the 409 payload.
+    """
+
+    await db.rollback()
+    current = await db.scalar(select(Task).where(Task.id == task_id))
+    detail = exc.api_detail()
+    detail["current_status"] = current.status if current else None
+    detail["current_assignee_participant_id"] = (
+        current.assignee_participant_id if current else None
+    )
+    raise HTTPException(status_code=409, detail=detail) from exc
+
+
 def _is_system_source(message: Message) -> bool:
     metadata = message.extra_metadata or {}
     if metadata.get("system_origin") is not None:
@@ -718,7 +742,7 @@ async def claim_task(
             participant_id=access.participant.id,
         )
     except TaskMutationConflict as exc:
-        _raise_conflict(exc)
+        await _raise_fresh_claim_conflict(db, task_id=task.id, exc=exc)
 
     await db.commit()
     await db.refresh(claimed)

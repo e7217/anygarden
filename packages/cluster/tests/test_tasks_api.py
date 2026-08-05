@@ -793,8 +793,14 @@ class TestMessageLinkedTasksAndClaims:
             ),
         )
         assert sorted((first.status_code, second.status_code)) == [200, 409]
+        winner = first if first.status_code == 200 else second
         loser = first if first.status_code == 409 else second
         assert loser.json()["detail"]["code"] == "TASK_CLAIM_CONFLICT"
+        assert loser.json()["detail"]["current_status"] == "in_progress"
+        assert (
+            loser.json()["detail"]["current_assignee_participant_id"]
+            == winner.json()["assignee_participant_id"]
+        )
 
         async with tasks_env["factory"]() as db:
             task = await db.get(Task, task_id)
