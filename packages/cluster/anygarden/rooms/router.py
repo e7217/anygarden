@@ -726,7 +726,16 @@ async def remove_participant(
     # global ``fan_out_delete`` that blasts every participant.
     removed_agent_id = target.agent_id
 
-    # 8. Delete the row and commit.
+    # 8. Release any open reservation/running work in the same transaction,
+    # then delete the participant. Requeue is intentionally silent: removal
+    # never manufactures an assignment wake.
+    from anygarden.task_service import release_participant_tasks
+
+    await release_participant_tasks(
+        db,
+        room_id=room_id,
+        participant_id=target.id,
+    )
     await db.execute(delete(Participant).where(Participant.id == target.id))
     await db.commit()
 

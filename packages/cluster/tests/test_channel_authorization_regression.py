@@ -335,24 +335,26 @@ async def test_roles_and_agent_task_update_scope_are_enforced_over_rest(
         )
         assert created.status_code == 201, created.text
 
-        own_update = await client.put(
-            f"/api/v1/tasks/{authorization_env['own_task_id']}",
-            json={"status": "in_progress"},
+        own_update = await client.post(
+            f"/api/v1/tasks/{authorization_env['own_task_id']}/claim",
             headers=agent_headers,
         )
         assert own_update.status_code == 200, own_update.text
         assert own_update.json()["status"] == "in_progress"
 
-        for task_id, payload in (
-            (authorization_env["own_task_id"], {"title": "not allowed"}),
-            (authorization_env["other_task_id"], {"status": "in_progress"}),
-        ):
-            denied = await client.put(
-                f"/api/v1/tasks/{task_id}",
-                json=payload,
-                headers=agent_headers,
-            )
-            assert denied.status_code == 403, denied.text
+        denied = await client.put(
+            f"/api/v1/tasks/{authorization_env['own_task_id']}",
+            json={"title": "not allowed"},
+            headers=agent_headers,
+        )
+        assert denied.status_code == 403, denied.text
+
+        reserved = await client.post(
+            f"/api/v1/tasks/{authorization_env['other_task_id']}/claim",
+            headers=agent_headers,
+        )
+        assert reserved.status_code == 409, reserved.text
+        assert reserved.json()["detail"]["code"] == "TASK_CLAIM_CONFLICT"
 
 
 @pytest.mark.asyncio

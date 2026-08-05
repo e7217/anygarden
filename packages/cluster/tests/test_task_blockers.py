@@ -47,7 +47,7 @@ async def _agent_with_task(
     *,
     agent_name: str,
     room: Room,
-    status: str = "todo",
+    status: str = "in_progress",
     title: str = "t",
 ) -> tuple[Task, Agent, Participant]:
     """Create an agent, a participant in *room*, and a task assigned to it."""
@@ -439,7 +439,7 @@ async def blocker_rpc_env():
         blocker = Task(
             room_id=room.id,
             title="blocker",
-            status="todo",
+            status="in_progress",
             assignee_participant_id=p.id,
         )
         session.add_all([dep, blocker])

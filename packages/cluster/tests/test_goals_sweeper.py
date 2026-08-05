@@ -131,6 +131,27 @@ async def test_todo_with_null_assigned_at_is_skipped(db):
     assert task.status == "todo"
 
 
+@pytest.mark.asyncio
+async def test_archived_room_task_is_never_swept(db):
+    room, participant, _, user = await _seed_room_with_agent(db)
+    now = _utcnow()
+    room.archived_at = now
+    task = Task(
+        room_id=room.id,
+        title="archived",
+        status="todo",
+        assignee_participant_id=participant.id,
+        assigned_at=now - timedelta(seconds=TASK_PICKUP_TIMEOUT_SECONDS + 30),
+        created_by=user.id,
+    )
+    db.add(task)
+    await db.commit()
+
+    assert await sweep_stuck_tasks(db, manager=None, now=now) == 0
+    await db.refresh(task)
+    assert task.status == "todo"
+
+
 # ── Execution timeout ────────────────────────────────────────────────
 
 

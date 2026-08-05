@@ -19,13 +19,15 @@ from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import Agent, AgentToken, Base, Participant, Room, Task, User
-from anygarden.mcp.tools import mark_task_status
+from anygarden.mcp.tools import claim_task, mark_task_status
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
 
 
-async def _make_task_assigned_to(db, *, agent_name: str = "bot") -> tuple[Task, Agent, Participant]:
+async def _make_task_assigned_to(
+    db, *, agent_name: str = "bot", status: str = "todo"
+) -> tuple[Task, Agent, Participant]:
     user = User(email=f"u-{agent_name}@example.com", password_hash="x")
     agent = Agent(name=agent_name, engine="echo")
     db.add_all([user, agent])
@@ -42,7 +44,7 @@ async def _make_task_assigned_to(db, *, agent_name: str = "bot") -> tuple[Task, 
     task = Task(
         room_id=room.id,
         title="t",
-        status="todo",
+        status=status,
         assignee_participant_id=p.id,
     )
     db.add(task)
@@ -62,8 +64,59 @@ async def test_assignee_agent_can_mark_in_progress(db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_assignee_agent_can_mark_done(db) -> None:
+async def test_agent_can_claim_unassigned_task_once(db) -> None:
+    task, agent, participant = await _make_task_assigned_to(db)
+    task.assignee_participant_id = None
+    await db.flush()
+
+    result = await claim_task(
+        db,
+        agent_id=agent.id,
+        arguments={"task_id": task.id},
+    )
+    assert result["isError"] is False
+    assert result["structuredContent"]["event"] == "claimed"
+    await db.refresh(task)
+    assert task.status == "in_progress"
+    assert task.assignee_participant_id == participant.id
+
+    loser_agent = Agent(name="loser", engine="echo")
+    db.add(loser_agent)
+    await db.flush()
+    db.add(
+        Participant(
+            room_id=task.room_id,
+            agent_id=loser_agent.id,
+            role="member",
+        )
+    )
+    await db.flush()
+    loser = await claim_task(
+        db,
+        agent_id=loser_agent.id,
+        arguments={"task_id": task.id},
+    )
+    assert loser["isError"] is True
+    assert "TASK_CLAIM_CONFLICT" in loser["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_mark_in_progress_does_not_claim_unassigned_task(db) -> None:
     task, agent, _ = await _make_task_assigned_to(db)
+    task.assignee_participant_id = None
+    await db.flush()
+    result = await mark_task_status(
+        db,
+        agent_id=agent.id,
+        arguments={"task_id": task.id, "status": "in_progress"},
+    )
+    assert result["isError"] is True
+    assert "use claim_task" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_assignee_agent_can_mark_done(db) -> None:
+    task, agent, _ = await _make_task_assigned_to(db, status="in_progress")
     result = await mark_task_status(
         db, agent_id=agent.id, arguments={"task_id": task.id, "status": "done"}
     )
@@ -78,7 +131,7 @@ async def test_assignee_agent_can_mark_failed(db) -> None:
     on a task can stamp the same status the goals sweeper would, instead
     of getting a 4xx that forces the workflow into ``blocked``.
     """
-    task, agent, _ = await _make_task_assigned_to(db)
+    task, agent, _ = await _make_task_assigned_to(db, status="in_progress")
     result = await mark_task_status(
         db, agent_id=agent.id, arguments={"task_id": task.id, "status": "failed"}
     )
@@ -105,7 +158,7 @@ async def test_mark_in_progress_sets_started_at(db) -> None:
 @pytest.mark.asyncio
 async def test_mark_terminal_sets_finished_at(db) -> None:
     """#445 — a terminal status stamps ``finished_at``."""
-    task, agent, _ = await _make_task_assigned_to(db)
+    task, agent, _ = await _make_task_assigned_to(db, status="in_progress")
     assert task.finished_at is None
     await mark_task_status(
         db, agent_id=agent.id, arguments={"task_id": task.id, "status": "done"}
@@ -122,6 +175,7 @@ async def test_started_at_not_overwritten_on_repeat(db) -> None:
     from datetime import datetime, timedelta, timezone
 
     task, agent, _ = await _make_task_assigned_to(db)
+    task.status = "in_progress"
     task.started_at = datetime.now(timezone.utc) - timedelta(hours=1)
     await db.flush()
     await db.refresh(task)
@@ -260,11 +314,30 @@ async def test_rpc_round_trip_marks_status_and_persists(mcp_app_env) -> None:
     """JSON-RPC ``tools/call mark_task_status`` updates the row and the
     change survives the request boundary (commit happened)."""
     client = mcp_app_env["client"]
-    resp = await client.post(
+    start = await client.post(
         "/mcp/rpc",
         json={
             "jsonrpc": "2.0",
             "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "mark_task_status",
+                "arguments": {
+                    "task_id": mcp_app_env["task_id"],
+                    "status": "in_progress",
+                },
+            },
+        },
+        headers={"Authorization": f"Bearer {mcp_app_env['token']}"},
+    )
+    assert start.status_code == 200
+    assert start.json()["result"]["isError"] is False
+
+    resp = await client.post(
+        "/mcp/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
             "method": "tools/call",
             "params": {
                 "name": "mark_task_status",

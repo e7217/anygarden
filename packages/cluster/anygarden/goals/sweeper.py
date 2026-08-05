@@ -68,7 +68,8 @@ async def sweep_stuck_tasks(
     exec_threshold = now - timedelta(seconds=TASK_EXECUTION_TIMEOUT_SECONDS)
 
     # Pickup timeout: assignee attached but never started.
-    pickup_stmt = select(Task).where(
+    pickup_stmt = select(Task).join(Room, Task.room_id == Room.id).where(
+        Room.archived_at.is_(None),
         Task.status == "todo",
         Task.assigned_at.is_not(None),
         Task.assigned_at < pickup_threshold,
@@ -76,7 +77,8 @@ async def sweep_stuck_tasks(
     stuck_todo = (await db.execute(pickup_stmt)).scalars().all()
 
     # Execution timeout: started but never finished.
-    exec_stmt = select(Task).where(
+    exec_stmt = select(Task).join(Room, Task.room_id == Room.id).where(
+        Room.archived_at.is_(None),
         Task.status == "in_progress",
         Task.started_at.is_not(None),
         Task.started_at < exec_threshold,
@@ -84,6 +86,8 @@ async def sweep_stuck_tasks(
     stuck_running = (await db.execute(exec_stmt)).scalars().all()
 
     transitioned = 0
+    from anygarden.task_service import fail_stale_task_cas
+
     for task in (*stuck_todo, *stuck_running):
         # Reason mirrors ``error`` for downstream observability — the
         # frontend goal-detail view shows the most recent failure to
@@ -91,8 +95,9 @@ async def sweep_stuck_tasks(
         reason = (
             "pickup_timeout" if task.status == "todo" else "execution_timeout"
         )
-        task.status = "failed"
-        task.error = reason
+        task = await fail_stale_task_cas(db, task=task, reason=reason)
+        if task is None:
+            continue
         # ``apply_completion`` is a no-op on manual (``goal_id IS
         # NULL``) tasks, so we can call it unconditionally — it gates
         # itself. For goal-derived tasks it bumps

@@ -16,6 +16,8 @@ export interface Task {
   assignee_participant_id: string | null
   created_by?: string | null
   created_at: string
+  source_message_id?: string | null
+  source_thread_root_id?: string | null
   // Optional — populated only when the server has run the #302
   // migration. Older servers omit them; consumers must guard accordingly.
   goal_id?: string | null
@@ -40,6 +42,15 @@ export interface UseRoomTasksValue {
     title: string
     assignee_participant_id?: string | null
   }) => Promise<Task | null>
+  createFromMessage: (
+    messageId: string,
+    input: { title: string; assignee_participant_id?: string | null },
+  ) => Promise<Task | null>
+  claim: (id: string) => Promise<Task | null>
+  requeue: (
+    id: string,
+    input: { reason: string; assignee_participant_id?: string | null },
+  ) => Promise<Task | null>
   update: (
     id: string,
     patch: Partial<Pick<Task, 'title' | 'status' | 'assignee_participant_id'>>,
@@ -156,6 +167,68 @@ export function useRoomTasks(
     [refresh],
   )
 
+  const createFromMessage = useCallback<
+    UseRoomTasksValue['createFromMessage']
+  >(
+    async (messageId, input) => {
+      if (!roomId) return null
+      const resp = await apiFetch(
+        `/api/v1/rooms/${roomId}/messages/${messageId}/task`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            title: input.title,
+            assignee_participant_id: input.assignee_participant_id ?? null,
+          }),
+        },
+      )
+      if (!resp.ok) {
+        setError(`Create from message failed (HTTP ${resp.status})`)
+        return null
+      }
+      const created = (await resp.json()) as Task
+      await refresh()
+      return created
+    },
+    [roomId, refresh],
+  )
+
+  const claim = useCallback<UseRoomTasksValue['claim']>(
+    async (id) => {
+      const resp = await apiFetch(`/api/v1/tasks/${id}/claim`, {
+        method: 'POST',
+      })
+      if (!resp.ok) {
+        setError(`Claim failed (HTTP ${resp.status})`)
+        return null
+      }
+      const claimed = (await resp.json()) as Task
+      await refresh()
+      return claimed
+    },
+    [refresh],
+  )
+
+  const requeue = useCallback<UseRoomTasksValue['requeue']>(
+    async (id, input) => {
+      const resp = await apiFetch(`/api/v1/tasks/${id}/requeue`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: input.reason,
+          assignee_participant_id: input.assignee_participant_id ?? null,
+        }),
+      })
+      if (!resp.ok) {
+        setError(`Requeue failed (HTTP ${resp.status})`)
+        return null
+      }
+      const requeued = (await resp.json()) as Task
+      await refresh()
+      return requeued
+    },
+    [refresh],
+  )
+
   const remove = useCallback<UseRoomTasksValue['remove']>(
     async (id) => {
       const resp = await apiFetch(`/api/v1/tasks/${id}`, { method: 'DELETE' })
@@ -168,5 +241,16 @@ export function useRoomTasks(
     [refresh],
   )
 
-  return { tasks, loading, error, refresh, create, update, remove }
+  return {
+    tasks,
+    loading,
+    error,
+    refresh,
+    create,
+    createFromMessage,
+    claim,
+    requeue,
+    update,
+    remove,
+  }
 }

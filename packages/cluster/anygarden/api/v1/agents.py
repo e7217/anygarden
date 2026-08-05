@@ -31,6 +31,7 @@ from anygarden.engines import get_engine_entry
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.scheduler.gateway_secrets import openhands_model_id_for_gateway
+from anygarden.task_service import release_participant_tasks, source_thread_root_id
 
 if TYPE_CHECKING:
     from anygarden.scheduler.machine_bus import MachineBus
@@ -905,6 +906,21 @@ async def delete_agent(
     ).scalars().all()
 
     # Clean up related records and delete agent
+    memberships = list(
+        (
+            await db.execute(
+                select(Participant).where(Participant.agent_id == agent_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for membership in memberships:
+        await release_participant_tasks(
+            db,
+            room_id=membership.room_id,
+            participant_id=membership.id,
+        )
     await db.execute(delete(Participant).where(Participant.agent_id == agent_id))
     await db.execute(delete(AgentToken).where(AgentToken.agent_id == agent_id))
     for room in dm_rooms:
@@ -1115,6 +1131,11 @@ async def remove_agent_room(
     if participant is None:
         raise HTTPException(status_code=404, detail="Agent not in room")
 
+    await release_participant_tasks(
+        db,
+        room_id=room_id,
+        participant_id=participant.id,
+    )
     await db.delete(participant)
     await db.commit()
 
@@ -1279,6 +1300,8 @@ class AgentTaskOut(BaseModel):
     assignee_participant_id: Optional[str] = None
     created_by: Optional[str] = None
     created_at: str
+    source_message_id: Optional[str] = None
+    source_thread_root_id: Optional[str] = None
 
 
 @router.get("/{agent_id}/tasks", response_model=list[AgentTaskOut])
@@ -1305,8 +1328,10 @@ async def list_agent_tasks(
     if status:
         stmt = stmt.where(Task.status == status)
     rows = (await db.execute(stmt)).all()
-    return [
-        AgentTaskOut(
+    results: list[AgentTaskOut] = []
+    for task, room_name in rows:
+        results.append(
+            AgentTaskOut(
             id=task.id,
             room_id=task.room_id,
             room_name=room_name,
@@ -1315,9 +1340,11 @@ async def list_agent_tasks(
             assignee_participant_id=task.assignee_participant_id,
             created_by=task.created_by,
             created_at=task.created_at.isoformat(),
+            source_message_id=task.source_message_id,
+            source_thread_root_id=await source_thread_root_id(db, task),
         )
-        for task, room_name in rows
-    ]
+        )
+    return results
 
 
 # Terminal statuses are the only ones an admin can sweep for an agent.
@@ -1359,6 +1386,7 @@ async def bulk_delete_agent_tasks(
         .join(Participant, Task.assignee_participant_id == Participant.id)
         .where(Participant.agent_id == agent_id)
         .where(Task.status == status)
+        .where(Task.source_message_id.is_(None))
     )
     target_ids = list((await db.execute(id_stmt)).scalars().all())
     if target_ids:

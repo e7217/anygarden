@@ -25,7 +25,6 @@ interface TaskPanelProps {
 
 // #319 — see ``TasksSection`` for the rationale; both panels share the
 // same status vocabulary and only differ in the layout chrome.
-const STATUS_CYCLE = ['todo', 'in_progress', 'done'] as const
 const STATUS_ICON: Record<string, typeof Circle> = {
   todo: Circle,
   in_progress: Clock,
@@ -51,7 +50,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
   // #302 — data plane lives in useRoomTasks. The right-rail TasksSection
   // consumes the same hook, guaranteeing the legacy panel and the new
   // sidebar render the same list against the same WS event stream.
-  const { tasks, create, update, remove } = useRoomTasks(roomId, {
+  const { tasks, create, claim, requeue, update, remove } = useRoomTasks(roomId, {
     status: filter,
   })
 
@@ -99,18 +98,28 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
   }
 
   const cycleStatus = async (task: Task) => {
-    // #319 — system-set statuses (``blocked`` / ``failed``) are not in
-    // the user toggle cycle. Click on a row in those buckets resets to
-    // ``todo`` so the user can re-engage without a separate control.
-    const idx = STATUS_CYCLE.indexOf(task.status as typeof STATUS_CYCLE[number])
-    const next = idx === -1
-      ? STATUS_CYCLE[0]
-      : STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
-    await update(task.id, { status: next })
+    if (task.status === 'todo') {
+      await claim(task.id)
+    } else if (task.status === 'in_progress') {
+      await update(task.id, { status: 'done' })
+    } else {
+      await requeue(task.id, {
+        reason: 'Requeued from task panel',
+        assignee_participant_id: task.assignee_participant_id,
+      })
+    }
   }
 
   const reassign = async (task: Task, participantId: string) => {
-    await update(task.id, { assignee_participant_id: participantId || null })
+    const assignee = participantId || null
+    if (task.status === 'todo') {
+      await update(task.id, { assignee_participant_id: assignee })
+    } else {
+      await requeue(task.id, {
+        reason: 'Reassigned from task panel',
+        assignee_participant_id: assignee,
+      })
+    }
   }
 
   const filters = [
@@ -212,13 +221,15 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                   engine={assignee.engine}
                 />
               ) : null}
-              <button
-                onClick={() => remove(task.id)}
-                className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
-                title="Delete task"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              {!task.source_message_id ? (
+                <button
+                  onClick={() => remove(task.id)}
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
+                  title="Delete task"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
             </div>
           )
         })}

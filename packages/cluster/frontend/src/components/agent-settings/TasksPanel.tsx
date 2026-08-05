@@ -50,6 +50,8 @@ export interface AgentTask {
   assignee_participant_id: string | null
   created_by: string | null
   created_at: string
+  source_message_id?: string | null
+  source_thread_root_id?: string | null
 }
 
 // ── Status taxonomy (#320) ───────────────────────────────────────────
@@ -311,7 +313,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                       >
                         <span className="truncate">{t.room_name}</span>
                       </button>
-                      {terminal ? (
+                      {terminal && !t.source_message_id ? (
                         <button
                           type="button"
                           onClick={() => handleDelete(t.id)}

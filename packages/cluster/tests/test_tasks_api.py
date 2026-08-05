@@ -8,6 +8,7 @@ helper itself is unit-tested in ``test_tasks_injection.py``.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from typing import AsyncIterator
 
@@ -27,8 +28,11 @@ from anygarden.db.models import (
     Participant,
     Project,
     Room,
+    RoomAuthorizationAudit,
+    Task,
     User,
 )
+from anygarden.messages.service import append_message
 
 
 @pytest_asyncio.fixture()
@@ -73,6 +77,12 @@ async def tasks_env() -> AsyncIterator[dict]:
     creator_token = create_user_token(
         creator.id, creator.email, creator.is_admin, secret=config.jwt_secret
     )
+    bystander_token = create_user_token(
+        bystander.id,
+        bystander.email,
+        bystander.is_admin,
+        secret=config.jwt_secret,
+    )
 
     app = create_app(config)
     app.state.engine = engine
@@ -82,6 +92,7 @@ async def tasks_env() -> AsyncIterator[dict]:
         yield {
             "client": client,
             "token": creator_token,
+            "bystander_token": bystander_token,
             "factory": factory,
             "room": room,
             "creator_p_id": creator_p.id,
@@ -269,7 +280,7 @@ class TestTaskInputValidation:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_update_accepts_canonical_status(self, tasks_env) -> None:
+    async def test_update_requires_claim_for_in_progress(self, tasks_env) -> None:
         client = tasks_env["client"]
         room = tasks_env["room"]
         create = await client.post(
@@ -283,8 +294,8 @@ class TestTaskInputValidation:
             json={"status": "in_progress"},
             headers=_auth(tasks_env["token"]),
         )
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "in_progress"
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["code"] == "TASK_CLAIM_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_update_status_none_is_allowed(self, tasks_env) -> None:
@@ -375,9 +386,15 @@ class TestUpdateTask:
         task_id = create.json()["id"]
         assert await _count_task_messages(tasks_env["factory"], room.id) == 1
 
+        async with tasks_env["factory"]() as db:
+            task = await db.get(Task, task_id)
+            assert task is not None
+            task.status = "in_progress"
+            await db.commit()
+
         resp = await client.put(
             f"/api/v1/tasks/{task_id}",
-            json={"status": "in_progress"},
+            json={"status": "done"},
             headers=_auth(tasks_env["token"]),
         )
         assert resp.status_code == 200
@@ -549,16 +566,16 @@ class TestAssignedAt:
         task_id = create.json()["id"]
 
         async with tasks_env["factory"]() as db:
-            from anygarden.db.models import Task as TaskRow
-
             before = (
-                await db.execute(select(TaskRow).where(TaskRow.id == task_id))
+                await db.execute(select(Task).where(Task.id == task_id))
             ).scalar_one()
             t1 = before.assigned_at
+            before.status = "in_progress"
+            await db.commit()
 
         resp = await client.put(
             f"/api/v1/tasks/{task_id}",
-            json={"status": "in_progress"},
+            json={"status": "done"},
             headers=_auth(tasks_env["token"]),
         )
         assert resp.status_code == 200
@@ -607,6 +624,10 @@ class TestRestResolveWake:
         # dependent in ``blocked``.
         async with tasks_env["factory"]() as db:
             db.add(TaskBlocker(task_id=dep_id, blocked_by_task_id=blocker_id))
+            blocker_row = (
+                await db.execute(select(TaskRow).where(TaskRow.id == blocker_id))
+            ).scalar_one()
+            blocker_row.status = "in_progress"
             dep_row = (
                 await db.execute(select(TaskRow).where(TaskRow.id == dep_id))
             ).scalar_one()
@@ -639,3 +660,255 @@ class TestRestResolveWake:
         # A fresh re-wake mention was injected for the dependent.
         msgs_after = await _count_task_messages(tasks_env["factory"], room.id)
         assert msgs_after == msgs_before + 1
+
+
+class TestMessageLinkedTasksAndClaims:
+    async def _source_messages(self, tasks_env) -> tuple[Message, Message]:
+        async with tasks_env["factory"]() as db:
+            room = tasks_env["room"]
+            root = await append_message(
+                db,
+                room.id,
+                tasks_env["creator_p_id"],
+                "source root",
+            )
+            reply = await append_message(
+                db,
+                room.id,
+                tasks_env["creator_p_id"],
+                "source reply",
+                thread_root_id=root.id,
+            )
+            await db.commit()
+            return root, reply
+
+    @pytest.mark.asyncio
+    async def test_reply_source_derives_root_and_assignment_stays_in_thread(
+        self, tasks_env
+    ) -> None:
+        root, reply = await self._source_messages(tasks_env)
+        response = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/messages/{reply.id}/task",
+            json={
+                "title": "reply work",
+                "assignee_participant_id": tasks_env["agent_a_p_id"],
+            },
+            headers=_auth(tasks_env["token"]),
+        )
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["source_message_id"] == reply.id
+        assert payload["source_thread_root_id"] == root.id
+
+        assignment = await _last_task_message(
+            tasks_env["factory"], tasks_env["room"].id
+        )
+        assert assignment is not None
+        assert assignment.parent_message_id == root.id
+        assert assignment.root_message_id == root.id
+
+        duplicate = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/messages/{reply.id}/task",
+            json={"title": "duplicate"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == {
+            "code": "TASK_SOURCE_ALREADY_LINKED",
+            "existing_task_id": payload["id"],
+        }
+
+        deleted = await tasks_env["client"].delete(
+            f"/api/v1/tasks/{payload['id']}",
+            headers=_auth(tasks_env["token"]),
+        )
+        assert deleted.status_code == 409
+        assert (
+            deleted.json()["detail"]["code"]
+            == "TASK_SOURCE_LINKED_DELETE_FORBIDDEN"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_room_and_system_sources_are_rejected(self, tasks_env) -> None:
+        async with tasks_env["factory"]() as db:
+            other = Room(name="other")
+            db.add(other)
+            await db.flush()
+            cross = await append_message(db, other.id, None, "private source")
+            system = await append_message(
+                db,
+                tasks_env["room"].id,
+                None,
+                "generated",
+                {"system_origin": "routing"},
+            )
+            await db.commit()
+
+        cross_response = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/messages/{cross.id}/task",
+            json={"title": "cross"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert cross_response.status_code == 404
+
+        system_response = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/messages/{system.id}/task",
+            json={"title": "system"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert system_response.status_code == 400
+        assert (
+            system_response.json()["detail"]["code"]
+            == "TASK_SYSTEM_SOURCE_FORBIDDEN"
+        )
+
+    @pytest.mark.asyncio
+    async def test_atomic_claim_has_exactly_one_winner_and_no_chat_wake(
+        self, tasks_env
+    ) -> None:
+        async with tasks_env["factory"]() as db:
+            room = await db.get(Room, tasks_env["room"].id)
+            assert room is not None
+            room.allow_human_assignment = True
+            await db.commit()
+
+        created = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/tasks",
+            json={"title": "race"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = created.json()["id"]
+        before = await _count_task_messages(
+            tasks_env["factory"], tasks_env["room"].id
+        )
+
+        first, second = await asyncio.gather(
+            tasks_env["client"].post(
+                f"/api/v1/tasks/{task_id}/claim",
+                headers=_auth(tasks_env["token"]),
+            ),
+            tasks_env["client"].post(
+                f"/api/v1/tasks/{task_id}/claim",
+                headers=_auth(tasks_env["bystander_token"]),
+            ),
+        )
+        assert sorted((first.status_code, second.status_code)) == [200, 409]
+        loser = first if first.status_code == 409 else second
+        assert loser.json()["detail"]["code"] == "TASK_CLAIM_CONFLICT"
+
+        async with tasks_env["factory"]() as db:
+            task = await db.get(Task, task_id)
+            assert task is not None
+            assert task.status == "in_progress"
+            assert task.assignee_participant_id in {
+                tasks_env["creator_p_id"],
+                tasks_env["bystander_p_id"],
+            }
+            assert task.assigned_at is not None
+            assert task.started_at is not None
+        assert (
+            await _count_task_messages(tasks_env["factory"], tasks_env["room"].id)
+            == before
+        )
+
+    @pytest.mark.asyncio
+    async def test_human_claim_gate_archive_and_removal_requeue(self, tasks_env) -> None:
+        created = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/tasks",
+            json={"title": "human work"},
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = created.json()["id"]
+        disabled = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/claim",
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert disabled.status_code == 403
+
+        async with tasks_env["factory"]() as db:
+            room = await db.get(Room, tasks_env["room"].id)
+            assert room is not None
+            room.allow_human_assignment = True
+            await db.commit()
+        claimed = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/claim",
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert claimed.status_code == 200
+        blocked = await tasks_env["client"].put(
+            f"/api/v1/tasks/{task_id}",
+            json={"status": "blocked"},
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert blocked.status_code == 200
+        requeued = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/requeue",
+            json={"reason": "blocker cleared"},
+            headers=_auth(tasks_env["token"]),
+        )
+        assert requeued.status_code == 200
+        reclaimed = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/claim",
+            headers=_auth(tasks_env["bystander_token"]),
+        )
+        assert reclaimed.status_code == 200
+
+        removed = await tasks_env["client"].delete(
+            f"/api/v1/rooms/{tasks_env['room'].id}/participants/"
+            f"{tasks_env['bystander_p_id']}",
+            headers=_auth(tasks_env["token"]),
+        )
+        assert removed.status_code == 204
+        async with tasks_env["factory"]() as db:
+            task = await db.get(Task, task_id)
+            assert task is not None
+            assert task.status == "todo"
+            assert task.assignee_participant_id is None
+            assert task.error == "assignee_removed"
+            room = await db.get(Room, tasks_env["room"].id)
+            assert room is not None
+            room.archived_at = task.created_at
+            await db.commit()
+
+        archived = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/claim",
+            headers=_auth(tasks_env["token"]),
+        )
+        assert archived.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_admin_requeue_records_reason(self, tasks_env) -> None:
+        created = await tasks_env["client"].post(
+            f"/api/v1/rooms/{tasks_env['room'].id}/tasks",
+            json={
+                "title": "retry",
+                "assignee_participant_id": tasks_env["agent_a_p_id"],
+            },
+            headers=_auth(tasks_env["token"]),
+        )
+        task_id = created.json()["id"]
+        async with tasks_env["factory"]() as db:
+            task = await db.get(Task, task_id)
+            assert task is not None
+            task.status = "in_progress"
+            await db.commit()
+
+        response = await tasks_env["client"].post(
+            f"/api/v1/tasks/{task_id}/requeue",
+            json={
+                "reason": "agent unavailable",
+                "assignee_participant_id": tasks_env["agent_b_p_id"],
+            },
+            headers=_auth(tasks_env["token"]),
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "todo"
+        assert response.json()["assignee_participant_id"] == tasks_env["agent_b_p_id"]
+        async with tasks_env["factory"]() as db:
+            audit = await db.scalar(
+                select(RoomAuthorizationAudit).where(
+                    RoomAuthorizationAudit.scope == "task.requeue"
+                )
+            )
+            assert audit is not None
+            assert audit.details["reason"] == "agent unavailable"

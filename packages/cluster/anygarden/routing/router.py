@@ -301,8 +301,27 @@ async def auto_route_unassigned(
                 )
             )
             continue
-        task.assignee_participant_id = target_pid
-        await db.flush()
+        from anygarden.task_service import (
+            TaskMutationConflict,
+            update_open_task_cas,
+        )
+
+        try:
+            task = await update_open_task_cas(
+                db,
+                task=task,
+                title=None,
+                set_assignee=True,
+                assignee_participant_id=target_pid,
+            )
+        except TaskMutationConflict:
+            skipped.append(
+                SkippedTask(
+                    task_id=task_id,
+                    reason="task changed while routing was in progress",
+                )
+            )
+            continue
         target_p = (
             await db.execute(
                 select(Participant).where(Participant.id == target_pid)

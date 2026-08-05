@@ -25,7 +25,6 @@ interface TasksSectionProps {
 // stamp ``blocked`` themselves via ``mark_task_status``). They render
 // in their own status group but are deliberately *not* in the user
 // toggle cycle — the click toggle stays on actionable transitions.
-const STATUS_CYCLE = ['todo', 'in_progress', 'done'] as const
 const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'failed', 'done'] as const
 const STATUS_ICON: Record<string, typeof Circle> = {
   todo: Circle,
@@ -58,7 +57,7 @@ const STATUS_LABEL: Record<string, string> = {
  * the chip is read-only — there is only one valid choice.
  */
 export default function TasksSection({ roomId, participants }: TasksSectionProps) {
-  const { tasks, refresh, create, update, remove } = useRoomTasks(roomId)
+  const { tasks, refresh, create, claim, requeue, update, remove } = useRoomTasks(roomId)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
   const [adding, setAdding] = useState(false)
@@ -172,19 +171,28 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }, [tasks])
 
   const cycleStatus = async (task: Task) => {
-    // #319 — when the current status is system-set (``blocked`` /
-    // ``failed``) it is not in the cycle. Re-entering the cycle from
-    // ``todo`` keeps the click toggle predictable and lets the user
-    // unblock a task without a separate "reset" affordance.
-    const idx = STATUS_CYCLE.indexOf(task.status as typeof STATUS_CYCLE[number])
-    const next = idx === -1
-      ? STATUS_CYCLE[0]
-      : STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
-    await update(task.id, { status: next })
+    if (task.status === 'todo') {
+      await claim(task.id)
+    } else if (task.status === 'in_progress') {
+      await update(task.id, { status: 'done' })
+    } else {
+      await requeue(task.id, {
+        reason: 'Requeued from right rail',
+        assignee_participant_id: task.assignee_participant_id,
+      })
+    }
   }
 
   const reassign = async (task: Task, participantId: string) => {
-    await update(task.id, { assignee_participant_id: participantId || null })
+    const assignee = participantId || null
+    if (task.status === 'todo') {
+      await update(task.id, { assignee_participant_id: assignee })
+    } else {
+      await requeue(task.id, {
+        reason: 'Reassigned from right rail',
+        assignee_participant_id: assignee,
+      })
+    }
   }
 
   const submitNew = async () => {
@@ -278,13 +286,15 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             is the row's inner right edge, exactly where the section
             header's action button sits — keeping the rail's right
             column visually aligned. */}
-        <button
-          onClick={() => remove(task.id)}
-          className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
-          aria-label={`Delete ${task.title}`}
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+        {!task.source_message_id ? (
+          <button
+            onClick={() => remove(task.id)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
+            aria-label={`Delete ${task.title}`}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        ) : null}
       </div>
     )
   }
