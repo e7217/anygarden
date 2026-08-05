@@ -113,6 +113,22 @@ jobs:
         working-directory: packages/cluster/frontend
         run: npm test
 
+      - name: Install Playwright Chromium
+        working-directory: packages/cluster/frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Test frontend browser E2E
+        working-directory: packages/cluster/frontend
+        run: npm run test:e2e
+
+      - name: Upload browser E2E artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-e2e-artifacts
+          path: packages/cluster/frontend/test-results/
+          if-no-files-found: ignore
+
       - name: Build (typecheck + bundle)
         working-directory: packages/cluster/frontend
         run: npm run build
