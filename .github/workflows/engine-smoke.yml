@@ -63,6 +63,37 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Write smoke preflight secret access audit
+        if: always()
+        run: |
+          mkdir -p smoke-evidence
+          cat > smoke-evidence/secret-audit.json <<JSON
+          {
+            "workflow": "engine-smoke",
+            "stage": "preflight",
+            "run_id": "${GITHUB_RUN_ID}",
+            "allowed_repository_variables": [
+              "ANYGARDEN_SMOKE_APPROVED",
+              "ANYGARDEN_SMOKE_BUDGET_POLICY",
+              "ANYGARDEN_SMOKE_EGRESS_POLICY",
+              "ANYGARDEN_SMOKE_PROXY_URL",
+              "ANYGARDEN_SMOKE_CREDENTIAL_SCOPE",
+              "ANYGARDEN_SMOKE_CONTAINER_IMAGE",
+              "ANYGARDEN_SMOKE_MODEL"
+            ],
+            "openai_secret_present": false
+          }
+          JSON
+
+      - name: Upload preflight secret-audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-smoke-secret-audit-${{ github.sha }}
+          path: smoke-evidence/secret-audit.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload preflight evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -71,6 +102,10 @@ jobs:
           path: smoke-evidence/evidence.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Cleanup preflight workspace
+        if: always()
+        run: rm -rf smoke-runner smoke-evidence
 
   live-canary:
     name: One-shot isolated canary
@@ -135,3 +170,8 @@ jobs:
           path: ${{ runner.temp }}/engine-smoke-evidence/evidence.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Cleanup canary artifacts
+        if: always()
+        run: |
+          rm -rf "${RUNNER_TEMP}/engine-smoke-evidence" "${RUNNER_TEMP}/engine-smoke-runner"

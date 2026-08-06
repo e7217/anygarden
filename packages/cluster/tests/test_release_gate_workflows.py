@@ -20,6 +20,24 @@ def test_tag_release_cannot_bypass_browser_or_engine_gate() -> None:
     assert "Release blocked" in RELEASE
 
 
+def test_release_builds_once_and_publishes_downloaded_artifacts() -> None:
+    build, publish = RELEASE.split("  publish-package:", maxsplit=1)
+
+    assert "  build-package:" in build
+    assert "needs: release-gate" in build
+    assert "contents: read" in build
+    assert "uses: actions/upload-artifact@v4" in build
+    assert "name: release-artifacts-${{ steps.parse.outputs.package }}-${{ github.sha }}" in build
+    assert "needs: build-package" in publish
+    assert "actions: read" in publish
+    assert "uses: actions/download-artifact@v4" in publish
+    assert (
+        "name: release-artifacts-${{ needs.build-package.outputs.package }}-${{ github.sha }}"
+        in publish
+    )
+    assert "\n          uv build --package" not in publish
+
+
 def test_live_smoke_has_no_pr_ref_prompt_or_retry_inputs() -> None:
     assert "workflow_dispatch:\n" in SMOKE
     assert "pull_request" not in SMOKE
@@ -92,3 +110,16 @@ def test_live_canary_keeps_workspace_empty_and_state_on_tmpfs() -> None:
     assert "/work/home" not in live
     assert "/work/codex" not in live
     assert "mkdir -p /work" not in live
+
+
+def test_smoke_records_secret_scope_and_always_cleans_temporary_resources() -> None:
+    preflight, live = SMOKE.split("  live-canary:", maxsplit=1)
+
+    assert "name: Write smoke preflight secret access audit\n        if: always()" in preflight
+    assert '"run_id": "${GITHUB_RUN_ID}"' in preflight
+    assert "<<JSON" in preflight
+    assert "<<'JSON'" not in preflight
+    assert "name: engine-smoke-secret-audit-${{ github.sha }}" in preflight
+    assert "rm -rf smoke-runner smoke-evidence" in preflight
+    assert 'rm -rf "${RUNNER_TEMP}/engine-smoke-evidence"' in live
+    assert '"${RUNNER_TEMP}/engine-smoke-runner"' in live

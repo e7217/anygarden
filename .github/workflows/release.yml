@@ -69,16 +69,16 @@ jobs:
             exit 1
           fi
 
-  build-and-release:
-    name: Build & Release ${{ github.ref_name }}
+  build-package:
+    name: Build ${{ github.ref_name }}
     needs: release-gate
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      # #402 — OIDC token for PyPI Trusted Publishing. ``id-token: write``
-      # lets the runner mint a short-lived OIDC token that PyPI exchanges
-      # for an upload grant, so no long-lived API token secret is stored.
-      id-token: write
+      contents: read
+    outputs:
+      dist_name: ${{ steps.parse.outputs.dist_name }}
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,10 +151,41 @@ jobs:
           # by distribution name.
           uv build --package "${{ steps.parse.outputs.dist_name }}"
 
+      - name: Upload release artifacts
+        id: publish_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ steps.parse.outputs.package }}-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-package:
+    name: Publish ${{ github.ref_name }}
+    needs: build-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      # #402 — OIDC token for PyPI Trusted Publishing. ``id-token: write``
+      # lets the runner mint a short-lived OIDC token that PyPI exchanges
+      # for an upload grant, so no long-lived API token secret is stored.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts-${{ needs.build-package.outputs.package }}-${{ github.sha }}
+          path: dist/
+
       - name: Resolve previous tag for same package
         id: prev
         run: |
-          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
+          DIST_NAME="${{ needs.build-package.outputs.dist_name }}"
           CURRENT="${GITHUB_REF_NAME}"
           PREV=$(git tag --list "${DIST_NAME}-v*" --sort=-version:refname \
             | grep -vx "${CURRENT}" \
@@ -170,8 +201,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
-          VERSION="${{ steps.parse.outputs.version }}"
+          DIST_NAME="${{ needs.build-package.outputs.dist_name }}"
+          VERSION="${{ needs.build-package.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           # uv normalizes hyphens to underscores in wheel/sdist
           # filenames (PEP 491/625), so anygarden-machine ships as

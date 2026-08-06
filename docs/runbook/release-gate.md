@@ -10,6 +10,15 @@ exact commit.
    the same default-branch SHA. Missing, failed, timed-out, or stale smoke runs
    block the tag before any build, GitHub Release, or PyPI publication occurs.
 
+Production release and canary operations are documented in [release operations
+runbook](./release-operations.md).
+
+## 운영 runbook
+
+- Run `docs/runbook/release-operations.md` before every release and incident.
+- Treat preflight and live-canary evidence as evidence-of-compliance artifacts.
+- Do not proceed when evidence indicates `BLOCKED_CONFIGURATION` in preflight.
+
 ## Protected engine smoke
 
 The live job is intentionally unusable by default. Configure it only after the
