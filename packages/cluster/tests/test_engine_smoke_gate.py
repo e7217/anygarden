@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -107,7 +108,21 @@ def test_preflight_evidence_has_only_redacted_contract_fields(tmp_path: Path) ->
     assert smoke.run("preflight", evidence, env) == 0
 
     payload = json.loads(evidence.read_text())
+    assert set(payload) == {
+        "duration_ms",
+        "engine",
+        "engine_version",
+        "exact_sha",
+        "failure_category",
+        "input_sha256",
+        "model_version",
+        "output_length",
+        "output_sha256",
+        "result_code",
+        "workflow_run",
+    }
     assert payload["result_code"] == "PREFLIGHT_PASS"
+    assert payload["failure_category"] == "NOT_APPLICABLE"
     assert payload["exact_sha"] == env["GITHUB_SHA"]
     assert payload["input_sha256"] == smoke._sha256(smoke.CANARY_PROMPT.encode())
     assert credential not in evidence.read_text()
@@ -119,9 +134,7 @@ def test_live_runner_requires_credential_only_after_isolation(
 ) -> None:
     env = configured_env()
     env.pop("OPENAI_API_KEY")
-    env["ANYGARDEN_SMOKE_RUNTIME_ISOLATED"] = (
-        "container-readonly-empty-workspace"
-    )
+    env["ANYGARDEN_SMOKE_RUNTIME_ISOLATED"] = "container-readonly-empty-workspace"
     monkeypatch.chdir(tmp_path)
 
     with pytest.raises(smoke.BlockedConfiguration):
@@ -269,6 +282,206 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
         smoke.parse_response(raw)
 
 
+@pytest.mark.parametrize(
+    ("raw", "category"),
+    [
+        (
+            (
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized: provider-secret, url: https://example.invalid"}'
+            ),
+            "AUTHENTICATION",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 404 Not Found: Model not found provider-secret"}}'
+            ),
+            "MODEL",
+        ),
+        (
+            (
+                b'{"type":"error","message":"exceeded retry limit, last '
+                b'status: 429 Too Many Requests, request id: provider-secret"}'
+            ),
+            "RATE_LIMIT",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 503 Service Unavailable: provider-secret"}}'
+            ),
+            "UPSTREAM",
+        ),
+        (
+            (
+                b'{"type":"error","message":"You\'ve hit your usage '
+                b'limit. provider-secret"}'
+            ),
+            "RATE_LIMIT",
+        ),
+        (
+            b'{"type":"error","message":"Connection failed: provider-secret"}',
+            "UPSTREAM",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 503 '
+                b'Service Unavailable: Model not found provider-secret"}'
+            ),
+            "UPSTREAM",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized: Model not found provider-secret"}'
+            ),
+            "AUTHENTICATION",
+        ),
+        (
+            (
+                b'{"type":"item.completed","item":{"type":"agent_message",'
+                b'"text":"unexpected status 401 Unauthorized"}}'
+            ),
+            "UNKNOWN",
+        ),
+    ],
+)
+def test_failure_classifier_projects_only_closed_categories(
+    raw: bytes, category: str
+) -> None:
+    assert smoke.classify_failure(raw) == category
+    assert category in smoke.FAILURE_CATEGORIES
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"not-json",
+        b'{"type":"error","message":42}',
+        b'{"type":"turn.failed","error":"not-an-object"}',
+        b'{"type":"error","message":"provider-secret"}',
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized: '
+            + b"x" * smoke.MAX_FAILURE_MESSAGE_BYTES
+            + b'"}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'503 Service Unavailable"}}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 429 Too Many '
+            b'Requests"}\n'
+            b'{"type":"error","message":"unexpected status 429 Too Many '
+            b'Requests"}'
+        ),
+        (
+            b'{"type":"error","message":"unrecognized provider-secret"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
+            + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1)
+        ),
+    ],
+)
+def test_failure_classifier_collapses_unsafe_input_to_unknown(raw: bytes) -> None:
+    assert smoke.classify_failure(raw) == "UNKNOWN"
+
+
+def test_evidence_boundary_collapses_unlisted_category_without_leaking() -> None:
+    sensitive_category = "AUTHENTICATION:raw-provider-secret"
+
+    evidence = smoke.make_evidence(
+        configured_env(),
+        "FAIL_ENGINE_NONZERO",
+        0,
+        failure_category=sensitive_category,
+    )
+
+    assert evidence.failure_category == "UNKNOWN"
+    assert sensitive_category not in json.dumps(evidence.__dict__)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "category"),
+    [
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized: raw-provider-secret"}}'
+            ),
+            b"raw-stderr-secret",
+            "AUTHENTICATION",
+        ),
+        (
+            b'{"type":"turn.failed","error":{"message":"unknown raw failure"}}',
+            b"unexpected status 401 Unauthorized: stderr-only-secret",
+            "UNKNOWN",
+        ),
+    ],
+)
+def test_nonzero_engine_evidence_keeps_only_projected_category(
+    tmp_path: Path,
+    monkeypatch,
+    stdout: bytes,
+    stderr: bytes,
+    category: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    class FakeProcess:
+        returncode = 1
+
+        def communicate(self, **_kwargs):
+            return stdout, stderr
+
+    monkeypatch.setattr(
+        smoke.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess()
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 1
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "FAIL_ENGINE_NONZERO"
+    assert decoded["failure_category"] == category
+    assert stdout.decode() not in payload
+    assert stderr.decode() not in payload
+    assert "raw-provider-secret" not in payload
+    assert "raw-stderr-secret" not in payload
+    assert "stderr-only-secret" not in payload
+
+
 def test_runtime_requires_isolated_empty_workspace(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     with pytest.raises(smoke.BlockedConfiguration):
@@ -276,12 +489,27 @@ def test_runtime_requires_isolated_empty_workspace(tmp_path: Path, monkeypatch) 
 
 
 @pytest.mark.parametrize(
-    ("error", "exit_code", "result_code"),
+    ("error", "exit_code", "result_code", "failure_category"),
     [
-        (TimeoutError("raw response"), 124, "TIMEOUT"),
-        (smoke.SmokeFailure("engine_nonzero"), 1, "FAIL_ENGINE_NONZERO"),
-        (smoke.SmokeFailure("embedded-sensitive-value"), 1, "FAIL"),
-        (RuntimeError("/home/runner embedded-sensitive-value"), 1, "FAIL"),
+        (TimeoutError("raw response"), 124, "TIMEOUT", "NOT_APPLICABLE"),
+        (
+            smoke.SmokeFailure("engine_nonzero"),
+            1,
+            "FAIL_ENGINE_NONZERO",
+            "UNKNOWN",
+        ),
+        (
+            smoke.SmokeFailure("embedded-sensitive-value"),
+            1,
+            "FAIL",
+            "NOT_APPLICABLE",
+        ),
+        (
+            RuntimeError("/home/runner embedded-sensitive-value"),
+            1,
+            "FAIL",
+            "NOT_APPLICABLE",
+        ),
     ],
 )
 def test_failure_evidence_never_contains_exception_text(
@@ -290,6 +518,7 @@ def test_failure_evidence_never_contains_exception_text(
     error: Exception,
     exit_code: int,
     result_code: str,
+    failure_category: str,
 ) -> None:
     env = configured_env()
     evidence = tmp_path / "evidence.json"
@@ -300,6 +529,8 @@ def test_failure_evidence_never_contains_exception_text(
     monkeypatch.setattr(smoke, "execute", fail)
     assert smoke.run("run", evidence, env) == exit_code
     payload = evidence.read_text()
-    assert json.loads(payload)["result_code"] == result_code
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == result_code
+    assert decoded["failure_category"] == failure_category
     assert str(error) not in payload
     assert env["OPENAI_API_KEY"] not in payload
