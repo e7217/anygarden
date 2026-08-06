@@ -494,6 +494,55 @@ async def test_archive_cancels_and_fences_late_completion(turn_env) -> None:
 
 
 @pytest.mark.asyncio
+async def test_observer_target_is_cancelled_before_lease_or_delivery(turn_env) -> None:
+    """Recovery must re-check the target's agent-write capability.
+
+    An observer is still a room participant and may have an open read socket,
+    but it cannot own a lifecycle/response.  Leasing or sending durable work
+    to it would execute an engine call that the final WS frame must reject.
+    """
+    async with turn_env["factory"]() as db:
+        participant = await db.get(Participant, turn_env["agent_participant"])
+        assert participant is not None
+        participant.role = "observer"
+        trigger = await append_message(
+            db,
+            turn_env["room"],
+            turn_env["user_participant"],
+            "do not dispatch to an observer",
+        )
+        turn = await create_turn(
+            db,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            trigger_message_id=trigger.id,
+        )
+        await db.commit()
+
+    manager = FakeManager(turn_env["agent_participant"], generation=3)
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 0
+    assert manager.frames == []
+
+    async with turn_env["factory"]() as db:
+        stored_turn = await db.get(AgentTurn, turn.request_id)
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(
+                AgentTurnAttempt.turn_id == turn.request_id
+            )
+        )
+        outbox = await db.scalar(
+            select(AgentTurnOutbox).where(
+                AgentTurnOutbox.turn_id == turn.request_id
+            )
+        )
+        assert stored_turn is not None and stored_turn.state == "cancelled"
+        assert stored_turn.terminal_reason == "authorization_revoked"
+        assert attempt is not None and attempt.state == "cancelled"
+        assert outbox is not None and outbox.state == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_generation_change_drains_then_retries_on_new_generation(
     turn_env,
 ) -> None:
