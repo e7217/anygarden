@@ -30,7 +30,7 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.db.repository import append_message
-from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.lifecycle import AgentLifecycle, _manifest_hash
 from anygarden.turns.service import (
     begin_completion,
     cancel_invalid_turns,
@@ -66,6 +66,22 @@ class FakeManager:
 
     async def broadcast(self, room_id, frame) -> None:
         self.broadcasts.append((room_id, frame))
+
+
+class FailFirstSendManager(FakeManager):
+    def __init__(self, participant_id: str, generation: int | None) -> None:
+        super().__init__(participant_id, generation)
+        self.attempted_frames = []
+
+    async def send_to(self, participant_id, frame, *, expected_generation=None):
+        self.attempted_frames.append(frame)
+        if len(self.attempted_frames) == 1:
+            return False
+        return await super().send_to(
+            participant_id,
+            frame,
+            expected_generation=expected_generation,
+        )
 
 
 class FakeBus:
@@ -179,6 +195,70 @@ async def test_turn_attempt_outbox_are_atomic_and_delivery_leases(turn_env) -> N
         assert attempt is not None and attempt.state == "leased"
         assert attempt.lease_expires_at is not None
         assert outbox is not None and outbox.state == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_failed_older_outbox_fences_later_room_turn(turn_env) -> None:
+    async with turn_env["factory"]() as db:
+        first_message = await append_message(
+            db,
+            turn_env["room"],
+            turn_env["user_participant"],
+            "first user intent",
+        )
+        first_turn = await create_turn(
+            db,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            trigger_message_id=first_message.id,
+        )
+        first_request_id = first_turn.request_id
+        await db.commit()
+
+    async with turn_env["factory"]() as db:
+        second_message = await append_message(
+            db,
+            turn_env["room"],
+            turn_env["user_participant"],
+            "second user intent",
+        )
+        second_turn = await create_turn(
+            db,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            trigger_message_id=second_message.id,
+        )
+        second_request_id = second_turn.request_id
+        await db.commit()
+
+    manager = FailFirstSendManager(turn_env["agent_participant"], generation=3)
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 0
+    assert [frame.metadata["request_id"] for frame in manager.attempted_frames] == [
+        first_request_id
+    ]
+    assert manager.frames == []
+
+    async with turn_env["factory"]() as db:
+        first_attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == first_request_id)
+        )
+        second_attempt = await db.scalar(
+            select(AgentTurnAttempt).where(
+                AgentTurnAttempt.turn_id == second_request_id
+            )
+        )
+        first_outbox = await db.scalar(
+            select(AgentTurnOutbox).where(AgentTurnOutbox.turn_id == first_request_id)
+        )
+        second_outbox = await db.scalar(
+            select(AgentTurnOutbox).where(AgentTurnOutbox.turn_id == second_request_id)
+        )
+        assert first_attempt is not None and first_attempt.state == "leased"
+        assert second_attempt is not None and second_attempt.state == "pending"
+        assert first_outbox is not None and first_outbox.delivery_count == 1
+        assert second_outbox is not None and second_outbox.delivery_count == 0
 
 
 @pytest.mark.asyncio
@@ -527,19 +607,104 @@ async def test_observer_target_is_cancelled_before_lease_or_delivery(turn_env) -
     async with turn_env["factory"]() as db:
         stored_turn = await db.get(AgentTurn, turn.request_id)
         attempt = await db.scalar(
-            select(AgentTurnAttempt).where(
-                AgentTurnAttempt.turn_id == turn.request_id
-            )
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == turn.request_id)
         )
         outbox = await db.scalar(
-            select(AgentTurnOutbox).where(
-                AgentTurnOutbox.turn_id == turn.request_id
-            )
+            select(AgentTurnOutbox).where(AgentTurnOutbox.turn_id == turn.request_id)
         )
         assert stored_turn is not None and stored_turn.state == "cancelled"
         assert stored_turn.terminal_reason == "authorization_revoked"
         assert attempt is not None and attempt.state == "cancelled"
         assert outbox is not None and outbox.state == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_observer_revocation_fences_lifecycle_completion_and_retry(
+    turn_env,
+) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    metadata = manager.frames[0].metadata
+    now = datetime.now(timezone.utc)
+    async with turn_env["factory"]() as db:
+        participant = await db.get(Participant, turn_env["agent_participant"])
+        assert participant is not None
+        participant.role = "observer"
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert attempt is not None
+        attempt.lease_expires_at = now - timedelta(seconds=1)
+
+        lifecycle_ok = await record_lifecycle(
+            db,
+            agent_id=turn_env["agent"],
+            frame=SimpleNamespace(
+                request_id=request_id,
+                room_id=turn_env["room"],
+                event="handler_started",
+                outcome=None,
+                turn_attempt=metadata["turn_attempt"],
+                turn_generation=metadata["turn_generation"],
+                turn_lease=metadata["turn_lease"],
+            ),
+        )
+        assert not lifecycle_ok
+        completion = await begin_completion(
+            db,
+            request_id=request_id,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            attempt_number=metadata["turn_attempt"],
+            generation=metadata["turn_generation"],
+            lease_token=metadata["turn_lease"],
+        )
+        assert completion.outcome == "stale"
+        assert completion.reason == "authorization_revoked"
+        await db.commit()
+
+    recovered = await recover_stalled_turns(turn_env["factory"], manager, now=now)
+    assert recovered.cancelled == 1
+    assert recovered.redispatched == 0
+
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        attempt_count = await db.scalar(
+            select(func.count())
+            .select_from(AgentTurnAttempt)
+            .where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert turn is not None and turn.state == "cancelled"
+        assert turn.terminal_reason == "authorization_revoked"
+        assert attempt_count == 1
+
+
+@pytest.mark.asyncio
+async def test_unchanged_effective_manifest_does_not_drain_active_turn(
+    turn_env,
+) -> None:
+    request_id, _, _ = await _create_and_deliver(turn_env)
+    bus = FakeBus()
+    lifecycle = AgentLifecycle(turn_env["factory"], bus)
+    async with turn_env["factory"]() as db:
+        agent = await db.get(Agent, turn_env["agent"])
+        assert agent is not None
+        frame = await lifecycle._build_sync_frame(db, agent, [turn_env["room"]])
+        agent.manifest_hash = _manifest_hash(frame, agent=agent)
+        await db.commit()
+
+    await lifecycle.bump_generation(turn_env["agent"])
+
+    async with turn_env["factory"]() as db:
+        agent = await db.get(Agent, turn_env["agent"])
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert agent is not None and agent.generation == 3
+        assert agent.pending_generation is None
+        assert agent.restart_deadline_at is None
+        assert attempt is not None and attempt.state == "leased"
+    assert bus.frames == []
 
 
 @pytest.mark.asyncio

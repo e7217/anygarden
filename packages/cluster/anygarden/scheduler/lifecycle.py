@@ -40,12 +40,20 @@ from anygarden.scheduler.placement import NoSuitableMachineError, select_machine
 logger = structlog.get_logger(__name__)
 
 
-def _manifest_hash(frame: dict) -> str:
-    """Return a stable config hash, excluding per-process credentials."""
+def _manifest_hash(frame: dict, *, agent: Agent | None = None) -> str:
+    """Return a stable effective-runtime hash without process credentials.
+
+    Most restart inputs are carried in the machine manifest itself. The
+    context-window opt-out is delivered in the agent's welcome frame after a
+    reconnect, so include it as an internal hash-only input without expanding
+    the machine protocol.
+    """
 
     stable = dict(frame)
     stable.pop("generation", None)
     stable.pop("anygarden_mcp_token", None)
+    if agent is not None:
+        stable["_context_window_opt_out"] = bool(agent.context_window_opt_out)
     body = json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(body.encode()).hexdigest()
 
@@ -217,7 +225,7 @@ class AgentLifecycle:
             _clear_unavailable(agent)
 
             frame = await self._build_sync_frame(db, agent, rooms)
-            agent.manifest_hash = _manifest_hash(frame)
+            agent.manifest_hash = _manifest_hash(frame, agent=agent)
             agent.pending_generation = None
             agent.restart_requested_at = None
             agent.restart_deadline_at = None
@@ -739,7 +747,46 @@ class AgentLifecycle:
             )
             rooms = [row[0] for row in room_result.all()]
             candidate = await self._build_sync_frame(db, agent, rooms)
-            candidate_hash = _manifest_hash(candidate)
+            candidate_hash = _manifest_hash(candidate, agent=agent)
+
+            # Only the effective, materialized manifest may restart a live
+            # process. API mutations can be semantically filtered (for
+            # example, an attached but unapproved skill), so the raw write is
+            # not itself proof that a generation change is needed.
+            if candidate_hash == agent.manifest_hash:
+                if agent.pending_generation is not None:
+                    cancelled_generation = agent.pending_generation
+                    agent.pending_generation = None
+                    agent.restart_requested_at = None
+                    agent.restart_deadline_at = None
+                    agent.pending_manifest_hash = None
+                    await db.execute(
+                        update(AgentTurnAttempt)
+                        .where(
+                            AgentTurnAttempt.agent_id == agent.id,
+                            AgentTurnAttempt.state == "pending",
+                            AgentTurnAttempt.generation == cancelled_generation,
+                        )
+                        .values(generation=agent.generation)
+                    )
+                    db.add(
+                        ActivityLog(
+                            agent_id=agent.id,
+                            event_type="generation_drain_cancelled",
+                            details={
+                                "generation": agent.generation,
+                                "cancelled_generation": cancelled_generation,
+                                "reason": "effective_manifest_unchanged",
+                            },
+                        )
+                    )
+                await db.commit()
+                return
+            if candidate_hash == agent.pending_manifest_hash:
+                # Coalesce repeated API hooks for the same desired manifest;
+                # one pending drain/restart is sufficient.
+                await db.commit()
+                return
 
             from anygarden.turns.service import active_lease_count
 

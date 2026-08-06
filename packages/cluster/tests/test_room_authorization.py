@@ -356,6 +356,19 @@ async def test_agent_role_is_clamped_and_only_own_task_status_can_change(db) -> 
             )
         assert exc.value.status_code == 403
 
+    participant.role = "observer"
+    await db.flush()
+    access = await resolve_access(db, room_id=room.id, identity=identity)
+    assert access.effective_role == "observer"
+    with pytest.raises(HTTPException) as exc:
+        await require_capability(
+            db,
+            room_id=room.id,
+            identity=identity,
+            capability=Capability.LIFECYCLE_WRITE,
+        )
+    assert exc.value.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_archive_blocks_writes_but_keeps_reads_and_owner_escape_hatches(

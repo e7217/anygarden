@@ -28,6 +28,7 @@ from anygarden.db.models import Participant, Room, RoomAuthorizationAudit, Task
 
 ROOM_VISIBILITY_VALUES: frozenset[str] = frozenset({"private"})
 ROOM_ROLE_VALUES: frozenset[str] = frozenset({"observer", "member", "admin", "owner"})
+AGENT_EXECUTION_ROLES: frozenset[str] = frozenset({"member", "admin", "owner"})
 
 
 class Capability(StrEnum):
@@ -277,10 +278,11 @@ async def resolve_access(
     Global administrators already have room-discovery authority and therefore
     receive a conventional 404 for an unknown id.
 
-    Agent participants are always clamped to ``member``.  This makes a stale
-    or hand-edited ``admin``/``owner`` row harmless and enforces the invariant
-    that agents never manage membership, roles, invites, visibility, or room
-    lifecycle.
+    Privileged Agent participant roles are clamped to ``member``. This makes a
+    stale or hand-edited ``admin``/``owner`` row harmless and enforces the
+    invariant that agents never manage membership, roles, invites, visibility,
+    or room lifecycle. ``observer`` remains read-only so operators can keep an
+    agent visible in a room without granting execution/lifecycle authority.
     """
 
     if is_global_admin(identity):
@@ -379,7 +381,11 @@ async def resolve_access(
             detail="Room not found",
         )
 
-    effective_role = "member" if identity.kind == "agent" else participant.role
+    effective_role = (
+        ("observer" if participant.role == "observer" else "member")
+        if identity.kind == "agent"
+        else participant.role
+    )
     if effective_role not in ROOM_ROLE_VALUES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -593,7 +599,7 @@ async def require_capability(
         if (
             access.participant is None
             or access.identity.kind not in {"agent", "user"}
-            or access.effective_role not in {"member", "admin", "owner"}
+            or access.effective_role not in AGENT_EXECUTION_ROLES
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -625,6 +631,7 @@ async def require_capability(
 
 
 __all__ = [
+    "AGENT_EXECUTION_ROLES",
     "ROOM_ROLE_VALUES",
     "ROOM_VISIBILITY_VALUES",
     "Capability",

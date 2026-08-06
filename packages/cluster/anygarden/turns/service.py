@@ -29,6 +29,7 @@ from anygarden.db.models import (
 )
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
+from anygarden.rooms.authorization import AGENT_EXECUTION_ROLES
 
 ACTIVE_ATTEMPT_STATES = frozenset({"leased", "started"})
 OPEN_TURN_STATES = frozenset({"pending", "leased", "retrying", "completing"})
@@ -187,26 +188,13 @@ async def deliver_pending_outbox(
     delivered = 0
     for outbox_id in outbox_ids:
         async with session_factory() as db:
-            claim = await db.execute(
-                update(AgentTurnOutbox)
-                .where(
-                    AgentTurnOutbox.id == outbox_id,
-                    AgentTurnOutbox.state == "pending",
-                    AgentTurnOutbox.available_at <= now,
-                )
-                .values(
-                    available_at=now + timedelta(seconds=OUTBOX_RECLAIM_SEC),
-                    delivery_count=AgentTurnOutbox.delivery_count + 1,
-                )
-            )
-            if claim.rowcount != 1:
-                await db.rollback()
-                continue
-            await db.commit()
-
-        async with session_factory() as db:
             row = await db.get(AgentTurnOutbox, outbox_id)
-            if row is None or row.state != "pending" or row.participant_id is None:
+            if (
+                row is None
+                or row.state != "pending"
+                or row.available_at > now
+                or row.participant_id is None
+            ):
                 continue
             turn = await db.get(AgentTurn, row.turn_id)
             attempt = await db.get(AgentTurnAttempt, row.attempt_id)
@@ -223,6 +211,7 @@ async def deliver_pending_outbox(
                         Participant.id == row.participant_id,
                         Participant.room_id == row.room_id,
                         Participant.agent_id == turn.agent_id,
+                        Participant.role.in_(AGENT_EXECUTION_ROLES),
                         Room.archived_at.is_(None),
                     )
                 )
@@ -233,6 +222,7 @@ async def deliver_pending_outbox(
                 attempt.state = "cancelled"
                 attempt.reason = "authorization_revoked"
                 row.state = "cancelled"
+                row.last_error = "authorization_revoked"
                 db.add(
                     ActivityLog(
                         agent_id=turn.agent_id,
@@ -258,7 +248,39 @@ async def deliver_pending_outbox(
                 turn.state = "cancelled"
                 turn.terminal_reason = "trigger_message_deleted"
                 attempt.state = "cancelled"
+                attempt.reason = "trigger_message_deleted"
                 await db.commit()
+                continue
+
+            # Preserve room-local user intent order across delivery retries.
+            # A failed socket write moves A's outbox availability into the
+            # future; without this fence, a still-due B would otherwise lease
+            # and execute first. Message.seq is authoritative inside a room,
+            # with turn creation order only as a legacy/deletion fallback.
+            turn_created_before = or_(
+                AgentTurn.created_at < turn.created_at,
+                and_(
+                    AgentTurn.created_at == turn.created_at,
+                    AgentTurn.request_id < turn.request_id,
+                ),
+            )
+            prior_open = await db.scalar(
+                select(AgentTurn.request_id)
+                .outerjoin(Message, Message.id == AgentTurn.trigger_message_id)
+                .where(
+                    AgentTurn.request_id != turn.request_id,
+                    AgentTurn.room_id == turn.room_id,
+                    AgentTurn.target_participant_id == turn.target_participant_id,
+                    AgentTurn.state.in_(OPEN_TURN_STATES),
+                    or_(
+                        Message.seq < msg.seq,
+                        and_(Message.seq == msg.seq, turn_created_before),
+                        and_(Message.seq.is_(None), turn_created_before),
+                    ),
+                )
+                .limit(1)
+            )
+            if prior_open is not None:
                 continue
             connected = await manager.is_connected(row.participant_id)
             if not connected:
@@ -285,6 +307,29 @@ async def deliver_pending_outbox(
             lease_seconds = max(
                 60, int(getattr(agent, "turn_timeout_sec", 0) or 900) + 300
             )
+            if attempt.state not in {"pending", *ACTIVE_ATTEMPT_STATES}:
+                row.state = "cancelled"
+                await db.commit()
+                continue
+
+            # Claim the outbox and execution lease in one transaction. The
+            # reads above are repeated by every contender; this CAS is the
+            # single winner gate before any socket side effect.
+            claim = await db.execute(
+                update(AgentTurnOutbox)
+                .where(
+                    AgentTurnOutbox.id == outbox_id,
+                    AgentTurnOutbox.state == "pending",
+                    AgentTurnOutbox.available_at <= now,
+                )
+                .values(
+                    available_at=now + timedelta(seconds=OUTBOX_RECLAIM_SEC),
+                    delivery_count=AgentTurnOutbox.delivery_count + 1,
+                )
+            )
+            if claim.rowcount != 1:
+                await db.rollback()
+                continue
             # Reserve the execution lease before touching the socket. This CAS
             # serializes dispatch with generation changes: a config restart
             # either observes an active lease and drains it, or updates a still-
@@ -309,10 +354,6 @@ async def deliver_pending_outbox(
                     continue
                 if turn.state in {"pending", "retrying"}:
                     turn.state = "leased"
-            elif attempt.state not in ACTIVE_ATTEMPT_STATES:
-                row.state = "cancelled"
-                await db.commit()
-                continue
             await db.commit()
 
         sent = await manager.send_to(
@@ -411,6 +452,7 @@ async def begin_completion(
                 Participant.id == participant_id,
                 Participant.room_id == room_id,
                 Participant.agent_id == agent_id,
+                Participant.role.in_(AGENT_EXECUTION_ROLES),
                 Room.archived_at.is_(None),
                 Agent.desired_state == "running",
             )
@@ -570,8 +612,24 @@ async def record_lifecycle(
             )
         )
     ).scalar_one_or_none()
+    gate = (
+        await db.execute(
+            select(Participant.id)
+            .join(Room, Room.id == Participant.room_id)
+            .join(Agent, Agent.id == Participant.agent_id)
+            .where(
+                Participant.id == turn.target_participant_id,
+                Participant.room_id == turn.room_id,
+                Participant.agent_id == agent_id,
+                Participant.role.in_(AGENT_EXECUTION_ROLES),
+                Room.archived_at.is_(None),
+                Agent.desired_state == "running",
+            )
+        )
+    ).scalar_one_or_none()
     valid = (
         attempt is not None
+        and gate is not None
         and turn.agent_id == agent_id
         and turn.room_id == frame.room_id
         and (
@@ -588,7 +646,11 @@ async def record_lifecycle(
             db,
             turn=turn,
             agent_id=agent_id,
-            reason="lifecycle_lease_mismatch",
+            reason=(
+                "lifecycle_authorization_revoked"
+                if gate is None
+                else "lifecycle_lease_mismatch"
+            ),
             attempt_number=attempt_number,
             generation=generation,
         )
@@ -725,6 +787,7 @@ async def recover_stalled_turns(
                 and participant is not None
                 and participant.room_id == turn.room_id
                 and participant.agent_id == turn.agent_id
+                and participant.role in AGENT_EXECUTION_ROLES
                 and agent.desired_state == "running"
             )
             if not gate_ok:
@@ -855,6 +918,7 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                         Participant.id == turn.target_participant_id,
                         Participant.room_id == turn.room_id,
                         Participant.agent_id == turn.agent_id,
+                        Participant.role.in_(AGENT_EXECUTION_ROLES),
                         Room.archived_at.is_(None),
                         Agent.desired_state == "running",
                     )
