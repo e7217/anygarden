@@ -127,6 +127,45 @@ def test_command_is_fixed_read_only_ephemeral_single_turn() -> None:
     assert smoke.MAX_RESPONSE_BYTES == 256
 
 
+def test_runtime_state_dirs_are_created_privately_on_fixed_tmpfs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime_root = tmp_path / "tmpfs"
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    env = {
+        "HOME": str(runtime_root / "home"),
+        "CODEX_HOME": str(runtime_root / "codex"),
+    }
+
+    runtime_state = smoke.prepare_runtime_state(env)
+
+    assert runtime_state == env
+    for path in (runtime_root / "home", runtime_root / "codex"):
+        assert path.is_dir()
+        assert path.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"HOME": "/work/home", "CODEX_HOME": "/tmp/codex"},
+        {"HOME": "/tmp/home", "CODEX_HOME": "/work/codex"},
+        {"HOME": "/tmp/home"},
+    ],
+)
+def test_runtime_state_rejects_missing_or_non_tmpfs_paths(
+    tmp_path: Path, monkeypatch, env: dict[str, str]
+) -> None:
+    runtime_root = tmp_path / "tmpfs"
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    mapped_env = {
+        key: value.replace("/tmp", str(runtime_root)) for key, value in env.items()
+    }
+
+    with pytest.raises(smoke.BlockedConfiguration):
+        smoke.prepare_runtime_state(mapped_env)
+
+
 def test_response_parser_accepts_only_exact_canary() -> None:
     raw = b"\n".join(
         [
