@@ -41,6 +41,8 @@ contains only the exact SHA/run, engine/model version, result code, duration,
 and input/output length and hashes. Raw prompts, responses, credentials,
 sessions, stderr, and temporary files are not retained.
 
-If any prerequisite is absent, the preflight writes redacted
-`BLOCKED_CONFIGURATION` evidence and exits non-zero. Do not reinterpret that
-result as a skip or a pass.
+The hosted preflight receives no provider credential and checks only non-secret
+configuration. The credential is injected and checked only inside the protected
+self-hosted job's isolated container. If either stage lacks a prerequisite, it
+writes redacted `BLOCKED_CONFIGURATION` evidence and exits non-zero. Do not
+reinterpret that result as a skip or a pass.

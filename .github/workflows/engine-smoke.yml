@@ -48,7 +48,6 @@ jobs:
           ANYGARDEN_SMOKE_CREDENTIAL_SCOPE: ${{ vars.ANYGARDEN_SMOKE_CREDENTIAL_SCOPE }}
           ANYGARDEN_SMOKE_CONTAINER_IMAGE: ${{ vars.ANYGARDEN_SMOKE_CONTAINER_IMAGE }}
           ANYGARDEN_SMOKE_MODEL: ${{ vars.ANYGARDEN_SMOKE_MODEL }}
-          OPENAI_API_KEY: ${{ secrets.ANYGARDEN_SMOKE_OPENAI_API_KEY }}
         run: python packages/cluster/scripts/engine_smoke_gate.py preflight --evidence smoke-evidence/evidence.json
 
       - name: Package the reviewed runner only

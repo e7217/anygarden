@@ -27,6 +27,8 @@ def test_live_smoke_has_no_pr_ref_prompt_or_retry_inputs() -> None:
 
 
 def test_live_smoke_requires_protected_isolated_fail_closed_runner() -> None:
+    preflight, live = SMOKE.split("  live-canary:", maxsplit=1)
+
     assert "environment: release-smoke" in SMOKE
     assert "protection_rules" in SMOKE
     assert "deployment-branch-policies" in SMOKE
@@ -37,3 +39,5 @@ def test_live_smoke_requires_protected_isolated_fail_closed_runner() -> None:
     assert "--network anygarden-smoke-egress" in SMOKE
     assert "container-readonly-empty-workspace" in SMOKE
     assert "if-no-files-found: error" in SMOKE
+    assert "OPENAI_API_KEY" not in preflight
+    assert "secrets.ANYGARDEN_SMOKE_OPENAI_API_KEY" in live

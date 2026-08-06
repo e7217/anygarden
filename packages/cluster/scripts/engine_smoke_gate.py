@@ -95,8 +95,6 @@ def validate_configuration(env: Mapping[str, str]) -> tuple[str, str]:
     model = _required(env, "ANYGARDEN_SMOKE_MODEL")
     if not MODEL_PATTERN.fullmatch(model):
         raise BlockedConfiguration("model")
-    if not env.get("OPENAI_API_KEY"):
-        raise BlockedConfiguration("credential")
     return exact_sha, model
 
 
@@ -173,6 +171,7 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
         raise BlockedConfiguration("runtime_isolation")
     if any(Path.cwd().iterdir()):
         raise BlockedConfiguration("workspace_not_empty")
+    credential = _required(env, "OPENAI_API_KEY")
     codex = shutil.which("codex")
     if not codex:
         raise BlockedConfiguration("engine_missing")
@@ -186,7 +185,7 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
         "PATH": env.get("PATH", ""),
         "HOME": env.get("HOME", "/tmp/home"),
         "CODEX_HOME": env.get("CODEX_HOME", "/tmp/codex"),
-        "OPENAI_API_KEY": _required(env, "OPENAI_API_KEY"),
+        "OPENAI_API_KEY": credential,
         "LANG": "C.UTF-8",
     }
     proc = subprocess.Popen(

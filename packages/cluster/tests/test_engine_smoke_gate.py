@@ -85,6 +85,7 @@ def test_preflight_fails_closed_for_unsafe_context(
 
 def test_preflight_evidence_has_only_redacted_contract_fields(tmp_path: Path) -> None:
     env = configured_env()
+    credential = env.pop("OPENAI_API_KEY")
     evidence = tmp_path / "evidence.json"
 
     assert smoke.run("preflight", evidence, env) == 0
@@ -93,8 +94,22 @@ def test_preflight_evidence_has_only_redacted_contract_fields(tmp_path: Path) ->
     assert payload["result_code"] == "PREFLIGHT_PASS"
     assert payload["exact_sha"] == env["GITHUB_SHA"]
     assert payload["input_sha256"] == smoke._sha256(smoke.CANARY_PROMPT.encode())
-    assert env["OPENAI_API_KEY"] not in evidence.read_text()
+    assert credential not in evidence.read_text()
     assert smoke.CANARY_PROMPT not in evidence.read_text()
+
+
+def test_live_runner_requires_credential_only_after_isolation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env = configured_env()
+    env.pop("OPENAI_API_KEY")
+    env["ANYGARDEN_SMOKE_RUNTIME_ISOLATED"] = (
+        "container-readonly-empty-workspace"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(smoke.BlockedConfiguration):
+        smoke.execute(env["ANYGARDEN_SMOKE_MODEL"], env)
 
 
 def test_command_is_fixed_read_only_ephemeral_single_turn() -> None:
