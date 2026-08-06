@@ -97,12 +97,16 @@ jobs:
           ANYGARDEN_SMOKE_MODEL: ${{ vars.ANYGARDEN_SMOKE_MODEL }}
           OPENAI_API_KEY: ${{ secrets.ANYGARDEN_SMOKE_OPENAI_API_KEY }}
         run: |
-          mkdir -p "${RUNNER_TEMP}/engine-smoke-evidence"
+          EVIDENCE_DIR="${RUNNER_TEMP}/engine-smoke-evidence"
+          EVIDENCE_FILE="${EVIDENCE_DIR}/evidence.json"
+          install -d -m 0755 "${EVIDENCE_DIR}"
+          install -m 0666 /dev/null "${EVIDENCE_FILE}"
           docker run --rm --read-only --cap-drop ALL \
             --security-opt no-new-privileges \
+            --user 65532:65532 \
             --network anygarden-smoke-egress \
-            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
-            --tmpfs /work:rw,noexec,nosuid,size=4m \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 \
+            --tmpfs /work:rw,noexec,nosuid,size=4m,mode=1777 \
             --workdir /work \
             -e GITHUB_EVENT_NAME -e GITHUB_REF -e GITHUB_SHA -e GITHUB_RUN_ID \
             -e ANYGARDEN_DEFAULT_BRANCH -e ANYGARDEN_CHECKOUT_SHA \
@@ -113,7 +117,8 @@ jobs:
             -e ANYGARDEN_SMOKE_RUNTIME_ISOLATED=container-readonly-empty-workspace \
             -e HOME=/tmp/home -e CODEX_HOME=/tmp/codex \
             -v "${RUNNER_TEMP}/engine-smoke-runner:/opt/anygarden:ro" \
-            -v "${RUNNER_TEMP}/engine-smoke-evidence:/evidence:rw" \
+            -v "${EVIDENCE_DIR}:/evidence:ro" \
+            -v "${EVIDENCE_FILE}:/evidence/evidence.json:rw" \
             "${ANYGARDEN_SMOKE_CONTAINER_IMAGE}" \
             python /opt/anygarden/engine_smoke_gate.py run --evidence /evidence/evidence.json
 
