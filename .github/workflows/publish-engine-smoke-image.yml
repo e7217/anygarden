@@ -5,13 +5,31 @@ on:
 
 permissions:
   contents: read
+  deployments: read
   packages: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: release-smoke
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify protected default-branch publisher
+        env:
+          ANYGARDEN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "${GITHUB_REF}" = "refs/heads/${ANYGARDEN_DEFAULT_BRANCH}"
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          ENVIRONMENT=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke")
+          RULES=$(jq '.protection_rules | length' <<<"${ENVIRONMENT}")
+          CUSTOM_BRANCHES=$(jq -r '.deployment_branch_policy.custom_branch_policies' <<<"${ENVIRONMENT}")
+          MAIN_ONLY=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke/deployment-branch-policies" \
+            --jq '[.branch_policies[].name] == ["main"]')
+          test "${RULES}" -ge 1
+          test "${CUSTOM_BRANCHES}" = "true"
+          test "${MAIN_ONLY}" = "true"
 
       - uses: docker/login-action@v3
         with:
