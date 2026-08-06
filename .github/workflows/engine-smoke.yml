@@ -23,12 +23,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ENVIRONMENT=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke" 2>/dev/null || true)
-          RULES=$(jq '.protection_rules | length' <<<"${ENVIRONMENT:-{}}" 2>/dev/null || echo 0)
-          CUSTOM_BRANCHES=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<<"${ENVIRONMENT:-{}}" 2>/dev/null || echo false)
-          MAIN_ONLY=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke/deployment-branch-policies" \
-            --jq '[.branch_policies[].name] == ["main"]' 2>/dev/null || echo false)
-          if [ "${RULES}" -lt 1 ] || [ "${CUSTOM_BRANCHES}" != "true" ] || [ "${MAIN_ONLY}" != "true" ]; then
+          APPROVALS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/approvals" 2>/dev/null || true)
+          ENVIRONMENT_APPROVED=$(jq -r \
+            'any(.[]; .state == "approved" and any(.environments[]?; .name == "release-smoke"))' \
+            <<<"${APPROVALS:-[]}" 2>/dev/null || echo false)
+          if [ "${ENVIRONMENT_APPROVED}" != "true" ]; then
             echo "ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED=false" >> "${GITHUB_ENV}"
             echo "protected=false" >> "${GITHUB_OUTPUT}"
           else

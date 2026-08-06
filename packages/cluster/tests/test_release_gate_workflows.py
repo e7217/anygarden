@@ -34,9 +34,11 @@ def test_live_smoke_requires_protected_isolated_fail_closed_runner() -> None:
     preflight, live = SMOKE.split("  live-canary:", maxsplit=1)
 
     assert "environment: release-smoke" in SMOKE
-    assert "protection_rules" in SMOKE
-    assert "deployment-branch-policies" in SMOKE
-    assert '== [\"main\"]' in SMOKE
+    assert "actions: read" in preflight
+    assert 'actions/runs/${GITHUB_RUN_ID}/approvals' in preflight
+    assert '.state == "approved"' in preflight
+    assert '.name == "release-smoke"' in preflight
+    assert "environments/release-smoke" not in preflight
     assert "runs-on: [self-hosted, linux, anygarden-release-smoke]" in SMOKE
     assert "--read-only --cap-drop ALL" in SMOKE
     assert "--security-opt no-new-privileges" in SMOKE
