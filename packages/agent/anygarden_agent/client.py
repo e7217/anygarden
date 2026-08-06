@@ -132,6 +132,13 @@ class ChatClient:
         # (set by the agent CLI) so a long turn can't be cut by keepalive.
         # Defaults to 600s for the plain text client, which has no engine.
         self._ping_timeout = ping_timeout
+        raw_generation = os.environ.get("ANYGARDEN_AGENT_GENERATION")
+        try:
+            self._generation = (
+                int(raw_generation) if raw_generation is not None else None
+            )
+        except ValueError:
+            self._generation = None
 
         # room_id -> last seen sequence number
         self._last_seq: dict[str, int] = {}
@@ -147,6 +154,8 @@ class ChatClient:
         self._seen_seqs_maxlen: int = 256
         # room_id -> websocket connection
         self._connections: dict[str, Any] = {}
+        # request_id -> server-issued durable turn lease metadata.
+        self._turn_context: dict[str, dict[str, Any]] = {}
         # room_id -> asyncio task
         self._tasks: dict[str, asyncio.Task] = {}
 
@@ -304,6 +313,9 @@ class ChatClient:
         # Attach a nonce so we can filter our own echo on receive
         nonce = str(uuid.uuid4())
         metadata = dict(metadata) if metadata else {}
+        request_id = metadata.get("request_id")
+        if isinstance(request_id, str):
+            metadata.update(self._turn_context.get(request_id, {}))
         metadata["_nonce"] = nonce
         self._sent_nonces.add(nonce)
         frame = SendFrame(
@@ -328,6 +340,10 @@ class ChatClient:
         room_id: str,
         request_id: str | None,
         event: str,
+        *,
+        turn_attempt: int | None = None,
+        turn_generation: int | None = None,
+        turn_lease: str | None = None,
         **details: Any,
     ) -> None:
         """Emit a LifecycleFrame over the room's WS (best-effort).
@@ -346,16 +362,36 @@ class ChatClient:
         if ws is None:
             return
         payload = {k: v for k, v in details.items() if v is not None}
+        context = self._turn_context.get(request_id, {})
         frame = LifecycleFrame(
             request_id=request_id,
             room_id=room_id,
             event=event,
+            turn_attempt=(
+                turn_attempt
+                if turn_attempt is not None
+                else context.get("turn_attempt")
+            ),
+            turn_generation=(
+                turn_generation
+                if turn_generation is not None
+                else context.get("turn_generation")
+            ),
+            turn_lease=(
+                turn_lease if turn_lease is not None else context.get("turn_lease")
+            ),
             **payload,
         )
         try:
             await ws.send(frame.model_dump_json(exclude_none=True))
         except Exception:
             pass
+        finally:
+            if event == "handler_finished" and payload.get("outcome") not in {
+                "queued",
+                "retrying",
+            }:
+                self._turn_context.pop(request_id, None)
 
     async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
         """Find a sub-room by name. Returns room_id or None."""
@@ -649,6 +685,19 @@ class ChatClient:
 
             # Soft filter: skip our own echoes via nonce
             msg_meta = data.get("metadata") or {}
+            request_id = msg_meta.get("request_id")
+            if isinstance(request_id, str):
+                self._turn_context[request_id] = {
+                    key: msg_meta[key]
+                    for key in (
+                        "turn_attempt",
+                        "turn_generation",
+                        "turn_lease",
+                        "turn_idempotency_key",
+                        "turn_protocol",
+                    )
+                    if key in msg_meta
+                }
             nonce = msg_meta.get("_nonce")
             if nonce and nonce in self._sent_nonces:
                 self._sent_nonces.discard(nonce)
@@ -876,8 +925,13 @@ class ChatClient:
             try:
                 since = self._last_seq.get(room_id, 0)
                 ws_url = f"{self._server_url}/ws/rooms/{room_id}"
+                query: list[str] = []
                 if since > 0:
-                    ws_url += f"?since_seq={since}"
+                    query.append(f"since_seq={since}")
+                if self._generation is not None:
+                    query.append(f"generation={self._generation}")
+                if query:
+                    ws_url += "?" + "&".join(query)
 
                 subprotocols = build_subprotocols(self._token)
 

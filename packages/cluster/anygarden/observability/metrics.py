@@ -129,6 +129,12 @@ agents_by_state = Gauge(
     ["state"],  # "pending" | "starting" | "running" | "crashed" | "stopping" | "stopped"
 )
 
+durable_turns_by_state = Gauge(
+    "anygarden_durable_turns_by_state",
+    "Number of durable agent turns grouped by recovery state",
+    ["state"],
+)
+
 # ── Anonymous-guest metrics (§11 design doc) ─────────────────────────
 
 # Currently-connected guests. Incremented on WS subscribe, decremented

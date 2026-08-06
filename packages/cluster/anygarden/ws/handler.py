@@ -17,6 +17,7 @@ from anygarden.config import AnygardenSettings
 from anygarden.db.models import (
     ActivityLog,
     Agent,
+    AgentTurn,
     AgentTurnTask,
     Participant,
     Room,
@@ -145,6 +146,10 @@ def _lifecycle_details(frame: LifecycleFrame) -> dict[str, Any]:
         out["duration_ms"] = frame.duration_ms
     if frame.error is not None:
         out["error"] = frame.error
+    if frame.turn_attempt is not None:
+        out["attempt"] = frame.turn_attempt
+    if frame.turn_generation is not None:
+        out["generation"] = frame.turn_generation
     return out
 
 
@@ -428,6 +433,9 @@ async def _maybe_redispatch_task(
         return
     try:
         async with session_factory() as db:
+            # Durable turns use the bounded Attempt/Outbox state machine.
+            if await db.get(AgentTurn, rid) is not None:
+                return
             did = await _redispatch_task_by_request_id(
                 db,
                 request_id=rid,
@@ -854,6 +862,20 @@ def _extract_since_seq(query_string: str | None) -> int:
     return 0
 
 
+def _extract_generation(query_string: str | None) -> int | None:
+    """Parse the optional durable-runtime generation handshake."""
+    if not query_string:
+        return None
+    for part in query_string.split("&"):
+        if part.startswith("generation="):
+            try:
+                value = int(part.split("=", 1)[1])
+                return value if value >= 0 else None
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
 @router.websocket("/ws/rooms/{room_id}")
 async def ws_room(websocket: WebSocket, room_id: str) -> None:
     """Main WebSocket endpoint for room-scoped messaging."""
@@ -1079,8 +1101,18 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     user_id = (
         identity.id if identity is not None and identity.kind == "user" else None
     )
+    raw_query = websocket.scope.get("query_string", b"").decode()
+    runtime_generation = (
+        _extract_generation(raw_query)
+        if identity is not None and identity.kind == "agent"
+        else None
+    )
     await manager.subscribe(
-        room_id, participant.id, websocket, user_id=user_id
+        room_id,
+        participant.id,
+        websocket,
+        user_id=user_id,
+        generation=runtime_generation,
     )
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
 
@@ -1108,7 +1140,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # cursor only moves forward.
         REPLAY_PAGE_SIZE = 200
         REPLAY_CEIL = 10000
-        since_seq = _extract_since_seq(websocket.scope.get("query_string", b"").decode())
+        since_seq = _extract_since_seq(raw_query)
         if since_seq > 0:
             async with session_factory() as db:
                 cursor = since_seq
@@ -1556,6 +1588,36 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # BEFORE the commit-and-broadcast so the stamp persists on
                 # the stored row and replays correctly on reconnect.
                 async with session_factory() as db:
+                    completion_decision = None
+                    if identity is not None and identity.kind == "agent":
+                        from anygarden.turns.service import begin_completion
+
+                        raw_rid = metadata.get("request_id")
+                        raw_attempt = metadata.get("turn_attempt")
+                        raw_generation = metadata.get("turn_generation")
+                        raw_lease = metadata.get("turn_lease")
+                        completion_decision = await begin_completion(
+                            db,
+                            request_id=raw_rid if isinstance(raw_rid, str) else None,
+                            room_id=room_id,
+                            participant_id=participant.id,
+                            agent_id=identity.id,
+                            attempt_number=(
+                                raw_attempt if isinstance(raw_attempt, int) else None
+                            ),
+                            generation=(
+                                raw_generation
+                                if isinstance(raw_generation, int)
+                                else None
+                            ),
+                            lease_token=(
+                                raw_lease if isinstance(raw_lease, str) else None
+                            ),
+                        )
+                        if completion_decision.outcome in {"idempotent", "stale"}:
+                            await db.commit()
+                            continue
+
                     room_row = (
                         await db.execute(
                             select(
@@ -1746,6 +1808,20 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             ErrorOut(detail=str(exc.detail)).model_dump_json()
                         )
                         continue
+                    if (
+                        completion_decision is not None
+                        and completion_decision.outcome == "accept"
+                        and completion_decision.turn is not None
+                        and completion_decision.attempt is not None
+                    ):
+                        from anygarden.turns.service import finish_completion
+
+                        await finish_completion(
+                            db,
+                            turn=completion_decision.turn,
+                            attempt=completion_decision.attempt,
+                            message_id=msg.id,
+                        )
                     # #425 — bind the message id so ingest/broadcast logs
                     # below carry it (cleared next loop iteration).
                     structlog.contextvars.bind_contextvars(message_id=msg.id)
@@ -1790,13 +1866,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             raw = metadata.get("request_id")
                             if isinstance(raw, str):
                                 echoed_rid = raw
-                        db.add(ActivityLog(
-                            agent_id=identity.id,
-                            event_type="response_sent",
-                            request_id=echoed_rid,
-                            room_id=room_id,
-                            details={"room_id": room_id},
-                        ))
+                        if not (
+                            completion_decision is not None
+                            and completion_decision.outcome == "accept"
+                        ):
+                            db.add(ActivityLog(
+                                agent_id=identity.id,
+                                event_type="response_sent",
+                                request_id=echoed_rid,
+                                room_id=room_id,
+                                details={"room_id": room_id},
+                            ))
                         # #427 — note the delivered reply on the trace
                         # (root span is still open until handler_finished).
                         if tracing is not None and echoed_rid:
@@ -1841,7 +1921,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             )
                         for next_pid, next_aid in next_agent_parts:
                             rid = str(uuid4())
-                            request_id_by_participant[next_pid] = rid
+                            from anygarden.turns.service import create_turn
+
+                            turn = await create_turn(
+                                db,
+                                room_id=room_id,
+                                participant_id=next_pid,
+                                agent_id=next_aid,
+                                trigger_message_id=msg.id,
+                                thread_root_id=msg.root_message_id,
+                                request_id=rid,
+                            )
+                            if turn.state == "pending":
+                                request_id_by_participant[next_pid] = rid
                             db.add(ActivityLog(
                                 agent_id=next_aid,
                                 event_type="message_received",
@@ -1900,7 +1992,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             ]
                         for pid, aid in agent_parts:
                             rid = str(uuid4())
-                            request_id_by_participant[pid] = rid
+                            from anygarden.turns.service import create_turn
+
+                            turn = await create_turn(
+                                db,
+                                room_id=room_id,
+                                participant_id=pid,
+                                agent_id=aid,
+                                trigger_message_id=msg.id,
+                                thread_root_id=msg.root_message_id,
+                                request_id=rid,
+                            )
+                            if turn.state == "pending":
+                                request_id_by_participant[pid] = rid
                             db.add(ActivityLog(
                                 agent_id=aid,
                                 event_type="message_received",
@@ -1927,7 +2031,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     await db.commit()
                     base_metadata = msg.extra_metadata
 
-                def _make_out(pid: str) -> MessageOut:
+                if (
+                    identity is not None
+                    and identity.kind == "agent"
+                    and completion_decision is not None
+                    and completion_decision.outcome == "accept"
+                ):
+                    lifecycle = getattr(websocket.app.state, "agent_lifecycle", None)
+                    if lifecycle is not None:
+                        await lifecycle.release_generation_drain(identity.id)
+
+                def _make_out(pid: str) -> MessageOut | None:
                     """Per-recipient MessageOut.
 
                     Agents receive ``metadata.request_id`` so they can
@@ -1936,13 +2050,31 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     the stored metadata unchanged — ``request_id``
                     never persists on the message row itself.
                     """
-                    rid = request_id_by_participant.get(pid)
-                    meta = dict(base_metadata) if base_metadata else {}
-                    if rid is not None:
-                        meta["request_id"] = rid
-                    return message_to_frame(msg, metadata=meta or None)
+                    if pid in request_id_by_participant:
+                        return None
+                    return message_to_frame(msg, metadata=base_metadata)
 
                 await manager.broadcast_tailored(room_id, _make_out)
+                if request_id_by_participant:
+                    from anygarden.turns.service import deliver_pending_outbox
+
+                    # Disconnected targets are durably queued for the recovery
+                    # worker/reconnect path. Avoid opening a second DB session
+                    # here when no target socket can consume the row; besides
+                    # unnecessary work, in-memory SQLite TestClient setups use
+                    # a separate event loop and cannot safely recycle that
+                    # fixture connection during WS teardown.
+                    connected_targets = [
+                        pid
+                        for pid in request_id_by_participant
+                        if await manager.is_connected(pid)
+                    ]
+                    if connected_targets:
+                        await deliver_pending_outbox(
+                            session_factory,
+                            manager,
+                            participant_ids=connected_targets,
+                        )
 
                 # Send system message if representative agent is offline
                 if metadata.get("_rep_offline"):
@@ -1978,6 +2110,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     )
                     try:
                         async with session_factory() as db:
+                            from anygarden.turns.service import record_lifecycle
+
+                            accepted = await record_lifecycle(
+                                db, agent_id=identity.id, frame=frame_in
+                            )
+                            if not accepted:
+                                await db.commit()
+                                continue
                             await _persist_lifecycle_event(
                                 db, agent_id=identity.id, frame=frame_in
                             )
@@ -2001,6 +2141,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 agent_id=identity.id,
                                 frame=frame_in,
                             )
+                        if (
+                            frame_in.event == "handler_finished"
+                            and frame_in.outcome not in {"queued", "retrying"}
+                        ):
+                            lifecycle = getattr(
+                                websocket.app.state, "agent_lifecycle", None
+                            )
+                            if lifecycle is not None:
+                                await lifecycle.release_generation_drain(identity.id)
                         # #463 (Wave 2) — lifecycle→Task re-dispatch
                         # bridge. AFTER the ActivityLog commit above: when
                         # this terminal handler_finished frame belongs to a

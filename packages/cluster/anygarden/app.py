@@ -38,6 +38,7 @@ from anygarden.api.v1.invites import router as invites_router
 from anygarden.api.v1.saved import router as saved_router
 from anygarden.api.v1.search import router as search_router
 from anygarden.api.v1.tasks import router as tasks_router
+from anygarden.api.v1.turns import router as turns_router
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.system import router as system_router
 from anygarden.routing.router import router as routing_router
@@ -639,6 +640,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 name="orphan_sweeper",
             )
 
+    # Transactional turn outbox + lease recovery. Tests may disable it with 0.
+    if getattr(app.state, "turn_recovery_task", None) is None:
+        try:
+            turn_interval = float(
+                os.environ.get("ANYGARDEN_TURN_RECOVERY_INTERVAL_SEC", "1")
+            )
+        except ValueError:
+            turn_interval = 1.0
+        if turn_interval > 0:
+            app.state.turn_recovery_task = asyncio.create_task(
+                _run_turn_recovery(app, turn_interval),
+                name="turn_recovery",
+            )
+
     # #420 — span reaper: ends spans for requests whose terminal
     # lifecycle event never arrived (a lost frame), bounding the
     # in-memory span registry. Only runs when tracing is enabled.
@@ -683,7 +698,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # stop before the event loop tears down. ``return_exceptions``
     # via the explicit try/except keeps the shutdown path from being
     # poisoned by CancelledError or a late task exception.
-    for attr in ("skill_stale_task", "orphan_sweeper_task", "span_reaper_task"):
+    for attr in (
+        "skill_stale_task",
+        "orphan_sweeper_task",
+        "turn_recovery_task",
+        "span_reaper_task",
+    ):
         task: asyncio.Task | None = getattr(app.state, attr, None)
         if task is not None and not task.done():
             task.cancel()
@@ -798,6 +818,66 @@ async def _reconcile_agents_by_state(app: FastAPI) -> None:
                 agents_by_state.labels(state=state).set(count)
     except Exception:  # noqa: BLE001 — metric refresh must not break the loop
         pass
+
+
+async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
+    """Flush durable dispatches, fence dead leases, and release drains."""
+
+    import structlog
+    from sqlalchemy import func, select
+
+    from anygarden.db.models import Agent, AgentTurn
+    from anygarden.observability.metrics import durable_turns_by_state
+    from anygarden.turns.service import (
+        cancel_invalid_turns,
+        deliver_pending_outbox,
+        recover_stalled_turns,
+    )
+
+    log = structlog.get_logger("turn_recovery")
+    # Avoid racing the lifespan's own startup transactions (especially the
+    # single-connection in-memory SQLite used by tests and local dev).
+    try:
+        await asyncio.sleep(interval_seconds)
+    except asyncio.CancelledError:
+        return
+    while True:
+        try:
+            factory = app.state.session_factory
+            manager = getattr(app.state, "connection_manager", None)
+            await cancel_invalid_turns(factory)
+            if manager is not None:
+                await deliver_pending_outbox(factory, manager)
+            recovered = await recover_stalled_turns(factory, manager)
+            async with factory() as db:
+                pending_agents = set(
+                    (
+                        await db.scalars(
+                            select(Agent.id).where(Agent.pending_generation.isnot(None))
+                        )
+                    ).all()
+                )
+                state_rows = (
+                    await db.execute(
+                        select(AgentTurn.state, func.count()).group_by(AgentTurn.state)
+                    )
+                ).all()
+            durable_turns_by_state.clear()
+            for state, count in state_rows:
+                durable_turns_by_state.labels(state=state).set(count)
+            pending_agents.update(recovered.drain_agents or set())
+            lifecycle = getattr(app.state, "agent_lifecycle", None)
+            if lifecycle is not None:
+                for agent_id in pending_agents:
+                    await lifecycle.release_generation_drain(agent_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("turn_recovery.error", error=str(exc))
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            return
 
 
 async def _run_orphan_sweeper(app: FastAPI, interval_seconds: float) -> None:
@@ -951,6 +1031,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     app.include_router(saved_router)
     app.include_router(search_router)
     app.include_router(tasks_router)
+    app.include_router(turns_router)
     app.include_router(goals_router)
     app.include_router(system_router)
     app.include_router(routing_router)

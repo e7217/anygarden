@@ -322,6 +322,22 @@ class Agent(Base):
     )
     restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
     generation: Mapped[int] = mapped_column(Integer, default=0)
+    # Phase 4 — durable drain state for process-affecting config changes.
+    pending_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
+    restart_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    restart_deadline_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    manifest_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    pending_manifest_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)
     restart_window_seconds: Mapped[int] = mapped_column(Integer, default=300)
     # Issue #73 — which runtime (machine-side process) hosts this
@@ -1530,6 +1546,176 @@ class AgentTurnTask(Base):
     ``_MAX_TASK_REDISPATCH`` bounds the chain."""
 
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class AgentTurn(Base):
+    """Durable intent for one agent response.
+
+    ``ActivityLog`` remains the append-only observability stream.  This row is
+    the correctness state used to recover a delivery after reconnect/process
+    loss and to fence stale completions from an older generation.
+    """
+
+    __tablename__ = "agent_turns"
+    __table_args__ = (
+        Index("ix_agent_turns_agent_state", "agent_id", "state"),
+        Index("ix_agent_turns_room_state", "room_id", "state"),
+        UniqueConstraint("idempotency_key", name="uq_agent_turns_idempotency_key"),
+    )
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    target_participant_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    trigger_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    thread_root_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    task_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    # pending | leased | retrying | completing | completed | cancelled | failed
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default="pending"
+    )
+    protocol_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    active_attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    retry_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    accepted_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    terminal_reason: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+
+
+class AgentTurnAttempt(Base):
+    """One leased execution attempt for an :class:`AgentTurn`."""
+
+    __tablename__ = "agent_turn_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "turn_id", "attempt_number", name="uq_agent_turn_attempt_number"
+        ),
+        UniqueConstraint("lease_token", name="uq_agent_turn_attempt_lease"),
+        Index("ix_agent_turn_attempts_agent_state", "agent_id", "state"),
+        Index("ix_agent_turn_attempts_lease_expiry", "state", "lease_expires_at"),
+        Index(
+            "uq_agent_turn_attempt_active",
+            "turn_id",
+            unique=True,
+            sqlite_where=sa_text("state IN ('leased', 'started')"),
+            postgresql_where=sa_text("state IN ('leased', 'started')"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    turn_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_turns.request_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    # pending | leased | started | completed | interrupted | cancelled | stale
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default="pending"
+    )
+    leased_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    outcome: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None
+    )
+    reason: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class AgentTurnOutbox(Base):
+    """Transactional delivery record for one durable turn attempt."""
+
+    __tablename__ = "agent_turn_outbox"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", name="uq_agent_turn_outbox_attempt"),
+        Index("ix_agent_turn_outbox_state_available", "state", "available_at"),
+        Index("ix_agent_turn_outbox_participant_state", "participant_id", "state"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    turn_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_turns.request_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agent_turn_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    participant_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # pending | delivering | delivered | cancelled
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default="pending"
+    )
+    delivery_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    available_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
 
 
 class Goal(Base):

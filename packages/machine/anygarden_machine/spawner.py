@@ -1016,6 +1016,7 @@ class Spawner:
         # adapters can rely on its presence and don't have to
         # special-case the missing key.
         env["ANYGARDEN_AGENT_PERMISSION_LEVEL"] = msg.permission_level or "standard"
+        env["ANYGARDEN_AGENT_GENERATION"] = str(msg.generation)
 
         # Issue #493 — per-agent turn timeout. Unlike permission_level this is
         # set ONLY when present: the engine adapter's resolution chain treats a

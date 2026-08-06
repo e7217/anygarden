@@ -25,6 +25,7 @@ class _Subscription:
     # agent-profile 2차 view so admins receive ``task.updated`` frames
     # on whichever room they happen to be looking at.
     user_id: Optional[str] = None
+    generation: Optional[int] = None
 
 
 class ConnectionManager:
@@ -82,6 +83,7 @@ class ConnectionManager:
         ws: WebSocket,
         *,
         user_id: str | None = None,
+        generation: int | None = None,
     ) -> None:
         """Register *ws* as listening on *room_id*.
 
@@ -104,6 +106,7 @@ class ConnectionManager:
             participant_id=participant_id,
             ws=ws,
             user_id=user_id,
+            generation=generation,
         )
         superseded: _Subscription | None = None
         async with self._lock:
@@ -245,7 +248,7 @@ class ConnectionManager:
         self,
         room_id: str,
         make_frame,
-    ) -> None:
+    ) -> set[str]:
         """Broadcast to a room with a per-recipient frame factory.
 
         ``make_frame(participant_id) -> OutgoingFrame`` is invoked
@@ -261,12 +264,17 @@ class ConnectionManager:
         """
         async with self._lock:
             subs = list(self._rooms.get(room_id, []))
+        delivered: set[str] = set()
         for sub in subs:
             try:
                 frame = make_frame(sub.participant_id)
+                if frame is None:
+                    continue
                 await sub.ws.send_text(frame.model_dump_json())
+                delivered.add(sub.participant_id)
             except Exception:
                 pass
+        return delivered
 
     async def push_to_users(
         self,
@@ -307,12 +315,31 @@ class ConnectionManager:
         async with self._lock:
             return set(self._by_participant.keys())
 
-    async def send_to(self, participant_id: str, frame: OutgoingFrame) -> None:
-        """Send *frame* directly to a single participant."""
+    async def is_connected(self, participant_id: str) -> bool:
+        async with self._lock:
+            return participant_id in self._by_participant
+
+    async def participant_generation(self, participant_id: str) -> int | None:
         async with self._lock:
             sub = self._by_participant.get(participant_id)
-        if sub is not None:
-            try:
-                await sub.ws.send_text(frame.model_dump_json())
-            except Exception:
-                pass
+            return sub.generation if sub is not None else None
+
+    async def send_to(
+        self,
+        participant_id: str,
+        frame: OutgoingFrame,
+        *,
+        expected_generation: int | None = None,
+    ) -> bool:
+        """Send directly, optionally fencing against a process generation."""
+        async with self._lock:
+            sub = self._by_participant.get(participant_id)
+        if sub is None:
+            return False
+        if expected_generation is not None and sub.generation != expected_generation:
+            return False
+        try:
+            await sub.ws.send_text(frame.model_dump_json())
+        except Exception:
+            return False
+        return True
