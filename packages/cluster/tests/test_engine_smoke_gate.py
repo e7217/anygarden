@@ -479,6 +479,16 @@ def test_failure_classifier_records_only_closed_stdout_state(
             "MULTIPLE_FAILURE_SIGNALS",
         ),
         (
+            b"authentication failed authentication failed",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
+            b"unexpected status 401 Unauthorized: unexpected status 401 Unauthorized",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
             b"x" * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
             "UNKNOWN",
             "OVERSIZE",
@@ -494,6 +504,8 @@ def test_failure_classifier_records_only_closed_stdout_state(
         "upstream",
         "conflicting-signals",
         "repeated-signal",
+        "same-line-repeated-signal",
+        "same-line-repeated-status",
         "oversize",
         "malformed",
         "unrecognized",
@@ -544,6 +556,7 @@ def test_stderr_classifier_adopts_exactly_one_bounded_allowlist_signal(
             b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
             + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1)
         ),
+        (b'{"type":"error","message":"authentication failed authentication failed"}'),
     ],
     ids=(
         "non-json",
@@ -556,6 +569,7 @@ def test_stderr_classifier_adopts_exactly_one_bounded_allowlist_signal(
         "repeated-rate-events",
         "unknown-plus-known",
         "event-oversize",
+        "same-line-repeated-signal",
     ),
 )
 def test_failure_classifier_collapses_unsafe_input_to_unknown(raw: bytes) -> None:
@@ -691,6 +705,14 @@ def test_engine_empty_output_requires_nonzero_and_zero_byte_stdout(
         ),
         (
             b"",
+            b"authentication failed authentication failed",
+            "UNKNOWN",
+            "EMPTY",
+            "MULTIPLE_FAILURE_SIGNALS",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
             b"x" * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
             "UNKNOWN",
             "EMPTY",
@@ -712,6 +734,7 @@ def test_engine_empty_output_requires_nonzero_and_zero_byte_stdout(
         "stderr-auth",
         "stderr-config",
         "stderr-multiple",
+        "stderr-same-line-repeat",
         "stderr-oversize",
         "stderr-unrecognized",
     ),

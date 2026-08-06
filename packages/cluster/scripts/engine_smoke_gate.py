@@ -109,7 +109,6 @@ AUTH_FAILURE_SIGNALS = (
     "invalid api key",
     "invalid authentication",
     "missing bearer authentication",
-    "unauthorized",
 )
 ENGINE_CONFIG_FAILURE_SIGNALS = (
     "failed to deserialize config",
@@ -499,53 +498,58 @@ def parse_response(raw: bytes) -> bytes:
     return response
 
 
-def _failure_message_categories(message: str) -> frozenset[str]:
-    """Return only fixed categories matched by one bounded failure message."""
+def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
+    """Preserve every fixed allowlist occurrence in one bounded message."""
     if len(message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
-        return frozenset()
+        return ()
     normalized = message.casefold()
-    statuses = {
+    statuses = [
         int(match.group("status")) for match in HTTP_STATUS_PATTERN.finditer(message)
-    }
-    categories: set[str] = set()
-    if statuses & {401, 403} or any(
-        signal in normalized for signal in AUTH_FAILURE_SIGNALS
-    ):
-        categories.add("AUTH_REJECTED")
-    if 429 in statuses:
-        categories.add("RATE_LIMIT")
-    if any(500 <= status <= 599 for status in statuses):
-        categories.add("UPSTREAM")
-    if (not statuses or statuses <= {400, 404}) and any(
-        signal in normalized for signal in MODEL_FAILURE_SIGNALS
-    ):
-        categories.add("MODEL_ACCESS")
-    if (not statuses or statuses <= {400}) and (
-        any(signal in normalized for signal in ENGINE_CONFIG_FAILURE_SIGNALS)
-        or (
+    ]
+    categories: list[str] = []
+    for status in statuses:
+        if status in {401, 403}:
+            categories.append("AUTH_REJECTED")
+        elif status == 429:
+            categories.append("RATE_LIMIT")
+        elif 500 <= status <= 599:
+            categories.append("UPSTREAM")
+
+    def add_signal_occurrences(signals: Sequence[str], category: str) -> int:
+        matches = sum(normalized.count(signal) for signal in signals)
+        categories.extend([category] * matches)
+        return matches
+
+    add_signal_occurrences(AUTH_FAILURE_SIGNALS, "AUTH_REJECTED")
+    if not statuses or set(statuses) <= {400, 404}:
+        add_signal_occurrences(MODEL_FAILURE_SIGNALS, "MODEL_ACCESS")
+    if not statuses or set(statuses) <= {400}:
+        config_matches = add_signal_occurrences(
+            ENGINE_CONFIG_FAILURE_SIGNALS, "ENGINE_CONFIG"
+        )
+        if config_matches == 0 and (
             "model_reasoning_effort" in normalized
             and any(
                 word in normalized
                 for word in ("invalid", "unknown", "unrecognized", "unsupported")
             )
-        )
-    ):
-        categories.add("ENGINE_CONFIG")
+        ):
+            categories.append("ENGINE_CONFIG")
     if not statuses and any(
         signal in normalized for signal in RATE_LIMIT_FAILURE_SIGNALS
     ):
-        categories.add("RATE_LIMIT")
+        add_signal_occurrences(RATE_LIMIT_FAILURE_SIGNALS, "RATE_LIMIT")
     if not statuses and any(
         signal in normalized for signal in UPSTREAM_FAILURE_SIGNALS
     ):
-        categories.add("UPSTREAM")
-    return frozenset(categories)
+        add_signal_occurrences(UPSTREAM_FAILURE_SIGNALS, "UPSTREAM")
+    return tuple(categories)
 
 
 def _classify_failure_message(message: str) -> str:
     # Codex 0.146 exposes text but not its internal error enum. Adopt a result
     # only when exactly one fixed category matches; ambiguity fails closed.
-    categories = _failure_message_categories(message)
+    categories = _failure_message_category_occurrences(message)
     if len(categories) != 1:
         return FAILURE_CATEGORY_UNKNOWN
     return next(iter(categories))
@@ -617,7 +621,7 @@ def classify_stderr_observation(
     for line in lines:
         if not line.strip():
             continue
-        categories = _failure_message_categories(line)
+        categories = _failure_message_category_occurrences(line)
         if len(categories) > 1:
             return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_SIGNALS"
         if categories:
