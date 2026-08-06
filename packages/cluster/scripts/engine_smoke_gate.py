@@ -16,6 +16,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
@@ -47,9 +48,10 @@ FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT = "ENGINE_EMPTY_OUTPUT"
 FAILURE_CATEGORIES = frozenset(
     {
         FAILURE_CATEGORY_NOT_APPLICABLE,
-        "AUTHENTICATION",
+        "AUTH_REJECTED",
+        "ENGINE_CONFIG",
         FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT,
-        "MODEL",
+        "MODEL_ACCESS",
         "RATE_LIMIT",
         "UPSTREAM",
         FAILURE_CATEGORY_UNKNOWN,
@@ -60,6 +62,7 @@ FAILURE_PHASES = frozenset(
         "ENGINE_LAUNCH",
         "ENGINE_EXECUTION",
         "ENGINE_EXIT",
+        "STDERR_CLASSIFICATION",
         "STDOUT_CLASSIFICATION",
         "RESPONSE_PARSE",
     }
@@ -76,6 +79,17 @@ STDOUT_STATES = frozenset(
         "NOT_OBSERVED",
     }
 )
+STDERR_STATES = frozenset(
+    {
+        "EMPTY",
+        "SINGLE_FAILURE_SIGNAL",
+        "MULTIPLE_FAILURE_SIGNALS",
+        "MALFORMED",
+        "OVERSIZE",
+        "UNRECOGNIZED",
+        "NOT_OBSERVED",
+    }
+)
 MAX_EVIDENCE_DURATION_MS = 24 * 60 * 60 * 1000
 HTTP_STATUS_PATTERN = re.compile(
     r"(?:^|:\s)(?:unexpected status\s+|exceeded retry limit, last status:\s*)"
@@ -87,6 +101,28 @@ MODEL_FAILURE_SIGNALS = (
     "model does not exist",
     "does not exist or you do not have access to it",
     "invalid model",
+)
+AUTH_FAILURE_SIGNALS = (
+    "api key is invalid",
+    "authentication failed",
+    "incorrect api key",
+    "invalid api key",
+    "invalid authentication",
+    "missing bearer authentication",
+    "unauthorized",
+)
+ENGINE_CONFIG_FAILURE_SIGNALS = (
+    "failed to deserialize config",
+    "failed to parse configuration",
+    "invalid configuration",
+    "invalid reasoning effort",
+    "invalid value for model_reasoning_effort",
+    "invalid value for 'model_reasoning_effort'",
+    "unknown configuration key",
+    "unknown reasoning effort",
+    "unrecognized configuration",
+    "unrecognized reasoning effort",
+    "unsupported reasoning effort",
 )
 RATE_LIMIT_FAILURE_SIGNALS = (
     "quota exceeded.",
@@ -126,6 +162,7 @@ class ExecutionDiagnostics:
     failure_phase: str = "ENGINE_LAUNCH"
     engine_exit_state: str = "NOT_OBSERVED"
     stdout_state: str = "NOT_OBSERVED"
+    stderr_state: str = "NOT_OBSERVED"
     setup_ms: int = 0
     engine_ms: int = 0
     classification_ms: int = 0
@@ -184,6 +221,28 @@ class EngineTimeout(TimeoutError):
         self.diagnostics = diagnostics
 
 
+class _BoundedStderrCapture:
+    """Drain stderr while retaining at most one 64 KiB in-memory buffer."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+        self._oversize = False
+
+    def drain(self, read_fd: int) -> None:
+        with os.fdopen(read_fd, "rb", closefd=True) as stream:
+            while chunk := stream.read(8192):
+                remaining = MAX_FAILURE_EVENT_BYTES - len(self._buffer)
+                if remaining > 0:
+                    self._buffer.extend(chunk[:remaining])
+                if len(chunk) > remaining:
+                    self._oversize = True
+
+    def take(self) -> tuple[bytearray, bool]:
+        raw = self._buffer
+        self._buffer = bytearray()
+        return raw, self._oversize
+
+
 @dataclass(frozen=True)
 class SmokeEvidence:
     exact_sha: str
@@ -196,6 +255,7 @@ class SmokeEvidence:
     failure_phase: str
     engine_exit_state: str
     stdout_state: str
+    stderr_state: str
     setup_ms: int
     engine_ms: int
     classification_ms: int
@@ -240,6 +300,11 @@ def _sanitize_diagnostics(
         stdout_state=(
             observed.stdout_state
             if observed.stdout_state in STDOUT_STATES
+            else "NOT_OBSERVED"
+        ),
+        stderr_state=(
+            observed.stderr_state
+            if observed.stderr_state in STDERR_STATES
             else "NOT_OBSERVED"
         ),
         setup_ms=_bounded_ms(observed.setup_ms),
@@ -434,33 +499,56 @@ def parse_response(raw: bytes) -> bytes:
     return response
 
 
-def _classify_failure_message(message: str) -> str:
-    # Codex 0.146 JSONL exposes error messages but not its internal error enum.
-    # Match only fixed CLI wrappers/statuses and known constant client copy.
+def _failure_message_categories(message: str) -> frozenset[str]:
+    """Return only fixed categories matched by one bounded failure message."""
     if len(message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
-        return FAILURE_CATEGORY_UNKNOWN
+        return frozenset()
     normalized = message.casefold()
-    match = HTTP_STATUS_PATTERN.search(message)
-    status = int(match.group("status")) if match else None
-    if status in {401, 403}:
-        return "AUTHENTICATION"
-    if status == 429:
-        return "RATE_LIMIT"
-    if status is not None and 500 <= status <= 599:
-        return "UPSTREAM"
-    if status in {None, 400, 404} and any(
+    statuses = {
+        int(match.group("status")) for match in HTTP_STATUS_PATTERN.finditer(message)
+    }
+    categories: set[str] = set()
+    if statuses & {401, 403} or any(
+        signal in normalized for signal in AUTH_FAILURE_SIGNALS
+    ):
+        categories.add("AUTH_REJECTED")
+    if 429 in statuses:
+        categories.add("RATE_LIMIT")
+    if any(500 <= status <= 599 for status in statuses):
+        categories.add("UPSTREAM")
+    if (not statuses or statuses <= {400, 404}) and any(
         signal in normalized for signal in MODEL_FAILURE_SIGNALS
     ):
-        return "MODEL"
-    if status is None and any(
+        categories.add("MODEL_ACCESS")
+    if (not statuses or statuses <= {400}) and (
+        any(signal in normalized for signal in ENGINE_CONFIG_FAILURE_SIGNALS)
+        or (
+            "model_reasoning_effort" in normalized
+            and any(
+                word in normalized
+                for word in ("invalid", "unknown", "unrecognized", "unsupported")
+            )
+        )
+    ):
+        categories.add("ENGINE_CONFIG")
+    if not statuses and any(
         signal in normalized for signal in RATE_LIMIT_FAILURE_SIGNALS
     ):
-        return "RATE_LIMIT"
-    if status is None and any(
+        categories.add("RATE_LIMIT")
+    if not statuses and any(
         signal in normalized for signal in UPSTREAM_FAILURE_SIGNALS
     ):
-        return "UPSTREAM"
-    return FAILURE_CATEGORY_UNKNOWN
+        categories.add("UPSTREAM")
+    return frozenset(categories)
+
+
+def _classify_failure_message(message: str) -> str:
+    # Codex 0.146 exposes text but not its internal error enum. Adopt a result
+    # only when exactly one fixed category matches; ambiguity fails closed.
+    categories = _failure_message_categories(message)
+    if len(categories) != 1:
+        return FAILURE_CATEGORY_UNKNOWN
+    return next(iter(categories))
 
 
 def classify_failure_observation(raw: bytes) -> tuple[str, str]:
@@ -511,6 +599,36 @@ def classify_failure(raw: bytes) -> str:
     return classify_failure_observation(raw)[0]
 
 
+def classify_stderr_observation(
+    raw: bytes | bytearray, *, oversize: bool = False
+) -> tuple[str, str]:
+    """Classify bounded stderr in memory without retaining any source text."""
+    if oversize:
+        return FAILURE_CATEGORY_UNKNOWN, "OVERSIZE"
+    if not raw:
+        return FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT, "EMPTY"
+    if len(raw) > MAX_FAILURE_EVENT_BYTES:
+        return FAILURE_CATEGORY_UNKNOWN, "OVERSIZE"
+    try:
+        lines = raw.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
+    matched_categories: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        categories = _failure_message_categories(line)
+        if len(categories) > 1:
+            return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_SIGNALS"
+        if categories:
+            matched_categories.append(next(iter(categories)))
+    if not matched_categories:
+        return FAILURE_CATEGORY_UNKNOWN, "UNRECOGNIZED"
+    if len(matched_categories) > 1:
+        return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_SIGNALS"
+    return matched_categories[0], "SINGLE_FAILURE_SIGNAL"
+
+
 def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(proc.pid, signal.SIGTERM)
@@ -551,16 +669,19 @@ def execute(model: str, env: Mapping[str, str]) -> ExecutionResult:
     if not ENGINE_VERSION_PATTERN.fullmatch(engine_version):
         raise BlockedConfiguration("engine_version")
     child_env = build_child_env(env, credential, runtime_state, proxy_url)
+    stderr_read_fd, stderr_write_fd = os.pipe()
     try:
         proc = subprocess.Popen(
             build_command(model),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=stderr_write_fd,
             env=child_env,
             start_new_session=True,
         )
     except (OSError, subprocess.SubprocessError):
+        os.close(stderr_read_fd)
+        os.close(stderr_write_fd)
         raise SmokeFailure(
             "engine_launch",
             engine_version=engine_version,
@@ -569,14 +690,25 @@ def execute(model: str, env: Mapping[str, str]) -> ExecutionResult:
                 setup_ms=_duration_ms(setup_started),
             ),
         ) from None
+    os.close(stderr_write_fd)
+    stderr_capture = _BoundedStderrCapture()
+    stderr_thread = threading.Thread(
+        target=stderr_capture.drain,
+        args=(stderr_read_fd,),
+        daemon=True,
+    )
+    stderr_thread.start()
     setup_ms = _duration_ms(setup_started)
     engine_started = time.monotonic()
     try:
-        stdout, stderr = proc.communicate(
+        stdout, _discarded_stderr = proc.communicate(
             input=CANARY_PROMPT.encode(), timeout=HARD_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired:
         _terminate_group(proc)
+        stderr_thread.join()
+        stderr, _stderr_oversize = stderr_capture.take()
+        del stderr
         raise EngineTimeout(
             engine_version=engine_version,
             diagnostics=ExecutionDiagnostics(
@@ -587,19 +719,51 @@ def execute(model: str, env: Mapping[str, str]) -> ExecutionResult:
                 engine_ms=_duration_ms(engine_started),
             ),
         ) from None
+    except (OSError, subprocess.SubprocessError):
+        _terminate_group(proc)
+        stderr_thread.join()
+        stderr, _stderr_oversize = stderr_capture.take()
+        del stderr
+        raise SmokeFailure(
+            "engine_execution",
+            engine_version=engine_version,
+            diagnostics=ExecutionDiagnostics(
+                failure_phase="ENGINE_EXECUTION",
+                engine_exit_state=_engine_exit_state(proc.returncode),
+                stdout_state="NOT_OBSERVED",
+                stderr_state="NOT_OBSERVED",
+                setup_ms=setup_ms,
+                engine_ms=_duration_ms(engine_started),
+            ),
+        ) from None
+    stderr_thread.join()
+    stderr, stderr_oversize = stderr_capture.take()
     engine_ms = _duration_ms(engine_started)
-    del stderr
     if proc.returncode != 0:
         classification_started = time.monotonic()
         failure_category, stdout_state = classify_failure_observation(stdout)
-        classification_ms = _duration_ms(classification_started)
-        failure_phase = (
-            "ENGINE_EXIT" if stdout_state == "EMPTY" else "STDOUT_CLASSIFICATION"
+        stderr_category, stderr_state = classify_stderr_observation(
+            stderr, oversize=stderr_oversize
         )
+        del stderr
+        if stdout_state in {"EMPTY", "NON_FAILURE_OUTPUT"}:
+            if stderr_state == "SINGLE_FAILURE_SIGNAL":
+                failure_category = stderr_category
+                failure_phase = "STDERR_CLASSIFICATION"
+            elif stdout_state == "EMPTY" and stderr_state == "EMPTY":
+                failure_category = FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT
+                failure_phase = "ENGINE_EXIT"
+            else:
+                failure_category = FAILURE_CATEGORY_UNKNOWN
+                failure_phase = "STDERR_CLASSIFICATION"
+        else:
+            failure_phase = "STDOUT_CLASSIFICATION"
+        classification_ms = _duration_ms(classification_started)
         diagnostics = ExecutionDiagnostics(
             failure_phase=failure_phase,
             engine_exit_state=_engine_exit_state(proc.returncode),
             stdout_state=stdout_state,
+            stderr_state=stderr_state,
             setup_ms=setup_ms,
             engine_ms=engine_ms,
             classification_ms=classification_ms,
@@ -611,6 +775,7 @@ def execute(model: str, env: Mapping[str, str]) -> ExecutionResult:
             engine_version=engine_version,
             diagnostics=diagnostics,
         )
+    del stderr
     classification_started = time.monotonic()
     _category, stdout_state = classify_failure_observation(stdout)
     try:
@@ -682,6 +847,7 @@ def make_evidence(
         result == "FAIL_ENGINE_NONZERO"
         and projected_diagnostics.engine_exit_state == "NONZERO"
         and projected_diagnostics.stdout_state == "EMPTY"
+        and projected_diagnostics.stderr_state == "EMPTY"
     ):
         projected_category = FAILURE_CATEGORY_UNKNOWN
     projected_engine_version = (
@@ -692,12 +858,13 @@ def make_evidence(
         workflow_run=env.get("GITHUB_RUN_ID", ""),
         engine="codex-cli",
         engine_version=projected_engine_version,
-        model_version=env.get("ANYGARDEN_SMOKE_MODEL", ""),
+        model_version="",
         result_code=result,
         failure_category=projected_category,
         failure_phase=projected_diagnostics.failure_phase,
         engine_exit_state=projected_diagnostics.engine_exit_state,
         stdout_state=projected_diagnostics.stdout_state,
+        stderr_state=projected_diagnostics.stderr_state,
         setup_ms=projected_diagnostics.setup_ms,
         engine_ms=projected_diagnostics.engine_ms,
         classification_ms=projected_diagnostics.classification_ms,
