@@ -54,6 +54,9 @@ class LifecycleFrame(BaseModel):
     type: Literal["lifecycle"] = "lifecycle"
     request_id: str
     room_id: str
+    turn_attempt: Optional[int] = None
+    turn_generation: Optional[int] = None
+    turn_lease: Optional[str] = None
     event: Literal[
         "handler_started",
         "handler_finished",

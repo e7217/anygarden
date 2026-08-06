@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -32,6 +31,11 @@ class TestChatClientInit:
         """Server URL trailing slash is stripped."""
         client = ChatClient("ws://localhost:8000/", token="t")
         assert client._server_url == "ws://localhost:8000"
+
+    def test_generation_is_read_from_runtime_environment(self, monkeypatch) -> None:
+        monkeypatch.setenv("ANYGARDEN_AGENT_GENERATION", "7")
+        client = ChatClient("ws://localhost:8000", token="t")
+        assert client._generation == 7
 
 
 class TestChatClientCallbacks:
@@ -194,6 +198,42 @@ class TestChatClientSend:
         assert sent["content"] == "hello world"
         assert sent["metadata"]["key"] == "val"
         assert "_nonce" in sent["metadata"]  # Self-echo filter nonce
+
+    @pytest.mark.asyncio
+    async def test_send_and_lifecycle_echo_durable_turn_context(self) -> None:
+        client = ChatClient("ws://localhost:8000", token="t")
+        mock_ws = AsyncMock()
+        client._connections["room-1"] = mock_ws
+        await client._process_frame(
+            "room-1",
+            {
+                "type": "message",
+                "id": "message-1",
+                "room_id": "room-1",
+                "participant_id": "human-1",
+                "content": "work",
+                "seq": 1,
+                "metadata": {
+                    "request_id": "request-1",
+                    "turn_attempt": 2,
+                    "turn_generation": 7,
+                    "turn_lease": "lease-1",
+                    "turn_protocol": 1,
+                },
+            },
+        )
+
+        await client.send("room-1", "answer", {"request_id": "request-1"})
+        sent = json.loads(mock_ws.send.call_args_list[0].args[0])
+        assert sent["metadata"]["turn_attempt"] == 2
+        assert sent["metadata"]["turn_generation"] == 7
+        assert sent["metadata"]["turn_lease"] == "lease-1"
+
+        await client.sendLifecycle("room-1", "request-1", "handler_started")
+        lifecycle = json.loads(mock_ws.send.call_args_list[1].args[0])
+        assert lifecycle["turn_attempt"] == 2
+        assert lifecycle["turn_generation"] == 7
+        assert lifecycle["turn_lease"] == "lease-1"
 
 
 class TestWebSocketKeepalive:

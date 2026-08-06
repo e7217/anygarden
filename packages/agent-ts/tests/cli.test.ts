@@ -92,4 +92,40 @@ describe("sendAdapterReply", () => {
       "root-1",
     );
   });
+
+  it("forwards durable turn lease metadata", async () => {
+    const send = vi.fn(async () => undefined);
+    const client = { send } as unknown as ChatClient;
+    await sendAdapterReply(
+      client,
+      {
+        type: "message",
+        id: "message-id",
+        room_id: "room-a",
+        participant_id: "human-pid",
+        content: "question",
+        seq: 1,
+        created_at: "2026-08-05T00:00:00Z",
+        metadata: {
+          request_id: "request-1",
+          turn_attempt: 2,
+          turn_generation: 9,
+          turn_lease: "lease-1",
+          turn_protocol: 1,
+        },
+      },
+      "answer",
+    );
+    expect(send).toHaveBeenCalledWith(
+      "room-a",
+      "answer",
+      expect.objectContaining({
+        request_id: "request-1",
+        turn_attempt: 2,
+        turn_generation: 9,
+        turn_lease: "lease-1",
+      }),
+      undefined,
+    );
+  });
 });

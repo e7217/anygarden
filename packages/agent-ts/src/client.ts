@@ -82,6 +82,7 @@ export class ChatClient {
   private readonly initialReconnectDelay: number;
   private readonly wsCtor: WebSocketCtor;
   private readonly httpFetch: typeof fetch;
+  private readonly generation: number | null;
 
   private readonly lastSeq = new Map<string, number>();
   private readonly connections = new Map<string, WSLike>();
@@ -93,6 +94,7 @@ export class ChatClient {
 
   private readonly nonceTracker = new NonceTracker();
   private readonly turnCounter = new TurnCounter();
+  private readonly turnContext = new Map<string, Record<string, unknown>>();
 
   /** Participant IDs the server has assigned us (one per room). */
   readonly myParticipantIds = new Set<string>();
@@ -109,6 +111,11 @@ export class ChatClient {
     this.initialReconnectDelay = opts.initialReconnectDelay ?? 1_000;
     this.wsCtor = opts.webSocketCtor ?? (WebSocket as unknown as WebSocketCtor);
     this.httpFetch = opts.httpFetch ?? fetch;
+    const rawGeneration = process.env.ANYGARDEN_AGENT_GENERATION;
+    const parsedGeneration = rawGeneration === undefined ? NaN : Number(rawGeneration);
+    this.generation = Number.isInteger(parsedGeneration) && parsedGeneration >= 0
+      ? parsedGeneration
+      : null;
   }
 
   // ── Callback registration ──────────────────────────────────────────
@@ -157,6 +164,8 @@ export class ChatClient {
     const ws = this.connections.get(roomId);
     if (!ws) throw new Error(`Not connected to room ${roomId}`);
     const md: Record<string, unknown> = metadata ? { ...metadata } : {};
+    const requestId = typeof md.request_id === "string" ? md.request_id : null;
+    if (requestId) Object.assign(md, this.turnContext.get(requestId) ?? {});
     md._nonce = this.nonceTracker.allocate();
     const frame = {
       type: "send",
@@ -165,6 +174,7 @@ export class ChatClient {
       ...(threadRootId ? { thread_root_id: threadRootId } : {}),
     };
     ws.send(JSON.stringify(frame));
+    if (requestId) this.turnContext.delete(requestId);
   }
 
   /**
@@ -352,6 +362,20 @@ export class ChatClient {
 
     // b. Soft self-filter via nonce.
     const metadata = frame.metadata ?? {};
+    const requestId = typeof metadata.request_id === "string" ? metadata.request_id : null;
+    if (requestId) {
+      const context: Record<string, unknown> = {};
+      for (const key of [
+        "turn_attempt",
+        "turn_generation",
+        "turn_lease",
+        "turn_idempotency_key",
+        "turn_protocol",
+      ]) {
+        if (key in metadata) context[key] = metadata[key];
+      }
+      this.turnContext.set(requestId, context);
+    }
     const nonce = typeof metadata._nonce === "string" ? metadata._nonce : null;
     if (nonce && this.nonceTracker.consume(nonce)) {
       this.turnCounter.handleNonceEcho(roomId, content);
@@ -389,7 +413,11 @@ export class ChatClient {
     while (!signal.aborted) {
       let url = `${this.serverUrl}/ws/rooms/${roomId}`;
       const since = this.lastSeq.get(roomId) ?? 0;
-      if (since > 0) url += `?since_seq=${since}`;
+      const params = new URLSearchParams();
+      if (since > 0) params.set("since_seq", String(since));
+      if (this.generation !== null) params.set("generation", String(this.generation));
+      const query = params.toString();
+      if (query) url += `?${query}`;
 
       const subprotocols = buildSubprotocols(this.token);
       let ws: WSLike;

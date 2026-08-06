@@ -80,10 +80,22 @@ export async function sendAdapterReply(
   reply: string | null,
 ): Promise<void> {
   if (reply && reply.trim().length > 0) {
+    const source = msg.metadata ?? {};
+    const metadata: Record<string, unknown> = {};
+    for (const key of [
+      "request_id",
+      "turn_attempt",
+      "turn_generation",
+      "turn_lease",
+      "turn_idempotency_key",
+      "turn_protocol",
+    ]) {
+      if (key in source) metadata[key] = source[key];
+    }
     await client.send(
       msg.room_id,
       reply,
-      undefined,
+      Object.keys(metadata).length > 0 ? metadata : undefined,
       msg.root_message_id ?? undefined,
     );
   }

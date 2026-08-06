@@ -244,6 +244,37 @@ describe("ChatClient — send()", () => {
     expect(typeof frame.metadata._nonce).toBe("string");
   });
 
+  it("echoes server-issued durable turn context", async () => {
+    const c = makeClient();
+    const sent: string[] = [];
+    c.__testSetConnection("r1", {
+      send: (data: string) => sent.push(data),
+      close: () => {},
+      on: () => {},
+    });
+    await c.__testFeedFrame("r1", {
+      type: "message",
+      id: "message-1",
+      room_id: "r1",
+      participant_id: "human-1",
+      content: "work",
+      seq: 7,
+      created_at: "2026-08-06T00:00:00Z",
+      metadata: {
+        request_id: "request-1",
+        turn_attempt: 2,
+        turn_generation: 8,
+        turn_lease: "lease-1",
+        turn_protocol: 1,
+      },
+    });
+    await c.send("r1", "answer", { request_id: "request-1" });
+    const frame = JSON.parse(sent[0]);
+    expect(frame.metadata.turn_attempt).toBe(2);
+    expect(frame.metadata.turn_generation).toBe(8);
+    expect(frame.metadata.turn_lease).toBe("lease-1");
+  });
+
   it("throws when not connected", async () => {
     const c = makeClient();
     await expect(c.send("nobody", "hi")).rejects.toThrow(/Not connected/);

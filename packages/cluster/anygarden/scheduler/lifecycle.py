@@ -9,11 +9,14 @@ tokens or replacement placement as needed.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, func, or_, select
+from sqlalchemy import and_, case, event, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -26,7 +29,8 @@ from anygarden.agent_availability import (
 )
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
-    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, Machine,
+    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, AgentTurn,
+    AgentTurnAttempt, Machine,
     Participant, Room, SkillLibraryEntry,
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
@@ -34,6 +38,24 @@ from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 logger = structlog.get_logger(__name__)
+
+
+def _manifest_hash(frame: dict, *, agent: Agent | None = None) -> str:
+    """Return a stable effective-runtime hash without process credentials.
+
+    Most restart inputs are carried in the machine manifest itself. The
+    context-window opt-out is delivered in the agent's welcome frame after a
+    reconnect, so include it as an internal hash-only input without expanding
+    the machine protocol.
+    """
+
+    stable = dict(frame)
+    stable.pop("generation", None)
+    stable.pop("anygarden_mcp_token", None)
+    if agent is not None:
+        stable["_context_window_opt_out"] = bool(agent.context_window_opt_out)
+    body = json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def _mark_unavailable(agent: Agent, code: str, detail: dict | None = None) -> None:
@@ -203,6 +225,11 @@ class AgentLifecycle:
             _clear_unavailable(agent)
 
             frame = await self._build_sync_frame(db, agent, rooms)
+            agent.manifest_hash = _manifest_hash(frame, agent=agent)
+            agent.pending_generation = None
+            agent.restart_requested_at = None
+            agent.restart_deadline_at = None
+            agent.pending_manifest_hash = None
             db.add(ActivityLog(
                 agent_id=agent_id,
                 event_type="start_requested",
@@ -333,6 +360,10 @@ class AgentLifecycle:
                 return
 
             agent.desired_state = "stopped"
+            agent.pending_generation = None
+            agent.restart_requested_at = None
+            agent.restart_deadline_at = None
+            agent.pending_manifest_hash = None
             # #516 — an intentional stop is not a "problem"; clear any
             # unavailability reason so the admin/user surfaces don't alarm.
             _clear_unavailable(agent)
@@ -686,34 +717,123 @@ class AgentLifecycle:
         )
 
     async def bump_generation(self, agent_id: str) -> None:
-        """Increment generation and push ``sync_desired_state`` if running."""
+        """Request a config restart, draining active durable leases first."""
         frame: dict | None = None
         target_machine_id: str | None = None
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
                 return
-            agent.generation = (agent.generation or 0) + 1
+            if agent.desired_state != "running" or not agent.placed_on_machine_id:
+                # Preserve the existing config-version contract for idle,
+                # stopped, and not-yet-placed agents. There is no live process
+                # to drain, but attach/detach and policy changes must still
+                # advance the generation consumed by the next spawn.
+                old_generation = int(agent.generation or 0)
+                agent.generation = old_generation + 1
+                await db.execute(
+                    update(AgentTurnAttempt)
+                    .where(
+                        AgentTurnAttempt.agent_id == agent.id,
+                        AgentTurnAttempt.state == "pending",
+                        AgentTurnAttempt.generation == old_generation,
+                    )
+                    .values(generation=agent.generation)
+                )
+                await db.commit()
+                return
+            room_result = await db.execute(
+                select(Participant.room_id).where(Participant.agent_id == agent.id)
+            )
+            rooms = [row[0] for row in room_result.all()]
+            candidate = await self._build_sync_frame(db, agent, rooms)
+            candidate_hash = _manifest_hash(candidate, agent=agent)
 
-            # Issue #445 — build the sync frame *before* committing, so
-            # any ``anygarden_token`` minted on a cache miss (its staged
-            # ``agent_tokens`` row) commits in the same transaction as
-            # the generation bump. Building it after the commit (the
-            # pre-#445 ordering) left a fresh mint uncommitted, so the
-            # frame carried a token the DB never persisted — and the
-            # cache, now gated on ``after_commit``, would never pick it
-            # up either, guaranteeing a 401 on the agent's next call.
-            if (
-                agent.desired_state == "running"
-                and agent.placed_on_machine_id
-            ):
-                room_result = await db.execute(
-                    select(Participant.room_id).where(
-                        Participant.agent_id == agent.id,
+            # Only the effective, materialized manifest may restart a live
+            # process. API mutations can be semantically filtered (for
+            # example, an attached but unapproved skill), so the raw write is
+            # not itself proof that a generation change is needed.
+            if candidate_hash == agent.manifest_hash:
+                if agent.pending_generation is not None:
+                    cancelled_generation = agent.pending_generation
+                    agent.pending_generation = None
+                    agent.restart_requested_at = None
+                    agent.restart_deadline_at = None
+                    agent.pending_manifest_hash = None
+                    await db.execute(
+                        update(AgentTurnAttempt)
+                        .where(
+                            AgentTurnAttempt.agent_id == agent.id,
+                            AgentTurnAttempt.state == "pending",
+                            AgentTurnAttempt.generation == cancelled_generation,
+                        )
+                        .values(generation=agent.generation)
+                    )
+                    db.add(
+                        ActivityLog(
+                            agent_id=agent.id,
+                            event_type="generation_drain_cancelled",
+                            details={
+                                "generation": agent.generation,
+                                "cancelled_generation": cancelled_generation,
+                                "reason": "effective_manifest_unchanged",
+                            },
+                        )
+                    )
+                await db.commit()
+                return
+            if candidate_hash == agent.pending_manifest_hash:
+                # Coalesce repeated API hooks for the same desired manifest;
+                # one pending drain/restart is sufficient.
+                await db.commit()
+                return
+
+            from anygarden.turns.service import active_lease_count
+
+            active = await active_lease_count(
+                db, agent_id=agent.id, generation=int(agent.generation or 0)
+            )
+            if active:
+                now = datetime.now(timezone.utc)
+                try:
+                    drain_sec = max(
+                        1, int(os.environ.get("ANYGARDEN_GENERATION_DRAIN_SEC", "60"))
+                    )
+                except ValueError:
+                    drain_sec = 60
+                agent.pending_generation = int(
+                    (agent.pending_generation or agent.generation or 0) + 1
+                )
+                agent.restart_requested_at = now
+                agent.restart_deadline_at = now + timedelta(seconds=drain_sec)
+                agent.pending_manifest_hash = candidate_hash
+                db.add(
+                    ActivityLog(
+                        agent_id=agent.id,
+                        event_type="generation_drain_requested",
+                        details={
+                            "generation": agent.generation,
+                            "pending_generation": agent.pending_generation,
+                            "active_leases": active,
+                            "deadline": agent.restart_deadline_at.isoformat(),
+                        },
                     )
                 )
-                rooms = [row[0] for row in room_result.all()]
-                frame = await self._build_sync_frame(db, agent, rooms)
+            else:
+                old_generation = int(agent.generation or 0)
+                agent.generation = old_generation + 1
+                candidate["generation"] = agent.generation
+                agent.manifest_hash = candidate_hash
+                await db.execute(
+                    update(AgentTurnAttempt)
+                    .where(
+                        AgentTurnAttempt.agent_id == agent.id,
+                        AgentTurnAttempt.state == "pending",
+                        AgentTurnAttempt.generation == old_generation,
+                    )
+                    .values(generation=agent.generation)
+                )
+                frame = candidate
                 target_machine_id = agent.placed_on_machine_id
 
             await db.commit()
@@ -721,6 +841,48 @@ class AgentLifecycle:
         # Send outside the session context if needed.
         if frame is not None and target_machine_id is not None:
             await self._machine_bus.send(target_machine_id, frame)
+
+    async def release_generation_drain(self, agent_id: str) -> bool:
+        """Promote a pending generation once its old leases reach zero."""
+
+        frame: dict | None = None
+        target_machine_id: str | None = None
+        async with self._db_factory() as db:
+            agent = await self._get_agent(db, agent_id)
+            if agent is None or agent.pending_generation is None:
+                return False
+            from anygarden.turns.service import active_lease_count
+
+            active = await active_lease_count(
+                db, agent_id=agent.id, generation=int(agent.generation or 0)
+            )
+            if active:
+                return False
+            room_result = await db.execute(
+                select(Participant.room_id).where(Participant.agent_id == agent.id)
+            )
+            rooms = [row[0] for row in room_result.all()]
+            agent.generation = agent.pending_generation
+            agent.pending_generation = None
+            agent.manifest_hash = agent.pending_manifest_hash
+            agent.pending_manifest_hash = None
+            agent.restart_requested_at = None
+            agent.restart_deadline_at = None
+            if agent.desired_state == "running" and agent.placed_on_machine_id:
+                frame = await self._build_sync_frame(db, agent, rooms)
+                frame["generation"] = agent.generation
+                target_machine_id = agent.placed_on_machine_id
+            db.add(
+                ActivityLog(
+                    agent_id=agent.id,
+                    event_type="generation_drain_completed",
+                    details={"generation": agent.generation},
+                )
+            )
+            await db.commit()
+        if frame is not None and target_machine_id is not None:
+            await self._machine_bus.send(target_machine_id, frame)
+        return True
 
     # ── Internal helpers ──────────────────────────────────────
 
@@ -1081,6 +1243,9 @@ async def sweep_orphaned_requests(
             .outerjoin(Agent, Agent.id == ActivityLog.agent_id)
             .where(
                 ActivityLog.request_id.isnot(None),
+                ~select(AgentTurn.request_id)
+                .where(AgentTurn.request_id == ActivityLog.request_id)
+                .exists(),
                 or_(
                     ActivityLog.timestamp < threshold,
                     Agent.actual_state == "crashed",

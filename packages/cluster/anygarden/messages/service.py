@@ -281,6 +281,29 @@ async def inject_task_assignment_message(
         metadata,
         thread_root_id=thread_root_id,
     )
+    assignee_agent_id = await db.scalar(
+        select(Participant.agent_id).where(
+            Participant.id == assignee_pid,
+            Participant.room_id == room.id,
+            Participant.agent_id.isnot(None),
+        )
+    )
+    if assignee_agent_id is None:
+        raise ValueError("task assignment target must be an agent participant")
+    from anygarden.turns.service import create_turn
+
+    turn = await create_turn(
+        db,
+        room_id=room.id,
+        participant_id=assignee_pid,
+        agent_id=assignee_agent_id,
+        trigger_message_id=msg.id,
+        thread_root_id=msg.root_message_id,
+        task_id=task.id,
+        request_id=rid,
+        retry_count=redispatch_count,
+    )
+    durable_delivery = turn.state == "pending"
 
     # #463 — persist the request_id↔task correlation so the WS handler can
     # map a terminal-non-ok ``handler_finished`` frame for this turn back to
@@ -310,7 +333,13 @@ async def inject_task_assignment_message(
         from anygarden.messages.serialization import message_to_frame
 
         frame = message_to_frame(msg)
-        await manager.broadcast(room.id, frame)
+        if hasattr(manager, "broadcast_tailored"):
+            await manager.broadcast_tailored(
+                room.id,
+                lambda pid: None if durable_delivery and pid == assignee_pid else frame,
+            )
+        else:
+            await manager.broadcast(room.id, frame)
 
     return msg
 

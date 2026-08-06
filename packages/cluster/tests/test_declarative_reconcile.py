@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import secrets
-from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -165,8 +164,6 @@ class TestDeclarativeReconcile:
         lifecycle = reconcile_env["lifecycle"]
         agent_id = reconcile_env["agent_id"]
         fake_ws = reconcile_env["fake_ws"]
-        factory = reconcile_env["factory"]
-        machine_id = reconcile_env["machine_id"]
 
         # Start agent first to place it on the machine
         await lifecycle.request_start(agent_id)
@@ -228,12 +225,18 @@ class TestDeclarativeReconcile:
         lifecycle = reconcile_env["lifecycle"]
         agent_id = reconcile_env["agent_id"]
         fake_ws = reconcile_env["fake_ws"]
+        factory = reconcile_env["factory"]
 
         # Start agent first (generation becomes 1)
         await lifecycle.request_start(agent_id)
         fake_ws.reset()
 
-        # Bump generation (should become 2)
+        # Change the effective manifest, then bump generation.
+        async with factory() as db:
+            agent = await db.get(Agent, agent_id)
+            assert agent is not None
+            agent.profile_yaml = "name: changed"
+            await db.commit()
         await lifecycle.bump_generation(agent_id)
 
         assert len(fake_ws.sent) >= 1
