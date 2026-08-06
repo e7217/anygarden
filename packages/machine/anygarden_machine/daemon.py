@@ -33,10 +33,14 @@ from anygarden_machine.protocol.frames import (
     EngineUpdateResultFrame,
     SyncDesiredStateFrame,
     TokenRequestFrame,
+    WorkspaceAttachReceiptFrame,
+    WorkspaceRevokeReceiptFrame,
     parse_server_frame,
 )
 from anygarden_machine.spawner import Spawner, SpawnManifest
 from anygarden_machine.updater import run_update
+from anygarden_machine.workspace_registry import WorkspaceRegistry
+from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
 
 log = structlog.get_logger()
 
@@ -60,29 +64,31 @@ TRANSITIONAL_LEAK_GRACE = 60.0
 # reject). text/* is broad on purpose — anything the existing
 # RoomSharedFile flow accepts as text fits here too.
 ARTIFACT_MAX_BYTES = 768 * 1024
-ARTIFACT_ALLOWED_MIMES: frozenset[str] = frozenset({
-    # Images — the headline use case (codex screenshot story).
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-    "image/svg+xml",
-    # Text — symmetrical with the existing user→agent shared file
-    # whitelist. Lets agents drop diagnostic logs / data dumps too.
-    "text/plain",
-    "text/markdown",
-    "text/x-markdown",
-    "text/csv",
-    "text/yaml",
-    "text/x-yaml",
-    "application/json",
-    "application/yaml",
-    "application/x-yaml",
-    "text/x-python",
-    "application/xml",
-    "text/xml",
-    "text/html",
-})
+ARTIFACT_ALLOWED_MIMES: frozenset[str] = frozenset(
+    {
+        # Images — the headline use case (codex screenshot story).
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/svg+xml",
+        # Text — symmetrical with the existing user→agent shared file
+        # whitelist. Lets agents drop diagnostic logs / data dumps too.
+        "text/plain",
+        "text/markdown",
+        "text/x-markdown",
+        "text/csv",
+        "text/yaml",
+        "text/x-yaml",
+        "application/json",
+        "application/yaml",
+        "application/x-yaml",
+        "text/x-python",
+        "application/xml",
+        "text/xml",
+        "text/html",
+    }
+)
 
 
 def _base_url_from_machine_url(machine_ws_url: str) -> str:
@@ -132,6 +138,8 @@ class MachineDaemon:
         labels: dict | None = None,
         token_path: Any = None,
         agent_dirs_root: Path | None = None,
+        workspace_registry_path: Path | None = None,
+        workspace_signing_key_path: Path | None = None,
     ) -> None:
         self.server_url = server_url
         self.machine_id = machine_id
@@ -146,6 +154,8 @@ class MachineDaemon:
         self._exit_requested: bool = False
 
         self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
+        self._workspace_registry = WorkspaceRegistry(workspace_registry_path)
+        self._workspace_signer = WorkspaceReceiptSigner(workspace_signing_key_path)
         self._spawner = Spawner(
             on_stopped=self._on_agent_stopped,
             on_crashed=self._on_agent_crashed,
@@ -289,6 +299,15 @@ class MachineDaemon:
             labels=self.labels,
             system_info=system_info,
             daemon_version=__version__,  # #546
+            # Phase 5 boundary support only. Root enforcement and audit
+            # signing are intentionally absent, so the cluster must reject
+            # every write activation from this daemon version.
+            control_capabilities=[
+                "workspace_attach_v1",
+                "workspace_receipt_signing_v1",
+            ],
+            workspace_catalog=self._workspace_registry.list_descriptors(),
+            workspace_signing_public_key=self._workspace_signer.public_key,
         )
         await self._send(frame.model_dump())
         log.info(
@@ -376,6 +395,66 @@ class MachineDaemon:
                 await self._handle_engine_check(frame)
             case "engine_update":
                 await self._handle_engine_update(frame)
+            case "workspace_attach_request":
+                await self._handle_workspace_attach_request(frame)
+            case "workspace_revoke":
+                await self._handle_workspace_revoke(frame)
+
+    async def _handle_workspace_attach_request(self, frame: Any) -> None:
+        """Verify local registration/consent without attaching a path."""
+
+        accepted, reason, descriptor = self._workspace_registry.verify_and_consume(
+            workspace_id=frame.workspace_id,
+            agent_id=frame.agent_id,
+            room_id=frame.room_id,
+            mode=frame.mode,
+            fingerprint=frame.fingerprint,
+            allowlist_digest=frame.allowlist_hash,
+            consent_proof=frame.consent_proof,
+        )
+        receipt = WorkspaceAttachReceiptFrame(
+            attachment_id=frame.attachment_id,
+            workspace_id=frame.workspace_id,
+            agent_id=frame.agent_id,
+            epoch=frame.epoch,
+            status="verified" if accepted else "denied",
+            reason="local_registration_verified" if accepted else reason,
+            label=descriptor.get("label") if descriptor else None,
+            fingerprint=descriptor.get("fingerprint") if descriptor else None,
+            allowlist_hash=descriptor.get("allowlist_hash") if descriptor else None,
+            # Deliberately no workspace_read_root_v1,
+            # workspace_write_root_v1, or workspace_audit_signing_v1.
+            capabilities=[
+                "workspace_attach_v1",
+                "workspace_receipt_signing_v1",
+            ],
+        )
+        receipt.signature = self._workspace_signer.sign(receipt.model_dump())
+        await self._send(receipt.model_dump())
+
+    async def _handle_workspace_revoke(self, frame: Any) -> None:
+        """Stop the full process tree before acknowledging revocation."""
+
+        running = self._spawner.get_running(frame.agent_id)
+        status = "not_running"
+        reason = None
+        try:
+            if running is not None:
+                await self._spawner.kill(frame.agent_id)
+                self._running_generations.pop(frame.agent_id, None)
+                status = "stopped"
+        except Exception as exc:  # pragma: no cover - defensive boundary
+            status = "failed"
+            reason = type(exc).__name__
+        receipt = WorkspaceRevokeReceiptFrame(
+            attachment_id=frame.attachment_id,
+            agent_id=frame.agent_id,
+            epoch=frame.epoch,
+            status=status,
+            reason=reason,
+        )
+        receipt.signature = self._workspace_signer.sign(receipt.model_dump())
+        await self._send(receipt.model_dump())
 
     # ── Desired-state handlers ─────────────────────────────────────────
 
@@ -505,9 +584,7 @@ class MachineDaemon:
             # anything. Done outside the lock so ``_send`` doesn't
             # serialize reconciles across agents.
             await self._report_actual_state()
-            asyncio.create_task(
-                self._request_token_and_spawn(agent_id, manifest)
-            )
+            asyncio.create_task(self._request_token_and_spawn(agent_id, manifest))
 
     async def _request_token_and_spawn(
         self,
@@ -525,9 +602,7 @@ class MachineDaemon:
         await self._send(token_req.model_dump())
 
         try:
-            agent_token = await asyncio.wait_for(
-                future, timeout=TOKEN_REQUEST_TIMEOUT
-            )
+            agent_token = await asyncio.wait_for(future, timeout=TOKEN_REQUEST_TIMEOUT)
         except asyncio.TimeoutError:
             log.error("token_request_timeout", agent_id=agent_id)
             self._token_futures.pop(agent_id, None)
@@ -574,6 +649,7 @@ class MachineDaemon:
             # in-memory cache (manifest on disk strips it for the same
             # reasons engine_secrets are stripped).
             anygarden_mcp_token=self._manifest_store.get_anygarden_mcp_token(agent_id),
+            workspace_attachment=getattr(manifest, "workspace_attachment", None),
             # Issue #451 — stamp the generation into runtime.json so a
             # restarted daemon can restore ``_running_generations`` on
             # re-adopt and the reconcile gate suppresses a duplicate spawn.
@@ -606,9 +682,7 @@ class MachineDaemon:
         self._clear_transitional(agent_id)
         await self._report_actual_state()
 
-    async def _rollback_reservation(
-        self, agent_id: str, generation: int
-    ) -> None:
+    async def _rollback_reservation(self, agent_id: str, generation: int) -> None:
         """Undo the pre-reservation in ``_running_generations`` for
         *agent_id* at *generation*, holding the per-agent lock so we
         don't clobber a higher generation reserved by a newer reconcile
@@ -726,17 +800,13 @@ class MachineDaemon:
                 # manifest and re-spawn an agent the server has already placed
                 # elsewhere — split-brain ghost (#182).
                 try:
-                    self._manifest_store.update_desired_state(
-                        agent_id, "stopped"
-                    )
+                    self._manifest_store.update_desired_state(agent_id, "stopped")
                 except FileNotFoundError:
                     pass
             else:
                 # restart_on_same_machine but budget exhausted — stop
                 try:
-                    self._manifest_store.update_desired_state(
-                        agent_id, "stopped"
-                    )
+                    self._manifest_store.update_desired_state(agent_id, "stopped")
                 except FileNotFoundError:
                     pass
             await self._report_actual_state()
@@ -852,9 +922,7 @@ class MachineDaemon:
             try:
                 body = notes_path.read_text()
             except OSError as exc:
-                log.warning(
-                    "memory_read_failed", agent_id=agent_id, error=str(exc)
-                )
+                log.warning("memory_read_failed", agent_id=agent_id, error=str(exc))
                 continue
             digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
             if self._memory_last_hash.get(agent_id) == digest:
@@ -932,10 +1000,7 @@ class MachineDaemon:
                     # change. Use a sentinel hash entry so we don't
                     # spam the log on every report tick.
                     sentinel = f"unsupported:{mime}"
-                    if (
-                        self._artifact_last_hash.get((agent_id, name))
-                        != sentinel
-                    ):
+                    if self._artifact_last_hash.get((agent_id, name)) != sentinel:
                         log.info(
                             "outbox_skipped_mime",
                             agent_id=agent_id,
@@ -995,14 +1060,11 @@ class MachineDaemon:
     def _prune_stale_transitional(self, now: float) -> None:
         """Reclaim annotations stuck past ``TRANSITIONAL_LEAK_GRACE`` with
         no running process — belt-and-suspenders for missed callbacks."""
-        running_ids = {
-            info["agent_id"] for info in self._spawner.list_running()
-        }
+        running_ids = {info["agent_id"] for info in self._spawner.list_running()}
         stale = [
             aid
             for aid, ts in self._transitional_set_at.items()
-            if aid not in running_ids
-            and now - ts > TRANSITIONAL_LEAK_GRACE
+            if aid not in running_ids and now - ts > TRANSITIONAL_LEAK_GRACE
         ]
         for aid in stale:
             log.warning(

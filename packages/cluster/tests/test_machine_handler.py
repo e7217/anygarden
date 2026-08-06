@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ from anygarden.ws.machine_handler import (
     _handle_register,
     _handle_self_update_result,
 )
+from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
 
 
 @pytest_asyncio.fixture()
@@ -178,6 +180,49 @@ class TestMachineHandler:
             engines = result.scalars().all()
             engine_names = {e.engine for e in engines}
             assert engine_names == {"echo", "llm"}
+
+    @pytest.mark.asyncio
+    async def test_register_enrolls_signing_key_without_silent_rotation(
+        self, handler_env, tmp_path: Path
+    ) -> None:
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        first = WorkspaceReceiptSigner(tmp_path / "first.key")
+        second = WorkspaceReceiptSigner(tmp_path / "second.key")
+
+        await _handle_register(
+            factory,
+            machine.id,
+            {
+                "type": "register",
+                "control_capabilities": ["workspace_receipt_signing_v1"],
+                "workspace_signing_public_key": first.public_key,
+            },
+        )
+        async with factory() as db:
+            enrolled = await db.get(Machine, machine.id)
+            assert enrolled is not None
+            assert enrolled.workspace_signing_public_key == first.public_key
+            assert "workspace_receipt_signing_v1" in (
+                enrolled.control_capabilities or []
+            )
+
+        await _handle_register(
+            factory,
+            machine.id,
+            {
+                "type": "register",
+                "control_capabilities": ["workspace_receipt_signing_v1"],
+                "workspace_signing_public_key": second.public_key,
+            },
+        )
+        async with factory() as db:
+            enrolled = await db.get(Machine, machine.id)
+            assert enrolled is not None
+            assert enrolled.workspace_signing_public_key == first.public_key
+            assert "workspace_receipt_signing_v1" not in (
+                enrolled.control_capabilities or []
+            )
 
     @pytest.mark.asyncio
     async def test_register_persists_system_info(self, handler_env) -> None:

@@ -21,6 +21,8 @@ def daemon(tmp_path: Path) -> MachineDaemon:
         machine_token="test-machine-token",
         labels={"region": "local"},
         agent_dirs_root=tmp_path / "agents",
+        workspace_registry_path=tmp_path / "workspaces.json",
+        workspace_signing_key_path=tmp_path / "workspace-signing.key",
     )
 
 

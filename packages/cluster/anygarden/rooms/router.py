@@ -32,6 +32,7 @@ from anygarden.db.models import (
     RoomArtifact,
     RoomSharedFile,
     User,
+    WorkspaceAttachment,
 )
 from anygarden.dependencies import (
     forbid_guest,
@@ -94,6 +95,16 @@ class SubRoomCreate(BaseModel):
     creator_participant_id: str
 
 
+class WorkspaceAttachmentSummary(BaseModel):
+    id: str
+    workspace_id: str
+    label: str
+    agent_id: str
+    mode: str
+    epoch: int
+    expires_at: datetime
+
+
 class RoomOut(BaseModel):
     id: str
     # #179 — DM rooms live outside any project (``project_id=NULL``) so
@@ -143,6 +154,9 @@ class RoomOut(BaseModel):
     visibility: str = "private"
     archived_at: Optional[datetime] = None
     archived_by: Optional[str] = None
+    # Phase 5 — visible safety banner data. This deliberately exposes only
+    # opaque IDs and a redacted machine-local label, never a host path.
+    workspace_attachments: list[WorkspaceAttachmentSummary] = []
     model_config = {"from_attributes": True}
 
 
@@ -316,6 +330,18 @@ async def list_rooms(
             db, user_id=identity.id, room_ids=room_ids
         )
 
+    attachments: dict[str, list[WorkspaceAttachment]] = {}
+    if rooms:
+        for row in (
+            await db.scalars(
+                select(WorkspaceAttachment).where(
+                    WorkspaceAttachment.room_id.in_([room.id for room in rooms]),
+                    WorkspaceAttachment.state == "active",
+                )
+            )
+        ).all():
+            attachments.setdefault(row.room_id, []).append(row)
+
     out: list[RoomOut] = []
     for r in rooms:
         pinned, sort_order = pin_state.get(r.id, (False, None))
@@ -338,6 +364,18 @@ async def list_rooms(
                 visibility=r.visibility,
                 archived_at=r.archived_at,
                 archived_by=r.archived_by,
+                workspace_attachments=[
+                    WorkspaceAttachmentSummary(
+                        id=attachment.id,
+                        workspace_id=attachment.workspace_id,
+                        label=attachment.workspace_label,
+                        agent_id=attachment.agent_id,
+                        mode=attachment.mode,
+                        epoch=attachment.epoch,
+                        expires_at=attachment.expires_at,
+                    )
+                    for attachment in attachments.get(r.id, [])
+                ],
             )
         )
     return out
@@ -398,13 +436,22 @@ async def get_room(
     )
 
     result = await db.execute(
-        select(Room)
-        .where(Room.id == room_id)
-        .options(selectinload(Room.participants))
+        select(Room).where(Room.id == room_id).options(selectinload(Room.participants))
     )
     room = result.scalar_one_or_none()
     if room is None:
         raise HTTPException(status_code=404, detail="Room not found")
+
+    workspace_attachments = list(
+        (
+            await db.scalars(
+                select(WorkspaceAttachment).where(
+                    WorkspaceAttachment.room_id == room_id,
+                    WorkspaceAttachment.state == "active",
+                )
+            )
+        ).all()
+    )
 
     # Presence snapshot (#54) — batch resolve online/last_seen_at for
     # every participant in a single call so we don't round-trip per
@@ -455,21 +502,23 @@ async def get_room(
                 avatar_value = agent.avatar_value
             kind = "agent"
         online, last_seen_at = presence_by_pid.get(p.id, (False, None))
-        participant_outs.append(ParticipantOut(
-            id=p.id,
-            room_id=p.room_id,
-            user_id=p.user_id,
-            agent_id=p.agent_id,
-            role=p.role,
-            display_name=display_name,
-            kind=kind,
-            is_anonymous=is_anonymous,
-            online=online,
-            last_seen_at=last_seen_at,
-            engine=engine,
-            avatar_kind=avatar_kind,
-            avatar_value=avatar_value,
-        ))
+        participant_outs.append(
+            ParticipantOut(
+                id=p.id,
+                room_id=p.room_id,
+                user_id=p.user_id,
+                agent_id=p.agent_id,
+                role=p.role,
+                display_name=display_name,
+                kind=kind,
+                is_anonymous=is_anonymous,
+                online=online,
+                last_seen_at=last_seen_at,
+                engine=engine,
+                avatar_kind=avatar_kind,
+                avatar_value=avatar_value,
+            )
+        )
 
     return RoomDetailOut(
         id=room.id,
@@ -485,6 +534,18 @@ async def get_room(
         visibility=room.visibility,
         archived_at=room.archived_at,
         archived_by=room.archived_by,
+        workspace_attachments=[
+            WorkspaceAttachmentSummary(
+                id=attachment.id,
+                workspace_id=attachment.workspace_id,
+                label=attachment.workspace_label,
+                agent_id=attachment.agent_id,
+                mode=attachment.mode,
+                epoch=attachment.epoch,
+                expires_at=attachment.expires_at,
+            )
+            for attachment in workspace_attachments
+        ],
         participants=participant_outs,
     )
 
@@ -572,9 +633,7 @@ async def add_participant(
             )
         )
         if already.scalars().first() is not None:
-            raise HTTPException(
-                status_code=409, detail="User is already a participant"
-            )
+            raise HTTPException(status_code=409, detail="User is already a participant")
         participant = await add_user_to_room(
             db,
             manager,
@@ -711,13 +770,17 @@ async def remove_participant(
     #    so we match the "existing members" semantics used by the
     #    ``added`` broadcast in auth/routes.py and add_participant.
     other_pids = (
-        await db.execute(
-            select(Participant.id).where(
-                Participant.room_id == room_id,
-                Participant.id != target.id,
+        (
+            await db.execute(
+                select(Participant.id).where(
+                    Participant.room_id == room_id,
+                    Participant.id != target.id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # Capture the removed agent's id before deletion so we can tell
     # its machine to drop the room's shared files from
@@ -738,6 +801,17 @@ async def remove_participant(
     )
     await db.execute(delete(Participant).where(Participant.id == target.id))
     await db.commit()
+
+    workspace_lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    if workspace_lifecycle is not None and machine_bus is not None:
+        from anygarden.workspaces.lifecycle import revoke_invalid_attachments
+
+        await revoke_invalid_attachments(
+            request.app.state.session_factory,
+            machine_bus,
+            workspace_lifecycle,
+        )
 
     if removed_agent_id is not None:
         _schedule_shared_files_delete_for_agent(
@@ -802,11 +876,7 @@ async def _archive_descendants(
     while frontier:
         parent_id = frontier.pop()
         children = list(
-            (
-                await db.execute(
-                    select(Room).where(Room.parent_room_id == parent_id)
-                )
-            )
+            (await db.execute(select(Room).where(Room.parent_room_id == parent_id)))
             .scalars()
             .all()
         )
@@ -848,12 +918,21 @@ async def archive_room(
     await db.commit()
     await db.refresh(access.room)
 
+    workspace_lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    if workspace_lifecycle is not None and machine_bus is not None:
+        from anygarden.workspaces.lifecycle import revoke_invalid_attachments
+
+        await revoke_invalid_attachments(
+            request.app.state.session_factory,
+            machine_bus,
+            workspace_lifecycle,
+        )
+
     manager = getattr(request.app.state, "connection_manager", None)
     if manager is not None:
         for archived_room_id in [room_id, *descendant_ids]:
-            await manager.revoke_room(
-                archived_room_id, reason="Room was archived"
-            )
+            await manager.revoke_room(archived_room_id, reason="Room was archived")
     return access.room
 
 
@@ -1050,10 +1129,10 @@ async def delete_room(
     #   user's OTHER active WS (e.g. a sidebar mounted in a sibling
     #   room) — the ``add_participant`` push pattern from #19.
     parts = (
-        await db.execute(
-            select(Participant).where(Participant.room_id == room_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(Participant).where(Participant.room_id == room_id)))
+        .scalars()
+        .all()
+    )
     user_ids = {p.user_id for p in parts if p.user_id}
 
     await archive_child_rooms(db, room_id)
@@ -1078,12 +1157,14 @@ async def delete_room(
         #    push the same frame.
         if user_ids:
             other_pids = (
-                await db.execute(
-                    select(Participant.id).where(
-                        Participant.user_id.in_(user_ids)
+                (
+                    await db.execute(
+                        select(Participant.id).where(Participant.user_id.in_(user_ids))
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for pid in other_pids:
                 await manager.send_to(pid, frame)
 
@@ -1235,9 +1316,8 @@ async def _broadcast_pin_order_to_user(
     if not participant_ids:
         return
     from anygarden.ws.protocol import RoomPinOrderChangedOut
-    frame = RoomPinOrderChangedOut(
-        user_id=user_id, pinned_room_ids=pinned_room_ids
-    )
+
+    frame = RoomPinOrderChangedOut(user_id=user_id, pinned_room_ids=pinned_room_ids)
     for pid in participant_ids:
         await manager.send_to(pid, frame)
 
@@ -1296,7 +1376,9 @@ async def set_pin_order(
 ):
     """Rewrite the caller's pinned-section order from a full snapshot."""
     if identity.kind != "user":
-        raise HTTPException(status_code=403, detail="Only users can reorder pinned rooms")
+        raise HTTPException(
+            status_code=403, detail="Only users can reorder pinned rooms"
+        )
     for room_id in body.room_ids:
         await require_capability(
             db,
@@ -1360,10 +1442,7 @@ async def get_room_token_stats(
         raise HTTPException(status_code=404, detail="Room not found")
 
     stats = await _compute(db, room_id)
-    return {
-        label: serialise_window(window)
-        for label, window in stats.items()
-    }
+    return {label: serialise_window(window) for label, window in stats.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -1509,9 +1588,7 @@ async def upload_room_shared_file(
     Same filename re-uploaded = upsert: the file's bytes are replaced
     atomically and a fresh write-frame goes to every agent.
     """
-    await _require_room_participant(
-        room_id, identity, db, Capability.FILE_MANAGE
-    )
+    await _require_room_participant(room_id, identity, db, Capability.FILE_MANAGE)
 
     room = await db.scalar(select(Room).where(Room.id == room_id))
     if room is None:
@@ -1570,9 +1647,7 @@ async def upload_room_shared_file(
     return response
 
 
-@router.get(
-    "/{room_id}/files", response_model=list[RoomSharedFileOut]
-)
+@router.get("/{room_id}/files", response_model=list[RoomSharedFileOut])
 async def list_room_shared_files(
     room_id: str,
     identity: Identity = Depends(forbid_guest),
@@ -1602,9 +1677,7 @@ async def delete_room_shared_file(
     fan-out to participating agents is scheduled in the background so
     their ``memory/shared/<storage_name>`` copies are pruned too.
     """
-    await _require_room_participant(
-        room_id, identity, db, Capability.FILE_MANAGE
-    )
+    await _require_room_participant(room_id, identity, db, Capability.FILE_MANAGE)
 
     config = request.app.state.config
     machine_bus = request.app.state.machine_bus
@@ -1664,18 +1737,14 @@ class RoomArtifactOut(BaseModel):
         )
 
 
-@router.get(
-    "/{room_id}/artifacts", response_model=list[RoomArtifactOut]
-)
+@router.get("/{room_id}/artifacts", response_model=list[RoomArtifactOut])
 async def list_room_artifacts(
     room_id: str,
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ) -> list[RoomArtifactOut]:
     """List artifacts produced into the room. Participants only."""
-    await _require_room_participant(
-        room_id, identity, db, Capability.ARTIFACT_READ
-    )
+    await _require_room_participant(room_id, identity, db, Capability.ARTIFACT_READ)
     rows = await artifacts_service.list_artifacts(db, room_id=room_id)
     return [RoomArtifactOut.from_row(r) for r in rows]
 
@@ -1695,9 +1764,7 @@ async def download_room_artifact(
     """
     from fastapi.responses import Response
 
-    await _require_room_participant(
-        room_id, identity, db, Capability.ARTIFACT_READ
-    )
+    await _require_room_participant(room_id, identity, db, Capability.ARTIFACT_READ)
     row = await artifacts_service.get_artifact(
         db, room_id=room_id, artifact_id=artifact_id
     )
@@ -1745,9 +1812,7 @@ async def delete_room_artifact(
     Broadcasts ``room_artifact.removed`` so other subscribers refresh
     their panel without having to poll.
     """
-    await _require_room_participant(
-        room_id, identity, db, Capability.ARTIFACT_MANAGE
-    )
+    await _require_room_participant(room_id, identity, db, Capability.ARTIFACT_MANAGE)
     config = request.app.state.config
     ok = await artifacts_service.delete_artifact(
         db,

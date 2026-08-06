@@ -45,6 +45,7 @@ KILL_TIMEOUT = 10  # seconds to wait after SIGTERM before SIGKILL
 ADOPT_POLL_INTERVAL = 5.0
 ADOPT_CREATE_TIME_TOLERANCE = 2.0
 
+
 @dataclass
 class SpawnManifest:
     """Engine-agnostic spawn parameters.
@@ -99,6 +100,10 @@ class SpawnManifest:
     # cluster did NOT register the self-MCP entry (e.g.
     # ``cluster_external_url`` unset, or engine has no MCP support).
     anygarden_mcp_token: str | None = None
+    # Opaque Phase 5 lease descriptor. No host path is accepted here. Until a
+    # root-enforcing adapter lands, ``spawn`` rejects every non-null value
+    # before materialization/subprocess side effects.
+    workspace_attachment: dict[str, str | int] | None = None
     # Issue #451 — desired-state generation that drove this spawn. The
     # spawner stamps it into ``runtime.json`` so a re-adopting daemon can
     # restore ``_running_generations[agent_id]`` after a restart and the
@@ -212,15 +217,17 @@ class Spawner:
     # ``workspace`` is intentionally absent here: it is legacy runtime
     # output during migration, and a codex-only sandbox root after
     # materialize when codex lacks fine-grained read-only path support.
-    _MATERIALIZER_MANAGED_TOP_LEVEL = frozenset({
-        ".agents",
-        ".claude",
-        ".codex",
-        ".gemini",
-        ".mcp.json",
-        "AGENTS.md",
-        "CLAUDE.md",
-    })
+    _MATERIALIZER_MANAGED_TOP_LEVEL = frozenset(
+        {
+            ".agents",
+            ".claude",
+            ".codex",
+            ".gemini",
+            ".mcp.json",
+            "AGENTS.md",
+            "CLAUDE.md",
+        }
+    )
 
     # #532 — subset of managed top-levels that hold agent/engine RUNTIME
     # state which must survive a respawn's re-materialize. For these the
@@ -234,14 +241,16 @@ class Spawner:
     # settings.json + the skills alias), so claude already survives respawn.
     _SESSION_BEARING_MANAGED = frozenset({".codex"})
 
-    _WORKSPACE_MANAGED_TOP_LEVEL = frozenset({
-        ".anygarden-codex-workspace",
-        ".claude",
-        "AGENTS.md",
-        "CLAUDE.md",
-        "memory",
-        "skills",
-    })
+    _WORKSPACE_MANAGED_TOP_LEVEL = frozenset(
+        {
+            ".anygarden-codex-workspace",
+            ".claude",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "memory",
+            "skills",
+        }
+    )
     _CODEX_WORKSPACE_MARKER = ".anygarden-codex-workspace"
 
     # Default ``.claude/settings.json`` body for claude-code agents
@@ -267,7 +276,7 @@ class Spawner:
     # for claude-code, and ``_claude_code_default_settings()`` is the
     # single call site every code path goes through.
     _CLAUDE_CODE_DEFAULT_SETTINGS = (
-        '{\n'
+        "{\n"
         '  "permissions": {\n'
         '    "allow": [\n'
         '      "WebSearch",\n'
@@ -280,7 +289,7 @@ class Spawner:
         '      "Grep",\n'
         '      "Task",\n'
         '      "TodoWrite"\n'
-        '    ],\n'
+        "    ],\n"
         '    "deny": [\n'
         '      "Edit(.mcp.json)",\n'
         '      "Write(.mcp.json)",\n'
@@ -293,13 +302,13 @@ class Spawner:
         '      "Bash(rm:.mcp.json)",\n'
         '      "Bash(rm:AGENTS.md)",\n'
         '      "Bash(rm:CLAUDE.md)"\n'
-        '    ]\n'
-        '  }\n'
-        '}\n'
+        "    ]\n"
+        "  }\n"
+        "}\n"
     )
 
     _CLAUDE_CODE_RESTRICTED_SETTINGS = (
-        '{\n'
+        "{\n"
         '  "permissions": {\n'
         '    "allow": [\n'
         '      "WebSearch",\n'
@@ -307,7 +316,7 @@ class Spawner:
         '      "Read",\n'
         '      "Glob",\n'
         '      "Grep"\n'
-        '    ],\n'
+        "    ],\n"
         '    "deny": [\n'
         '      "Edit(.mcp.json)",\n'
         '      "Write(.mcp.json)",\n'
@@ -320,15 +329,13 @@ class Spawner:
         '      "Bash(rm:.mcp.json)",\n'
         '      "Bash(rm:AGENTS.md)",\n'
         '      "Bash(rm:CLAUDE.md)"\n'
-        '    ]\n'
-        '  }\n'
-        '}\n'
+        "    ]\n"
+        "  }\n"
+        "}\n"
     )
 
     @classmethod
-    def _claude_code_default_settings(
-        cls, permission_level: str | None
-    ) -> str:
+    def _claude_code_default_settings(cls, permission_level: str | None) -> str:
         """Return the JSON body to materialize at
         ``.claude/settings.json`` when the admin didn't ship one.
 
@@ -376,7 +383,8 @@ class Spawner:
 
         # ── Skills auto-inline ──────────────────────────────────
         skill_paths = sorted(
-            path for path in msg.files
+            path
+            for path in msg.files
             if path.startswith("skills/") and path.endswith("/SKILL.md")
         )
         if skill_paths:
@@ -696,7 +704,10 @@ class Spawner:
         # and documents the invariant at the call site.
         root_resolved = self._agent_dirs_root.resolve(strict=False)
         agent_resolved = agent_root.resolve(strict=False)
-        if root_resolved != agent_resolved and root_resolved not in agent_resolved.parents:
+        if (
+            root_resolved != agent_resolved
+            and root_resolved not in agent_resolved.parents
+        ):
             raise AgentFilePathError(
                 f"agent_id {msg.agent_id!r} resolves outside the agent dir root"
             )
@@ -852,9 +863,7 @@ class Spawner:
         # via N symlinks pointing at the same file, which mirrors the
         # pre-#213 behaviour where every codex agent read
         # ``~/.codex/auth.json`` directly — no regression.
-        has_codex_overlay = any(
-            path.startswith(".codex/") for path in msg.files
-        )
+        has_codex_overlay = any(path.startswith(".codex/") for path in msg.files)
         # #496 — codex-cli shares codex's ``.codex`` auth/config overlay.
         if msg.engine == "codex-cli" and has_codex_overlay:
             per_agent_auth = agent_root / ".codex" / "auth.json"
@@ -905,7 +914,9 @@ class Spawner:
                 mode=0o600,
             )
 
-            composed = self._compose_agents_md(msg) if msg.agents_md is not None else None
+            composed = (
+                self._compose_agents_md(msg) if msg.agents_md is not None else None
+            )
             for slot_name in ("AGENTS.md", "CLAUDE.md"):
                 slot = workspace / slot_name
                 if slot.is_symlink() or slot.exists():
@@ -938,6 +949,16 @@ class Spawner:
         - Begins background watch task
         """
         agent_id = msg.agent_id
+
+        if msg.workspace_attachment is not None:
+            return SpawnResult(
+                success=False,
+                agent_id=agent_id,
+                error=(
+                    "External workspace execution adapter unavailable; "
+                    "attachment refused fail-closed"
+                ),
+            )
 
         if agent_id in self._agents:
             old_pid = self._agents[agent_id].pid
@@ -1046,14 +1067,8 @@ class Spawner:
         # that opt into MCP implicitly also opt into per-agent auth
         # (typically via ``engine_secrets``/LLM gateway — the usual
         # anygarden model for MCP-enabled agents).
-        has_codex_overlay = any(
-            path.startswith(".codex/") for path in msg.files
-        )
-        if (
-            msg.engine == "codex-cli"
-            and agent_root is not None
-            and has_codex_overlay
-        ):
+        has_codex_overlay = any(path.startswith(".codex/") for path in msg.files)
+        if msg.engine == "codex-cli" and agent_root is not None and has_codex_overlay:
             env["CODEX_HOME"] = str(agent_root / ".codex")
 
         # The daemon's own server URL is authoritative — it's the address the
@@ -1079,9 +1094,12 @@ class Spawner:
             if anygarden_agent_ts:
                 cmd = [
                     anygarden_agent_ts,
-                    "--engine", msg.engine,
-                    "--name", agent_name,
-                    "--server", agent_server,
+                    "--engine",
+                    msg.engine,
+                    "--name",
+                    agent_name,
+                    "--server",
+                    agent_server,
                 ]
                 log.info(
                     "agent_binary_resolved",
@@ -1095,9 +1113,12 @@ class Spawner:
                     "npx",
                     "-y",
                     "@anygarden/agent-ts",
-                    "--engine", msg.engine,
-                    "--name", agent_name,
-                    "--server", agent_server,
+                    "--engine",
+                    msg.engine,
+                    "--name",
+                    agent_name,
+                    "--server",
+                    agent_server,
                 ]
                 log.info(
                     "agent_binary_resolved",
@@ -1112,9 +1133,12 @@ class Spawner:
             if anygarden_agent:
                 cmd = [
                     anygarden_agent,
-                    "--engine", msg.engine,
-                    "--name", msg.name or f"agent-{agent_id[:8]}",
-                    "--server", agent_server,
+                    "--engine",
+                    msg.engine,
+                    "--name",
+                    msg.name or f"agent-{agent_id[:8]}",
+                    "--server",
+                    agent_server,
                 ]
                 log.info(
                     "agent_binary_resolved",
@@ -1128,9 +1152,12 @@ class Spawner:
                 cmd = [
                     "uvx",
                     "anygarden-agent",
-                    "--engine", msg.engine,
-                    "--name", msg.name or f"agent-{agent_id[:8]}",
-                    "--server", agent_server,
+                    "--engine",
+                    msg.engine,
+                    "--name",
+                    msg.name or f"agent-{agent_id[:8]}",
+                    "--server",
+                    agent_server,
                 ]
                 log.info(
                     "agent_binary_resolved",
@@ -1245,9 +1272,7 @@ class Spawner:
 
         # Start background watcher
         agent.watch_task = asyncio.create_task(
-            watch_process(
-                agent_id, proc, self._handle_stopped, self._handle_crashed
-            )
+            watch_process(agent_id, proc, self._handle_stopped, self._handle_crashed)
         )
 
         log.info("agent_spawned", agent_id=agent_id, pid=proc.pid, engine=msg.engine)
@@ -1346,7 +1371,9 @@ class Spawner:
         # Remove temp profile
         if agent.profile_path:
             agent.profile_path.unlink(missing_ok=True)
-            log.debug("profile_cleaned", agent_id=agent_id, path=str(agent.profile_path))
+            log.debug(
+                "profile_cleaned", agent_id=agent_id, path=str(agent.profile_path)
+            )
 
     async def drain(self) -> None:
         """Kill all running agents (drain mode)."""
@@ -1412,14 +1439,15 @@ class Spawner:
             self._manifest_store.clear_runtime(agent_id)
             return False
         except psutil.Error as exc:  # AccessDenied etc. — can't verify.
-            log.warning("adopt_pid_unverifiable", agent_id=agent_id, pid=pid, error=str(exc))
+            log.warning(
+                "adopt_pid_unverifiable", agent_id=agent_id, pid=pid, error=str(exc)
+            )
             self._manifest_store.clear_runtime(agent_id)
             return False
 
         if (
             not isinstance(recorded_started_at, (int, float))
-            or abs(live_create_time - recorded_started_at)
-            > ADOPT_CREATE_TIME_TOLERANCE
+            or abs(live_create_time - recorded_started_at) > ADOPT_CREATE_TIME_TOLERANCE
         ):
             log.warning(
                 "adopt_pid_recycled",

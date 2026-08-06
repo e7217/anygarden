@@ -74,6 +74,8 @@ def daemon(tmp_path: Path) -> MachineDaemon:
         machine_token="test-machine-token",
         labels={"region": "local"},
         agent_dirs_root=tmp_path / "agents",
+        workspace_registry_path=tmp_path / "workspaces.json",
+        workspace_signing_key_path=tmp_path / "workspace-signing.key",
     )
 
 
@@ -112,6 +114,8 @@ class TestRegisterFrame:
         assert frame["machine_id"] == "machine-test-001"
         assert len(frame["capabilities"]) == 1
         assert frame["capabilities"][0]["engine"] == "claude-code"
+        assert frame["workspace_signing_public_key"].startswith("ed25519pk_")
+        assert "workspace_receipt_signing_v1" in frame["control_capabilities"]
 
     async def test_register_includes_system_info(self, daemon: MachineDaemon) -> None:
         """_register embeds collected static SystemInfo in the frame (#523)."""

@@ -66,6 +66,7 @@ class Capability(StrEnum):
 
     MEMBER_MANAGE = "member.manage"
     INVITE_MANAGE = "invite.manage"
+    WORKSPACE_ATTACH_MANAGE = "workspace.attach.manage"
 
 
 _READ_CAPABILITIES: frozenset[Capability] = frozenset(
@@ -101,6 +102,7 @@ _ADMIN_CAPABILITIES: frozenset[Capability] = frozenset(
         Capability.MEMBER_MANAGE,
         Capability.INVITE_MANAGE,
         Capability.AGENT_WAKE,
+        Capability.WORKSPACE_ATTACH_MANAGE,
     }
 )
 
@@ -584,7 +586,10 @@ async def require_capability(
 
     # Members get a narrow, target-sensitive exception even though the generic
     # member capability set deliberately excludes TASK_UPDATE.
-    if capability == Capability.TASK_UPDATE and access.identity.kind in {"agent", "user"}:
+    if capability == Capability.TASK_UPDATE and access.identity.kind in {
+        "agent",
+        "user",
+    }:
         _require_task_update_scope(
             access,
             task=task,

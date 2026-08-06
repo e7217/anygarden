@@ -37,6 +37,7 @@ def _uuid() -> str:
 
 class Base(DeclarativeBase):
     """Declarative base for all Anygarden models."""
+
     pass
 
 
@@ -45,7 +46,9 @@ class Project(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    description: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     # ``passive_deletes=True`` defers child cleanup to the FK's
@@ -80,13 +83,21 @@ class Room(Base):
         default=None,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    description: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     parent_room_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("rooms.id", ondelete="SET NULL"), nullable=True, default=None
+        String(36),
+        ForeignKey("rooms.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     is_dm: Mapped[bool] = mapped_column(Boolean, default=False)
     representative_agent_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, default=None
+        String(36),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     # Issue #148 — per-room ambient context window toggle. When True
     # the WS broadcast path stamps ``metadata.ingest_only=True`` on
@@ -184,7 +195,9 @@ class Room(Base):
     parent_room: Mapped[Optional["Room"]] = relationship(
         "Room", remote_side="Room.id", back_populates="child_rooms"
     )
-    child_rooms: Mapped[list["Room"]] = relationship("Room", back_populates="parent_room")
+    child_rooms: Mapped[list["Room"]] = relationship(
+        "Room", back_populates="parent_room"
+    )
     # passive_deletes defers to the FK's ON DELETE CASCADE — without
     # it the ORM tries to UPDATE the child's room_id to NULL before
     # cascade fires, which violates NOT NULL. Same pattern as the
@@ -256,12 +269,17 @@ class Agent(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     engine: Mapped[str] = mapped_column(String(128), nullable=False)
     placed_on_machine_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("machines.id", ondelete="SET NULL"), nullable=True, default=None
+        String(36),
+        ForeignKey("machines.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     desired_state: Mapped[str] = mapped_column(String(32), default="idle")
     actual_state: Mapped[str] = mapped_column(String(32), default="idle")
     pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
-    profile_yaml: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    profile_yaml: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     # Per-agent directory manifest: AGENTS.md source of truth. The machine
     # materializes this into ~/.anygarden/agents/<id>/AGENTS.md on spawn.
     # See docs/plans/2026-04-11-per-agent-directory-skills.md
@@ -272,7 +290,9 @@ class Agent(Base):
     last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
-    last_crash_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    last_crash_reason: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     # #516 — structured "why can't this agent respond" for the not-running
     # family (engine change, no machine for engine, spawn failure, crash,
     # engine drift, no room). NULL ``unavailable_code`` == the agent is fine.
@@ -382,7 +402,9 @@ class Agent(Base):
     # own system prompt body); ``description`` is what *others* see.
     # Application layer caps this at 200 chars; DB stays Text for
     # forward flexibility.
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    description: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None
+    )
     # Issue #279 — per-agent collaboration policy. ``solo`` (default)
     # preserves pre-#279 behaviour: the agent answers within its own
     # turn. ``collaborative`` triggers a server-supplied hint suffix in
@@ -409,7 +431,9 @@ class Agent(Base):
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
-    machine: Mapped[Optional["Machine"]] = relationship("Machine", back_populates="agents")
+    machine: Mapped[Optional["Machine"]] = relationship(
+        "Machine", back_populates="agents"
+    )
     files: Mapped[list["AgentFile"]] = relationship(
         "AgentFile", back_populates="agent", cascade="all, delete-orphan"
     )
@@ -417,9 +441,7 @@ class Agent(Base):
 
 class Machine(Base):
     __tablename__ = "machines"
-    __table_args__ = (
-        Index("ix_machines_status_owner", "status", "owner_user_id"),
-    )
+    __table_args__ = (Index("ix_machines_status_owner", "status", "owner_user_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -430,12 +452,16 @@ class Machine(Base):
     hostname: Mapped[str] = mapped_column(String(255), nullable=False)
     # User-supplied free-form label / note (issue #523). Optional; replaces
     # the former user-entered ``hostname`` input which is now auto-detected.
-    description: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
+    description: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None
+    )
     owner_user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(32), default="offline")
-    daemon_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    daemon_version: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     daemon_last_seen_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
@@ -444,14 +470,22 @@ class Machine(Base):
     # #523 wires the daemon to fill them. ``lan_ip`` / ``os_platform`` are new.
     cpu_cores: Mapped[int] = mapped_column(Integer, default=0)
     memory_gb: Mapped[float] = mapped_column(Float, default=0.0)
-    lan_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
-    os_platform: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, default=None)
+    lan_ip: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    os_platform: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None
+    )
     # #550 — server-driven self-update state, surfaced in the admin machine
     # view. ``updating`` (self_update frame sent) → ``success`` (new
     # daemon_version confirmed on re-register) / ``failed`` (daemon reported
     # failure). NULL means no update has ever been triggered.
-    update_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, default=None)
-    update_error: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
+    update_status: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default=None
+    )
+    update_error: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, default=None
+    )
     update_started_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
@@ -461,6 +495,18 @@ class Machine(Base):
     # migration. Set absurdly high so it never bites in practice.
     max_agents: Mapped[int] = mapped_column(Integer, default=1000)
     labels: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    # Phase 5 — non-engine daemon protocol features and redacted local
+    # workspace descriptors. Catalog entries contain opaque IDs and hashes,
+    # never canonical host paths.
+    control_capabilities: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    workspace_catalog: Mapped[Optional[list]] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    workspace_signing_public_key: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     owner: Mapped["User"] = relationship("User")
@@ -484,17 +530,18 @@ class Machine(Base):
 
 class MachineEngine(Base):
     """Records which engines a machine supports and their versions."""
+
     __tablename__ = "machine_engines"
-    __table_args__ = (
-        Index("ix_machine_engines_engine", "engine"),
-    )
+    __table_args__ = (Index("ix_machine_engines_engine", "engine"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     machine_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("machines.id", ondelete="CASCADE"), nullable=False
     )
     engine: Mapped[str] = mapped_column(String(128), nullable=False)
-    version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
+    version: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     machine: Mapped["Machine"] = relationship("Machine", back_populates="engines")
@@ -547,10 +594,9 @@ class MachineEngineStatus(Base):
 
 class MachineToken(Base):
     """Stores hashed machine tokens for daemon authentication."""
+
     __tablename__ = "machine_tokens"
-    __table_args__ = (
-        Index("ix_machine_tokens_hint", "lookup_hint"),
-    )
+    __table_args__ = (Index("ix_machine_tokens_hint", "lookup_hint"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     machine_id: Mapped[str] = mapped_column(
@@ -571,10 +617,9 @@ class MachineToken(Base):
 
 class AgentToken(Base):
     """Stores hashed agent tokens for agent authentication (O(1) lookup)."""
+
     __tablename__ = "agent_tokens"
-    __table_args__ = (
-        Index("ix_agent_tokens_hint", "lookup_hint"),
-    )
+    __table_args__ = (Index("ix_agent_tokens_hint", "lookup_hint"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     agent_id: Mapped[str] = mapped_column(
@@ -630,7 +675,9 @@ class RoomInviteLink(Base):
     )
     # None = unlimited uses. Acceptance increments ``use_count`` and
     # refuses when ``use_count >= max_uses``.
-    max_uses: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    max_uses: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
     use_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     room: Mapped["Room"] = relationship("Room")
@@ -645,10 +692,16 @@ class Participant(Base):
         String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
     )
     user_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, default=None
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
     )
     agent_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, default=None
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=True,
+        default=None,
     )
     role: Mapped[str] = mapped_column(String(32), default="member")
     joined_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
@@ -795,7 +848,9 @@ class Message(Base):
         nullable=True,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    extra_metadata: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    extra_metadata: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, default=None
+    )
     # A root message leaves both columns NULL. A direct reply points both
     # columns at the same top-level root; nested replies are rejected by the
     # service before insert and the CHECK prevents arbitrary parent shapes.
@@ -1019,7 +1074,9 @@ class SkillLibraryEntry(Base):
     __tablename__ = "skill_library"
     __table_args__ = (
         UniqueConstraint(
-            "source", "name", "pinned_rev",
+            "source",
+            "name",
+            "pinned_rev",
             name="uq_skill_library_source_name_rev",
         ),
         Index("ix_skill_library_source_name", "source", "name"),
@@ -1076,9 +1133,7 @@ class AgentSkill(Base):
     """
 
     __tablename__ = "agent_skills"
-    __table_args__ = (
-        Index("ix_agent_skills_skill", "skill_library_id"),
-    )
+    __table_args__ = (Index("ix_agent_skills_skill", "skill_library_id"),)
 
     agent_id: Mapped[str] = mapped_column(
         String(36),
@@ -1165,16 +1220,12 @@ class MCPServerTemplate(Base):
     description: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None
     )
-    icon: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
-    config_per_engine: Mapped[dict] = mapped_column(
-        JSON, nullable=False, default=dict
+    icon: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, default=None
     )
-    required_env_vars: Mapped[list] = mapped_column(
-        JSON, nullable=False, default=list
-    )
-    supported_engines: Mapped[list] = mapped_column(
-        JSON, nullable=False, default=list
-    )
+    config_per_engine: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    required_env_vars: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    supported_engines: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="custom")
     created_by: Mapped[Optional[str]] = mapped_column(
         String(36), nullable=True, default=None
@@ -1204,7 +1255,8 @@ class MCPServerInstance(Base):
     __tablename__ = "mcp_server_instances"
     __table_args__ = (
         UniqueConstraint(
-            "template_id", "agent_id",
+            "template_id",
+            "agent_id",
             name="uq_mcp_server_instances_template_agent",
         ),
         Index("ix_mcp_server_instances_agent", "agent_id"),
@@ -1294,6 +1346,120 @@ class ActivityLog(Base):
         String(32), nullable=True, default=None
     )
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+
+
+class WorkspaceAttachment(Base):
+    """Opaque cluster-side lease for one machine-local workspace."""
+
+    __tablename__ = "workspace_attachments"
+    __table_args__ = (
+        Index("ix_workspace_attachments_room_state", "room_id", "state"),
+        Index("ix_workspace_attachments_agent_state", "agent_id", "state"),
+        Index("ix_workspace_attachments_expiry", "state", "expires_at"),
+        Index(
+            "uq_workspace_attachment_agent_active",
+            "agent_id",
+            unique=True,
+            sqlite_where=sa_text(
+                "state IN ('requested', 'machine_verified', 'active', 'revoking')"
+            ),
+            postgresql_where=sa_text(
+                "state IN ('requested', 'machine_verified', 'active', 'revoking')"
+            ),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    workspace_label: Mapped[str] = mapped_column(String(80), nullable=False)
+    machine_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("machines.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    target_participant_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="requested", server_default="requested"
+    )
+    epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    allowlist_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    requested_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    room_approved_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    global_approved_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    failure_code: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True, default=None
+    )
+    resume_after_revoke: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, default=_utcnow, onupdate=_utcnow
+    )
+    activated_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+
+
+class WorkspaceInvocationAudit(Base):
+    """Append-only, HMAC chained workspace decision/invocation audit."""
+
+    __tablename__ = "workspace_invocation_audits"
+    __table_args__ = (
+        Index("ix_workspace_audits_attachment_ts", "attachment_id", "created_at"),
+        Index("ix_workspace_audits_request", "request_id"),
+        UniqueConstraint("row_hash", name="uq_workspace_audits_row_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Immutable snapshot identifier rather than a cascading FK: evidence must
+    # survive attachment/room/machine deletion.
+    attachment_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    actor_user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    actor_participant_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True
+    )
+    room_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    task_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    source_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    source_thread_root_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True
+    )
+    agent_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    machine_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    policy_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_hmac: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    outcome: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    changed_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    previous_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    row_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class MachineActivityLog(Base):
@@ -1413,12 +1579,8 @@ class Task(Base):
     result_markdown: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None
     )
-    error: Mapped[Optional[str]] = mapped_column(
-        Text, nullable=True, default=None
-    )
-    is_interesting: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    is_interesting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     """Used by ``materialize='interesting_only'`` Goals to decide
     whether a successful run still earns a Task row. Errors are
     auto-flagged interesting; agents may opt successes in via the
@@ -1462,9 +1624,7 @@ class TaskBlocker(Base):
         # Composite PK = the edge identity. A duplicate (task_id,
         # blocked_by_task_id) insert raises IntegrityError, which the
         # ``add_task_blocker`` handler treats as idempotent success.
-        PrimaryKeyConstraint(
-            "task_id", "blocked_by_task_id", name="pk_task_blockers"
-        ),
+        PrimaryKeyConstraint("task_id", "blocked_by_task_id", name="pk_task_blockers"),
         # The resolve-wake reverse lookup is ``WHERE blocked_by_task_id =
         # :just_completed``; the PK's leading column is ``task_id`` so it
         # can't serve that scan. A dedicated index keeps it cheap.
@@ -1538,9 +1698,7 @@ class AgentTurnTask(Base):
     Task tears down its turn-correlation rows (matches the rooms→tasks /
     task_blockers cascades)."""
 
-    redispatch_count: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0
-    )
+    redispatch_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     """How many automatic re-dispatches have happened *before* this turn.
     0 for the original assignment; carried + incremented on each re-wake so
     ``_MAX_TASK_REDISPATCH`` bounds the chain."""
@@ -1583,6 +1741,14 @@ class AgentTurn(Base):
     )
     task_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    workspace_attachment_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("workspace_attachments.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    workspace_attachment_epoch: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
     )
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
     # pending | leased | retrying | completing | completed | cancelled | failed
@@ -1715,7 +1881,6 @@ class AgentTurnOutbox(Base):
     )
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
-
 
 
 class Goal(Base):
@@ -1863,7 +2028,9 @@ class LLMGatewayModel(Base):
     api_key_ref: Mapped[str] = mapped_column(String(64), nullable=False)
     # Optional extras passed through to ``litellm_params`` verbatim —
     # temperature, max_tokens, custom headers, etc. JSON dict.
-    extra_params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
+    extra_params: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True, default=None
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -1966,7 +2133,9 @@ class LLMGatewayUsage(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     # Populated only on non-2xx. Short message from upstream or proxy
     # for debug views; never user-facing.
-    error: Mapped[Optional[str]] = mapped_column(String(512), nullable=True, default=None)
+    error: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True, default=None
+    )
 
 
 # ── Token budgets (#453, reliability Wave 1d) ──────────────────────────
@@ -2118,9 +2287,7 @@ class TokenBudgetIncident(Base):
     # "soft" (warn threshold) | "hard" (ceiling).
     threshold_type: Mapped[str] = mapped_column(String(8), nullable=False)
     # "open" (active breach) | "resolved" (admin acknowledged / resumed).
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="open"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     # The observed-token SUM at the moment the incident was recorded.
     observed_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
@@ -2138,6 +2305,7 @@ class VersionCheck(Base):
     DB (rather than in-memory) keeps the last-known state across restarts
     and lets a future background poller fill the same cache unchanged.
     """
+
     __tablename__ = "version_checks"
 
     # Package name is the natural primary key — one cache row per package.
