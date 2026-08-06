@@ -372,6 +372,17 @@ def test_failure_classifier_projects_only_closed_categories(
             b'503 Service Unavailable"}}'
         ),
         (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 429 Too Many '
+            b'Requests"}\n'
+            b'{"type":"error","message":"unexpected status 429 Too Many '
+            b'Requests"}'
+        ),
+        (
             b'{"type":"error","message":"unrecognized provider-secret"}\n'
             b'{"type":"turn.failed","error":{"message":"unexpected status '
             b'401 Unauthorized"}}'

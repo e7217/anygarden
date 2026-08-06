@@ -337,7 +337,8 @@ def classify_failure(raw: bytes) -> str:
         lines = raw.decode("utf-8", errors="strict").splitlines()
     except UnicodeDecodeError:
         return FAILURE_CATEGORY_UNKNOWN
-    categories: set[str] = set()
+    failure_category: str | None = None
+    failure_event_count = 0
     for line in lines:
         if not line.strip():
             continue
@@ -358,15 +359,16 @@ def classify_failure(raw: bytes) -> str:
             message = error.get("message")
         else:
             continue
+        failure_event_count += 1
+        if failure_event_count > 1:
+            return FAILURE_CATEGORY_UNKNOWN
         if not isinstance(message, str):
             return FAILURE_CATEGORY_UNKNOWN
         category = _classify_failure_message(message)
         if category == FAILURE_CATEGORY_UNKNOWN:
             return FAILURE_CATEGORY_UNKNOWN
-        categories.add(category)
-    if len(categories) == 1:
-        return categories.pop()
-    return FAILURE_CATEGORY_UNKNOWN
+        failure_category = category
+    return failure_category or FAILURE_CATEGORY_UNKNOWN
 
 
 def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
