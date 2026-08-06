@@ -33,6 +33,7 @@ MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_PATTERN = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 ALLOWED_ITEM_TYPES = {"agent_message", "reasoning"}
+RUNTIME_STATE_ROOT = Path("/tmp")
 SMOKE_FAILURE_RESULT_CODES = {
     "approval_requested": "FAIL_APPROVAL_REQUESTED",
     "canary_mismatch": "FAIL_CANARY_MISMATCH",
@@ -129,6 +130,23 @@ def build_command(model: str) -> list[str]:
     ]
 
 
+def prepare_runtime_state(env: Mapping[str, str]) -> dict[str, str]:
+    """Create the fixed private state directories on the container tmpfs."""
+    state_dirs = {
+        "HOME": RUNTIME_STATE_ROOT / "home",
+        "CODEX_HOME": RUNTIME_STATE_ROOT / "codex",
+    }
+    for key, path in state_dirs.items():
+        if env.get(key) != str(path):
+            raise BlockedConfiguration("runtime_state")
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.chmod(0o700)
+        except OSError:
+            raise BlockedConfiguration("runtime_state") from None
+    return {key: str(path) for key, path in state_dirs.items()}
+
+
 def parse_response(raw: bytes) -> bytes:
     """Extract the canary while rejecting tool/approval activity."""
     if len(raw) > 64 * 1024:
@@ -181,6 +199,7 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
     if any(Path.cwd().iterdir()):
         raise BlockedConfiguration("workspace_not_empty")
     credential = _required(env, "OPENAI_API_KEY")
+    runtime_state = prepare_runtime_state(env)
     codex = shutil.which("codex")
     if not codex:
         raise BlockedConfiguration("engine_missing")
@@ -192,8 +211,8 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
     engine_version = version.stdout.decode(errors="replace").strip()[:80]
     child_env = {
         "PATH": env.get("PATH", ""),
-        "HOME": env.get("HOME", "/tmp/home"),
-        "CODEX_HOME": env.get("CODEX_HOME", "/tmp/codex"),
+        "HOME": runtime_state["HOME"],
+        "CODEX_HOME": runtime_state["CODEX_HOME"],
         "OPENAI_API_KEY": credential,
         "LANG": "C.UTF-8",
     }
