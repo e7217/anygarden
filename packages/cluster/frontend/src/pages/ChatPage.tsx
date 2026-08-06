@@ -15,6 +15,7 @@ import RoomInviteDialog from '@/components/RoomInviteDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
+import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -566,6 +567,9 @@ export default function ChatPage() {
                 />
               )}
             </div>
+            <WorkspaceAttachmentBanner
+              attachments={currentRoom.workspace_attachments ?? []}
+            />
             <ChatArea
               messages={messages}
               participants={participants}

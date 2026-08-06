@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterable, MutableMapping
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -19,6 +20,7 @@ from anygarden_machine.config import MachineConfig, load_token, save_token
 from anygarden_machine.daemon import MachineDaemon
 from anygarden_machine.detector import detect_engines
 from anygarden_machine.updater import run_update
+from anygarden_machine.workspace_registry import WorkspaceRegistry
 
 log = structlog.get_logger()
 
@@ -109,7 +111,11 @@ def main() -> None:
 
 
 @main.command()
-@click.option("--server", required=True, help="Anygarden server URL (e.g. https://anygarden.example.com)")
+@click.option(
+    "--server",
+    required=True,
+    help="Anygarden server URL (e.g. https://anygarden.example.com)",
+)
 @click.option("--name", required=True, help="Human-readable machine name")
 def register(server: str, name: str) -> None:
     """Register this machine with a Anygarden server."""
@@ -180,12 +186,28 @@ def register(server: str, name: str) -> None:
 
 
 @main.command()
-@click.option("--config", "config_path", type=click.Path(exists=True), default=None,
-              help="Config file path (default: ~/.anygarden/machine.toml)")
-@click.option("--server", default=None, help="Server WS URL override (e.g. ws://host:8000)")
-@click.option("--token", default=None, help="Machine token override (or use ~/.anygarden/machine.token)")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="Config file path (default: ~/.anygarden/machine.toml)",
+)
+@click.option(
+    "--server", default=None, help="Server WS URL override (e.g. ws://host:8000)"
+)
+@click.option(
+    "--token",
+    default=None,
+    help="Machine token override (or use ~/.anygarden/machine.token)",
+)
 @click.option("--machine-id", default=None, help="Machine ID override")
-def run(config_path: str | None, server: str | None, token: str | None, machine_id: str | None) -> None:
+def run(
+    config_path: str | None,
+    server: str | None,
+    token: str | None,
+    machine_id: str | None,
+) -> None:
     """Run the machine daemon (connects to server via WebSocket)."""
     # #545 — augment PATH before anything spawns/detects so engine CLIs
     # in ~/.local/bin and /usr/local/bin are visible even when launched
@@ -212,19 +234,30 @@ def run(config_path: str | None, server: str | None, token: str | None, machine_
 
     # Build WS URL if HTTP URL given
     if final_server and final_server.startswith("http"):
-        final_server = final_server.replace("https://", "wss://").replace("http://", "ws://")
+        final_server = final_server.replace("https://", "wss://").replace(
+            "http://", "ws://"
+        )
     # Append /ws/machines/{id} if not already present
     if final_server and "/ws/machines/" not in final_server and final_id:
         final_server = f"{final_server.rstrip('/')}/ws/machines/{final_id}"
 
     if not final_id:
-        click.echo("Error: No machine_id. Run 'anygarden-machine register' or pass --machine-id.", err=True)
+        click.echo(
+            "Error: No machine_id. Run 'anygarden-machine register' or pass --machine-id.",
+            err=True,
+        )
         sys.exit(1)
     if not final_server:
-        click.echo("Error: No server URL. Run 'anygarden-machine register' or pass --server.", err=True)
+        click.echo(
+            "Error: No server URL. Run 'anygarden-machine register' or pass --server.",
+            err=True,
+        )
         sys.exit(1)
     if not final_token:
-        click.echo("Error: No token. Run 'anygarden-machine register' or pass --token.", err=True)
+        click.echo(
+            "Error: No token. Run 'anygarden-machine register' or pass --token.",
+            err=True,
+        )
         sys.exit(1)
 
     click.echo(f"Starting daemon: machine_id={final_id}, server={final_server}")
@@ -232,7 +265,7 @@ def run(config_path: str | None, server: str | None, token: str | None, machine_
         server_url=final_server,
         machine_id=final_id,
         machine_token=final_token,
-        labels=config.labels if hasattr(config, 'labels') else {},
+        labels=config.labels if hasattr(config, "labels") else {},
     )
     try:
         asyncio.run(daemon.run())
@@ -247,11 +280,15 @@ def status() -> None:
     token = load_token()
 
     if not config.machine_id or not token:
-        click.echo("Error: Not registered. Run 'anygarden-machine register' first.", err=True)
+        click.echo(
+            "Error: Not registered. Run 'anygarden-machine register' first.", err=True
+        )
         sys.exit(1)
 
     # Derive HTTP base URL from WS URL
-    base_url = config.server_url.replace("wss://", "https://").replace("ws://", "http://")
+    base_url = config.server_url.replace("wss://", "https://").replace(
+        "ws://", "http://"
+    )
     base_url = base_url.rsplit("/ws/", 1)[0]
 
     try:
@@ -274,7 +311,114 @@ def status() -> None:
     agents = data.get("running_agents", [])
     click.echo(f"Agents:  {len(agents)} running")
     for agent in agents:
-        click.echo(f"  - {agent.get('agent_id', '?')} (engine={agent.get('engine', '?')})")
+        click.echo(
+            f"  - {agent.get('agent_id', '?')} (engine={agent.get('engine', '?')})"
+        )
+
+
+@main.group("workspace")
+def workspace() -> None:
+    """Manage machine-local external workspace registrations."""
+
+
+@workspace.command("register")
+@click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--label", required=True, help="Redacted label shown in the room banner")
+@click.option(
+    "--max-mode",
+    type=click.Choice(["read", "write"]),
+    default="read",
+    show_default=True,
+)
+@click.option(
+    "--allow",
+    "allowlist",
+    multiple=True,
+    required=True,
+    help="Allowed relative path (repeatable; .git and credential paths are denied)",
+)
+@click.option("--expires-in", type=int, default=86400, show_default=True)
+@click.option("--registry", type=click.Path(path_type=Path), default=None, hidden=True)
+def workspace_register(
+    root: Path,
+    label: str,
+    max_mode: str,
+    allowlist: tuple[str, ...],
+    expires_in: int,
+    registry: Path | None,
+) -> None:
+    """Register ROOT locally and print its opaque workspace ID."""
+
+    try:
+        row = WorkspaceRegistry(registry).register(
+            root,
+            label=label,
+            max_mode=max_mode,  # type: ignore[arg-type]
+            allowlist=list(allowlist),
+            expires_in=timedelta(seconds=expires_in),
+        )
+    except (KeyError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(row.workspace_id)
+
+
+@workspace.command("list")
+@click.option("--registry", type=click.Path(path_type=Path), default=None, hidden=True)
+def workspace_list(registry: Path | None) -> None:
+    """List active redacted registrations; canonical paths are never printed."""
+
+    try:
+        rows = WorkspaceRegistry(registry).list_descriptors()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for row in rows:
+        click.echo(
+            f"{row['workspace_id']}\t{row['label']}\t{row['max_mode']}\t"
+            f"{row['expires_at']}"
+        )
+
+
+@workspace.command("consent")
+@click.argument("workspace_id")
+@click.option("--agent-id", required=True)
+@click.option("--room-id", required=True)
+@click.option("--mode", type=click.Choice(["read", "write"]), required=True)
+@click.option("--expires-in", type=int, default=600, show_default=True)
+@click.option("--registry", type=click.Path(path_type=Path), default=None, hidden=True)
+def workspace_consent(
+    workspace_id: str,
+    agent_id: str,
+    room_id: str,
+    mode: str,
+    expires_in: int,
+    registry: Path | None,
+) -> None:
+    """Mint one scoped, short-lived consent token for an attach request."""
+
+    try:
+        token = WorkspaceRegistry(registry).issue_consent(
+            workspace_id,
+            agent_id=agent_id,
+            room_id=room_id,
+            mode=mode,  # type: ignore[arg-type]
+            expires_in=timedelta(seconds=expires_in),
+        )
+    except (KeyError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(token)
+
+
+@workspace.command("revoke")
+@click.argument("workspace_id")
+@click.option("--registry", type=click.Path(path_type=Path), default=None, hidden=True)
+def workspace_revoke(workspace_id: str, registry: Path | None) -> None:
+    """Revoke a local registration and all of its unused consents."""
+
+    if not WorkspaceRegistry(registry).revoke(workspace_id):
+        raise click.ClickException(
+            "workspace registration not found or already revoked"
+        )
+    click.echo("revoked")
 
 
 def _write_systemd_unit() -> Path:

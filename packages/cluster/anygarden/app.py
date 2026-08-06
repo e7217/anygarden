@@ -42,6 +42,7 @@ from anygarden.api.v1.turns import router as turns_router
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.system import router as system_router
 from anygarden.routing.router import router as routing_router
+from anygarden.workspaces.router import router as workspaces_router
 from anygarden.orchestration.rules import (
     CooldownManager,
     GuestRoomAggregateLimiter,
@@ -169,12 +170,14 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
             # Mirror what Alembic's `stamp head` does, inline, so it joins
             # the same transaction as create_all. Schema of alembic_version
             # is Alembic's standard single-column table.
-            await conn.execute(text("""
+            await conn.execute(
+                text("""
                 CREATE TABLE IF NOT EXISTS alembic_version (
                     version_num VARCHAR(32) NOT NULL,
                     CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
                 )
-            """))
+            """)
+            )
             await conn.execute(
                 text("INSERT INTO alembic_version (version_num) VALUES (:v)"),
                 {"v": head_rev},
@@ -310,6 +313,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             secret_file.write_text(config.jwt_secret)
             secure_chmod(secret_file, 0o600)
 
+    # Workspace invocation audits use a domain-separated HMAC derived from
+    # the persisted server secret. Prompt content is never stored.
+    from anygarden.workspaces.service import configure_audit_key
+
+    configure_audit_key(config.jwt_secret)
+
     # Configure structured logging
     configure_logging(config.log_level, dev=config.dev)
 
@@ -349,6 +358,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # wired to a fake fetcher so register() stays offline.
     if not getattr(app.state, "skill_library_service", None):
         from anygarden.skills_library.service import SkillLibraryService
+
         app.state.skill_library_service = SkillLibraryService(
             app.state.session_factory,
         )
@@ -421,7 +431,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # shadowing the stdlib ``secrets`` module imported at the
         # top of the file.
         mcp_secrets = MCPSecrets.from_config_key(
-            resolved_key, dev_mode=config.dev,
+            resolved_key,
+            dev_mode=config.dev,
         )
         app.state.mcp_template_service = MCPTemplateService(
             app.state.session_factory,
@@ -460,9 +471,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # direct presence imports so we don't introduce a cycle.
     if not getattr(app.state, "presence_service", None):
         app.state.presence_service = PresenceService(app.state.connection_manager)
-        app.state.connection_manager.set_presence_service(
-            app.state.presence_service
-        )
+        app.state.connection_manager.set_presence_service(app.state.presence_service)
     if not getattr(app.state, "cooldown_manager", None):
         app.state.cooldown_manager = CooldownManager(capacity=5, refill_rate=1.0)
     # Guests get a stricter bucket — §11.7 of the design doc. The two
@@ -470,9 +479,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # burst from a chatty registered user doesn't starve the guest
     # bucket and vice versa.
     if not getattr(app.state, "guest_cooldown_manager", None):
-        app.state.guest_cooldown_manager = CooldownManager(
-            capacity=3, refill_rate=0.5
-        )
+        app.state.guest_cooldown_manager = CooldownManager(capacity=3, refill_rate=0.5)
     # Room-wide cap on combined guest mentions — blunts LLM-cost
     # amplification when an invite is shared widely. 20 agent-mention
     # events per minute per room is the §11.7 starting point.
@@ -497,8 +504,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # machine-reconnect respawn path bring them back fresh.
     if not engine_provided:
         from anygarden.db.models import Machine as _Machine
+
         async with app.state.session_factory() as db:
             from sqlalchemy import update
+
             # Only reset machines to offline — agents are NOT reset.
             await db.execute(
                 update(_Machine)
@@ -508,6 +517,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             reset_openhands_ids = await _reset_openhands_agents_for_restart(db)
             await db.commit()
             import structlog
+
             logger = structlog.get_logger()
             logger.info("startup.machines_reset_offline")
             if reset_openhands_ids:
@@ -534,14 +544,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         if removed:
             import structlog
-            structlog.get_logger().info(
-                "startup.room_files_cleanup", removed=removed
-            )
+
+            structlog.get_logger().info("startup.room_files_cleanup", removed=removed)
     except Exception:  # pragma: no cover — best-effort boot chore
         import structlog
-        structlog.get_logger().exception(
-            "startup.room_files_cleanup_failed"
-        )
+
+        structlog.get_logger().exception("startup.room_files_cleanup_failed")
 
     # Dev mode: auto-create admin user
     if config.dev:
@@ -550,16 +558,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         async with app.state.session_factory() as db:
             from sqlalchemy import func
+
             count = (await db.execute(select(func.count()).select_from(User))).scalar()
             if count == 0:
-                db.add(User(
-                    email="admin@anygarden.dev",
-                    password_hash=hash_password("admin"),
-                    is_admin=True,
-                ))
+                db.add(
+                    User(
+                        email="admin@anygarden.dev",
+                        password_hash=hash_password("admin"),
+                        is_admin=True,
+                    )
+                )
                 await db.commit()
                 import structlog
-                structlog.get_logger().info("dev.admin_created", email="admin@anygarden.dev")
+
+                structlog.get_logger().info(
+                    "dev.admin_created", email="admin@anygarden.dev"
+                )
 
     # #126 — stale-check cron. Default 6h interval so we don't hammer
     # GitHub; override via ``ANYGARDEN_SKILL_STALE_INTERVAL_HOURS``. A
@@ -569,9 +583,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # app.state (test double).
     stale_task = getattr(app.state, "skill_stale_task", None)
     if stale_task is None:
-        interval_hours_env = os.environ.get(
-            "ANYGARDEN_SKILL_STALE_INTERVAL_HOURS", "6"
-        )
+        interval_hours_env = os.environ.get("ANYGARDEN_SKILL_STALE_INTERVAL_HOURS", "6")
         try:
             interval_hours = float(interval_hours_env)
         except ValueError:
@@ -591,16 +603,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         and getattr(app.state, "llm_gateway_supervisor", None) is None
     ):
         from anygarden.llm_gateway.bootstrap import bootstrap_gateway
+
         # MCPSecrets was already built above for MCP templates; the
         # llm_gateway reuses the same Fernet key per ADR-004. Fetch it
         # from the service (which stores it as ``_secrets``) so this
         # works both when we built the service here and when a test
         # pre-set ``app.state.mcp_template_service``.
-        gateway_secrets = getattr(
-            app.state.mcp_template_service, "_secrets", None
-        )
+        gateway_secrets = getattr(app.state.mcp_template_service, "_secrets", None)
         if gateway_secrets is None:
             import structlog
+
             structlog.get_logger().warning(
                 "llm_gateway.bootstrap_skipped",
                 reason="mcp_template_service has no _secrets attribute",
@@ -615,6 +627,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
             except Exception as exc:  # noqa: BLE001
                 import structlog
+
                 structlog.get_logger().warning(
                     "llm_gateway.bootstrap_failed",
                     error=str(exc),
@@ -627,9 +640,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # double has already populated ``app.state.orphan_sweeper_task``.
     orphan_task = getattr(app.state, "orphan_sweeper_task", None)
     if orphan_task is None:
-        interval_env = os.environ.get(
-            "ANYGARDEN_ORPHAN_SWEEPER_INTERVAL_SEC", "60"
-        )
+        interval_env = os.environ.get("ANYGARDEN_ORPHAN_SWEEPER_INTERVAL_SEC", "60")
         try:
             orphan_interval = float(interval_env)
         except ValueError:
@@ -692,6 +703,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # go away. ``shutdown_gateway`` is safe to call even if bootstrap
     # never ran (no-op when app.state lacks the supervisor).
     from anygarden.llm_gateway.bootstrap import shutdown_gateway
+
     await shutdown_gateway(app)
 
     # Shutdown: cancel background crons and wait for them to actually
@@ -833,6 +845,7 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
         deliver_pending_outbox,
         recover_stalled_turns,
     )
+    from anygarden.workspaces.lifecycle import revoke_invalid_attachments
 
     log = structlog.get_logger("turn_recovery")
     # Avoid racing the lifespan's own startup transactions (especially the
@@ -845,6 +858,10 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
         try:
             factory = app.state.session_factory
             manager = getattr(app.state, "connection_manager", None)
+            lifecycle = getattr(app.state, "agent_lifecycle", None)
+            machine_bus = getattr(app.state, "machine_bus", None)
+            if lifecycle is not None and machine_bus is not None:
+                await revoke_invalid_attachments(factory, machine_bus, lifecycle)
             await cancel_invalid_turns(factory)
             if manager is not None:
                 await deliver_pending_outbox(factory, manager)
@@ -866,7 +883,6 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             for state, count in state_rows:
                 durable_turns_by_state.labels(state=state).set(count)
             pending_agents.update(recovered.drain_agents or set())
-            lifecycle = getattr(app.state, "agent_lifecycle", None)
             if lifecycle is not None:
                 for agent_id in pending_agents:
                     await lifecycle.release_generation_drain(agent_id)
@@ -1032,6 +1048,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     app.include_router(search_router)
     app.include_router(tasks_router)
     app.include_router(turns_router)
+    app.include_router(workspaces_router)
     app.include_router(goals_router)
     app.include_router(system_router)
     app.include_router(routing_router)
@@ -1079,6 +1096,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
         if session_factory is None:
             components["db"] = "disabled"
         else:
+
             async def _ping_db() -> None:
                 async with session_factory() as db:
                     await db.execute(text("SELECT 1"))
@@ -1162,7 +1180,11 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     index_html = static_dir / "index.html"
 
     if static_dir.is_dir() and index_html.exists():
-        app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="static-assets")
+        app.mount(
+            "/assets",
+            StaticFiles(directory=static_dir / "assets"),
+            name="static-assets",
+        )
 
         @app.get("/{path:path}")
         async def spa_fallback(path: str):

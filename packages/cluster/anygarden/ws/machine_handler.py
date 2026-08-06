@@ -134,6 +134,26 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                 # #553 — daemon reported engine update progress/outcome.
                 await _handle_engine_update_result(session_factory, machine_id, data)
 
+            elif frame_type == "workspace_attach_receipt":
+                from anygarden.workspaces.lifecycle import handle_attach_receipt
+
+                await handle_attach_receipt(
+                    session_factory,
+                    machine_id=machine_id,
+                    data=data,
+                    lifecycle=lifecycle,
+                )
+
+            elif frame_type == "workspace_revoke_receipt":
+                from anygarden.workspaces.lifecycle import handle_revoke_receipt
+
+                await handle_revoke_receipt(
+                    session_factory,
+                    machine_id=machine_id,
+                    data=data,
+                    lifecycle=lifecycle,
+                )
+
             elif frame_type == "agent_memory_update":
                 # #237 — file → DB sync. Machine observed a change in
                 # ``memory/notes.md`` and shipped the full body. We
@@ -167,9 +187,7 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                         data,
                         artifact_files_dir=config.artifact_files_dir,
                     )
-                connection_manager = getattr(
-                    app.state, "connection_manager", None
-                )
+                connection_manager = getattr(app.state, "connection_manager", None)
                 if connection_manager is not None:
                     for row in inserted:
                         out = RoomArtifactAddedOut(
@@ -202,16 +220,16 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
         machines_online.dec()  # #427 — balance the connect increment
         # Mark machine offline on disconnect
         async with session_factory() as db:
-            result = await db.execute(
-                select(Machine).where(Machine.id == machine_id)
-            )
+            result = await db.execute(select(Machine).where(Machine.id == machine_id))
             machine = result.scalar_one_or_none()
             if machine:
                 machine.status = "offline"
-                db.add(MachineActivityLog(
-                    machine_id=machine_id,
-                    event_type="offline",
-                ))
+                db.add(
+                    MachineActivityLog(
+                        machine_id=machine_id,
+                        event_type="offline",
+                    )
+                )
                 await db.commit()
 
 
@@ -274,12 +292,14 @@ async def _upsert_engine_status(
     Lives in ``machine_engine_status`` (not ``machine_engines``) so it survives
     the register-time delete+recreate of the detection table (#553).
     """
-    row = (await db.execute(
-        select(MachineEngineStatus).where(
-            MachineEngineStatus.machine_id == machine_id,
-            MachineEngineStatus.engine == engine,
+    row = (
+        await db.execute(
+            select(MachineEngineStatus).where(
+                MachineEngineStatus.machine_id == machine_id,
+                MachineEngineStatus.engine == engine,
+            )
         )
-    )).scalar_one_or_none()
+    ).scalar_one_or_none()
     if row is None:
         row = MachineEngineStatus(machine_id=machine_id, engine=engine)
         db.add(row)
@@ -357,10 +377,10 @@ async def _handle_register(
     engines = data.get("capabilities", data.get("engines", []))
     daemon_version = data.get("daemon_version")
 
+    from anygarden.workspaces.service import sanitize_workspace_catalog
+
     async with session_factory() as db:
-        result = await db.execute(
-            select(Machine).where(Machine.id == machine_id)
-        )
+        result = await db.execute(select(Machine).where(Machine.id == machine_id))
         machine = result.scalar_one_or_none()
         if machine is None:
             return
@@ -370,6 +390,16 @@ async def _handle_register(
         old_version = machine.daemon_version
         if daemon_version:
             machine.daemon_version = daemon_version
+        machine.control_capabilities = sorted(
+            {
+                value
+                for value in data.get("control_capabilities", [])
+                if isinstance(value, str) and len(value) <= 80
+            }
+        )
+        machine.workspace_catalog = sanitize_workspace_catalog(
+            data.get("workspace_catalog")
+        )
 
         # #550 — a pending server-driven self-update is confirmed successful
         # when the daemon comes back online reporting a different version.
@@ -396,17 +426,25 @@ async def _handle_register(
         for eng in engines:
             name = eng if isinstance(eng, str) else eng.get("engine", eng)
             version = None if isinstance(eng, str) else eng.get("version")
-            db.add(MachineEngine(
-                machine_id=machine_id,
-                engine=name,
-                version=version,
-            ))
+            db.add(
+                MachineEngine(
+                    machine_id=machine_id,
+                    engine=name,
+                    version=version,
+                )
+            )
 
-        db.add(MachineActivityLog(
-            machine_id=machine_id,
-            event_type="online",
-            details={"engines": engines},
-        ))
+        db.add(
+            MachineActivityLog(
+                machine_id=machine_id,
+                event_type="online",
+                details={
+                    "engines": engines,
+                    "control_capability_count": len(machine.control_capabilities),
+                    "workspace_registration_count": len(machine.workspace_catalog),
+                },
+            )
+        )
         await db.commit()
     logger.info(
         "machine_ws.registered",

@@ -29,9 +29,18 @@ from anygarden.agent_availability import (
 )
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
-    ActivityLog, Agent, AgentFile, AgentSkill, AgentToken, AgentTurn,
-    AgentTurnAttempt, Machine,
-    Participant, Room, SkillLibraryEntry,
+    ActivityLog,
+    Agent,
+    AgentFile,
+    AgentSkill,
+    AgentToken,
+    AgentTurn,
+    AgentTurnAttempt,
+    Machine,
+    Participant,
+    Room,
+    SkillLibraryEntry,
+    WorkspaceAttachment,
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
 from anygarden.scheduler.machine_bus import MachineBus
@@ -183,9 +192,7 @@ class AgentLifecycle:
                 return
 
             try:
-                machine = await select_machine_for(
-                    agent.engine, db, self._machine_bus
-                )
+                machine = await select_machine_for(agent.engine, db, self._machine_bus)
             except NoSuitableMachineError:
                 logger.warning(
                     "lifecycle.no_machine",
@@ -206,11 +213,13 @@ class AgentLifecycle:
                 _mark_unavailable(
                     agent, NO_MACHINE_FOR_ENGINE, {"engine": agent.engine}
                 )
-                db.add(ActivityLog(
-                    agent_id=agent_id,
-                    event_type="agent_unavailable",
-                    details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
-                ))
+                db.add(
+                    ActivityLog(
+                        agent_id=agent_id,
+                        event_type="agent_unavailable",
+                        details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
+                    )
+                )
                 await db.commit()
                 return
 
@@ -230,11 +239,13 @@ class AgentLifecycle:
             agent.restart_requested_at = None
             agent.restart_deadline_at = None
             agent.pending_manifest_hash = None
-            db.add(ActivityLog(
-                agent_id=agent_id,
-                event_type="start_requested",
-                details={"machine_id": machine.id, "generation": agent.generation},
-            ))
+            db.add(
+                ActivityLog(
+                    agent_id=agent_id,
+                    event_type="start_requested",
+                    details={"machine_id": machine.id, "generation": agent.generation},
+                )
+            )
             await db.commit()
 
             sent = await self._machine_bus.send(machine.id, frame)
@@ -245,9 +256,7 @@ class AgentLifecycle:
                     machine_id=machine.id,
                 )
 
-    def _acquire_anygarden_token(
-        self, db: AsyncSession, agent_id: str
-    ) -> str:
+    def _acquire_anygarden_token(self, db: AsyncSession, agent_id: str) -> str:
         """Return the per-agent ``anygarden_token``, minting one on cache miss.
 
         Issue #369 — single mint point for the anygarden self-MCP /
@@ -380,12 +389,15 @@ class AgentLifecycle:
             await db.commit()
 
             if agent.placed_on_machine_id:
-                await self._machine_bus.send(agent.placed_on_machine_id, {
-                    "type": "sync_desired_state",
-                    "agent_id": agent.id,
-                    "desired_state": "stopped",
-                    "generation": agent.generation,
-                })
+                await self._machine_bus.send(
+                    agent.placed_on_machine_id,
+                    {
+                        "type": "sync_desired_state",
+                        "agent_id": agent.id,
+                        "desired_state": "stopped",
+                        "generation": agent.generation,
+                    },
+                )
 
     async def handle_report_actual_state(
         self,
@@ -442,10 +454,14 @@ class AgentLifecycle:
                 if new_state == "running":
                     reported_engine = (entry.get("engine") or "").strip()
                     if reported_engine and reported_engine != agent.engine:
-                        _mark_unavailable(agent, ENGINE_MISMATCH, {
-                            "db_engine": agent.engine,
-                            "running_engine": reported_engine,
-                        })
+                        _mark_unavailable(
+                            agent,
+                            ENGINE_MISMATCH,
+                            {
+                                "db_engine": agent.engine,
+                                "running_engine": reported_engine,
+                            },
+                        )
                     else:
                         _clear_unavailable(agent)
                 elif new_state == "crashed":
@@ -453,36 +469,48 @@ class AgentLifecycle:
                     # otherwise it ran and then died.
                     uptime = entry.get("uptime_seconds") or 0
                     code = SPAWN_FAILED if uptime <= 0 else CRASHED
-                    _mark_unavailable(agent, code, {
-                        "engine": agent.engine,
-                        "stderr_tail": entry.get("last_crash_reason"),
-                    })
+                    _mark_unavailable(
+                        agent,
+                        code,
+                        {
+                            "engine": agent.engine,
+                            "stderr_tail": entry.get("last_crash_reason"),
+                        },
+                    )
                 elif new_state == "stopped":
                     _clear_unavailable(agent)
 
                 # Only log when state actually changed (skip heartbeat noise)
                 if new_state and new_state != old_state:
-                    db.add(ActivityLog(
-                        agent_id=aid,
-                        event_type="state_changed",
-                        details={
-                            "from": old_state,
-                            "to": new_state,
-                            "pid": entry.get("pid"),
-                            "machine_id": machine_id,
-                        },
-                    ))
+                    db.add(
+                        ActivityLog(
+                            agent_id=aid,
+                            event_type="state_changed",
+                            details={
+                                "from": old_state,
+                                "to": new_state,
+                                "pid": entry.get("pid"),
+                                "machine_id": machine_id,
+                            },
+                        )
+                    )
                     if new_state == "running":
                         backfill_targets.append(aid)
             # Agents placed on this machine but absent from the report:
             # if desired=stopped they are confirmed stopped. Keep
             # placed_on_machine_id so the machine page still lists them.
             reported_ids = {e.get("agent_id") for e in agents_data if e.get("agent_id")}
-            placed_on_machine = (await db.execute(
-                select(Agent).where(
-                    Agent.placed_on_machine_id == machine_id,
+            placed_on_machine = (
+                (
+                    await db.execute(
+                        select(Agent).where(
+                            Agent.placed_on_machine_id == machine_id,
+                        )
+                    )
                 )
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
             for agent in placed_on_machine:
                 if agent.id in reported_ids:
                     continue
@@ -491,11 +519,18 @@ class AgentLifecycle:
                     agent.actual_state = "stopped"
                     agent.pid = None
                     _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
-                    db.add(ActivityLog(
-                        agent_id=agent.id,
-                        event_type="state_changed",
-                        details={"from": old, "to": "stopped", "machine_id": machine_id, "reason": "absent_from_report"},
-                    ))
+                    db.add(
+                        ActivityLog(
+                            agent_id=agent.id,
+                            event_type="state_changed",
+                            details={
+                                "from": old,
+                                "to": "stopped",
+                                "machine_id": machine_id,
+                                "reason": "absent_from_report",
+                            },
+                        )
+                    )
 
             await db.commit()
 
@@ -508,9 +543,7 @@ class AgentLifecycle:
         if self._room_files_dir is not None and backfill_targets:
             await self._backfill_shared_files_for_agents(backfill_targets)
 
-    async def _backfill_shared_files_for_agents(
-        self, agent_ids: list[str]
-    ) -> None:
+    async def _backfill_shared_files_for_agents(self, agent_ids: list[str]) -> None:
         """Push every room shared file to each agent in ``agent_ids``.
 
         #255 — Invoked after an agent transitions into ``running``,
@@ -582,16 +615,20 @@ class AgentLifecycle:
 
                 plain = generate_token()
                 token_hash, lookup_hint = hash_agent_token(plain)
-                db.add(AgentToken(
-                    agent_id=agent.id,
-                    token_hash=token_hash,
-                    lookup_hint=lookup_hint,
-                ))
-                grants.append({
-                    "type": "token_grant",
-                    "agent_id": agent.id,
-                    "agent_token": plain,
-                })
+                db.add(
+                    AgentToken(
+                        agent_id=agent.id,
+                        token_hash=token_hash,
+                        lookup_hint=lookup_hint,
+                    )
+                )
+                grants.append(
+                    {
+                        "type": "token_grant",
+                        "agent_id": agent.id,
+                        "agent_token": plain,
+                    }
+                )
             await db.commit()
         return grants
 
@@ -610,11 +647,13 @@ class AgentLifecycle:
             agent.pid = None
             agent.actual_state = "pending"
             agent.last_crash_reason = reason
-            db.add(ActivityLog(
-                agent_id=agent_id,
-                event_type="replacement_requested",
-                details={"machine_id": machine_id, "reason": reason},
-            ))
+            db.add(
+                ActivityLog(
+                    agent_id=agent_id,
+                    event_type="replacement_requested",
+                    details={"machine_id": machine_id, "reason": reason},
+                )
+            )
             await db.commit()
 
         logger.info(
@@ -664,11 +703,14 @@ class AgentLifecycle:
         # ``is_full_snapshot=True`` explicitly so the machine treats
         # agents missing from this batch as orphans (#185). Partial
         # updates — if we ever add them — must set the flag to False.
-        await self._machine_bus.send(machine_id, {
-            "type": "sync_batch",
-            "is_full_snapshot": True,
-            "agents": frames,
-        })
+        await self._machine_bus.send(
+            machine_id,
+            {
+                "type": "sync_batch",
+                "is_full_snapshot": True,
+                "agents": frames,
+            },
+        )
 
     async def on_room_added(self, agent_id: str) -> None:
         """Runtime-room-add entry point (#227).
@@ -699,7 +741,9 @@ class AgentLifecycle:
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
-                logger.warning("lifecycle.on_room_added.agent_not_found", agent_id=agent_id)
+                logger.warning(
+                    "lifecycle.on_room_added.agent_not_found", agent_id=agent_id
+                )
                 return
             state = agent.actual_state
 
@@ -909,15 +953,19 @@ class AgentLifecycle:
         of which an operator wants to see.
         """
         rows = (
-            await db.execute(
-                select(SkillLibraryEntry)
-                .join(
-                    AgentSkill,
-                    AgentSkill.skill_library_id == SkillLibraryEntry.id,
+            (
+                await db.execute(
+                    select(SkillLibraryEntry)
+                    .join(
+                        AgentSkill,
+                        AgentSkill.skill_library_id == SkillLibraryEntry.id,
+                    )
+                    .where(AgentSkill.agent_id == agent_id)
                 )
-                .where(AgentSkill.agent_id == agent_id)
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         files: dict[str, str] = {}
         for entry in rows:
             if entry.approved_by is None:
@@ -943,10 +991,10 @@ class AgentLifecycle:
         """Build a ``sync_desired_state`` dict from DB data."""
         # Agent files
         file_rows = (
-            await db.execute(
-                select(AgentFile).where(AgentFile.agent_id == agent.id)
-            )
-        ).scalars().all()
+            (await db.execute(select(AgentFile).where(AgentFile.agent_id == agent.id)))
+            .scalars()
+            .all()
+        )
         files_map: dict[str, str] = {row.path: row.content for row in file_rows}
 
         # #119 / #123 / #125 — merge attached *approved* library skills
@@ -1003,7 +1051,8 @@ class AgentLifecycle:
             # shadowed by it.
             if self._mcp_template_service is not None:
                 pairs = await self._mcp_template_service.list_instances_for_agent(
-                    db, agent.id,
+                    db,
+                    agent.id,
                 )
                 secrets = self._mcp_template_service._secrets
                 for instance, template in pairs:
@@ -1084,12 +1133,26 @@ class AgentLifecycle:
         sub_rooms_info: list[dict[str, str | None]] = []
         if rooms:
             sub_result = await db.execute(
-                select(Room.name, Room.description).where(
-                    Room.parent_room_id.in_(rooms)
-                ).order_by(Room.name)
+                select(Room.name, Room.description)
+                .where(Room.parent_room_id.in_(rooms))
+                .order_by(Room.name)
             )
             for name, desc in sub_result.all():
                 sub_rooms_info.append({"name": name, "description": desc})
+
+        workspace_attachment = (
+            await db.execute(
+                select(WorkspaceAttachment).where(
+                    WorkspaceAttachment.agent_id == agent.id,
+                    WorkspaceAttachment.state == "active",
+                )
+            )
+        ).scalar_one_or_none()
+        workspace_descriptor = None
+        if workspace_attachment is not None:
+            from anygarden.workspaces.service import attachment_frame
+
+            workspace_descriptor = attachment_frame(workspace_attachment)
 
         return {
             "type": "sync_desired_state",
@@ -1153,6 +1216,9 @@ class AgentLifecycle:
             # builtin (e.g. cluster_external_url unset, or engine
             # has no MCP support).
             "anygarden_mcp_token": anygarden_token,
+            # Opaque lease metadata only. Canonical host paths remain in the
+            # machine-local registry and cannot enter a desired-state frame.
+            "workspace_attachment": workspace_descriptor,
         }
 
 
@@ -1218,9 +1284,7 @@ async def sweep_orphaned_requests(
     terminal_expr = func.sum(
         case(
             (
-                ActivityLog.event_type.in_(
-                    ["handler_finished", "handler_orphaned"]
-                ),
+                ActivityLog.event_type.in_(["handler_finished", "handler_orphaned"]),
                 1,
             ),
             else_=0,
@@ -1310,9 +1374,7 @@ async def sweep_orphaned_requests(
 #: One-line Korean room notice posted when a request is orphaned by the
 #: liveness watchdog (#481). Keep it short and reassuring — the matching
 #: Task (if assignment-originated) is re-dispatched right after.
-_ORPHAN_NOTICE_TEXT = (
-    "⚠️ 에이전트 응답이 확인되지 않아 이 요청을 종료 처리했습니다."
-)
+_ORPHAN_NOTICE_TEXT = "⚠️ 에이전트 응답이 확인되지 않아 이 요청을 종료 처리했습니다."
 
 
 async def notify_and_redispatch_orphans(

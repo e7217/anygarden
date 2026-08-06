@@ -84,10 +84,17 @@ class SyncDesiredStateFrame(BaseModel):
     # cluster's ``cluster_external_url`` is unset).
     anygarden_mcp_token: str | None = None
 
+    # Phase 5 workspace-attachment lease. Contains opaque identifiers and
+    # policy hashes only; raw host paths are forbidden on this wire. The
+    # current daemon advertises no execution-root capability, so a non-null
+    # value is fail-closed by the spawner until a future adapter implements
+    # OS-enforced roots plus signed audit receipts.
+    workspace_attachment: dict[str, str | int] | None = None
+
     # Restart policy
-    restart_policy: Literal[
-        "stop", "restart_on_same_machine", "restart_anywhere"
-    ] = "restart_anywhere"
+    restart_policy: Literal["stop", "restart_on_same_machine", "restart_anywhere"] = (
+        "restart_anywhere"
+    )
     max_restarts: int = 3
     restart_window_seconds: int = 300
 
@@ -220,6 +227,33 @@ class EngineUpdateFrame(BaseModel):
     engine: str
 
 
+class WorkspaceAttachRequestFrame(BaseModel):
+    """Ask the machine to verify one local registration + consent."""
+
+    type: Literal["workspace_attach_request"] = "workspace_attach_request"
+    attachment_id: str
+    workspace_id: str
+    agent_id: str
+    room_id: str
+    participant_id: str
+    epoch: int
+    mode: Literal["read", "write"]
+    fingerprint: str
+    allowlist_hash: str
+    policy_hash: str
+    expires_at: str
+    consent_token: str
+
+
+class WorkspaceRevokeFrame(BaseModel):
+    """Immediately stop the attached process and acknowledge the epoch."""
+
+    type: Literal["workspace_revoke"] = "workspace_revoke"
+    attachment_id: str
+    agent_id: str
+    epoch: int
+
+
 ServerFrame = Union[
     SyncDesiredStateFrame,
     SyncBatchFrame,
@@ -232,6 +266,8 @@ ServerFrame = Union[
     SelfUpdateFrame,
     EngineCheckFrame,
     EngineUpdateFrame,
+    WorkspaceAttachRequestFrame,
+    WorkspaceRevokeFrame,
 ]
 
 
@@ -267,6 +303,13 @@ class RegisterFrame(BaseModel):
     # ``machine.daemon_version`` for the admin UI. Optional for backward
     # compat with older daemons that predate this field.
     daemon_version: str | None = None
+    # Non-engine protocol features are separate from detected engine
+    # capabilities so an old daemon cannot accidentally satisfy a workspace
+    # enforcement gate by reporting an engine with a similar name.
+    control_capabilities: list[str] = Field(default_factory=list)
+    # Redacted machine-local registrations. Every entry contains only opaque
+    # ID, label, fingerprints/hashes, policy ceiling and expiry — never path.
+    workspace_catalog: list[dict[str, str]] = Field(default_factory=list)
 
 
 class AgentActual(BaseModel):
@@ -401,6 +444,31 @@ class EngineUpdateResultFrame(BaseModel):
     error: str | None = None
 
 
+class WorkspaceAttachReceiptFrame(BaseModel):
+    """Machine-side verification result; never carries the canonical path."""
+
+    type: Literal["workspace_attach_receipt"] = "workspace_attach_receipt"
+    attachment_id: str
+    workspace_id: str
+    agent_id: str
+    epoch: int
+    status: Literal["verified", "denied"]
+    reason: str
+    label: str | None = None
+    fingerprint: str | None = None
+    allowlist_hash: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class WorkspaceRevokeReceiptFrame(BaseModel):
+    type: Literal["workspace_revoke_receipt"] = "workspace_revoke_receipt"
+    attachment_id: str
+    agent_id: str
+    epoch: int
+    status: Literal["stopped", "not_running", "failed"]
+    reason: str | None = None
+
+
 MachineFrame = Union[
     RegisterFrame,
     ReportActualStateFrame,
@@ -411,6 +479,8 @@ MachineFrame = Union[
     SelfUpdateResultFrame,
     EngineCheckResultFrame,
     EngineUpdateResultFrame,
+    WorkspaceAttachReceiptFrame,
+    WorkspaceRevokeReceiptFrame,
 ]
 
 
@@ -428,6 +498,8 @@ _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
     "self_update": SelfUpdateFrame,
     "engine_check": EngineCheckFrame,
     "engine_update": EngineUpdateFrame,
+    "workspace_attach_request": WorkspaceAttachRequestFrame,
+    "workspace_revoke": WorkspaceRevokeFrame,
 }
 
 

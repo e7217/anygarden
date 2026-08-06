@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "061"
+                assert version == "062"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -73,6 +73,8 @@ class TestMigrations:
                     "agent_turns",
                     "agent_turn_attempts",
                     "agent_turn_outbox",
+                    "workspace_attachments",
+                    "workspace_invocation_audits",
                 }
                 missing = expected - tables
                 assert not missing, f"Missing tables after upgrade: {missing}"
@@ -468,7 +470,7 @@ class TestMigrations:
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
                 # is still present after upgrading through to head.
-                assert version == "061"
+                assert version == "062"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -528,7 +530,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -575,7 +577,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -642,7 +644,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -724,6 +726,67 @@ class TestMigrations:
             except OSError:
                 pass
 
+    def test_062_workspace_attachments_up_and_down(self) -> None:
+        """062 adds opaque attachment/audit state and turn epoch binding."""
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='table'")
+                    )
+                }
+                assert {
+                    "workspace_attachments",
+                    "workspace_invocation_audits",
+                } <= tables
+                machine_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(machines)"))
+                }
+                assert {"control_capabilities", "workspace_catalog"} <= machine_columns
+                turn_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(agent_turns)"))
+                }
+                assert {
+                    "workspace_attachment_id",
+                    "workspace_attachment_epoch",
+                } <= turn_columns
+            engine.dispose()
+
+            command.downgrade(cfg, "061")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                tables = {
+                    row[0]
+                    for row in conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='table'")
+                    )
+                }
+                assert "workspace_attachments" not in tables
+                machine_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(machines)"))
+                }
+                assert "workspace_catalog" not in machine_columns
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "061"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
     def test_downgrade_to_base_and_back(self) -> None:
         """Full round-trip: head → base → head must succeed."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -781,7 +844,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -821,7 +884,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
             sync_engine.dispose()
         finally:
             try:
@@ -855,7 +918,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "061"
+            assert head == "062"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -957,7 +1020,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "061"
+                assert version == "062"
             sync_engine.dispose()
         finally:
             try:

@@ -12,6 +12,16 @@ import { apiFetch } from '@/lib/api';
 
 interface Project { id: string; name: string; description?: string; }
 
+export interface WorkspaceAttachmentSummary {
+  id: string;
+  workspace_id: string;
+  label: string;
+  agent_id: string;
+  mode: 'read' | 'write';
+  epoch: number;
+  expires_at: string;
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -43,6 +53,9 @@ export interface Room {
   // Caller-specific sidebar update state (#385). True means this
   // user has not marked the room read at the latest message seq.
   has_updates?: boolean;
+  // Active external-workspace leases. The server intentionally returns only
+  // opaque IDs and a redacted local label; host paths never enter the UI.
+  workspace_attachments?: WorkspaceAttachmentSummary[];
 }
 
 // Fetch state machine for the projects+rooms store.

@@ -54,6 +54,10 @@ class MachineOut(BaseModel):
     update_status: Optional[str] = None
     update_error: Optional[str] = None
     update_started_at: Optional[datetime] = None
+    # Phase 5 — redacted daemon control inventory. Workspace catalog rows
+    # contain opaque IDs, labels and hashes only; canonical paths stay local.
+    control_capabilities: Optional[list[str]] = None
+    workspace_catalog: Optional[list[dict[str, str]]] = None
     model_config = {"from_attributes": True}
 
 
@@ -71,6 +75,7 @@ class MachineUpdateTrigger(BaseModel):
 
 class MachineCreateOut(MachineOut):
     """Returned on creation — includes the plaintext token (shown once)."""
+
     machine_token: str
 
 
@@ -223,9 +228,7 @@ async def delete_machine(
 
     # Detach remaining agents (placed_on_machine_id has ondelete=SET NULL,
     # but doing it explicitly keeps the operation deterministic).
-    await db.execute(
-        select(Agent).where(Agent.placed_on_machine_id == machine_id)
-    )
+    await db.execute(select(Agent).where(Agent.placed_on_machine_id == machine_id))
     for agent in active_agents:
         agent.placed_on_machine_id = None
         agent.actual_state = "stopped"
@@ -292,10 +295,13 @@ async def regenerate_machine_token(
     if not revoke_only:
         # Try to push the new token to the connected daemon BEFORE disconnecting,
         # so it can persist the token and reconnect automatically.
-        pushed = await machine_bus.send(machine_id, {
-            "type": "rotate_token",
-            "new_token": plaintext,
-        })
+        pushed = await machine_bus.send(
+            machine_id,
+            {
+                "type": "rotate_token",
+                "new_token": plaintext,
+            },
+        )
 
     # Disconnect the daemon. If push succeeded the daemon now has the new
     # token and will reconnect with it; if push failed (or revoke_only),
@@ -462,35 +468,51 @@ async def list_machine_agents(
     """List agents placed on a specific machine."""
     from anygarden.db.models import Participant, Room
 
-    machine = (await db.execute(select(Machine).where(Machine.id == machine_id))).scalar_one_or_none()
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == machine_id))
+    ).scalar_one_or_none()
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    agents = (await db.execute(
-        select(Agent).where(Agent.placed_on_machine_id == machine_id)
-    )).scalars().all()
+    agents = (
+        (
+            await db.execute(
+                select(Agent).where(Agent.placed_on_machine_id == machine_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     results = []
     for agent in agents:
         # Get room names for this agent
-        room_rows = (await db.execute(
-            select(Room.name)
-            .join(Participant, Participant.room_id == Room.id)
-            .where(Participant.agent_id == agent.id)
-        )).scalars().all()
+        room_rows = (
+            (
+                await db.execute(
+                    select(Room.name)
+                    .join(Participant, Participant.room_id == Room.id)
+                    .where(Participant.agent_id == agent.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
 
-        results.append(MachineAgentOut(
-            id=agent.id,
-            name=agent.name,
-            engine=agent.engine,
-            desired_state=agent.desired_state,
-            actual_state=agent.actual_state,
-            reasoning_effort=agent.reasoning_effort,
-            rooms=list(room_rows),
-            avatar_kind=agent.avatar_kind,
-            avatar_value=agent.avatar_value,
-            context_window_opt_out=agent.context_window_opt_out,
-        ))
+        results.append(
+            MachineAgentOut(
+                id=agent.id,
+                name=agent.name,
+                engine=agent.engine,
+                desired_state=agent.desired_state,
+                actual_state=agent.actual_state,
+                reasoning_effort=agent.reasoning_effort,
+                rooms=list(room_rows),
+                avatar_kind=agent.avatar_kind,
+                avatar_value=agent.avatar_value,
+                context_window_opt_out=agent.context_window_opt_out,
+            )
+        )
     return results
 
 
@@ -503,32 +525,48 @@ async def list_machine_engines(
     db: AsyncSession = Depends(get_db),
 ):
     """List engines available on a specific machine."""
-    machine = (await db.execute(select(Machine).where(Machine.id == machine_id))).scalar_one_or_none()
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == machine_id))
+    ).scalar_one_or_none()
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 
-    rows = (await db.execute(
-        select(MachineEngine).where(MachineEngine.machine_id == machine_id)
-    )).scalars().all()
-
-    status_rows = (await db.execute(
-        select(MachineEngineStatus).where(
-            MachineEngineStatus.machine_id == machine_id
+    rows = (
+        (
+            await db.execute(
+                select(MachineEngine).where(MachineEngine.machine_id == machine_id)
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
+
+    status_rows = (
+        (
+            await db.execute(
+                select(MachineEngineStatus).where(
+                    MachineEngineStatus.machine_id == machine_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     status_by_engine = {s.engine: s for s in status_rows}
 
     result = []
     for r in rows:
         st = status_by_engine.get(r.engine)
-        result.append(MachineEngineOut(
-            engine=r.engine,
-            version=r.version,
-            latest_version=st.latest_version if st else None,
-            update_available=st.update_available if st else False,
-            update_status=st.update_status if st else None,
-            latest_checked_at=st.latest_checked_at if st else None,
-        ))
+        result.append(
+            MachineEngineOut(
+                engine=r.engine,
+                version=r.version,
+                latest_version=st.latest_version if st else None,
+                update_available=st.update_available if st else False,
+                update_status=st.update_status if st else None,
+                latest_checked_at=st.latest_checked_at if st else None,
+            )
+        )
     return result
 
 
@@ -536,12 +574,14 @@ async def _get_or_create_engine_status(
     db: AsyncSession, machine_id: str, engine: str
 ) -> MachineEngineStatus:
     """Fetch the (machine_id, engine) status row, creating it if absent."""
-    row = (await db.execute(
-        select(MachineEngineStatus).where(
-            MachineEngineStatus.machine_id == machine_id,
-            MachineEngineStatus.engine == engine,
+    row = (
+        await db.execute(
+            select(MachineEngineStatus).where(
+                MachineEngineStatus.machine_id == machine_id,
+                MachineEngineStatus.engine == engine,
+            )
         )
-    )).scalar_one_or_none()
+    ).scalar_one_or_none()
     if row is None:
         row = MachineEngineStatus(machine_id=machine_id, engine=engine)
         db.add(row)
@@ -598,11 +638,13 @@ async def update_machine_engine(
     status.update_status = "updating"
     status.update_error = None
     status.update_started_at = datetime.now(timezone.utc)
-    db.add(MachineActivityLog(
-        machine_id=machine_id,
-        event_type="engine_update",
-        details={"engine": engine},
-    ))
+    db.add(
+        MachineActivityLog(
+            machine_id=machine_id,
+            event_type="engine_update",
+            details={"engine": engine},
+        )
+    )
     await db.commit()
     return {"status": "updating", "engine": engine}
 
@@ -625,7 +667,9 @@ async def get_machine_activity(
     db: AsyncSession = Depends(get_db),
 ):
     """Return recent activity events for a machine."""
-    machine = (await db.execute(select(Machine).where(Machine.id == machine_id))).scalar_one_or_none()
+    machine = (
+        await db.execute(select(Machine).where(Machine.id == machine_id))
+    ).scalar_one_or_none()
     if machine is None:
         raise HTTPException(status_code=404, detail="Machine not found")
 

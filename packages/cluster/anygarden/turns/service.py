@@ -95,6 +95,20 @@ async def create_turn(
         max_retries=max_retries,
         terminal_reason=reason,
     )
+    # Phase 5 — an active external-workspace lease turns every invocation
+    # into an epoch-bound intent. Cross-room turns and write turns without a
+    # claimed, source-linked task are cancelled before any outbox is created.
+    from anygarden.workspaces.service import bind_turn
+
+    trigger_message = await db.get(Message, trigger_message_id)
+    workspace_allowed, workspace_reason = await bind_turn(
+        db, turn=turn, message=trigger_message
+    )
+    if state == "pending" and not workspace_allowed:
+        state = "cancelled"
+        reason = workspace_reason or "workspace_authorization_revoked"
+        turn.state = state
+        turn.terminal_reason = reason
     db.add(turn)
     attempt = AgentTurnAttempt(
         id=str(uuid4()),
@@ -138,6 +152,14 @@ async def active_lease_count(
     return int((await db.scalar(stmt)) or 0)
 
 
+async def _workspace_gate(
+    db: AsyncSession, turn: AgentTurn
+) -> tuple[bool, str | None, Any]:
+    from anygarden.workspaces.service import validate_turn
+
+    return await validate_turn(db, turn)
+
+
 def _durable_metadata(
     turn: AgentTurn, attempt: AgentTurnAttempt, base: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -152,6 +174,13 @@ def _durable_metadata(
             "turn_protocol": 1,
         }
     )
+    if turn.workspace_attachment_id is not None:
+        metadata.update(
+            {
+                "workspace_attachment_id": turn.workspace_attachment_id,
+                "workspace_attachment_epoch": turn.workspace_attachment_epoch,
+            }
+        )
     return metadata
 
 
@@ -200,6 +229,35 @@ async def deliver_pending_outbox(
             attempt = await db.get(AgentTurnAttempt, row.attempt_id)
             if turn is None or attempt is None or turn.state not in OPEN_TURN_STATES:
                 row.state = "cancelled"
+                await db.commit()
+                continue
+            (
+                workspace_ok,
+                workspace_reason,
+                workspace_attachment,
+            ) = await _workspace_gate(db, turn)
+            if not workspace_ok:
+                reason = workspace_reason or "workspace_authorization_revoked"
+                turn.state = "cancelled"
+                turn.terminal_reason = reason
+                attempt.state = "cancelled"
+                attempt.reason = reason
+                row.state = "cancelled"
+                row.last_error = reason
+                if workspace_attachment is not None:
+                    from anygarden.workspaces.service import append_audit
+
+                    await append_audit(
+                        db,
+                        attachment=workspace_attachment,
+                        event_type="dispatch_denied",
+                        request_id=turn.request_id,
+                        task_id=turn.task_id,
+                        source_message_id=turn.trigger_message_id,
+                        source_thread_root_id=turn.thread_root_id,
+                        outcome="denied",
+                        details={"reason": reason},
+                    )
                 await db.commit()
                 continue
             joined = (
@@ -443,6 +501,34 @@ async def begin_completion(
     turn = await db.get(AgentTurn, request_id)
     if turn is None:
         return CompletionDecision("legacy")
+    workspace_ok, workspace_reason, workspace_attachment = await _workspace_gate(
+        db, turn
+    )
+    if not workspace_ok:
+        reason = workspace_reason or "workspace_authorization_revoked"
+        await _audit_stale(
+            db,
+            turn=turn,
+            agent_id=agent_id,
+            reason=reason,
+            attempt_number=attempt_number,
+            generation=generation,
+        )
+        if workspace_attachment is not None:
+            from anygarden.workspaces.service import append_audit
+
+            await append_audit(
+                db,
+                attachment=workspace_attachment,
+                event_type="completion_denied",
+                request_id=turn.request_id,
+                task_id=turn.task_id,
+                source_message_id=turn.trigger_message_id,
+                source_thread_root_id=turn.thread_root_id,
+                outcome="stale",
+                details={"reason": reason},
+            )
+        return CompletionDecision("stale", turn=turn, reason=reason)
     gate = (
         await db.execute(
             select(Participant.id)
@@ -587,6 +673,22 @@ async def finish_completion(
             },
         )
     )
+    workspace_ok, _, workspace_attachment = await _workspace_gate(db, turn)
+    if workspace_ok and workspace_attachment is not None:
+        from anygarden.workspaces.service import append_audit
+
+        await append_audit(
+            db,
+            attachment=workspace_attachment,
+            event_type="invocation_completed",
+            request_id=turn.request_id,
+            task_id=turn.task_id,
+            source_message_id=turn.trigger_message_id,
+            source_thread_root_id=turn.thread_root_id,
+            outcome="ok",
+            changed_count=0,
+            details={"attempt": attempt.attempt_number},
+        )
 
 
 async def record_lifecycle(
@@ -627,9 +729,13 @@ async def record_lifecycle(
             )
         )
     ).scalar_one_or_none()
+    workspace_ok, workspace_reason, workspace_attachment = await _workspace_gate(
+        db, turn
+    )
     valid = (
         attempt is not None
         and gate is not None
+        and workspace_ok
         and turn.agent_id == agent_id
         and turn.room_id == frame.room_id
         and (
@@ -647,18 +753,58 @@ async def record_lifecycle(
             turn=turn,
             agent_id=agent_id,
             reason=(
-                "lifecycle_authorization_revoked"
-                if gate is None
-                else "lifecycle_lease_mismatch"
+                workspace_reason
+                or (
+                    "lifecycle_authorization_revoked"
+                    if gate is None
+                    else "lifecycle_lease_mismatch"
+                )
             ),
             attempt_number=attempt_number,
             generation=generation,
         )
+        if workspace_attachment is not None and not workspace_ok:
+            from anygarden.workspaces.service import append_audit
+
+            await append_audit(
+                db,
+                attachment=workspace_attachment,
+                event_type="lifecycle_denied",
+                request_id=turn.request_id,
+                task_id=turn.task_id,
+                source_message_id=turn.trigger_message_id,
+                source_thread_root_id=turn.thread_root_id,
+                outcome="stale",
+                details={
+                    "reason": workspace_reason or "workspace_authorization_revoked"
+                },
+            )
         return False
     assert attempt is not None
     if legacy:
         turn.protocol_version = 0
     now = _now()
+    if workspace_attachment is not None and frame.event in {
+        "handler_started",
+        "handler_finished",
+    }:
+        from anygarden.workspaces.service import append_audit
+
+        await append_audit(
+            db,
+            attachment=workspace_attachment,
+            event_type=(
+                "invocation_started"
+                if frame.event == "handler_started"
+                else "invocation_finished"
+            ),
+            request_id=turn.request_id,
+            task_id=turn.task_id,
+            source_message_id=turn.trigger_message_id,
+            source_thread_root_id=turn.thread_root_id,
+            outcome=getattr(frame, "outcome", None),
+            details={"attempt": attempt.attempt_number},
+        )
     if frame.event == "handler_started":
         if attempt.state in {"pending", "leased"}:
             attempt.state = "started"
@@ -790,9 +936,15 @@ async def recover_stalled_turns(
                 and participant.role in AGENT_EXECUTION_ROLES
                 and agent.desired_state == "running"
             )
+            (
+                workspace_ok,
+                workspace_reason,
+                workspace_attachment,
+            ) = await _workspace_gate(db, turn)
+            gate_ok = gate_ok and workspace_ok
             if not gate_ok:
                 turn.state = "cancelled"
-                turn.terminal_reason = "authorization_revoked"
+                turn.terminal_reason = workspace_reason or "authorization_revoked"
                 turn.completed_at = current
                 result.cancelled += 1
                 event = "turn_cancelled"
@@ -856,6 +1008,20 @@ async def recover_stalled_turns(
                     },
                 )
             )
+            if workspace_attachment is not None and not workspace_ok:
+                from anygarden.workspaces.service import append_audit
+
+                await append_audit(
+                    db,
+                    attachment=workspace_attachment,
+                    event_type="retry_denied",
+                    request_id=turn.request_id,
+                    task_id=turn.task_id,
+                    source_message_id=turn.trigger_message_id,
+                    source_thread_root_id=turn.thread_root_id,
+                    outcome="cancelled",
+                    details={"reason": turn.terminal_reason},
+                )
             db.add(
                 ActivityLog(
                     agent_id=turn.agent_id,
@@ -924,11 +1090,16 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                     )
                 )
             ).scalar_one_or_none()
-            if gate is not None:
+            (
+                workspace_ok,
+                workspace_reason,
+                workspace_attachment,
+            ) = await _workspace_gate(db, turn)
+            if gate is not None and workspace_ok:
                 continue
             now = _now()
             turn.state = "cancelled"
-            turn.terminal_reason = "authorization_revoked"
+            turn.terminal_reason = workspace_reason or "authorization_revoked"
             turn.completed_at = now
             attempt = (
                 await db.execute(
@@ -941,14 +1112,14 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
             if attempt is not None and attempt.state not in {"completed", "cancelled"}:
                 attempt.state = "cancelled"
                 attempt.ended_at = now
-                attempt.reason = "authorization_revoked"
+                attempt.reason = turn.terminal_reason
             await db.execute(
                 update(AgentTurnOutbox)
                 .where(
                     AgentTurnOutbox.turn_id == turn.request_id,
                     AgentTurnOutbox.state == "pending",
                 )
-                .values(state="cancelled", last_error="authorization_revoked")
+                .values(state="cancelled", last_error=turn.terminal_reason)
             )
             db.add(
                 ActivityLog(
@@ -957,11 +1128,25 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                     request_id=turn.request_id,
                     room_id=turn.room_id,
                     details={
-                        "reason": "authorization_revoked",
+                        "reason": turn.terminal_reason,
                         "attempt": turn.active_attempt,
                     },
                 )
             )
+            if workspace_attachment is not None and not workspace_ok:
+                from anygarden.workspaces.service import append_audit
+
+                await append_audit(
+                    db,
+                    attachment=workspace_attachment,
+                    event_type="turn_cancelled",
+                    request_id=turn.request_id,
+                    task_id=turn.task_id,
+                    source_message_id=turn.trigger_message_id,
+                    source_thread_root_id=turn.thread_root_id,
+                    outcome="cancelled",
+                    details={"reason": turn.terminal_reason},
+                )
             cancelled += 1
         if cancelled:
             await db.commit()
