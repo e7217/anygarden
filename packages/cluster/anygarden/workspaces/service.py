@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -10,6 +12,8 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,12 +38,24 @@ BASE_CAPABILITY = "workspace_attach_v1"
 READ_ROOT_CAPABILITY = "workspace_read_root_v1"
 WRITE_ROOT_CAPABILITY = "workspace_write_root_v1"
 AUDIT_SIGNING_CAPABILITY = "workspace_audit_signing_v1"
+RECEIPT_SIGNING_CAPABILITY = "workspace_receipt_signing_v1"
+_RECEIPT_DOMAIN = b"anygarden-workspace-receipt-v1\0"
 _AUDIT_KEY = b"anygarden-workspace-audit-unconfigured"
 _SENSITIVE_KEY = re.compile(
-    r"path|prompt|content|stdout|stderr|token|secret|environment|env|diff",
+    r"path|prompt|content|stdout|stderr|token|proof|secret|environment|env|diff",
     re.IGNORECASE,
 )
 _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+_EMBEDDED_PATH = re.compile(
+    r"(?:^|[\s'\"=:,(])(?:/[^\s'\"),]+|~[\\/][^\s'\"),]+|[A-Za-z]:[\\/][^\s'\"),]+)"
+)
+_OPAQUE_SECRET_VALUE = re.compile(
+    r"(?:wcp|wsc|mch|agt)_[A-Za-z0-9_-]+", re.IGNORECASE
+)
+_NAMED_SECRET_VALUE = re.compile(
+    r"(?:token|secret|password|credential|authorization)\s*[:=]",
+    re.IGNORECASE,
+)
 
 
 def _now() -> datetime:
@@ -69,7 +85,65 @@ def policy_hash(*, mode: str, fingerprint: str, allowlist_hash: str) -> str:
 
 def required_capabilities(mode: str) -> frozenset[str]:
     root = WRITE_ROOT_CAPABILITY if mode == "write" else READ_ROOT_CAPABILITY
-    return frozenset({BASE_CAPABILITY, root, AUDIT_SIGNING_CAPABILITY})
+    return frozenset(
+        {BASE_CAPABILITY, root, AUDIT_SIGNING_CAPABILITY, RECEIPT_SIGNING_CAPABILITY}
+    )
+
+
+def _decode_urlsafe(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + ("=" * (-len(value) % 4)))
+
+
+def normalize_workspace_signing_public_key(value: Any) -> str | None:
+    """Accept only a canonical Ed25519 public key enrollment value."""
+
+    if not isinstance(value, str) or not value.startswith("ed25519pk_"):
+        return None
+    try:
+        raw = _decode_urlsafe(value.removeprefix("ed25519pk_"))
+        if len(raw) != 32:
+            return None
+        Ed25519PublicKey.from_public_bytes(raw)
+    except (binascii.Error, TypeError, ValueError):
+        return None
+    return value
+
+
+def verify_workspace_receipt_signature(
+    machine: Machine, data: dict[str, Any]
+) -> tuple[bool, str | None]:
+    """Verify a complete, domain-separated workspace receipt payload."""
+
+    enrolled_value = getattr(machine, "workspace_signing_public_key", None)
+    enrolled = normalize_workspace_signing_public_key(enrolled_value)
+    if enrolled is None:
+        return (
+            False,
+            "workspace_receipt_key_unenrolled"
+            if enrolled_value is None
+            else "workspace_receipt_key_invalid",
+        )
+    signature = data.get("signature")
+    if not isinstance(signature, str) or not signature.startswith("ed25519sig_"):
+        return False, "workspace_receipt_signature_invalid"
+    unsigned = {key: value for key, value in data.items() if key != "signature"}
+    canonical = _RECEIPT_DOMAIN + json.dumps(
+        unsigned,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    try:
+        public_key = Ed25519PublicKey.from_public_bytes(
+            _decode_urlsafe(enrolled.removeprefix("ed25519pk_"))
+        )
+        raw_signature = _decode_urlsafe(signature.removeprefix("ed25519sig_"))
+        if len(raw_signature) != 64:
+            return False, "workspace_receipt_signature_invalid"
+        public_key.verify(raw_signature, canonical)
+    except (InvalidSignature, binascii.Error, TypeError, ValueError):
+        return False, "workspace_receipt_signature_invalid"
+    return True, None
 
 
 def sanitize_workspace_catalog(value: Any) -> list[dict[str, str]]:
@@ -118,31 +192,26 @@ def sanitize_workspace_catalog(value: Any) -> list[dict[str, str]]:
 def redacted_details(details: dict[str, Any] | None) -> dict[str, Any]:
     """Allow metadata-only audit projection; strip paths, content and secrets."""
 
+    def redact_scalar(value: str) -> str:
+        if (
+            _EMBEDDED_PATH.search(value)
+            or _OPAQUE_SECRET_VALUE.search(value)
+            or _NAMED_SECRET_VALUE.search(value)
+        ):
+            return "[redacted]"
+        return value
+
     out: dict[str, Any] = {}
     for key, value in (details or {}).items():
         if _SENSITIVE_KEY.search(key):
             continue
-        if isinstance(value, str) and (
-            value.startswith(("/", "~", "\\\\"))
-            or _WINDOWS_ABSOLUTE.match(value)
-            or value.startswith(("wsc_", "mch_", "agt_"))
-        ):
-            out[key] = "[redacted]"
+        if isinstance(value, str):
+            out[key] = redact_scalar(value)
         elif isinstance(value, (str, int, float, bool)) or value is None:
             out[key] = value
         elif isinstance(value, list):
             out[key] = [
-                (
-                    "[redacted]"
-                    if isinstance(item, str)
-                    and (
-                        item.startswith(
-                            ("/", "~", "\\\\", "wsc_", "mch_", "agt_")
-                        )
-                        or _WINDOWS_ABSOLUTE.match(item)
-                    )
-                    else item
-                )
+                redact_scalar(item) if isinstance(item, str) else item
                 for item in value
                 if isinstance(item, (str, int, float, bool)) or item is None
             ][:100]
@@ -448,6 +517,11 @@ def machine_can_activate(
 ) -> tuple[bool, str | None]:
     registered = set(machine.control_capabilities or [])
     receipt = set(receipt_capabilities)
+    if (
+        RECEIPT_SIGNING_CAPABILITY not in registered
+        or RECEIPT_SIGNING_CAPABILITY not in receipt
+    ):
+        return False, "workspace_receipt_signing_unavailable"
     required = required_capabilities(mode)
     if not required.issubset(registered) or not required.issubset(receipt):
         return False, "workspace_root_or_audit_capability_missing"

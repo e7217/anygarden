@@ -397,6 +397,7 @@ source = { editable = "packages/machine" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "click" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "psutil" },
@@ -423,6 +424,7 @@ openhands = [
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "click", specifier = ">=8.1" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9" },
     { name = "openhands-sdk", marker = "extra == 'dev'", specifier = ">=1.35,<2" },

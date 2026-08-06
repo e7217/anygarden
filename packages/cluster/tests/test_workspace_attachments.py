@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.auth.dependencies import Identity
+from anygarden.auth.jwt import UserClaims
 from anygarden.db.models import (
     Agent,
     AgentTurn,
@@ -26,13 +30,18 @@ from anygarden.db.models import (
 )
 from anygarden.db.repository import append_message
 from anygarden.turns.service import create_turn, deliver_pending_outbox
-from anygarden.workspaces.lifecycle import revoke_invalid_attachments
-from anygarden.workspaces.router import AttachmentCreate
+from anygarden.workspaces.lifecycle import (
+    handle_attach_receipt,
+    handle_revoke_receipt,
+    revoke_invalid_attachments,
+)
+from anygarden.workspaces.router import AttachmentCreate, VerifyBody, list_audits
 from anygarden.workspaces.service import (
     append_audit,
     machine_can_activate,
     policy_hash,
 )
+from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
 
 
 class FakeManager:
@@ -69,9 +78,10 @@ class FakeLifecycle:
 
 
 @pytest_asyncio.fixture()
-async def workspace_env():
+async def workspace_env(tmp_path: Path):
     engine = build_engine("sqlite+aiosqlite://")
     factory = build_session_factory(engine)
+    signer = WorkspaceReceiptSigner(tmp_path / "workspace-signing.key")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -93,7 +103,9 @@ async def workspace_env():
                 "workspace_attach_v1",
                 "workspace_write_root_v1",
                 "workspace_audit_signing_v1",
+                "workspace_receipt_signing_v1",
             ],
+            workspace_signing_public_key=signer.public_key,
         )
         db.add(machine)
         await db.flush()
@@ -151,7 +163,7 @@ async def workspace_env():
             "attachment": attachment.id,
         }
 
-    yield {"engine": engine, "factory": factory, **ids}
+    yield {"engine": engine, "factory": factory, "signer": signer, **ids}
     await engine.dispose()
 
 
@@ -166,6 +178,15 @@ def test_raw_path_is_not_part_of_attachment_request_contract() -> None:
                 "path": "/home/user/secret",
             }
         )
+
+
+def test_verify_contract_accepts_only_one_way_consent_proof() -> None:
+    proof = f"wcp_{'a' * 64}"
+    assert VerifyBody.model_validate({"consent_proof": proof}).consent_proof
+    with pytest.raises(ValidationError):
+        VerifyBody.model_validate({"consent_token": "wsc_raw_secret"})
+    with pytest.raises(ValidationError):
+        VerifyBody.model_validate({"consent_proof": "wsc_raw_secret"})
 
 
 @pytest.mark.asyncio
@@ -273,8 +294,7 @@ async def test_archive_revokes_attachment_and_emits_opaque_stop_frame(
     bus = FakeBus()
     lifecycle = FakeLifecycle()
     assert (
-        await revoke_invalid_attachments(workspace_env["factory"], bus, lifecycle)
-        == 1
+        await revoke_invalid_attachments(workspace_env["factory"], bus, lifecycle) == 1
     )
     assert lifecycle.stopped == [workspace_env["agent"]]
     assert len(bus.frames) == 1
@@ -289,8 +309,7 @@ async def test_archive_revokes_attachment_and_emits_opaque_stop_frame(
         revoke_epoch = attachment.epoch
 
     assert (
-        await revoke_invalid_attachments(workspace_env["factory"], bus, lifecycle)
-        == 1
+        await revoke_invalid_attachments(workspace_env["factory"], bus, lifecycle) == 1
     )
     assert bus.frames[-1][1]["epoch"] == revoke_epoch
 
@@ -309,6 +328,8 @@ async def test_audit_strips_paths_content_secrets_and_chains(workspace_env) -> N
                 "path": "/home/alice/private",
                 "token": "wsc_secret",
                 "reason": "approved",
+                "daemon_note": "denied at /srv/private token=wsc_embedded",
+                "codes": ["approved", "credential=wsc_list_secret"],
             },
         )
         await append_audit(
@@ -322,18 +343,330 @@ async def test_audit_strips_paths_content_secrets_and_chains(workspace_env) -> N
             (
                 await db.scalars(
                     select(WorkspaceInvocationAudit)
-                    .where(
-                        WorkspaceInvocationAudit.attachment_id == attachment.id
-                    )
+                    .where(WorkspaceInvocationAudit.attachment_id == attachment.id)
                     .order_by(WorkspaceInvocationAudit.created_at)
                 )
             ).all()
         )
     assert len(rows) == 2
-    assert rows[0].details == {"reason": "approved"}
+    assert rows[0].details == {
+        "reason": "approved",
+        "daemon_note": "[redacted]",
+        "codes": ["approved", "[redacted]"],
+    }
     assert rows[0].prompt_hmac and "do not persist" not in rows[0].prompt_hmac
     assert rows[1].previous_hash == rows[0].row_hash
     assert "stdout" not in (rows[1].details or {})
+
+
+@pytest.mark.asyncio
+async def test_denied_receipt_projects_only_allowlisted_reason_code(
+    workspace_env,
+) -> None:
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        await db.commit()
+
+    receipt = {
+        "type": "workspace_attach_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "workspace_id": "ws_opaque_fixture",
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "denied",
+        "reason": "failed at /home/alice/private token=wsc_raw_secret",
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        assert attachment.failure_code == "machine_denied"
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id == attachment.id
+                    )
+                )
+            ).all()
+        )
+    projection = str([row.details for row in audits])
+    assert "/home/alice" not in projection
+    assert "wsc_raw_secret" not in projection
+    assert "machine_denied" in projection
+
+
+@pytest.mark.asyncio
+async def test_verified_receipt_discards_untrusted_reason_text(workspace_env) -> None:
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        await db.commit()
+
+    capabilities = [
+        "workspace_attach_v1",
+        "workspace_write_root_v1",
+        "workspace_audit_signing_v1",
+        "workspace_receipt_signing_v1",
+    ]
+    receipt = {
+        "type": "workspace_attach_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "workspace_id": "ws_opaque_fixture",
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "verified",
+        "reason": "verified /etc/shadow authorization=wsc_raw_secret",
+        "fingerprint": "1" * 64,
+        "allowlist_hash": "2" * 64,
+        "capabilities": capabilities,
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        assert attachment.failure_code == "workspace_write_adapter_unavailable"
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id == attachment.id
+                    )
+                )
+            ).all()
+        )
+    projection = str([row.details for row in audits])
+    assert "/etc/shadow" not in projection
+    assert "wsc_raw_secret" not in projection
+    assert "machine_verified" in projection
+
+
+@pytest.mark.asyncio
+async def test_attach_receipt_requires_enrolled_signing_key(workspace_env) -> None:
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        machine = await db.get(Machine, workspace_env["machine"])
+        assert attachment is not None and machine is not None
+        attachment.state = "requested"
+        machine.workspace_signing_public_key = None
+        await db.commit()
+
+    receipt = {
+        "type": "workspace_attach_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "workspace_id": "ws_opaque_fixture",
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "denied",
+        "reason": "consent_expired",
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        assert attachment.state == "failed"
+        assert attachment.failure_code == "workspace_receipt_key_unenrolled"
+        audit = (
+            await db.scalars(
+                select(WorkspaceInvocationAudit).where(
+                    WorkspaceInvocationAudit.attachment_id == attachment.id
+                )
+            )
+        ).one()
+        assert audit.details == {"reason": "workspace_receipt_key_unenrolled"}
+
+
+@pytest.mark.asyncio
+async def test_attach_receipt_signature_covers_untrusted_reason(workspace_env) -> None:
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        await db.commit()
+
+    receipt = {
+        "type": "workspace_attach_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "workspace_id": "ws_opaque_fixture",
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "denied",
+        "reason": "consent_expired",
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    receipt["reason"] = "failed at /root/private token=wsc_mutated"
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        assert attachment.failure_code == "workspace_receipt_signature_invalid"
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id == attachment.id
+                    )
+                )
+            ).all()
+        )
+    projection = str([row.details for row in audits])
+    assert "/root/private" not in projection
+    assert "wsc_mutated" not in projection
+
+
+@pytest.mark.asyncio
+async def test_revoke_receipt_signature_failure_stays_retryable(workspace_env) -> None:
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "revoking"
+        await db.commit()
+
+    receipt = {
+        "type": "workspace_revoke_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "failed",
+        "reason": "PermissionError",
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    receipt["reason"] = "failed at /root/private token=wsc_mutated"
+    await handle_revoke_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        assert attachment.state == "revoking"
+        assert attachment.failure_code == "workspace_receipt_signature_invalid"
+
+
+@pytest.mark.asyncio
+async def test_audit_evidence_survives_attachment_deletion(workspace_env) -> None:
+    attachment_id = workspace_env["attachment"]
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, attachment_id)
+        assert attachment is not None
+        await append_audit(
+            db,
+            attachment=attachment,
+            event_type="evidence_snapshot",
+            outcome="preserved",
+        )
+        await db.commit()
+        await db.delete(attachment)
+        await db.commit()
+
+    async with workspace_env["factory"]() as db:
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id == attachment_id
+                    )
+                )
+            ).all()
+        )
+    assert len(audits) == 1
+    assert audits[0].event_type == "evidence_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_audit_api_requires_system_or_room_admin(workspace_env) -> None:
+    async with workspace_env["factory"]() as db:
+        room_admin = User(
+            email="room-admin@test.com", password_hash="x", is_admin=False
+        )
+        observer = User(email="observer@test.com", password_hash="x", is_admin=False)
+        db.add_all([room_admin, observer])
+        await db.flush()
+        db.add_all(
+            [
+                Participant(
+                    room_id=workspace_env["room"],
+                    user_id=room_admin.id,
+                    role="admin",
+                ),
+                Participant(
+                    room_id=workspace_env["room"],
+                    user_id=observer.id,
+                    role="observer",
+                ),
+            ]
+        )
+        await db.commit()
+
+        admin_identity = Identity(
+            kind="user",
+            id=room_admin.id,
+            claims=UserClaims(
+                user_id=room_admin.id,
+                email=room_admin.email or "",
+                is_admin=False,
+            ),
+        )
+        assert (
+            await list_audits(
+                workspace_env["room"],
+                workspace_env["attachment"],
+                identity=admin_identity,
+                db=db,
+            )
+            == []
+        )
+
+        observer_identity = Identity(
+            kind="user",
+            id=observer.id,
+            claims=UserClaims(
+                user_id=observer.id,
+                email=observer.email or "",
+                is_admin=False,
+            ),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await list_audits(
+                workspace_env["room"],
+                workspace_env["attachment"],
+                identity=observer_identity,
+                db=db,
+            )
+        assert exc_info.value.status_code == 403
 
 
 def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
@@ -346,12 +679,13 @@ def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
         receipt_capabilities=["workspace_attach_v1"],
     )
     assert allowed is False
-    assert reason == "workspace_root_or_audit_capability_missing"
+    assert reason == "workspace_receipt_signing_unavailable"
 
     machine.control_capabilities = [
         "workspace_attach_v1",
         "workspace_write_root_v1",
         "workspace_audit_signing_v1",
+        "workspace_receipt_signing_v1",
     ]
     allowed, reason = machine_can_activate(
         machine=machine,
@@ -366,6 +700,7 @@ def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
         "workspace_attach_v1",
         "workspace_read_root_v1",
         "workspace_audit_signing_v1",
+        "workspace_receipt_signing_v1",
     ]
     agent.engine = "claude-code"
     agent.permission_level = "restricted"

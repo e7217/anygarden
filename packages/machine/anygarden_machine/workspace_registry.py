@@ -35,6 +35,7 @@ _DENIED_NAMES = frozenset(
     }
 )
 _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+_CONSENT_PROOF = re.compile(r"^wcp_[0-9a-f]{64}$")
 
 
 def _utcnow() -> datetime:
@@ -52,7 +53,7 @@ def _parse_time(value: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def _hash_token(value: str) -> str:
+def _hash_proof(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -139,7 +140,7 @@ def repository_fingerprint(root: Path) -> str:
 
 
 class WorkspaceConsent(BaseModel):
-    token_hash: str
+    proof_hash: str
     agent_id: str
     room_id: str
     mode: Literal["read", "write"]
@@ -270,7 +271,11 @@ class WorkspaceRegistry:
             raise ValueError("consent expiry must be in the future")
         rows = self._load()
         now = _utcnow()
-        token = f"wsc_{secrets.token_urlsafe(32)}"
+        # The raw random value is never returned or persisted.  Only its
+        # one-way proof crosses HTTP/WebSocket, and that proof is still
+        # single-use and scope-bound by the local registry.
+        raw_consent = secrets.token_urlsafe(32)
+        proof = f"wcp_{hashlib.sha256(raw_consent.encode('utf-8')).hexdigest()}"
         for row in rows:
             if row.workspace_id != workspace_id:
                 continue
@@ -280,7 +285,7 @@ class WorkspaceRegistry:
                 raise ValueError("workspace registration is read-only")
             row.consents.append(
                 WorkspaceConsent(
-                    token_hash=_hash_token(token),
+                    proof_hash=_hash_proof(proof),
                     agent_id=agent_id,
                     room_id=room_id,
                     mode=mode,
@@ -288,7 +293,7 @@ class WorkspaceRegistry:
                 )
             )
             self._save(rows)
-            return token
+            return proof
         raise KeyError(workspace_id)
 
     def verify_and_consume(
@@ -300,7 +305,7 @@ class WorkspaceRegistry:
         mode: Literal["read", "write"],
         fingerprint: str,
         allowlist_digest: str,
-        consent_token: str,
+        consent_proof: str,
     ) -> tuple[bool, str, dict[str, str] | None]:
         """Verify local registration + scoped one-time consent.
 
@@ -339,9 +344,11 @@ class WorkspaceRegistry:
             if reason is not None:
                 return False, reason, None
 
-            token_hash = _hash_token(consent_token)
+            if not _CONSENT_PROOF.fullmatch(consent_proof):
+                return False, "consent_invalid", None
+            proof_hash = _hash_proof(consent_proof)
             for consent in row.consents:
-                if consent.token_hash != token_hash:
+                if not secrets.compare_digest(consent.proof_hash, proof_hash):
                     continue
                 if consent.used_at is not None:
                     return False, "consent_replayed", None

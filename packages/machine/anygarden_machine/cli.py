@@ -181,8 +181,8 @@ def register(server: str, name: str) -> None:
     save_token(machine_token)
 
     click.echo(f"Registered! machine_id={machine_id}")
-    click.echo(f"Config saved to ~/.anygarden/machine.toml")
-    click.echo(f"Token saved to ~/.anygarden/machine.token (chmod 600)")
+    click.echo("Config saved to ~/.anygarden/machine.toml")
+    click.echo("Token saved to ~/.anygarden/machine.token (chmod 600)")
 
 
 @main.command()
@@ -393,10 +393,10 @@ def workspace_consent(
     expires_in: int,
     registry: Path | None,
 ) -> None:
-    """Mint one scoped, short-lived consent token for an attach request."""
+    """Mint one scoped, short-lived one-way consent proof."""
 
     try:
-        token = WorkspaceRegistry(registry).issue_consent(
+        proof = WorkspaceRegistry(registry).issue_consent(
             workspace_id,
             agent_id=agent_id,
             room_id=room_id,
@@ -405,7 +405,7 @@ def workspace_consent(
         )
     except (KeyError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo(token)
+    click.echo(proof)
 
 
 @workspace.command("revoke")

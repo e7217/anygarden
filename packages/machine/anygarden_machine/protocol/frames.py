@@ -242,7 +242,7 @@ class WorkspaceAttachRequestFrame(BaseModel):
     allowlist_hash: str
     policy_hash: str
     expires_at: str
-    consent_token: str
+    consent_proof: str
 
 
 class WorkspaceRevokeFrame(BaseModel):
@@ -310,6 +310,9 @@ class RegisterFrame(BaseModel):
     # Redacted machine-local registrations. Every entry contains only opaque
     # ID, label, fingerprints/hashes, policy ceiling and expiry — never path.
     workspace_catalog: list[dict[str, str]] = Field(default_factory=list)
+    # Ed25519 public key enrolled on the authenticated machine channel.
+    # The private key never leaves the machine.
+    workspace_signing_public_key: str | None = None
 
 
 class AgentActual(BaseModel):
@@ -458,6 +461,7 @@ class WorkspaceAttachReceiptFrame(BaseModel):
     fingerprint: str | None = None
     allowlist_hash: str | None = None
     capabilities: list[str] = Field(default_factory=list)
+    signature: str | None = None
 
 
 class WorkspaceRevokeReceiptFrame(BaseModel):
@@ -467,6 +471,7 @@ class WorkspaceRevokeReceiptFrame(BaseModel):
     epoch: int
     status: Literal["stopped", "not_running", "failed"]
     reason: str | None = None
+    signature: str | None = None
 
 
 MachineFrame = Union[

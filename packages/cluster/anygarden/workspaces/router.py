@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,9 +28,11 @@ from anygarden.rooms.authorization import (
 )
 from anygarden.workspaces.service import (
     ACTIVE_ATTACHMENT_STATES,
+    RECEIPT_SIGNING_CAPABILITY,
     append_audit,
     cancel_attachment_turns,
     machine_can_activate,
+    normalize_workspace_signing_public_key,
     policy_hash,
     required_capabilities,
 )
@@ -61,7 +64,14 @@ class AttachmentCreate(BaseModel):
 class VerifyBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    consent_token: SecretStr
+    consent_proof: SecretStr
+
+    @field_validator("consent_proof")
+    @classmethod
+    def validate_consent_proof(cls, value: SecretStr) -> SecretStr:
+        if not re.fullmatch(r"wcp_[0-9a-f]{64}", value.get_secret_value()):
+            raise ValueError("invalid consent proof")
+        return value
 
 
 class AttachmentOut(BaseModel):
@@ -356,8 +366,38 @@ async def verify_attachment(
     agent = await db.get(Agent, row.agent_id)
     if machine is None or agent is None:
         raise HTTPException(status_code=409, detail="Attachment target unavailable")
+    control_capabilities = set(machine.control_capabilities or [])
+    enrolled_key = normalize_workspace_signing_public_key(
+        machine.workspace_signing_public_key
+    )
+    signing_reason = None
+    if enrolled_key is None:
+        signing_reason = (
+            "workspace_receipt_key_unenrolled"
+            if machine.workspace_signing_public_key is None
+            else "workspace_receipt_key_invalid"
+        )
+    elif RECEIPT_SIGNING_CAPABILITY not in control_capabilities:
+        signing_reason = "workspace_receipt_signing_unavailable"
+    if signing_reason is not None:
+        row.state = "failed"
+        row.failure_code = signing_reason
+        row.epoch += 1
+        await append_audit(
+            db,
+            attachment=row,
+            event_type="verification_denied",
+            actor_user_id=identity.id,
+            outcome="unsupported",
+            details={"reason": signing_reason},
+        )
+        await db.commit()
+        raise HTTPException(
+            status_code=409,
+            detail="Machine workspace receipt signing is unavailable",
+        )
     required = required_capabilities(row.mode)
-    if not required.issubset(set(machine.control_capabilities or [])):
+    if not required.issubset(control_capabilities):
         row.state = "failed"
         row.failure_code = "workspace_root_or_audit_capability_missing"
         row.epoch += 1
@@ -420,7 +460,7 @@ async def verify_attachment(
             "allowlist_hash": row.allowlist_hash,
             "policy_hash": row.policy_hash,
             "expires_at": row.expires_at.isoformat(),
-            "consent_token": body.consent_token.get_secret_value(),
+            "consent_proof": body.consent_proof.get_secret_value(),
         },
     )
     if not sent:
@@ -522,12 +562,23 @@ async def list_audits(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> list[WorkspaceInvocationAudit]:
-    await require_capability(
+    access = await require_capability(
         db,
         room_id=room_id,
         identity=identity,
         capability=Capability.ROOM_READ,
     )
+    if identity.kind != "user" or (
+        not is_global_admin(identity)
+        and (
+            access.participant is None
+            or access.effective_role not in {"admin", "owner"}
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="System admin or room admin audit access required",
+        )
     await _attachment_or_404(db, room_id, attachment_id)
     return list(
         (

@@ -18,7 +18,9 @@ from anygarden_machine.workspace_registry import (
 def _git_repo(path: Path) -> Path:
     path.mkdir()
     subprocess.run(["git", "init", "-q", str(path)], check=True)
-    subprocess.run(["git", "-C", str(path), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@example.com"], check=True
+    )
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
     (path / "README.md").write_text("fixture\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(path), "add", "README.md"], check=True)
@@ -95,13 +97,15 @@ def test_scoped_consent_is_one_time_and_policy_fingerprinted(tmp_path: Path) -> 
         allowlist=["src"],
         expires_in=timedelta(hours=1),
     )
-    token = registry.issue_consent(
+    proof = registry.issue_consent(
         row.workspace_id,
         agent_id="agent-a",
         room_id="room-a",
         mode="write",
         expires_in=timedelta(minutes=5),
     )
+    assert proof.startswith("wcp_")
+    assert proof not in (tmp_path / "registry.json").read_text(encoding="utf-8")
 
     denied, reason, _ = registry.verify_and_consume(
         workspace_id=row.workspace_id,
@@ -110,7 +114,7 @@ def test_scoped_consent_is_one_time_and_policy_fingerprinted(tmp_path: Path) -> 
         mode="write",
         fingerprint=row.fingerprint,
         allowlist_digest=row.allowlist_hash,
-        consent_token=token,
+        consent_proof=proof,
     )
     assert denied is False
     assert reason == "consent_scope_mismatch"
@@ -122,7 +126,7 @@ def test_scoped_consent_is_one_time_and_policy_fingerprinted(tmp_path: Path) -> 
         mode="write",
         fingerprint=row.fingerprint,
         allowlist_digest=row.allowlist_hash,
-        consent_token=token,
+        consent_proof=proof,
     )
     assert accepted is True
     assert reason == "verified"
@@ -135,12 +139,12 @@ def test_scoped_consent_is_one_time_and_policy_fingerprinted(tmp_path: Path) -> 
         mode="write",
         fingerprint=row.fingerprint,
         allowlist_digest=row.allowlist_hash,
-        consent_token=token,
+        consent_proof=proof,
     )
     assert replayed is False
     assert reason == "consent_replayed"
 
-    mismatch_token = registry.issue_consent(
+    mismatch_proof = registry.issue_consent(
         row.workspace_id,
         agent_id="agent-a",
         room_id="room-a",
@@ -154,7 +158,7 @@ def test_scoped_consent_is_one_time_and_policy_fingerprinted(tmp_path: Path) -> 
         mode="write",
         fingerprint="0" * 64,
         allowlist_digest=row.allowlist_hash,
-        consent_token=mismatch_token,
+        consent_proof=mismatch_proof,
     )
     assert mismatch is False
     assert reason == "fingerprint_mismatch"
@@ -170,7 +174,7 @@ def test_consent_fails_when_repository_identity_changes(tmp_path: Path) -> None:
         allowlist=["src"],
         expires_in=timedelta(hours=1),
     )
-    token = registry.issue_consent(
+    proof = registry.issue_consent(
         row.workspace_id,
         agent_id="agent-a",
         room_id="room-a",
@@ -187,7 +191,7 @@ def test_consent_fails_when_repository_identity_changes(tmp_path: Path) -> None:
         mode="write",
         fingerprint=row.fingerprint,
         allowlist_digest=row.allowlist_hash,
-        consent_token=token,
+        consent_proof=proof,
     )
     assert accepted is False
     assert reason == "fingerprint_mismatch"

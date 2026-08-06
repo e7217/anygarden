@@ -22,6 +22,9 @@ def upgrade() -> None:
     with op.batch_alter_table("machines") as batch:
         batch.add_column(sa.Column("control_capabilities", sa.JSON(), nullable=True))
         batch.add_column(sa.Column("workspace_catalog", sa.JSON(), nullable=True))
+        batch.add_column(
+            sa.Column("workspace_signing_public_key", sa.String(64), nullable=True)
+        )
 
     op.create_table(
         "workspace_attachments",
@@ -118,9 +121,6 @@ def upgrade() -> None:
         sa.Column("previous_hash", sa.String(64), nullable=False),
         sa.Column("row_hash", sa.String(64), nullable=False),
         sa.Column("created_at", UtcDateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["attachment_id"], ["workspace_attachments.id"], ondelete="CASCADE"
-        ),
         sa.UniqueConstraint("row_hash", name="uq_workspace_audits_row_hash"),
     )
     op.create_index(
@@ -175,5 +175,6 @@ def downgrade() -> None:
     )
     op.drop_table("workspace_attachments")
     with op.batch_alter_table("machines") as batch:
+        batch.drop_column("workspace_signing_public_key")
         batch.drop_column("workspace_catalog")
         batch.drop_column("control_capabilities")

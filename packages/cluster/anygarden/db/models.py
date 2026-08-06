@@ -504,6 +504,9 @@ class Machine(Base):
     workspace_catalog: Mapped[Optional[list]] = mapped_column(
         JSON, nullable=True, default=None
     )
+    workspace_signing_public_key: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
     owner: Mapped["User"] = relationship("User")
@@ -1428,11 +1431,9 @@ class WorkspaceInvocationAudit(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    attachment_id: Mapped[str] = mapped_column(
-        String(36),
-        ForeignKey("workspace_attachments.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Immutable snapshot identifier rather than a cascading FK: evidence must
+    # survive attachment/room/machine deletion.
+    attachment_id: Mapped[str] = mapped_column(String(36), nullable=False)
     epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)

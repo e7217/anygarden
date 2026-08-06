@@ -377,7 +377,11 @@ async def _handle_register(
     engines = data.get("capabilities", data.get("engines", []))
     daemon_version = data.get("daemon_version")
 
-    from anygarden.workspaces.service import sanitize_workspace_catalog
+    from anygarden.workspaces.service import (
+        RECEIPT_SIGNING_CAPABILITY,
+        normalize_workspace_signing_public_key,
+        sanitize_workspace_catalog,
+    )
 
     async with session_factory() as db:
         result = await db.execute(select(Machine).where(Machine.id == machine_id))
@@ -390,13 +394,24 @@ async def _handle_register(
         old_version = machine.daemon_version
         if daemon_version:
             machine.daemon_version = daemon_version
-        machine.control_capabilities = sorted(
-            {
-                value
-                for value in data.get("control_capabilities", [])
-                if isinstance(value, str) and len(value) <= 80
-            }
+        control_capabilities = {
+            value
+            for value in data.get("control_capabilities", [])
+            if isinstance(value, str) and len(value) <= 80
+        }
+        advertised_key = normalize_workspace_signing_public_key(
+            data.get("workspace_signing_public_key")
         )
+        if machine.workspace_signing_public_key is None and advertised_key is not None:
+            # First enrollment is bound to the already-authenticated machine
+            # WebSocket. Reconnects may confirm but never silently rotate it.
+            machine.workspace_signing_public_key = advertised_key
+        if (
+            advertised_key is None
+            or machine.workspace_signing_public_key != advertised_key
+        ):
+            control_capabilities.discard(RECEIPT_SIGNING_CAPABILITY)
+        machine.control_capabilities = sorted(control_capabilities)
         machine.workspace_catalog = sanitize_workspace_catalog(
             data.get("workspace_catalog")
         )

@@ -750,7 +750,17 @@ class TestMigrations:
                     row[1]
                     for row in conn.execute(text("PRAGMA table_info(machines)"))
                 }
-                assert {"control_capabilities", "workspace_catalog"} <= machine_columns
+                assert {
+                    "control_capabilities",
+                    "workspace_catalog",
+                    "workspace_signing_public_key",
+                } <= machine_columns
+                audit_foreign_keys = list(
+                    conn.execute(
+                        text("PRAGMA foreign_key_list(workspace_invocation_audits)")
+                    )
+                )
+                assert audit_foreign_keys == []
                 turn_columns = {
                     row[1]
                     for row in conn.execute(text("PRAGMA table_info(agent_turns)"))
@@ -776,6 +786,7 @@ class TestMigrations:
                     for row in conn.execute(text("PRAGMA table_info(machines)"))
                 }
                 assert "workspace_catalog" not in machine_columns
+                assert "workspace_signing_public_key" not in machine_columns
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()

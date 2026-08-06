@@ -40,6 +40,7 @@ from anygarden_machine.protocol.frames import (
 from anygarden_machine.spawner import Spawner, SpawnManifest
 from anygarden_machine.updater import run_update
 from anygarden_machine.workspace_registry import WorkspaceRegistry
+from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
 
 log = structlog.get_logger()
 
@@ -138,6 +139,7 @@ class MachineDaemon:
         token_path: Any = None,
         agent_dirs_root: Path | None = None,
         workspace_registry_path: Path | None = None,
+        workspace_signing_key_path: Path | None = None,
     ) -> None:
         self.server_url = server_url
         self.machine_id = machine_id
@@ -153,6 +155,7 @@ class MachineDaemon:
 
         self._manifest_store = ManifestStore(agents_root=agent_dirs_root)
         self._workspace_registry = WorkspaceRegistry(workspace_registry_path)
+        self._workspace_signer = WorkspaceReceiptSigner(workspace_signing_key_path)
         self._spawner = Spawner(
             on_stopped=self._on_agent_stopped,
             on_crashed=self._on_agent_crashed,
@@ -299,8 +302,12 @@ class MachineDaemon:
             # Phase 5 boundary support only. Root enforcement and audit
             # signing are intentionally absent, so the cluster must reject
             # every write activation from this daemon version.
-            control_capabilities=["workspace_attach_v1"],
+            control_capabilities=[
+                "workspace_attach_v1",
+                "workspace_receipt_signing_v1",
+            ],
             workspace_catalog=self._workspace_registry.list_descriptors(),
+            workspace_signing_public_key=self._workspace_signer.public_key,
         )
         await self._send(frame.model_dump())
         log.info(
@@ -403,7 +410,7 @@ class MachineDaemon:
             mode=frame.mode,
             fingerprint=frame.fingerprint,
             allowlist_digest=frame.allowlist_hash,
-            consent_token=frame.consent_token,
+            consent_proof=frame.consent_proof,
         )
         receipt = WorkspaceAttachReceiptFrame(
             attachment_id=frame.attachment_id,
@@ -417,8 +424,12 @@ class MachineDaemon:
             allowlist_hash=descriptor.get("allowlist_hash") if descriptor else None,
             # Deliberately no workspace_read_root_v1,
             # workspace_write_root_v1, or workspace_audit_signing_v1.
-            capabilities=["workspace_attach_v1"],
+            capabilities=[
+                "workspace_attach_v1",
+                "workspace_receipt_signing_v1",
+            ],
         )
+        receipt.signature = self._workspace_signer.sign(receipt.model_dump())
         await self._send(receipt.model_dump())
 
     async def _handle_workspace_revoke(self, frame: Any) -> None:
@@ -435,15 +446,15 @@ class MachineDaemon:
         except Exception as exc:  # pragma: no cover - defensive boundary
             status = "failed"
             reason = type(exc).__name__
-        await self._send(
-            WorkspaceRevokeReceiptFrame(
-                attachment_id=frame.attachment_id,
-                agent_id=frame.agent_id,
-                epoch=frame.epoch,
-                status=status,
-                reason=reason,
-            ).model_dump()
+        receipt = WorkspaceRevokeReceiptFrame(
+            attachment_id=frame.attachment_id,
+            agent_id=frame.agent_id,
+            epoch=frame.epoch,
+            status=status,
+            reason=reason,
         )
+        receipt.signature = self._workspace_signer.sign(receipt.model_dump())
+        await self._send(receipt.model_dump())
 
     # ── Desired-state handlers ─────────────────────────────────────────
 

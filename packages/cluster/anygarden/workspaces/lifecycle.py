@@ -18,11 +18,43 @@ from anygarden.workspaces.service import (
     append_audit,
     cancel_attachment_turns,
     machine_can_activate,
+    verify_workspace_receipt_signature,
+)
+
+_ATTACH_DENIAL_REASONS = frozenset(
+    {
+        "workspace_revoked",
+        "workspace_expired",
+        "fingerprint_mismatch",
+        "allowlist_mismatch",
+        "mode_exceeds_local_policy",
+        "consent_replayed",
+        "consent_expired",
+        "consent_scope_mismatch",
+        "consent_invalid",
+        "workspace_unknown",
+    }
 )
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _attach_receipt_reason(value: Any, *, verified: bool) -> str:
+    """Project an untrusted daemon reason to a closed code vocabulary."""
+
+    if verified:
+        return (
+            "local_registration_verified"
+            if value == "local_registration_verified"
+            else "machine_verified"
+        )
+    return (
+        value
+        if isinstance(value, str) and value in _ATTACH_DENIAL_REASONS
+        else "machine_denied"
+    )
 
 
 async def handle_attach_receipt(
@@ -50,6 +82,25 @@ async def handle_attach_receipt(
             )
             await db.commit()
             return
+        machine = await db.get(Machine, machine_id)
+        if machine is None:
+            return
+        signature_ok, signature_reason = verify_workspace_receipt_signature(
+            machine, data
+        )
+        if not signature_ok:
+            row.state = "failed"
+            row.failure_code = signature_reason
+            row.epoch += 1
+            await append_audit(
+                db,
+                attachment=row,
+                event_type="machine_receipt_rejected",
+                outcome="denied",
+                details={"reason": signature_reason},
+            )
+            await db.commit()
+            return
         if (
             data.get("workspace_id") != row.workspace_id
             or data.get("agent_id") != row.agent_id
@@ -68,7 +119,9 @@ async def handle_attach_receipt(
             return
         if data.get("status") != "verified":
             row.state = "failed"
-            row.failure_code = str(data.get("reason") or "machine_denied")[:128]
+            row.failure_code = _attach_receipt_reason(
+                data.get("reason"), verified=False
+            )
             row.epoch += 1
             await append_audit(
                 db,
@@ -96,9 +149,8 @@ async def handle_attach_receipt(
             await db.commit()
             return
 
-        machine = await db.get(Machine, machine_id)
         agent = await db.get(Agent, row.agent_id)
-        if machine is None or agent is None or row.expires_at <= _now():
+        if agent is None or row.expires_at <= _now():
             row.state = "failed"
             row.failure_code = "attachment_target_unavailable"
             row.epoch += 1
@@ -114,12 +166,13 @@ async def handle_attach_receipt(
 
         row.state = "machine_verified"
         row.epoch += 1
+        receipt_reason = _attach_receipt_reason(data.get("reason"), verified=True)
         await append_audit(
             db,
             attachment=row,
             event_type="machine_verified",
             outcome="verified",
-            details={"daemon_reason": str(data.get("reason") or "verified")[:80]},
+            details={"receipt_reason": receipt_reason},
         )
         allowed, reason = machine_can_activate(
             machine=machine,
@@ -177,6 +230,23 @@ async def handle_revoke_receipt(
                 event_type="stale_revoke_receipt",
                 outcome="denied",
                 details={"reason": "state_or_epoch_mismatch"},
+            )
+            await db.commit()
+            return
+        machine = await db.get(Machine, machine_id)
+        if machine is None:
+            return
+        signature_ok, signature_reason = verify_workspace_receipt_signature(
+            machine, data
+        )
+        if not signature_ok:
+            row.failure_code = signature_reason
+            await append_audit(
+                db,
+                attachment=row,
+                event_type="revoke_receipt_rejected",
+                outcome="denied",
+                details={"reason": signature_reason},
             )
             await db.commit()
             return
