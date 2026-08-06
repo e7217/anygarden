@@ -21,6 +21,7 @@ import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
+import { shouldShowFallbackCrashWarning } from '@/lib/admin-agent-warning'
 import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -516,11 +517,14 @@ export default function AdminMachines() {
                           >
                             · {agent.unavailable_reason.message.split('\n')[0]}
                           </span>
-                        ) : agent.last_crash_reason && (
-                          <span className="truncate text-[var(--color-warning)]" title={agent.last_crash_reason}>
+                        ) : shouldShowFallbackCrashWarning(agent) ? (
+                          <span
+                            className="truncate text-[var(--color-warning)]"
+                            title={agent.last_crash_reason ?? undefined}
+                          >
                             · {agent.last_crash_reason}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>

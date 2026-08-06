@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.agent_availability import SPAWN_FAILED
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     ActivityLog,
@@ -483,6 +485,222 @@ class TestAgentLifecycle:
             ".codex/config.toml": '[mcp_servers.docs]\ncommand = "docs-mcp"\n',
         }
         assert frame["engine_secrets"] == {}
+
+    @pytest.mark.asyncio
+    async def test_request_start_preserves_last_crash_diagnostic(
+        self, lifecycle_env
+    ) -> None:
+        """A retry keeps prior diagnostics; UI state prevents stale alarms."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-stale-warning",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                last_crash_reason="stale bootstrap failure",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle_env["attach_to_room"](agent_id)
+        await lifecycle.request_start(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.last_crash_reason == "stale bootstrap failure"
+
+    @pytest.mark.asyncio
+    async def test_request_start_send_failure_reverts_placement_and_marks_unavailable(
+        self, lifecycle_env, monkeypatch
+    ) -> None:
+        """A connected machine send failure returns the agent to retry scope."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        bus = lifecycle_env["bus"]
+        machine = lifecycle_env["machine"]
+
+        async def fail_send(machine_id: str, frame: dict) -> bool:
+            return False
+
+        monkeypatch.setattr(bus, "send", fail_send)
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-send-fail",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                last_crash_reason="stale bootstrap failure",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle_env["attach_to_room"](agent_id)
+        await lifecycle.request_start(agent_id)
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.placed_on_machine_id is None
+            assert agent.unavailable_code == SPAWN_FAILED
+            assert agent.unavailable_detail == {
+                "machine_id": machine.id,
+                "reason": "dispatch_failed",
+            }
+            assert "dispatch_failed to" in (agent.last_crash_reason or "")
+
+            activity = (
+                await db.execute(
+                    select(ActivityLog).where(
+                        ActivityLog.agent_id == agent_id,
+                        ActivityLog.event_type == "agent_unavailable",
+                    )
+                )
+            ).scalars().all()
+            assert any(row.details.get("code") == SPAWN_FAILED for row in activity)
+
+    @pytest.mark.asyncio
+    async def test_request_start_concurrent_calls_send_once(self, lifecycle_env) -> None:
+        """Concurrent in-process start calls are coalesced."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        fake_ws = lifecycle_env["fake_ws"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-race",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle_env["attach_to_room"](agent_id)
+        initial = len(fake_ws.sent)
+
+        await asyncio.gather(
+            lifecycle.request_start(agent_id),
+            lifecycle.request_start(agent_id),
+        )
+
+        assert len(fake_ws.sent) == initial + 1
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.generation == 1
+
+    @pytest.mark.asyncio
+    async def test_stale_generation_report_does_not_overwrite_current_state(
+        self, lifecycle_env
+    ) -> None:
+        """A late report from the previous process generation is ignored."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-stale-generation",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                placed_on_machine_id=machine.id,
+                generation=2,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [
+                {
+                    "agent_id": agent_id,
+                    "actual_state": "running",
+                    "generation": 1,
+                    "pid": 9876,
+                }
+            ],
+        )
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "pending"
+            assert agent.pid is None
+
+    @pytest.mark.asyncio
+    async def test_late_running_report_cannot_reverse_requested_stop(
+        self, lifecycle_env
+    ) -> None:
+        """A periodic running report already in flight must not undo stop."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        async with factory() as db:
+            agent = Agent(
+                name="agent-stop-race",
+                engine="echo",
+                desired_state="running",
+                actual_state="running",
+                placed_on_machine_id=machine.id,
+                generation=3,
+                pid=4321,
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+
+        await lifecycle.request_stop(agent_id)
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [
+                {
+                    "agent_id": agent_id,
+                    "actual_state": "running",
+                    "generation": 3,
+                    "pid": 4321,
+                }
+            ],
+        )
+
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.desired_state == "stopped"
+            assert agent.actual_state == "stopping"
+
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [
+                {
+                    "agent_id": agent_id,
+                    "actual_state": "crashed",
+                    "generation": 3,
+                    "last_crash_reason": "killed during shutdown",
+                }
+            ],
+        )
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopped"
+            assert agent.unavailable_code is None
 
     @pytest.mark.asyncio
     async def test_request_start_legacy_agent_no_manifest(

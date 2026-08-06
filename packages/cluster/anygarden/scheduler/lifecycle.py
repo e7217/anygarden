@@ -153,8 +153,11 @@ class AgentLifecycle:
         # - ``request_stop`` and ``delete_agent`` evict so the next
         #   start cycle issues a fresh token (rotation on respawn).
         self._token_cache: dict[str, str] = {}
-
-    # ── Public API ──────────────────────────────────────────────
+        # Request-level in-process dedupe for ``request_start``. This
+        # prevents concurrent manual/API-triggered start calls from
+        # sending duplicate sync frames for the same agent within this
+        # process.
+        self._start_inflight: set[str] = set()
 
     async def request_start(self, agent_id: str) -> None:
         """Select a machine, bump generation, send ``sync_desired_state``."""
@@ -165,96 +168,149 @@ class AgentLifecycle:
         # spawn's plaintext, which is undesirable both for security
         # rotation and for race scenarios where the prior process
         # outlives the stop window.
+        if agent_id in self._start_inflight:
+            logger.info(
+                "lifecycle.start_skipped_inflight",
+                agent_id=agent_id,
+                reason="duplicate_call_in_progress",
+            )
+            return
+
+        self._start_inflight.add(agent_id)
+        # Only the call that wins the in-flight gate rotates the cached
+        # token. A duplicate call can arrive after the winner committed but
+        # before its frame was sent; evicting before the gate would discard
+        # that freshly committed cache entry and make a later sync mint an
+        # unnecessary second token.
         self._token_cache.pop(agent_id, None)
         async with self._db_factory() as db:
-            agent = await self._get_agent(db, agent_id)
-            if agent is None:
-                logger.error("lifecycle.agent_not_found", agent_id=agent_id)
-                return
-
-            # Refuse to dispatch if agent has no room memberships.
-            result = await db.execute(
-                select(Participant.room_id).where(Participant.agent_id == agent.id)
-            )
-            rooms = [row[0] for row in result.all()]
-            if not rooms:
-                logger.warning("lifecycle.spawn_refused_no_rooms", agent_id=agent_id)
-                agent.actual_state = "pending"
-                agent.desired_state = "running"
-                agent.placed_on_machine_id = None
-                agent.pid = None
-                agent.last_crash_reason = (
-                    "no rooms assigned \u2014 add the agent to at least one room "
-                    "before starting"
-                )
-                _mark_unavailable(agent, NO_ROOM, None)
-                await db.commit()
-                return
-
             try:
-                machine = await select_machine_for(agent.engine, db, self._machine_bus)
-            except NoSuitableMachineError:
-                logger.warning(
-                    "lifecycle.no_machine",
-                    agent_id=agent_id,
-                    engine=agent.engine,
+                agent = await self._get_agent(db, agent_id)
+                if agent is None:
+                    logger.error("lifecycle.agent_not_found", agent_id=agent_id)
+                    return
+
+                if (
+                    agent.desired_state == "running"
+                    and agent.actual_state in ("starting", "pending")
+                    and agent.placed_on_machine_id
+                ):
+                    logger.info(
+                        "lifecycle.start_skipped_inflight",
+                        agent_id=agent_id,
+                        reason="already_starting",
+                        existing_machine_id=agent.placed_on_machine_id,
+                    )
+                    return
+
+                # Refuse to dispatch if agent has no room memberships.
+                result = await db.execute(
+                    select(Participant.room_id).where(Participant.agent_id == agent.id)
                 )
+                rooms = [row[0] for row in result.all()]
+                if not rooms:
+                    logger.warning("lifecycle.spawn_refused_no_rooms", agent_id=agent_id)
+                    agent.actual_state = "pending"
+                    agent.desired_state = "running"
+                    agent.placed_on_machine_id = None
+                    agent.pid = None
+                    agent.last_crash_reason = (
+                        "no rooms assigned \u2014 add the agent to at least one room "
+                        "before starting"
+                    )
+                    _mark_unavailable(agent, NO_ROOM, None)
+                    await db.commit()
+                    return
+
+                try:
+                    machine = await select_machine_for(agent.engine, db, self._machine_bus)
+                except NoSuitableMachineError:
+                    logger.warning(
+                        "lifecycle.no_machine",
+                        agent_id=agent_id,
+                        engine=agent.engine,
+                    )
+                    agent.actual_state = "pending"
+                    # #516 — previously the only *silent* start failure: no reason,
+                    # no ActivityLog, and the stale placement stranded the agent
+                    # from ``_place_orphaned_agents`` (which filters
+                    # ``placed_on_machine_id IS NULL``). Now record the reason,
+                    # release the placement so a newly-registered machine can adopt
+                    # it, and leave an audit trail.
+                    agent.placed_on_machine_id = None
+                    agent.last_crash_reason = (
+                        f"no online machine supports engine '{agent.engine}'"
+                    )
+                    _mark_unavailable(
+                        agent, NO_MACHINE_FOR_ENGINE, {"engine": agent.engine}
+                    )
+                    db.add(
+                        ActivityLog(
+                            agent_id=agent_id,
+                            event_type="agent_unavailable",
+                            details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
+                        )
+                    )
+                    await db.commit()
+                    return
+
+                agent.placed_on_machine_id = machine.id
+                agent.desired_state = "running"
                 agent.actual_state = "pending"
-                # #516 \u2014 previously the only *silent* start failure: no reason,
-                # no ActivityLog, and the stale placement stranded the agent
-                # from ``_place_orphaned_agents`` (which filters
-                # ``placed_on_machine_id IS NULL``). Now record the reason,
-                # release the placement so a newly-registered machine can adopt
-                # it, and leave an audit trail.
-                agent.placed_on_machine_id = None
-                agent.last_crash_reason = (
-                    f"no online machine supports engine '{agent.engine}'"
-                )
-                _mark_unavailable(
-                    agent, NO_MACHINE_FOR_ENGINE, {"engine": agent.engine}
-                )
+                agent.generation = (agent.generation or 0) + 1
+                agent.started_at = datetime.now(timezone.utc)
+                # A machine was found — the prior no_machine / no_room reason (if
+                # any) no longer applies. A later spawn failure re-stamps a fresh
+                # reason via ``handle_report_actual_state``.
+                _clear_unavailable(agent)
+
+                frame = await self._build_sync_frame(db, agent, rooms)
+                agent.manifest_hash = _manifest_hash(frame, agent=agent)
+                agent.pending_generation = None
+                agent.restart_requested_at = None
+                agent.restart_deadline_at = None
+                agent.pending_manifest_hash = None
                 db.add(
                     ActivityLog(
                         agent_id=agent_id,
-                        event_type="agent_unavailable",
-                        details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
+                        event_type="start_requested",
+                        details={"machine_id": machine.id, "generation": agent.generation},
                     )
                 )
                 await db.commit()
-                return
 
-            agent.placed_on_machine_id = machine.id
-            agent.desired_state = "running"
-            agent.actual_state = "pending"
-            agent.generation = (agent.generation or 0) + 1
-            agent.started_at = datetime.now(timezone.utc)
-            # A machine was found \u2014 the prior no_machine / no_room reason (if
-            # any) no longer applies. A later spawn failure re-stamps a fresh
-            # reason via ``handle_report_actual_state``.
-            _clear_unavailable(agent)
-
-            frame = await self._build_sync_frame(db, agent, rooms)
-            agent.manifest_hash = _manifest_hash(frame, agent=agent)
-            agent.pending_generation = None
-            agent.restart_requested_at = None
-            agent.restart_deadline_at = None
-            agent.pending_manifest_hash = None
-            db.add(
-                ActivityLog(
-                    agent_id=agent_id,
-                    event_type="start_requested",
-                    details={"machine_id": machine.id, "generation": agent.generation},
-                )
-            )
-            await db.commit()
-
-            sent = await self._machine_bus.send(machine.id, frame)
-            if not sent:
-                logger.warning(
-                    "lifecycle.sync_send_failed",
-                    agent_id=agent_id,
-                    machine_id=machine.id,
-                )
+                sent = await self._machine_bus.send(machine.id, frame)
+                if not sent:
+                    logger.warning(
+                        "lifecycle.sync_send_failed",
+                        agent_id=agent_id,
+                        machine_id=machine.id,
+                    )
+                    # Send failed means the agent is visible as unplaced for
+                    # orphan recovery again and keeps re-dispatchable.
+                    agent.placed_on_machine_id = None
+                    agent.last_crash_reason = (
+                        f"dispatch_failed to {machine.id}: sync frame not delivered"
+                    )
+                    _mark_unavailable(
+                        agent,
+                        SPAWN_FAILED,
+                        {"machine_id": machine.id, "reason": "dispatch_failed"},
+                    )
+                    db.add(
+                        ActivityLog(
+                            agent_id=agent_id,
+                            event_type="agent_unavailable",
+                            details={
+                                "code": SPAWN_FAILED,
+                                "machine_id": machine.id,
+                                "reason": "dispatch_failed",
+                            },
+                        )
+                    )
+                    await db.commit()
+            finally:
+                self._start_inflight.discard(agent_id)
 
     def _acquire_anygarden_token(self, db: AsyncSession, agent_id: str) -> str:
         """Return the per-agent ``anygarden_token``, minting one on cache miss.
@@ -437,6 +493,47 @@ class AgentLifecycle:
                     continue
 
                 new_state = entry.get("actual_state")
+                reported_generation = entry.get("generation")
+                if (
+                    reported_generation is not None
+                    and reported_generation != agent.generation
+                ):
+                    # A previous process generation can report after a
+                    # restart has already advanced the desired manifest. Do
+                    # not let that late frame overwrite the current state.
+                    # Older daemons omit the key entirely and retain the
+                    # pre-generation compatibility path.
+                    logger.warning(
+                        "lifecycle.report_stale_generation",
+                        agent_id=aid,
+                        expected=agent.generation,
+                        got=reported_generation,
+                        reported_state=new_state,
+                    )
+                    continue
+
+                if agent.desired_state == "stopped" and new_state in (
+                    "running",
+                    "starting",
+                ):
+                    # request_stop commits ``stopping`` before dispatching
+                    # the kill frame. A periodic report already in flight can
+                    # still say running/starting for the same generation; it
+                    # is an observation of the pre-stop world, not a reason
+                    # to reverse the requested transition.
+                    logger.info(
+                        "lifecycle.report_ignored_during_stop",
+                        agent_id=aid,
+                        reported_state=new_state,
+                    )
+                    continue
+
+                if agent.desired_state == "stopped" and new_state == "crashed":
+                    # The process is gone while an intentional stop is in
+                    # progress. Normalize this to the requested terminal
+                    # state so admin surfaces do not raise a crash warning for
+                    # a successful stop race.
+                    new_state = "stopped"
                 old_state = agent.actual_state
                 if new_state:
                     agent.actual_state = new_state
