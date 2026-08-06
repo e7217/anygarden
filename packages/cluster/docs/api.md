@@ -37,7 +37,7 @@ Base URL: `/api/v1`
 | Method | Path | 설명 |
 |--------|------|------|
 | GET | `/machines` | 머신 목록 |
-| POST | `/machines/register` | 머신 등록 |
+| POST | `/machines` | 머신 등록 |
 | GET | `/machines/{id}` | 머신 상세 |
 
 ## Messages
@@ -52,3 +52,56 @@ Base URL: `/api/v1`
 |------|------|
 | `/ws/chat` | 유저/에이전트 채팅 연결 |
 | `/ws/machines/{id}` | 머신 데몬 연결 |
+
+## Error response
+
+Any API failure follows one of the shapes below:
+
+1) Plain string detail (`"Not found"`)
+
+2) Structured object:
+
+```json
+{
+  "code": "TASK_NOT_FOUND",
+  "message": "Task not found",
+  "detail": "Task not found"
+}
+```
+
+`code` is the machine-readable identifier for clients.
+`message` and `detail` are human-readable message aliases for compatibility.
+Deprecated legacy fields (`error`) may exist temporarily on migration paths.
+
+예시:
+
+```bash
+# 머신 오프라인
+curl -i -X POST http://localhost:8000/api/v1/machines/<id>/update \
+  -H "Authorization: Bearer <token>"
+
+{
+  "detail": {
+    "code": "MACHINE_OFFLINE",
+    "message": "Machine is not connected",
+    "detail": "Machine is not connected"
+  }
+}
+```
+
+```bash
+# 삭제 대상 머신에 에이전트가 존재
+curl -i -X DELETE http://localhost:8000/api/v1/machines/<id> \
+  -H "Authorization: Bearer <token>"
+
+{
+  "detail": {
+    "code": "MACHINE_HAS_ACTIVE_AGENTS",
+    "error": "machine_has_active_agents",
+    "agent_count": 2,
+    "message": "2 agent(s) are still placed on this machine..."
+  }
+}
+```
+
+`error` is intentionally kept as a compatibility key while clients migrate to `code`.

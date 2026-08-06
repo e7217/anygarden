@@ -228,6 +228,47 @@ class TestMachinesAPI:
         assert resp.json()["name"] == "get-machine"
 
     @pytest.mark.asyncio
+    async def test_missing_machine_has_stable_error(self, machines_env) -> None:
+        client = machines_env["client"]
+        token = machines_env["token"]
+
+        resp = await client.get(
+            "/api/v1/machines/not-found",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == {
+            "code": "MACHINE_NOT_FOUND",
+            "message": "Machine not found",
+            "detail": "Machine not found",
+        }
+
+    @pytest.mark.asyncio
+    async def test_offline_machine_update_has_stable_error(self, machines_env) -> None:
+        client = machines_env["client"]
+        token = machines_env["token"]
+
+        created = await client.post(
+            "/api/v1/machines",
+            json={"name": "offline-update"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        machine_id = created.json()["id"]
+
+        resp = await client.post(
+            f"/api/v1/machines/{machine_id}/update",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {
+            "code": "MACHINE_OFFLINE",
+            "message": "Machine is not connected",
+            "detail": "Machine is not connected",
+        }
+
+    @pytest.mark.asyncio
     async def test_update_machine(self, machines_env) -> None:
         client = machines_env["client"]
         token = machines_env["token"]
@@ -333,7 +374,8 @@ class TestMachinesAPI:
         )
         assert resp.status_code == 409
         body = resp.json()
-        assert body["detail"]["error"] == "machine_has_active_agents"
+        assert body["detail"].get("code") == "MACHINE_HAS_ACTIVE_AGENTS"
+        assert body["detail"].get("error") == "machine_has_active_agents"
         assert body["detail"]["agent_count"] == 1
 
     @pytest.mark.asyncio
