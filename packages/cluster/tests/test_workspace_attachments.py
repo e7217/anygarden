@@ -35,7 +35,12 @@ from anygarden.workspaces.lifecycle import (
     handle_revoke_receipt,
     revoke_invalid_attachments,
 )
-from anygarden.workspaces.router import AttachmentCreate, VerifyBody, list_audits
+from anygarden.workspaces.router import (
+    AttachmentCreate,
+    AttachmentOut,
+    VerifyBody,
+    list_audits,
+)
 from anygarden.workspaces.service import (
     append_audit,
     machine_can_activate,
@@ -456,6 +461,54 @@ async def test_verified_receipt_discards_untrusted_reason_text(workspace_env) ->
     assert "/etc/shadow" not in projection
     assert "wsc_raw_secret" not in projection
     assert "machine_verified" in projection
+
+
+@pytest.mark.asyncio
+async def test_untrusted_denial_text_cannot_reach_attachment_api_projection(
+    workspace_env,
+) -> None:
+    """A validly signed receipt still may not expose daemon diagnostics."""
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        await db.commit()
+
+    receipt = {
+        "type": "workspace_attach_receipt",
+        "attachment_id": workspace_env["attachment"],
+        "workspace_id": "ws_opaque_fixture",
+        "agent_id": workspace_env["agent"],
+        "epoch": 7,
+        "status": "denied",
+        "reason": "diagnostic C:\\Users\\alice\\private token=wsc_qa_sentinel",
+    }
+    receipt["signature"] = workspace_env["signer"].sign(receipt)
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data=receipt,
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        audits = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit).where(
+                        WorkspaceInvocationAudit.attachment_id == attachment.id
+                    )
+                )
+            ).all()
+        )
+
+    projection = AttachmentOut.model_validate(attachment).model_dump_json()
+    rendered = f"{projection} {[row.details for row in audits]}"
+    assert "C:\\Users\\alice\\private" not in rendered
+    assert "wsc_qa_sentinel" not in rendered
+    assert attachment.failure_code == "machine_denied"
 
 
 @pytest.mark.asyncio
