@@ -398,6 +398,54 @@ async def test_machine_receipt_reason_cannot_leak_path_or_secret_to_audit(
     assert "wsc_secret" not in rendered
 
 
+@pytest.mark.asyncio
+async def test_machine_denial_reason_cannot_leak_to_attachment_or_audit(
+    workspace_env,
+) -> None:
+    """A daemon rejection reason must be a safe code before persistence."""
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        attachment.epoch = 10
+        await db.commit()
+        receipt_epoch = attachment.epoch
+
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data={
+            "attachment_id": workspace_env["attachment"],
+            "workspace_id": "ws_opaque_fixture",
+            "agent_id": workspace_env["agent"],
+            "epoch": receipt_epoch,
+            "status": "denied",
+            "reason": "denied /home/alice/private token=wsc_secret",
+        },
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        rows = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit)
+                    .where(
+                        WorkspaceInvocationAudit.attachment_id
+                        == workspace_env["attachment"]
+                    )
+                    .order_by(WorkspaceInvocationAudit.created_at)
+                )
+            ).all()
+        )
+
+    rendered = f"{attachment.failure_code} {[row.details for row in rows]}"
+    assert "/home/alice/private" not in rendered
+    assert "wsc_secret" not in rendered
+
+
 def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
     machine = SimpleNamespace(control_capabilities=["workspace_attach_v1"])
     agent = SimpleNamespace(engine="codex-cli", permission_level="standard")
