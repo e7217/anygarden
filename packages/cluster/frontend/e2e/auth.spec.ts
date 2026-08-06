@@ -42,6 +42,10 @@ async function stubApi(page: Page, loginStatus = 200) {
       return fulfillJson(route, 200, user)
     }
 
+    if (pathname === '/api/v1/system/version') {
+      return fulfillJson(route, 200, { version: '0.18.0' })
+    }
+
     // The post-login empty workspace needs only these list endpoints.  The
     // same test still runs the real router, providers, and sidebar code.
     if (pathname === '/api/v1/projects' || pathname === '/api/v1/rooms') {
@@ -63,6 +67,7 @@ test.describe('authentication browser smoke', () => {
 
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { name: 'Welcome to Anygarden' })).toBeVisible()
+    await expect(page.getByTitle('Server version')).toHaveText('anygarden v0.18.0')
     await expect
       .poll(() => page.evaluate(() => localStorage.getItem('anygarden_token')))
       .toBe('e2e-token')
