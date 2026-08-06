@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -359,16 +358,13 @@ async def _redispatch_task_by_request_id(
     if room is None:
         return False
 
-    # Return the Task to a re-runnable state. ``started_at=None``
-    # so the exec sweeper (Wave 0) re-measures from the next
-    # in_progress; ``assigned_at=now`` refreshes the pickup-timeout
-    # clock; the error notes which reason triggered it.
-    now = datetime.now(timezone.utc)
-    task.status = "todo"
-    task.assigned_at = now
-    task.started_at = None
-    task.error = f"redispatch:{reason}"
-    await db.flush()
+    # Re-read-sensitive CAS: a removal, archive, reassignment, or completed
+    # task turns this recovery into a no-op instead of reviving stale work.
+    from anygarden.task_service import redispatch_task_cas
+
+    task = await redispatch_task_cas(db, task=task, reason=reason)
+    if task is None:
+        return False
 
     # Re-wake: a fresh request_id + a new AgentTurnTask carrying the
     # incremented chain count is minted inside inject. Pass the

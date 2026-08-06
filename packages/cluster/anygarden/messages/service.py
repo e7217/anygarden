@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import AgentTurnTask, Message, Participant, User
+from anygarden.db.models import AgentTurnTask, Message, Participant, Room, User
 from anygarden.db.repository import append_message as _repo_append, replay_since_seq
 
 if TYPE_CHECKING:
@@ -215,6 +215,15 @@ async def inject_task_assignment_message(
             "inject_task_assignment_message requires task.assignee_participant_id"
         )
 
+    active_room_id = await db.scalar(
+        select(Room.id).where(Room.id == room.id, Room.archived_at.is_(None))
+    )
+    if active_room_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Room is archived",
+        )
+
     # #463 — mint (or accept) the server-side turn correlation id and put
     # it on the metadata under the SAME ``request_id`` key the live path
     # uses. The assignee agent threads ``metadata.request_id`` onto its
@@ -261,12 +270,16 @@ async def inject_task_assignment_message(
         "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다."
     )
 
-    msg = await _repo_append(
+    from anygarden.task_service import source_thread_root_id
+
+    thread_root_id = await source_thread_root_id(db, task)
+    msg = await append_message(
         db,
         room.id,
         sender_participant_id,
         content,
         metadata,
+        thread_root_id=thread_root_id,
     )
 
     # #463 — persist the request_id↔task correlation so the WS handler can
@@ -318,6 +331,8 @@ async def _build_task_ws_payload(
         p = await db.get(Participant, task.assignee_participant_id)
         if p is not None:
             agent_id = p.agent_id
+    from anygarden.task_service import source_thread_root_id
+
     return {
         "id": task.id,
         "room_id": task.room_id,
@@ -328,6 +343,8 @@ async def _build_task_ws_payload(
         "agent_id": agent_id,
         "created_by": task.created_by,
         "created_at": task.created_at.isoformat() if task.created_at else None,
+        "source_message_id": task.source_message_id,
+        "source_thread_root_id": await source_thread_root_id(db, task),
     }
 
 
@@ -345,7 +362,9 @@ async def fanout_task_event(
     db: AsyncSession,
     *,
     manager: "ConnectionManager | None",
-    event: Literal["created", "updated", "deleted", "assigned", "reassigned"],
+    event: Literal[
+        "created", "updated", "deleted", "assigned", "reassigned", "claimed"
+    ],
     task: "Task",
     room_name: str,
 ) -> None:

@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "059"
+                assert version == "060"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -463,9 +463,9 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                # Head is now 059; the cost_usd column added by 047
+                # Head is now 060; the cost_usd column added by 047
                 # is still present after upgrading through to head.
-                assert version == "059"
+                assert version == "060"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -525,7 +525,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "059"
+                assert version == "060"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "059"
+                assert version == "060"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -589,6 +589,66 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 assert version == "048"
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+    def test_060_message_linked_tasks_up_and_down(self) -> None:
+        """060 adds the nullable source FK plus unique lookup indexes."""
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                columns = {
+                    row[1]: row for row in conn.execute(text("PRAGMA table_info(tasks)"))
+                }
+                assert columns["source_message_id"][3] == 0  # nullable
+                foreign_keys = list(
+                    conn.execute(text("PRAGMA foreign_key_list(tasks)"))
+                )
+                assert any(
+                    row[2] == "messages"
+                    and row[3] == "source_message_id"
+                    and row[4] == "id"
+                    and row[6] == "SET NULL"
+                    for row in foreign_keys
+                )
+                indexes = {
+                    row[1]: row for row in conn.execute(text("PRAGMA index_list(tasks)"))
+                }
+                assert "ix_tasks_source_message_id" in indexes
+                unique_columns = {
+                    tuple(
+                        info[2]
+                        for info in conn.execute(
+                            text(f'PRAGMA index_info("{name}")')
+                        )
+                    )
+                    for name, row in indexes.items()
+                    if row[2] == 1
+                }
+                assert ("source_message_id",) in unique_columns
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "060"
+            engine.dispose()
+
+            command.downgrade(cfg, "059")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                columns = {
+                    row[1] for row in conn.execute(text("PRAGMA table_info(tasks)"))
+                }
+                assert "source_message_id" not in columns
             engine.dispose()
         finally:
             try:
@@ -653,7 +713,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "059"
+                assert version == "060"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -693,7 +753,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "059"
+                assert version == "060"
             sync_engine.dispose()
         finally:
             try:
@@ -727,7 +787,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "059"
+            assert head == "060"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -829,7 +889,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "059"
+                assert version == "060"
             sync_engine.dispose()
         finally:
             try:

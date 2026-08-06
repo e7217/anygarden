@@ -190,6 +190,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "update_skill",
         "list_my_skills",
         "delete_my_skill",
+        "claim_task",
         "mark_task_status",
         "create_task",
         "add_task_blocker",

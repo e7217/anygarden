@@ -345,7 +345,9 @@ class TaskUpdateOut(BaseModel):
     """
 
     type: Literal["task.updated"] = "task.updated"
-    event: Literal["created", "updated", "deleted", "assigned", "reassigned"]
+    event: Literal[
+        "created", "updated", "deleted", "assigned", "reassigned", "claimed"
+    ]
     task: dict[str, Any]
 
 

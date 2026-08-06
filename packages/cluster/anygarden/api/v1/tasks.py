@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
@@ -19,6 +20,15 @@ from anygarden.messages.service import (
 )
 from anygarden.messages.serialization import message_to_frame
 from anygarden.rooms.authorization import Capability, require_capability
+from anygarden.task_service import (
+    TaskMutationConflict,
+    admin_requeue_task_cas,
+    claim_task_cas,
+    source_thread_root_id,
+    transition_task_status_cas,
+    update_open_task_cas,
+    update_task_title_cas,
+)
 # #471 — validate ``status`` against the single canonical vocabulary
 # (the same set the MCP ``mark_task_status`` path enforces) so the REST
 # surface can't persist an out-of-band status the rest of the system
@@ -51,7 +61,7 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=500)
     status: Optional[str] = None
     assignee_participant_id: Optional[str] = None
 
@@ -66,6 +76,8 @@ class TaskOut(BaseModel):
     assignee_participant_id: Optional[str] = None
     created_by: Optional[str] = None
     created_at: str
+    source_message_id: Optional[str] = None
+    source_thread_root_id: Optional[str] = None
     # #302 — goal-derived task fields. NULL on manual rows. Surfaced
     # so the frontend can render an "⚙ from <Goal title>" attribution
     # chip without a second round-trip.
@@ -76,7 +88,17 @@ class TaskOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def _to_out(task: Task) -> TaskOut:
+class MessageTaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    assignee_participant_id: Optional[str] = None
+
+
+class TaskRequeue(BaseModel):
+    reason: str = Field(min_length=1, max_length=1000)
+    assignee_participant_id: Optional[str] = None
+
+
+async def _to_out(db: AsyncSession, task: Task) -> TaskOut:
     return TaskOut(
         id=task.id,
         room_id=task.room_id,
@@ -85,10 +107,54 @@ def _to_out(task: Task) -> TaskOut:
         assignee_participant_id=task.assignee_participant_id,
         created_by=task.created_by,
         created_at=task.created_at.isoformat(),
+        source_message_id=task.source_message_id,
+        source_thread_root_id=await source_thread_root_id(db, task),
         goal_id=task.goal_id,
         triggered_by=task.triggered_by,
         is_interesting=task.is_interesting,
     )
+
+
+def _raise_conflict(exc: TaskMutationConflict) -> None:
+    raise HTTPException(status_code=409, detail=exc.api_detail()) from exc
+
+
+async def _raise_fresh_claim_conflict(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    exc: TaskMutationConflict,
+) -> None:
+    """Report the committed winner, not the loser's stale read snapshot.
+
+    SQLite can retain the transaction snapshot established by the pre-CAS
+    task lookup even after a competing writer commits.  The failed UPDATE
+    changed nothing, so end that request transaction before reading the row
+    used in the 409 payload.
+    """
+
+    await db.rollback()
+    current = await db.scalar(select(Task).where(Task.id == task_id))
+    detail = exc.api_detail()
+    detail["current_status"] = current.status if current else None
+    detail["current_assignee_participant_id"] = (
+        current.assignee_participant_id if current else None
+    )
+    raise HTTPException(status_code=409, detail=detail) from exc
+
+
+def _is_system_source(message: Message) -> bool:
+    metadata = message.extra_metadata or {}
+    if metadata.get("system_origin") is not None:
+        return True
+    denied_keys = {
+        "task_assignment",
+        "room_query",
+        "room_query_result",
+        "room_query_forward",
+        "routing_request_id",
+    }
+    return any(key in metadata for key in denied_keys)
 
 
 async def _validate_assignee_in_room(
@@ -209,6 +275,12 @@ async def create_task(
 
     assignee: Optional[Participant] = None
     if body.assignee_participant_id is not None:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.TASK_MANAGE,
+        )
         assignee = await _validate_assignee_in_room(
             db, room_id, body.assignee_participant_id
         )
@@ -249,7 +321,106 @@ async def create_task(
         db, manager=manager, event="created", task=task, room_name=room.name
     )
 
-    return _to_out(task)
+    return await _to_out(db, task)
+
+
+@router.post(
+    "/api/v1/rooms/{room_id}/messages/{message_id}/task",
+    status_code=201,
+    response_model=TaskOut,
+)
+async def create_message_task(
+    room_id: str,
+    message_id: str,
+    body: MessageTaskCreate,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Convert one same-room user message into a uniquely linked task."""
+
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.TASK_CREATE,
+    )
+    source = await db.scalar(
+        select(Message).where(Message.id == message_id, Message.room_id == room_id)
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if _is_system_source(source):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "TASK_SYSTEM_SOURCE_FORBIDDEN",
+                "detail": "System-generated messages cannot become tasks",
+            },
+        )
+
+    assignee: Participant | None = None
+    if body.assignee_participant_id is not None:
+        await require_capability(
+            db,
+            room_id=room_id,
+            identity=identity,
+            capability=Capability.TASK_MANAGE,
+        )
+        assignee = await _validate_assignee_in_room(
+            db, room_id, body.assignee_participant_id
+        )
+
+    task = Task(
+        room_id=room_id,
+        source_message_id=source.id,
+        title=body.title,
+        status="todo",
+        assignee_participant_id=body.assignee_participant_id,
+        assigned_at=(
+            datetime.now(timezone.utc) if body.assignee_participant_id else None
+        ),
+        created_by=identity.id if identity.kind == "user" else None,
+    )
+    db.add(task)
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        existing_id = await db.scalar(
+            select(Task.id).where(Task.source_message_id == message_id)
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TASK_SOURCE_ALREADY_LINKED",
+                "existing_task_id": existing_id,
+            },
+        ) from exc
+
+    injected = await _maybe_inject(
+        db,
+        room=access.room,
+        task=task,
+        assignee=assignee,
+        identity=identity,
+        event="assigned",
+    )
+    await db.commit()
+    await db.refresh(task)
+
+    manager = _connection_manager(request)
+    if injected is not None and manager is not None:
+        await db.refresh(injected)
+        await manager.broadcast(room_id, _message_to_frame(injected))
+    await fanout_task_event(
+        db,
+        manager=manager,
+        event="created",
+        task=task,
+        room_name=access.room.name,
+    )
+    return await _to_out(db, task)
 
 
 @router.get("/api/v1/rooms/{room_id}/tasks", response_model=list[TaskOut])
@@ -277,7 +448,7 @@ async def list_tasks(
         stmt = stmt.where(Task.goal_id == goal_id)
     stmt = stmt.order_by(Task.created_at)
     rows = (await db.execute(stmt)).scalars().all()
-    return [_to_out(t) for t in rows]
+    return [await _to_out(db, task) for task in rows]
 
 
 @router.put("/api/v1/tasks/{task_id}", response_model=TaskOut)
@@ -288,18 +459,12 @@ async def update_task(
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a task's title, status, or assignee.
-
-    When *assignee_participant_id* changes to an agent participant, a
-    synthetic mention message is injected so the agent's
-    ``decide_policy`` wakes up via the existing mention path. Status-
-    only or human-targeted changes are quiet.
-    """
+    """Apply a guarded edit or assignee-owned lifecycle transition."""
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    await require_capability(
+    access = await require_capability(
         db,
         room_id=task.room_id,
         identity=identity,
@@ -310,37 +475,80 @@ async def update_task(
 
     previous_assignee = task.assignee_participant_id
     new_assignee_participant: Optional[Participant] = None
+    previous_status = task.status
+    task_source_thread_root_id = await source_thread_root_id(db, task)
 
-    if body.assignee_participant_id is not None and (
-        body.assignee_participant_id != previous_assignee
-    ):
+    assignee_was_set = "assignee_participant_id" in body.model_fields_set
+    if assignee_was_set and body.status is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Change an assignee or a status in one request, not both",
+        )
+    if assignee_was_set and body.assignee_participant_id is not None:
         new_assignee_participant = await _validate_assignee_in_room(
             db, task.room_id, body.assignee_participant_id
         )
 
-    # Capture pre-state so the materialize hook (#302) can detect a
-    # transition into a terminal status.
-    previous_status = task.status
+    try:
+        if assignee_was_set:
+            if task.status != "todo":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "TASK_REQUEUE_REQUIRED",
+                        "detail": (
+                            "Running, blocked, and terminal tasks must use the "
+                            "admin requeue endpoint before reassignment"
+                        ),
+                    },
+                )
+            task = await update_open_task_cas(
+                db,
+                task=task,
+                title=body.title,
+                set_assignee=True,
+                assignee_participant_id=body.assignee_participant_id,
+            )
+        elif body.title is not None:
+            task = await update_task_title_cas(db, task=task, title=body.title)
 
-    if body.title is not None:
-        task.title = body.title
-    if body.status is not None:
-        task.status = body.status
-        # #445 — stamp lifecycle timestamps on the status transition so
-        # the execution-timeout sweeper can catch wedged in_progress
-        # tasks. is-None guard keeps the first transition authoritative;
-        # apply_completion below still sets finished_at for goal tasks.
-        _ts = datetime.now(timezone.utc)
-        if body.status == "in_progress" and task.started_at is None:
-            task.started_at = _ts
-        elif body.status in ("done", "failed") and task.finished_at is None:
-            task.finished_at = _ts
-    if body.assignee_participant_id is not None:
-        task.assignee_participant_id = body.assignee_participant_id
-        # #314 — refresh the pickup-timeout clock on every (re)assignment
-        # so the new assignee gets a fresh window.
-        if body.assignee_participant_id != previous_assignee:
-            task.assigned_at = datetime.now(timezone.utc)
+        if body.status is not None and body.status != previous_status:
+            if body.status == "in_progress":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "TASK_CLAIM_REQUIRED",
+                        "detail": "Use the atomic task claim endpoint",
+                    },
+                )
+            if previous_status != "in_progress" or body.status not in {
+                "blocked",
+                "done",
+                "failed",
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "TASK_INVALID_TRANSITION",
+                        "detail": f"Cannot transition {previous_status} to {body.status}",
+                    },
+                )
+            is_admin = access.is_global_admin or access.effective_role in {
+                "admin",
+                "owner",
+            }
+            task = await transition_task_status_cas(
+                db,
+                task=task,
+                target_status=body.status,
+                participant_id=(
+                    None
+                    if is_admin
+                    else access.participant.id if access.participant else None
+                ),
+            )
+    except TaskMutationConflict as exc:
+        _raise_conflict(exc)
 
     await db.flush()
 
@@ -435,7 +643,9 @@ async def update_task(
     # silent-success path. ``_to_out`` reads attributes that detach
     # after ``db.delete`` + ``commit`` — building the WS payload from
     # the snapshot keeps the response shape consistent.
-    task_snapshot_for_response = _to_out(task) if not task_was_deleted else None
+    task_snapshot_for_response = (
+        await _to_out(db, task) if not task_was_deleted else None
+    )
 
     await db.commit()
 
@@ -478,6 +688,8 @@ async def update_task(
             assignee_participant_id=task.assignee_participant_id,
             created_by=task.created_by,
             created_at=task.created_at.isoformat(),
+            source_message_id=task.source_message_id,
+            source_thread_root_id=task_source_thread_root_id,
             goal_id=task.goal_id,
             triggered_by=task.triggered_by,
             is_interesting=task.is_interesting,
@@ -493,7 +705,118 @@ async def update_task(
             room_name=room.name,
         )
 
-    return task_snapshot_for_response or _to_out(task)
+    return task_snapshot_for_response or await _to_out(db, task)
+
+
+@router.post("/api/v1/tasks/{task_id}/claim", response_model=TaskOut)
+async def claim_task(
+    task_id: str,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Atomically claim an unassigned or caller-reserved todo task."""
+
+    task = await db.scalar(select(Task).where(Task.id == task_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    access = await require_capability(
+        db,
+        room_id=task.room_id,
+        identity=identity,
+        capability=Capability.TASK_CLAIM,
+        task=task,
+    )
+    if access.participant is None:
+        raise HTTPException(status_code=403, detail="Room participant required")
+    if identity.kind == "user" and not access.room.allow_human_assignment:
+        raise HTTPException(
+            status_code=403,
+            detail="Human task assignment is disabled for this room",
+        )
+    try:
+        claimed = await claim_task_cas(
+            db,
+            task_id=task.id,
+            room_id=task.room_id,
+            participant_id=access.participant.id,
+        )
+    except TaskMutationConflict as exc:
+        await _raise_fresh_claim_conflict(db, task_id=task.id, exc=exc)
+
+    await db.commit()
+    await db.refresh(claimed)
+    manager = _connection_manager(request)
+    await fanout_task_event(
+        db,
+        manager=manager,
+        event="claimed",
+        task=claimed,
+        room_name=access.room.name,
+    )
+    return await _to_out(db, claimed)
+
+
+@router.post("/api/v1/tasks/{task_id}/requeue", response_model=TaskOut)
+async def requeue_task(
+    task_id: str,
+    body: TaskRequeue,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Explicitly return work to todo and record the administrator's reason."""
+
+    task = await db.scalar(select(Task).where(Task.id == task_id))
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    access = await require_capability(
+        db,
+        room_id=task.room_id,
+        identity=identity,
+        capability=Capability.TASK_MANAGE,
+        task=task,
+    )
+    assignee: Participant | None = None
+    if body.assignee_participant_id is not None:
+        assignee = await _validate_assignee_in_room(
+            db, task.room_id, body.assignee_participant_id
+        )
+    try:
+        changed = await admin_requeue_task_cas(
+            db,
+            task=task,
+            actor_user_id=identity.id,
+            reason=body.reason,
+            assignee_participant_id=body.assignee_participant_id,
+        )
+    except TaskMutationConflict as exc:
+        _raise_conflict(exc)
+
+    injected: Message | None = None
+    if assignee is not None and assignee.agent_id is not None:
+        injected = await _maybe_inject(
+            db,
+            room=access.room,
+            task=changed,
+            assignee=assignee,
+            identity=identity,
+            event="reassigned",
+        )
+    await db.commit()
+    await db.refresh(changed)
+    manager = _connection_manager(request)
+    if injected is not None and manager is not None:
+        await db.refresh(injected)
+        await manager.broadcast(changed.room_id, _message_to_frame(injected))
+    await fanout_task_event(
+        db,
+        manager=manager,
+        event="reassigned" if assignee is not None else "updated",
+        task=changed,
+        room_name=access.room.name,
+    )
+    return await _to_out(db, changed)
 
 
 @router.delete("/api/v1/tasks/{task_id}", status_code=200)
@@ -516,6 +839,15 @@ async def delete_task(
         task=task,
         changed_fields={"delete"},
     )
+
+    if task.source_message_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TASK_SOURCE_LINKED_DELETE_FORBIDDEN",
+                "detail": "A message-linked task cannot be deleted",
+            },
+        )
 
     # Snapshot the fields the WS frame needs, then drop the row. After
     # the delete the ORM object's attributes are detached, so we resolve

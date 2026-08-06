@@ -712,11 +712,12 @@ class Participant(Base):
 
 
 class RoomAuthorizationAudit(Base):
-    """Append-only record of a global-admin room authorization bypass.
+    """Append-only record of privileged room authorization decisions.
 
     Actor and room identifiers deliberately have no foreign keys: deleting a
-    user or room must not erase which operator crossed which authorization
-    boundary. ``room_id`` is null for collection/search scopes.
+    user or room must not erase which operator crossed an authorization
+    boundary or forced a lifecycle transition. ``room_id`` is null for
+    collection/search scopes.
     """
 
     __tablename__ = "room_authorization_audits"
@@ -1329,11 +1330,19 @@ class Task(Base):
         # second Task. NULL is multi-allowed on both SQLite and
         # Postgres so non-goal Tasks (key NULL) never collide.
         UniqueConstraint("idempotency_key", name="uq_tasks_idempotency_key"),
+        UniqueConstraint("source_message_id", name="uq_tasks_source_message_id"),
+        Index("ix_tasks_source_message_id", "source_message_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     room_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    source_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("messages.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="todo")

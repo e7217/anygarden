@@ -54,6 +54,7 @@ class Capability(StrEnum):
 
     TASK_READ = "task.read"
     TASK_CREATE = "task.create"
+    TASK_CLAIM = "task.claim"
     TASK_UPDATE = "task.update"
     TASK_MANAGE = "task.manage"
 
@@ -82,6 +83,7 @@ _MEMBER_CAPABILITIES: frozenset[Capability] = frozenset(
         Capability.TYPING_SEND,
         Capability.SELF_STATE_WRITE,
         Capability.TASK_CREATE,
+        Capability.TASK_CLAIM,
     }
 )
 
@@ -528,11 +530,15 @@ def _require_task_update_scope(
     task: Task | None,
     changed_fields: AbstractSet[str] | None,
 ) -> None:
-    """Apply the member-agent exception for self-assigned status updates."""
+    """Apply the member exception for self-assigned status updates."""
 
     if access.is_global_admin or access.effective_role in {"admin", "owner"}:
         return
-    if access.identity.kind != "agent" or access.participant is None:
+    if (
+        access.identity.kind not in {"agent", "user"}
+        or access.participant is None
+        or access.effective_role != "member"
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Task management requires a room admin or owner",
@@ -540,12 +546,12 @@ def _require_task_update_scope(
     if task is None or task.assignee_participant_id != access.participant.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the assignee agent may update this task",
+            detail="Only the assignee may update this task",
         )
     if not changed_fields or not set(changed_fields) <= {"status"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Assignee agents may update task status only",
+            detail="Assignees may update task status only",
         )
 
 
@@ -570,15 +576,29 @@ async def require_capability(
     if access.is_archived and capability not in _ARCHIVED_ALLOWED_CAPABILITIES:
         require_active_room(access)
 
-    # Agents get a narrow, target-sensitive exception even though the generic
+    # Members get a narrow, target-sensitive exception even though the generic
     # member capability set deliberately excludes TASK_UPDATE.
-    if capability == Capability.TASK_UPDATE and access.identity.kind == "agent":
+    if capability == Capability.TASK_UPDATE and access.identity.kind in {"agent", "user"}:
         _require_task_update_scope(
             access,
             task=task,
             changed_fields=changed_fields,
         )
         return access
+
+    if capability == Capability.TASK_CLAIM:
+        # A claim always binds to the caller's current Participant. Global
+        # administrator discovery authority is not a substitute for room
+        # membership, and guests/observers never claim work.
+        if (
+            access.participant is None
+            or access.identity.kind not in {"agent", "user"}
+            or access.effective_role not in {"member", "admin", "owner"}
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Task claim requires current room membership",
+            )
 
     if capability not in _role_capabilities(access):
         raise HTTPException(

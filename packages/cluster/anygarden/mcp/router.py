@@ -23,6 +23,7 @@ from anygarden.mcp.tools import (
     TOOL_SCHEMAS,
     add_task_blocker,
     call_tool,
+    claim_task,
     clear_task_blocker,
     create_task,
     mark_task_status,
@@ -137,10 +138,11 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
         # on the main DB rather than the skill library, so it owns its
         # own session lifecycle here. The legacy skill tools below
         # continue to flow through ``call_tool``.
-        if name == "mark_task_status":
+        if name in {"mark_task_status", "claim_task"}:
             session_factory = request.app.state.session_factory
             async with session_factory() as db:
-                tool_result = await mark_task_status(
+                handler = claim_task if name == "claim_task" else mark_task_status
+                tool_result = await handler(
                     db, agent_id=agent_id, arguments=arguments
                 )
                 if not tool_result.get("isError"):
@@ -225,7 +227,7 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                         await _fanout_task_event(
                             db,
                             manager=manager,
-                            event="updated",
+                            event=structured.get("event", "updated"),
                             task=task_obj,
                             room_name=room_obj.name if room_obj else "",
                         )

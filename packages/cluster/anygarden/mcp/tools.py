@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -127,6 +126,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"id": {"type": "string"}},
             "required": ["id"],
+        },
+    },
+    {
+        "name": "claim_task",
+        "description": (
+            "Atomically claim an unassigned todo task for your current room "
+            "participant. If another participant wins first, the call returns "
+            "TASK_CLAIM_CONFLICT and does not overwrite their claim."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task_id": {"type": "string"}},
+            "required": ["task_id"],
         },
     },
     {
@@ -408,6 +420,57 @@ async def _delete_my_skill(
 # ── mark_task_status (#266) ────────────────────────────────────────
 
 
+async def claim_task(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically claim an open task as the calling agent participant."""
+
+    from anygarden.task_service import TaskMutationConflict, claim_task_cas
+
+    task_id = arguments.get("task_id")
+    if not task_id:
+        return _error_result("missing required argument: task_id")
+    task = await db.scalar(select(Task).where(Task.id == task_id))
+    if task is None:
+        return _error_result(f"task not found: {task_id}")
+    try:
+        access = await require_capability(
+            db,
+            room_id=task.room_id,
+            identity=Identity(kind="agent", id=agent_id),
+            capability=Capability.TASK_CLAIM,
+            task=task,
+        )
+        if access.participant is None:
+            return _error_result("forbidden: room participant required")
+        claimed = await claim_task_cas(
+            db,
+            task_id=task.id,
+            room_id=task.room_id,
+            participant_id=access.participant.id,
+        )
+    except HTTPException as exc:
+        return _error_result(f"forbidden: {exc.detail}")
+    except TaskMutationConflict as exc:
+        return _error_result(
+            f"{exc.code}: {exc.detail}; current_status={exc.current_status!r}; "
+            f"current_assignee_participant_id="
+            f"{exc.current_assignee_participant_id!r}"
+        )
+    return _ok_result(
+        f"task {task_id} claimed",
+        structured={
+            "task_id": task_id,
+            "room_id": claimed.room_id,
+            "status": claimed.status,
+            "event": "claimed",
+        },
+    )
+
+
 async def mark_task_status(
     db: AsyncSession,
     *,
@@ -442,28 +505,83 @@ async def mark_task_status(
     ).scalar_one_or_none()
     if task is None:
         return _error_result(f"task not found: {task_id}")
+    from anygarden.task_service import (
+        TaskMutationConflict,
+        claim_task_cas,
+        transition_task_status_cas,
+    )
+
     try:
-        await require_capability(
-            db,
-            room_id=task.room_id,
-            identity=Identity(kind="agent", id=agent_id),
-            capability=Capability.TASK_UPDATE,
-            task=task,
-            changed_fields={"status"},
-        )
+        if status == "in_progress":
+            access = await require_capability(
+                db,
+                room_id=task.room_id,
+                identity=Identity(kind="agent", id=agent_id),
+                capability=Capability.TASK_CLAIM,
+                task=task,
+            )
+            if access.participant is None:
+                return _error_result("forbidden: room participant required")
+            if (
+                task.status == "in_progress"
+                and task.assignee_participant_id == access.participant.id
+            ):
+                return _ok_result(
+                    f"task {task_id} already in_progress",
+                    structured={
+                        "task_id": task_id,
+                        "status": status,
+                        "woken": [],
+                        "event": "updated",
+                    },
+                )
+            if task.assignee_participant_id != access.participant.id:
+                return _error_result(
+                    "TASK_CLAIM_CONFLICT: mark_task_status(in_progress) only "
+                    "accepts a task already reserved for this agent; use "
+                    "claim_task for an unassigned task"
+                )
+            task = await claim_task_cas(
+                db,
+                task_id=task.id,
+                room_id=task.room_id,
+                participant_id=access.participant.id,
+            )
+        else:
+            access = await require_capability(
+                db,
+                room_id=task.room_id,
+                identity=Identity(kind="agent", id=agent_id),
+                capability=Capability.TASK_UPDATE,
+                task=task,
+                changed_fields={"status"},
+            )
+            if status == task.status:
+                return _ok_result(
+                    f"task {task_id} already {status}",
+                    structured={"task_id": task_id, "status": status, "woken": []},
+                )
+            if task.status != "in_progress" or status not in {
+                "blocked",
+                "done",
+                "failed",
+            }:
+                return _error_result(
+                    f"TASK_INVALID_TRANSITION: cannot transition "
+                    f"{task.status} to {status}"
+                )
+            assert access.participant is not None
+            task = await transition_task_status_cas(
+                db,
+                task=task,
+                target_status=status,
+                participant_id=access.participant.id,
+            )
     except HTTPException as exc:
         return _error_result(f"forbidden: {exc.detail}")
+    except TaskMutationConflict as exc:
+        return _error_result(f"{exc.code}: {exc.detail}")
 
-    now = datetime.now(timezone.utc)
-    task.status = status
-    # #445 — stamp lifecycle timestamps so the execution-timeout sweeper
-    # (goals/sweeper.py) can detect wedged in_progress tasks. The is-None
-    # guard preserves a started_at already set at goal-task creation
-    # (goals/executor.py) and keeps the first transition authoritative.
-    if status == "in_progress" and task.started_at is None:
-        task.started_at = now
-    elif status in TERMINAL_STATUSES and task.finished_at is None:
-        task.finished_at = now
     await db.flush()
 
     # #459 (Wave 2c) — resolve-wake. When this task reaches a terminal
@@ -476,7 +594,12 @@ async def mark_task_status(
 
     return _ok_result(
         f"task {task_id} status -> {status}",
-        structured={"task_id": task_id, "status": status, "woken": woken},
+        structured={
+            "task_id": task_id,
+            "status": status,
+            "woken": woken,
+            "event": "claimed" if status == "in_progress" else "updated",
+        },
     )
 
 
@@ -928,6 +1051,10 @@ async def resolve_task_blockers(
     # Lazy import — avoids a top-level cycle between mcp/tools and
     # messages/service (the latter imports anygarden.db.models).
     from anygarden.messages.service import inject_task_assignment_message
+    from anygarden.task_service import (
+        TaskMutationConflict,
+        transition_task_status_cas,
+    )
 
     woken: list[str] = []
     for dep_id in dependent_ids:
@@ -964,13 +1091,20 @@ async def resolve_task_blockers(
             ).scalar_one_or_none()
             if dep is None:
                 continue
-            if dep.status not in ("blocked", "todo", "failed"):
-                # Already moving (in_progress) or done — leave it alone.
+            if dep.status not in ("blocked", "todo"):
+                # Moving or terminal work must not be reopened implicitly.
                 continue
+            if dep.status == "blocked":
+                try:
+                    dep = await transition_task_status_cas(
+                        db,
+                        task=dep,
+                        target_status="todo",
+                    )
+                except TaskMutationConflict:
+                    continue
             if not dep.assignee_participant_id:
-                # No assignee to wake; just normalize the status.
-                dep.status = "todo"
-                await db.flush()
+                # No assignee to wake; status was normalized above.
                 continue
 
             assignee = (
@@ -981,8 +1115,6 @@ async def resolve_task_blockers(
                 )
             ).scalar_one_or_none()
 
-            dep.status = "todo"
-            dep.assigned_at = datetime.now(timezone.utc)
             await db.flush()
 
             # Human assignees don't auto-execute (mirrors api/v1/tasks
