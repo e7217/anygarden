@@ -47,7 +47,11 @@ def test_missing_configuration_is_blocked_and_redacted(tmp_path: Path) -> None:
     assert smoke.run("preflight", evidence, {}) == 2
 
     payload = evidence.read_text()
-    assert json.loads(payload)["result_code"] == "BLOCKED_CONFIGURATION"
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "BLOCKED_CONFIGURATION"
+    assert decoded["failure_phase"] == "ENGINE_LAUNCH"
+    assert decoded["engine_exit_state"] == "NOT_OBSERVED"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
     assert "prompt" not in payload
     assert "response" not in payload
     assert "credential" not in payload
@@ -109,20 +113,29 @@ def test_preflight_evidence_has_only_redacted_contract_fields(tmp_path: Path) ->
 
     payload = json.loads(evidence.read_text())
     assert set(payload) == {
+        "classification_ms",
         "duration_ms",
         "engine",
+        "engine_exit_state",
+        "engine_ms",
         "engine_version",
         "exact_sha",
         "failure_category",
+        "failure_phase",
         "input_sha256",
         "model_version",
         "output_length",
         "output_sha256",
         "result_code",
+        "setup_ms",
+        "stdout_state",
         "workflow_run",
     }
     assert payload["result_code"] == "PREFLIGHT_PASS"
     assert payload["failure_category"] == "NOT_APPLICABLE"
+    assert payload["failure_phase"] == "ENGINE_LAUNCH"
+    assert payload["engine_exit_state"] == "NOT_OBSERVED"
+    assert payload["stdout_state"] == "NOT_OBSERVED"
     assert payload["exact_sha"] == env["GITHUB_SHA"]
     assert payload["input_sha256"] == smoke._sha256(smoke.CANARY_PROMPT.encode())
     assert credential not in evidence.read_text()
@@ -154,6 +167,17 @@ def test_command_is_fixed_read_only_ephemeral_single_turn() -> None:
     assert "resume" not in command
     assert smoke.HARD_TIMEOUT_SECONDS == 60
     assert smoke.MAX_RESPONSE_BYTES == 256
+
+
+@pytest.mark.parametrize(
+    ("returncode", "state"),
+    [(0, "ZERO"), (1, "NONZERO"), (-9, "SIGNAL"), (None, "NOT_OBSERVED")],
+)
+def test_raw_exit_code_projects_to_fixed_state(
+    returncode: int | None, state: str
+) -> None:
+    assert smoke._engine_exit_state(returncode) == state
+    assert state in smoke.ENGINE_EXIT_STATES
 
 
 def test_child_env_passes_only_validated_proxy_endpoint() -> None:
@@ -285,6 +309,7 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
 @pytest.mark.parametrize(
     ("raw", "category"),
     [
+        (b"", "ENGINE_EMPTY_OUTPUT"),
         (
             (
                 b'{"type":"error","message":"unexpected status 401 '
@@ -355,6 +380,46 @@ def test_failure_classifier_projects_only_closed_categories(
 
 
 @pytest.mark.parametrize(
+    ("raw", "category", "stdout_state"),
+    [
+        (b"", "ENGINE_EMPTY_OUTPUT", "EMPTY"),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}',
+            "AUTHENTICATION",
+            "SINGLE_FAILURE_EVENT",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 429 Too Many '
+                b'Requests"}\n'
+                b'{"type":"error","message":"unexpected status 429 Too Many '
+                b'Requests"}'
+            ),
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_EVENTS",
+        ),
+        (b"not-json", "UNKNOWN", "MALFORMED"),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
+            + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
+            "UNKNOWN",
+            "OVERSIZE",
+        ),
+        (
+            b'{"type":"thread.started","thread_id":"opaque"}',
+            "UNKNOWN",
+            "NON_FAILURE_OUTPUT",
+        ),
+    ],
+)
+def test_failure_classifier_records_only_closed_stdout_state(
+    raw: bytes, category: str, stdout_state: str
+) -> None:
+    assert smoke.classify_failure_observation(raw) == (category, stdout_state)
+    assert stdout_state in smoke.STDOUT_STATES
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         b"not-json",
@@ -404,15 +469,67 @@ def test_evidence_boundary_collapses_unlisted_category_without_leaking() -> None
         configured_env(),
         "FAIL_ENGINE_NONZERO",
         0,
+        engine_version="codex-cli raw-provider-secret",
         failure_category=sensitive_category,
+        diagnostics=smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT:raw-provider-secret",
+            engine_exit_state="137",
+            stdout_state="raw-provider-secret",
+            setup_ms=-1,
+            engine_ms=True,
+            classification_ms=smoke.MAX_EVIDENCE_DURATION_MS + 1,
+        ),
     )
 
     assert evidence.failure_category == "UNKNOWN"
+    assert evidence.engine_version == ""
+    assert evidence.failure_phase == "ENGINE_LAUNCH"
+    assert evidence.engine_exit_state == "NOT_OBSERVED"
+    assert evidence.stdout_state == "NOT_OBSERVED"
+    assert evidence.setup_ms == 0
+    assert evidence.engine_ms == 0
+    assert evidence.classification_ms == smoke.MAX_EVIDENCE_DURATION_MS
     assert sensitive_category not in json.dumps(evidence.__dict__)
+    assert "raw-provider-secret" not in json.dumps(evidence.__dict__)
 
 
 @pytest.mark.parametrize(
-    ("stdout", "stderr", "category"),
+    "diagnostics",
+    [
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="ZERO",
+            stdout_state="EMPTY",
+        ),
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="SIGNAL",
+            stdout_state="EMPTY",
+        ),
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="NONZERO",
+            stdout_state="NON_FAILURE_OUTPUT",
+        ),
+        smoke.ExecutionDiagnostics(),
+    ],
+)
+def test_engine_empty_output_requires_nonzero_and_zero_byte_stdout(
+    diagnostics: object,
+) -> None:
+    evidence = smoke.make_evidence(
+        configured_env(),
+        "FAIL_ENGINE_NONZERO",
+        0,
+        failure_category="ENGINE_EMPTY_OUTPUT",
+        diagnostics=diagnostics,
+    )
+
+    assert evidence.failure_category == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "category", "stdout_state", "failure_phase"),
     [
         (
             (
@@ -421,11 +538,22 @@ def test_evidence_boundary_collapses_unlisted_category_without_leaking() -> None
             ),
             b"raw-stderr-secret",
             "AUTHENTICATION",
+            "SINGLE_FAILURE_EVENT",
+            "STDOUT_CLASSIFICATION",
         ),
         (
             b'{"type":"turn.failed","error":{"message":"unknown raw failure"}}',
             b"unexpected status 401 Unauthorized: stderr-only-secret",
             "UNKNOWN",
+            "SINGLE_FAILURE_EVENT",
+            "STDOUT_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"unexpected status 401 Unauthorized: stderr-only-secret",
+            "ENGINE_EMPTY_OUTPUT",
+            "EMPTY",
+            "ENGINE_EXIT",
         ),
     ],
 )
@@ -435,6 +563,8 @@ def test_nonzero_engine_evidence_keeps_only_projected_category(
     stdout: bytes,
     stderr: bytes,
     category: str,
+    stdout_state: str,
+    failure_phase: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     runtime_root = tmp_path / "runtime"
@@ -475,11 +605,258 @@ def test_nonzero_engine_evidence_keeps_only_projected_category(
     decoded = json.loads(payload)
     assert decoded["result_code"] == "FAIL_ENGINE_NONZERO"
     assert decoded["failure_category"] == category
-    assert stdout.decode() not in payload
+    assert decoded["failure_phase"] == failure_phase
+    assert decoded["engine_exit_state"] == "NONZERO"
+    assert decoded["stdout_state"] == stdout_state
+    assert decoded["engine_version"] == "codex-cli 0.146.0"
+    if stdout:
+        assert stdout.decode() not in payload
     assert stderr.decode() not in payload
     assert "raw-provider-secret" not in payload
     assert "raw-stderr-secret" not in payload
     assert "stderr-only-secret" not in payload
+
+
+def test_provider_free_fake_engine_reproduces_empty_stdout_nonzero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    class FakeEngine:
+        returncode = 1
+
+        def communicate(self, **_kwargs):
+            return b"", b"sensitive-stderr-provider-secret"
+
+    monkeypatch.setattr(
+        smoke.subprocess, "Popen", lambda *_args, **_kwargs: FakeEngine()
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 1
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "FAIL_ENGINE_NONZERO"
+    assert decoded["failure_category"] == "ENGINE_EMPTY_OUTPUT"
+    assert decoded["failure_phase"] == "ENGINE_EXIT"
+    assert decoded["engine_exit_state"] == "NONZERO"
+    assert decoded["stdout_state"] == "EMPTY"
+    assert decoded["engine_version"] == "codex-cli 0.146.0"
+    assert decoded["output_length"] == 0
+    assert decoded["output_sha256"] == ""
+    assert decoded["setup_ms"] >= 0
+    assert decoded["engine_ms"] >= 0
+    assert decoded["classification_ms"] >= 0
+    assert "sensitive-stderr-provider-secret" not in payload
+    assert env["OPENAI_API_KEY"] not in payload
+    assert env["ANYGARDEN_SMOKE_PROXY_URL"] not in payload
+
+
+def test_engine_version_must_match_fixed_non_sensitive_shape(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli sensitive-version-secret"
+        ),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("engine must not start")
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", forbidden)
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 2
+
+    payload = evidence.read_text()
+    assert json.loads(payload)["result_code"] == "BLOCKED_CONFIGURATION"
+    assert "sensitive-version-secret" not in payload
+
+
+def test_provider_free_success_keeps_closed_observability_defaults(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    class FakeEngine:
+        returncode = 0
+
+        def communicate(self, **_kwargs):
+            return (
+                (
+                    b'{"type":"item.completed","item":{"type":"agent_message",'
+                    b'"text":"ANYGARDEN_SMOKE_OK"}}'
+                ),
+                b"sensitive-success-stderr",
+            )
+
+    monkeypatch.setattr(
+        smoke.subprocess, "Popen", lambda *_args, **_kwargs: FakeEngine()
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 0
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "PASS"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "RESPONSE_PARSE"
+    assert decoded["engine_exit_state"] == "ZERO"
+    assert decoded["stdout_state"] == "NON_FAILURE_OUTPUT"
+    assert decoded["output_length"] == len(smoke.CANARY_RESPONSE)
+    assert decoded["output_sha256"] == smoke._sha256(smoke.CANARY_RESPONSE.encode())
+    assert "sensitive-success-stderr" not in payload
+
+
+def test_engine_launch_failure_records_only_fixed_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    def fail_launch(*_args, **_kwargs):
+        raise OSError("sensitive-launch-exception")
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", fail_launch)
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 1
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "FAIL"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "ENGINE_LAUNCH"
+    assert decoded["engine_exit_state"] == "NOT_OBSERVED"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
+    assert "sensitive-launch-exception" not in payload
+
+
+def test_engine_timeout_records_only_fixed_state(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+    monkeypatch.setattr(smoke, "_terminate_group", lambda _proc: None)
+
+    class TimeoutEngine:
+        returncode = None
+
+        def communicate(self, **_kwargs):
+            raise smoke.subprocess.TimeoutExpired(
+                "sensitive-command", smoke.HARD_TIMEOUT_SECONDS
+            )
+
+    monkeypatch.setattr(
+        smoke.subprocess, "Popen", lambda *_args, **_kwargs: TimeoutEngine()
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 124
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "TIMEOUT"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "ENGINE_EXECUTION"
+    assert decoded["engine_exit_state"] == "SIGNAL"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
+    assert "sensitive-command" not in payload
 
 
 def test_runtime_requires_isolated_empty_workspace(tmp_path: Path, monkeypatch) -> None:

@@ -18,7 +18,7 @@ import signal
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from ipaddress import AddressValueError, IPv4Address, IPv4Network
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -32,6 +32,9 @@ MAX_RESPONSE_BYTES = 256
 HARD_TIMEOUT_SECONDS = 60
 TERM_GRACE_SECONDS = 2
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+ENGINE_VERSION_PATTERN = re.compile(
+    r"^codex-cli [0-9]{1,4}(?:\.[0-9]{1,4}){2}(?:[-+][A-Za-z0-9.-]{1,40})?$"
+)
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_PATTERN = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 ALLOWED_ITEM_TYPES = {"agent_message", "reasoning"}
@@ -40,16 +43,40 @@ MAX_FAILURE_EVENT_BYTES = 64 * 1024
 MAX_FAILURE_MESSAGE_BYTES = 4 * 1024
 FAILURE_CATEGORY_NOT_APPLICABLE = "NOT_APPLICABLE"
 FAILURE_CATEGORY_UNKNOWN = "UNKNOWN"
+FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT = "ENGINE_EMPTY_OUTPUT"
 FAILURE_CATEGORIES = frozenset(
     {
         FAILURE_CATEGORY_NOT_APPLICABLE,
         "AUTHENTICATION",
+        FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT,
         "MODEL",
         "RATE_LIMIT",
         "UPSTREAM",
         FAILURE_CATEGORY_UNKNOWN,
     }
 )
+FAILURE_PHASES = frozenset(
+    {
+        "ENGINE_LAUNCH",
+        "ENGINE_EXECUTION",
+        "ENGINE_EXIT",
+        "STDOUT_CLASSIFICATION",
+        "RESPONSE_PARSE",
+    }
+)
+ENGINE_EXIT_STATES = frozenset({"ZERO", "NONZERO", "SIGNAL", "NOT_OBSERVED"})
+STDOUT_STATES = frozenset(
+    {
+        "EMPTY",
+        "SINGLE_FAILURE_EVENT",
+        "MULTIPLE_FAILURE_EVENTS",
+        "MALFORMED",
+        "OVERSIZE",
+        "NON_FAILURE_OUTPUT",
+        "NOT_OBSERVED",
+    }
+)
+MAX_EVIDENCE_DURATION_MS = 24 * 60 * 60 * 1000
 HTTP_STATUS_PATTERN = re.compile(
     r"(?:^|:\s)(?:unexpected status\s+|exceeded retry limit, last status:\s*)"
     r"(?P<status>[1-5][0-9]{2})\b",
@@ -92,6 +119,25 @@ SMOKE_FAILURE_RESULT_CODES = {
 }
 
 
+@dataclass(frozen=True)
+class ExecutionDiagnostics:
+    """Fixed, non-sensitive process-boundary observations only."""
+
+    failure_phase: str = "ENGINE_LAUNCH"
+    engine_exit_state: str = "NOT_OBSERVED"
+    stdout_state: str = "NOT_OBSERVED"
+    setup_ms: int = 0
+    engine_ms: int = 0
+    classification_ms: int = 0
+
+
+@dataclass(frozen=True)
+class ExecutionResult:
+    output: bytes
+    engine_version: str
+    diagnostics: ExecutionDiagnostics
+
+
 class BlockedConfiguration(Exception):
     """The protected smoke prerequisites are absent or stale."""
 
@@ -104,6 +150,8 @@ class SmokeFailure(Exception):
         reason: str,
         *,
         failure_category: str | None = None,
+        engine_version: str = "",
+        diagnostics: ExecutionDiagnostics | None = None,
     ) -> None:
         super().__init__(reason)
         self.reason = reason
@@ -118,6 +166,22 @@ class SmokeFailure(Exception):
             if failure_category in FAILURE_CATEGORIES
             else FAILURE_CATEGORY_UNKNOWN
         )
+        self.engine_version = engine_version
+        self.diagnostics = diagnostics or ExecutionDiagnostics()
+
+
+class EngineTimeout(TimeoutError):
+    """The fixed engine invocation timed out; raw process output is discarded."""
+
+    def __init__(
+        self,
+        *,
+        engine_version: str,
+        diagnostics: ExecutionDiagnostics,
+    ) -> None:
+        super().__init__("engine_timeout")
+        self.engine_version = engine_version
+        self.diagnostics = diagnostics
 
 
 @dataclass(frozen=True)
@@ -129,6 +193,12 @@ class SmokeEvidence:
     model_version: str
     result_code: str
     failure_category: str
+    failure_phase: str
+    engine_exit_state: str
+    stdout_state: str
+    setup_ms: int
+    engine_ms: int
+    classification_ms: int
     duration_ms: int
     input_sha256: str
     output_length: int
@@ -137,6 +207,66 @@ class SmokeEvidence:
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _duration_ms(started: float) -> int:
+    return min(
+        MAX_EVIDENCE_DURATION_MS,
+        max(0, int((time.monotonic() - started) * 1000)),
+    )
+
+
+def _bounded_ms(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return min(MAX_EVIDENCE_DURATION_MS, max(0, value))
+
+
+def _sanitize_diagnostics(
+    diagnostics: ExecutionDiagnostics | None,
+) -> ExecutionDiagnostics:
+    observed = diagnostics or ExecutionDiagnostics()
+    return ExecutionDiagnostics(
+        failure_phase=(
+            observed.failure_phase
+            if observed.failure_phase in FAILURE_PHASES
+            else "ENGINE_LAUNCH"
+        ),
+        engine_exit_state=(
+            observed.engine_exit_state
+            if observed.engine_exit_state in ENGINE_EXIT_STATES
+            else "NOT_OBSERVED"
+        ),
+        stdout_state=(
+            observed.stdout_state
+            if observed.stdout_state in STDOUT_STATES
+            else "NOT_OBSERVED"
+        ),
+        setup_ms=_bounded_ms(observed.setup_ms),
+        engine_ms=_bounded_ms(observed.engine_ms),
+        classification_ms=_bounded_ms(observed.classification_ms),
+    )
+
+
+def _prefix_setup_ms(
+    diagnostics: ExecutionDiagnostics,
+    prefix_ms: int,
+) -> ExecutionDiagnostics:
+    observed = _sanitize_diagnostics(diagnostics)
+    return replace(
+        observed,
+        setup_ms=_bounded_ms(_bounded_ms(prefix_ms) + observed.setup_ms),
+    )
+
+
+def _engine_exit_state(returncode: int | None) -> str:
+    if returncode is None:
+        return "NOT_OBSERVED"
+    if returncode == 0:
+        return "ZERO"
+    if returncode < 0:
+        return "SIGNAL"
+    return "NONZERO"
 
 
 def _required(env: Mapping[str, str], key: str) -> str:
@@ -288,7 +418,11 @@ def parse_response(raw: bytes) -> bytes:
             item_type = item.get("type") if isinstance(item, dict) else None
             if item_type not in ALLOWED_ITEM_TYPES:
                 raise SmokeFailure("tool_requested")
-            if event_type == "item.completed" and item_type == "agent_message":
+            if (
+                event_type == "item.completed"
+                and item_type == "agent_message"
+                and isinstance(item, dict)
+            ):
                 text = item.get("text")
                 if isinstance(text, str):
                     texts.append(text)
@@ -329,25 +463,28 @@ def _classify_failure_message(message: str) -> str:
     return FAILURE_CATEGORY_UNKNOWN
 
 
-def classify_failure(raw: bytes) -> str:
-    """Project Codex JSONL failures to a closed category without retaining text."""
+def classify_failure_observation(raw: bytes) -> tuple[str, str]:
+    """Project JSONL to closed category/stdout state without retaining text."""
+    if not raw:
+        return FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT, "EMPTY"
     if len(raw) > MAX_FAILURE_EVENT_BYTES:
-        return FAILURE_CATEGORY_UNKNOWN
+        return FAILURE_CATEGORY_UNKNOWN, "OVERSIZE"
     try:
         lines = raw.decode("utf-8", errors="strict").splitlines()
     except UnicodeDecodeError:
-        return FAILURE_CATEGORY_UNKNOWN
-    failure_category: str | None = None
-    failure_event_count = 0
+        return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
+    saw_nonempty_line = False
+    failure_categories: list[str] = []
     for line in lines:
         if not line.strip():
             continue
+        saw_nonempty_line = True
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return FAILURE_CATEGORY_UNKNOWN
+            return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
         if not isinstance(event, dict):
-            return FAILURE_CATEGORY_UNKNOWN
+            return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
         event_type = event.get("type")
         message: object | None = None
         if event_type == "error":
@@ -355,20 +492,23 @@ def classify_failure(raw: bytes) -> str:
         elif event_type == "turn.failed":
             error = event.get("error")
             if not isinstance(error, dict):
-                return FAILURE_CATEGORY_UNKNOWN
+                return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
             message = error.get("message")
         else:
             continue
-        failure_event_count += 1
-        if failure_event_count > 1:
-            return FAILURE_CATEGORY_UNKNOWN
         if not isinstance(message, str):
-            return FAILURE_CATEGORY_UNKNOWN
-        category = _classify_failure_message(message)
-        if category == FAILURE_CATEGORY_UNKNOWN:
-            return FAILURE_CATEGORY_UNKNOWN
-        failure_category = category
-    return failure_category or FAILURE_CATEGORY_UNKNOWN
+            return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
+        failure_categories.append(_classify_failure_message(message))
+    if not saw_nonempty_line or not failure_categories:
+        return FAILURE_CATEGORY_UNKNOWN, "NON_FAILURE_OUTPUT"
+    if len(failure_categories) > 1:
+        return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_EVENTS"
+    return failure_categories[0], "SINGLE_FAILURE_EVENT"
+
+
+def classify_failure(raw: bytes) -> str:
+    """Compatibility helper returning only the closed failure category."""
+    return classify_failure_observation(raw)[0]
 
 
 def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
@@ -383,7 +523,8 @@ def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
         proc.wait()
 
 
-def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
+def execute(model: str, env: Mapping[str, str]) -> ExecutionResult:
+    setup_started = time.monotonic()
     if (
         env.get("ANYGARDEN_SMOKE_RUNTIME_ISOLATED")
         != "container-readonly-empty-workspace"
@@ -398,34 +539,127 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
     codex = shutil.which("codex")
     if not codex:
         raise BlockedConfiguration("engine_missing")
-    version = subprocess.run(
-        [codex, "--version"], capture_output=True, timeout=5, check=False
-    )
+    try:
+        version = subprocess.run(
+            [codex, "--version"], capture_output=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise BlockedConfiguration("engine_version") from None
     if version.returncode != 0:
         raise BlockedConfiguration("engine_version")
-    engine_version = version.stdout.decode(errors="replace").strip()[:80]
+    engine_version = version.stdout.decode(errors="replace").strip()
+    if not ENGINE_VERSION_PATTERN.fullmatch(engine_version):
+        raise BlockedConfiguration("engine_version")
     child_env = build_child_env(env, credential, runtime_state, proxy_url)
-    proc = subprocess.Popen(
-        build_command(model),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=child_env,
-        start_new_session=True,
-    )
+    try:
+        proc = subprocess.Popen(
+            build_command(model),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=child_env,
+            start_new_session=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise SmokeFailure(
+            "engine_launch",
+            engine_version=engine_version,
+            diagnostics=ExecutionDiagnostics(
+                failure_phase="ENGINE_LAUNCH",
+                setup_ms=_duration_ms(setup_started),
+            ),
+        ) from None
+    setup_ms = _duration_ms(setup_started)
+    engine_started = time.monotonic()
     try:
         stdout, stderr = proc.communicate(
             input=CANARY_PROMPT.encode(), timeout=HARD_TIMEOUT_SECONDS
         )
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         _terminate_group(proc)
-        raise TimeoutError from exc
+        raise EngineTimeout(
+            engine_version=engine_version,
+            diagnostics=ExecutionDiagnostics(
+                failure_phase="ENGINE_EXECUTION",
+                engine_exit_state="SIGNAL",
+                stdout_state="NOT_OBSERVED",
+                setup_ms=setup_ms,
+                engine_ms=_duration_ms(engine_started),
+            ),
+        ) from None
+    engine_ms = _duration_ms(engine_started)
     del stderr
     if proc.returncode != 0:
-        failure_category = classify_failure(stdout)
+        classification_started = time.monotonic()
+        failure_category, stdout_state = classify_failure_observation(stdout)
+        classification_ms = _duration_ms(classification_started)
+        failure_phase = (
+            "ENGINE_EXIT" if stdout_state == "EMPTY" else "STDOUT_CLASSIFICATION"
+        )
+        diagnostics = ExecutionDiagnostics(
+            failure_phase=failure_phase,
+            engine_exit_state=_engine_exit_state(proc.returncode),
+            stdout_state=stdout_state,
+            setup_ms=setup_ms,
+            engine_ms=engine_ms,
+            classification_ms=classification_ms,
+        )
         del stdout
-        raise SmokeFailure("engine_nonzero", failure_category=failure_category)
-    return parse_response(stdout), engine_version
+        raise SmokeFailure(
+            "engine_nonzero",
+            failure_category=failure_category,
+            engine_version=engine_version,
+            diagnostics=diagnostics,
+        )
+    classification_started = time.monotonic()
+    _category, stdout_state = classify_failure_observation(stdout)
+    try:
+        output = parse_response(stdout)
+    except SmokeFailure as exc:
+        diagnostics = ExecutionDiagnostics(
+            failure_phase="RESPONSE_PARSE",
+            engine_exit_state="ZERO",
+            stdout_state=stdout_state,
+            setup_ms=setup_ms,
+            engine_ms=engine_ms,
+            classification_ms=_duration_ms(classification_started),
+        )
+        del stdout
+        raise SmokeFailure(
+            exc.reason,
+            failure_category=exc.failure_category,
+            engine_version=engine_version,
+            diagnostics=diagnostics,
+        ) from None
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        diagnostics = ExecutionDiagnostics(
+            failure_phase="RESPONSE_PARSE",
+            engine_exit_state="ZERO",
+            stdout_state=stdout_state,
+            setup_ms=setup_ms,
+            engine_ms=engine_ms,
+            classification_ms=_duration_ms(classification_started),
+        )
+        del stdout
+        raise SmokeFailure(
+            "protocol_shape",
+            engine_version=engine_version,
+            diagnostics=diagnostics,
+        ) from None
+    diagnostics = ExecutionDiagnostics(
+        failure_phase="RESPONSE_PARSE",
+        engine_exit_state="ZERO",
+        stdout_state=stdout_state,
+        setup_ms=setup_ms,
+        engine_ms=engine_ms,
+        classification_ms=_duration_ms(classification_started),
+    )
+    del stdout
+    return ExecutionResult(
+        output=output,
+        engine_version=engine_version,
+        diagnostics=diagnostics,
+    )
 
 
 def make_evidence(
@@ -436,21 +670,38 @@ def make_evidence(
     output: bytes = b"",
     engine_version: str = "",
     failure_category: str = FAILURE_CATEGORY_NOT_APPLICABLE,
+    diagnostics: ExecutionDiagnostics | None = None,
 ) -> SmokeEvidence:
     projected_category = (
         failure_category
         if failure_category in FAILURE_CATEGORIES
         else FAILURE_CATEGORY_UNKNOWN
     )
+    projected_diagnostics = _sanitize_diagnostics(diagnostics)
+    if projected_category == FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT and not (
+        result == "FAIL_ENGINE_NONZERO"
+        and projected_diagnostics.engine_exit_state == "NONZERO"
+        and projected_diagnostics.stdout_state == "EMPTY"
+    ):
+        projected_category = FAILURE_CATEGORY_UNKNOWN
+    projected_engine_version = (
+        engine_version if ENGINE_VERSION_PATTERN.fullmatch(engine_version) else ""
+    )
     return SmokeEvidence(
         exact_sha=env.get("GITHUB_SHA", ""),
         workflow_run=env.get("GITHUB_RUN_ID", ""),
         engine="codex-cli",
-        engine_version=engine_version,
+        engine_version=projected_engine_version,
         model_version=env.get("ANYGARDEN_SMOKE_MODEL", ""),
         result_code=result,
         failure_category=projected_category,
-        duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+        failure_phase=projected_diagnostics.failure_phase,
+        engine_exit_state=projected_diagnostics.engine_exit_state,
+        stdout_state=projected_diagnostics.stdout_state,
+        setup_ms=projected_diagnostics.setup_ms,
+        engine_ms=projected_diagnostics.engine_ms,
+        classification_ms=projected_diagnostics.classification_ms,
+        duration_ms=_duration_ms(started),
         input_sha256=_sha256(CANARY_PROMPT.encode()),
         output_length=len(output),
         output_sha256=_sha256(output) if output else "",
@@ -466,26 +717,70 @@ def write_evidence(path: Path, evidence: SmokeEvidence) -> None:
 
 def run(mode: str, evidence_path: Path, env: Mapping[str, str]) -> int:
     started = time.monotonic()
+    configuration_ms = 0
     try:
         _exact_sha, model = validate_configuration(env)
+        configuration_ms = _duration_ms(started)
         if mode == "preflight":
-            write_evidence(evidence_path, make_evidence(env, "PREFLIGHT_PASS", started))
+            write_evidence(
+                evidence_path,
+                make_evidence(
+                    env,
+                    "PREFLIGHT_PASS",
+                    started,
+                    diagnostics=ExecutionDiagnostics(setup_ms=configuration_ms),
+                ),
+            )
             return 0
-        output, engine_version = execute(model, env)
+        execution = execute(model, env)
         write_evidence(
             evidence_path,
             make_evidence(
-                env, "PASS", started, output=output, engine_version=engine_version
+                env,
+                "PASS",
+                started,
+                output=execution.output,
+                engine_version=execution.engine_version,
+                diagnostics=_prefix_setup_ms(execution.diagnostics, configuration_ms),
             ),
         )
         return 0
     except BlockedConfiguration:
         write_evidence(
-            evidence_path, make_evidence(env, "BLOCKED_CONFIGURATION", started)
+            evidence_path,
+            make_evidence(
+                env,
+                "BLOCKED_CONFIGURATION",
+                started,
+                diagnostics=ExecutionDiagnostics(setup_ms=_duration_ms(started)),
+            ),
         )
         return 2
+    except EngineTimeout as exc:
+        write_evidence(
+            evidence_path,
+            make_evidence(
+                env,
+                "TIMEOUT",
+                started,
+                engine_version=exc.engine_version,
+                diagnostics=_prefix_setup_ms(exc.diagnostics, configuration_ms),
+            ),
+        )
+        return 124
     except TimeoutError:
-        write_evidence(evidence_path, make_evidence(env, "TIMEOUT", started))
+        write_evidence(
+            evidence_path,
+            make_evidence(
+                env,
+                "TIMEOUT",
+                started,
+                diagnostics=ExecutionDiagnostics(
+                    failure_phase="ENGINE_EXECUTION",
+                    setup_ms=_duration_ms(started),
+                ),
+            ),
+        )
         return 124
     except SmokeFailure as exc:
         reason = exc.reason
@@ -497,11 +792,26 @@ def run(mode: str, evidence_path: Path, env: Mapping[str, str]) -> int:
         result = SMOKE_FAILURE_RESULT_CODES.get(reason, "FAIL")
         write_evidence(
             evidence_path,
-            make_evidence(env, result, started, failure_category=failure_category),
+            make_evidence(
+                env,
+                result,
+                started,
+                engine_version=exc.engine_version,
+                failure_category=failure_category,
+                diagnostics=_prefix_setup_ms(exc.diagnostics, configuration_ms),
+            ),
         )
         return 1
     except Exception:  # noqa: BLE001 - evidence must redact every unknown failure
-        write_evidence(evidence_path, make_evidence(env, "FAIL", started))
+        write_evidence(
+            evidence_path,
+            make_evidence(
+                env,
+                "FAIL",
+                started,
+                diagnostics=ExecutionDiagnostics(setup_ms=_duration_ms(started)),
+            ),
+        )
         return 1
 
 
