@@ -45,6 +45,13 @@ def test_live_smoke_requires_protected_isolated_fail_closed_runner() -> None:
     assert "--network anygarden-smoke-egress" in SMOKE
     assert "container-readonly-empty-workspace" in SMOKE
     assert "if-no-files-found: error" in SMOKE
+    assert "ANYGARDEN_SMOKE_PROXY_URL: ${{ vars.ANYGARDEN_SMOKE_PROXY_URL }}" in (
+        preflight
+    )
+    assert "ANYGARDEN_SMOKE_PROXY_URL: ${{ vars.ANYGARDEN_SMOKE_PROXY_URL }}" in live
+    assert "-e ANYGARDEN_SMOKE_PROXY_URL" in live
+    assert '-e HTTP_PROXY="${ANYGARDEN_SMOKE_PROXY_URL}"' in live
+    assert '-e HTTPS_PROXY="${ANYGARDEN_SMOKE_PROXY_URL}"' in live
     assert "OPENAI_API_KEY" not in preflight
     assert "secrets.ANYGARDEN_SMOKE_OPENAI_API_KEY" in live
 

@@ -19,7 +19,9 @@ import subprocess
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from ipaddress import AddressValueError, IPv4Address, IPv4Network
 from pathlib import Path
+from urllib.parse import urlsplit
 
 CANARY_PROMPT = (
     "Reply with exactly ANYGARDEN_SMOKE_OK and nothing else. "
@@ -34,6 +36,11 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_PATTERN = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 ALLOWED_ITEM_TYPES = {"agent_message", "reasoning"}
 RUNTIME_STATE_ROOT = Path("/tmp")
+RFC1918_NETWORKS = (
+    IPv4Network("10.0.0.0/8"),
+    IPv4Network("172.16.0.0/12"),
+    IPv4Network("192.168.0.0/16"),
+)
 SMOKE_FAILURE_RESULT_CODES = {
     "approval_requested": "FAIL_APPROVAL_REQUESTED",
     "canary_mismatch": "FAIL_CANARY_MISMATCH",
@@ -97,6 +104,7 @@ def validate_configuration(env: Mapping[str, str]) -> tuple[str, str]:
         raise BlockedConfiguration("budget")
     if env.get("ANYGARDEN_SMOKE_EGRESS_POLICY") != "vendor-only":
         raise BlockedConfiguration("egress")
+    validate_proxy_url(env)
     if env.get("ANYGARDEN_SMOKE_CREDENTIAL_SCOPE") != "low-privilege-test-only":
         raise BlockedConfiguration("credential_scope")
     image = _required(env, "ANYGARDEN_SMOKE_CONTAINER_IMAGE")
@@ -106,6 +114,40 @@ def validate_configuration(env: Mapping[str, str]) -> tuple[str, str]:
     if not MODEL_PATTERN.fullmatch(model):
         raise BlockedConfiguration("model")
     return exact_sha, model
+
+
+def validate_proxy_url(env: Mapping[str, str]) -> str:
+    """Accept only a credential-free private IPv4 HTTP proxy endpoint."""
+    value = _required(env, "ANYGARDEN_SMOKE_PROXY_URL")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        address = IPv4Address(parsed.hostname or "")
+    except (AddressValueError, ValueError):
+        raise BlockedConfiguration("proxy") from None
+    if (
+        parsed.scheme != "http"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or port is None
+        or port <= 0
+        or not any(address in network for network in RFC1918_NETWORKS)
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_unspecified
+        or value != f"http://{address}:{port}"
+    ):
+        raise BlockedConfiguration("proxy")
+    return value
+
+
+def validate_proxy_transport(env: Mapping[str, str], proxy_url: str) -> None:
+    if env.get("HTTP_PROXY") != proxy_url or env.get("HTTPS_PROXY") != proxy_url:
+        raise BlockedConfiguration("proxy")
 
 
 def build_command(model: str) -> list[str]:
@@ -145,6 +187,25 @@ def prepare_runtime_state(env: Mapping[str, str]) -> dict[str, str]:
         except OSError:
             raise BlockedConfiguration("runtime_state") from None
     return {key: str(path) for key, path in state_dirs.items()}
+
+
+def build_child_env(
+    env: Mapping[str, str],
+    credential: str,
+    runtime_state: Mapping[str, str],
+    proxy_url: str,
+) -> dict[str, str]:
+    return {
+        "PATH": env.get("PATH", ""),
+        "HOME": runtime_state["HOME"],
+        "CODEX_HOME": runtime_state["CODEX_HOME"],
+        "OPENAI_API_KEY": credential,
+        "HTTP_PROXY": proxy_url,
+        "HTTPS_PROXY": proxy_url,
+        "http_proxy": proxy_url,
+        "https_proxy": proxy_url,
+        "LANG": "C.UTF-8",
+    }
 
 
 def parse_response(raw: bytes) -> bytes:
@@ -198,6 +259,8 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
         raise BlockedConfiguration("runtime_isolation")
     if any(Path.cwd().iterdir()):
         raise BlockedConfiguration("workspace_not_empty")
+    proxy_url = validate_proxy_url(env)
+    validate_proxy_transport(env, proxy_url)
     credential = _required(env, "OPENAI_API_KEY")
     runtime_state = prepare_runtime_state(env)
     codex = shutil.which("codex")
@@ -209,13 +272,7 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
     if version.returncode != 0:
         raise BlockedConfiguration("engine_version")
     engine_version = version.stdout.decode(errors="replace").strip()[:80]
-    child_env = {
-        "PATH": env.get("PATH", ""),
-        "HOME": runtime_state["HOME"],
-        "CODEX_HOME": runtime_state["CODEX_HOME"],
-        "OPENAI_API_KEY": credential,
-        "LANG": "C.UTF-8",
-    }
+    child_env = build_child_env(env, credential, runtime_state, proxy_url)
     proc = subprocess.Popen(
         build_command(model),
         stdin=subprocess.PIPE,
