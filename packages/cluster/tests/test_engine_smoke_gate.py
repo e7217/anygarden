@@ -28,6 +28,9 @@ def configured_env() -> dict[str, str]:
         "ANYGARDEN_SMOKE_APPROVED": "true",
         "ANYGARDEN_SMOKE_BUDGET_POLICY": "vendor-daily-cap-1",
         "ANYGARDEN_SMOKE_EGRESS_POLICY": "vendor-only",
+        "ANYGARDEN_SMOKE_PROXY_URL": "http://192.168.100.97:3129",
+        "HTTP_PROXY": "http://192.168.100.97:3129",
+        "HTTPS_PROXY": "http://192.168.100.97:3129",
         "ANYGARDEN_SMOKE_CREDENTIAL_SCOPE": "low-privilege-test-only",
         "ANYGARDEN_SMOKE_CONTAINER_IMAGE": (
             "ghcr.io/e7217/anygarden-smoke@sha256:" + "b" * 64
@@ -69,6 +72,19 @@ def test_blocked_configuration_never_spawns_engine(tmp_path: Path, monkeypatch) 
         ("ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED", "false"),
         ("ANYGARDEN_SMOKE_BUDGET_POLICY", "none"),
         ("ANYGARDEN_SMOKE_EGRESS_POLICY", "internet"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", ""),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "https://192.168.100.97:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://user@192.168.100.97:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://8.8.8.8:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://172.15.255.255:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://172.32.0.0:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://192.0.2.1:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://198.51.100.1:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://203.0.113.1:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://240.0.0.1:3129"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://192.168.100.97"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://192.168.100.97:0"),
+        ("ANYGARDEN_SMOKE_PROXY_URL", "http://192.168.100.97:3129/path"),
         ("ANYGARDEN_SMOKE_CONTAINER_IMAGE", "ghcr.io/e7217/smoke:latest"),
     ],
 )
@@ -125,6 +141,60 @@ def test_command_is_fixed_read_only_ephemeral_single_turn() -> None:
     assert "resume" not in command
     assert smoke.HARD_TIMEOUT_SECONDS == 60
     assert smoke.MAX_RESPONSE_BYTES == 256
+
+
+def test_child_env_passes_only_validated_proxy_endpoint() -> None:
+    env = configured_env()
+    runtime_state = {"HOME": "/tmp/home", "CODEX_HOME": "/tmp/codex"}
+
+    child_env = smoke.build_child_env(
+        env,
+        env["OPENAI_API_KEY"],
+        runtime_state,
+        smoke.validate_proxy_url(env),
+    )
+
+    assert child_env["HTTP_PROXY"] == env["ANYGARDEN_SMOKE_PROXY_URL"]
+    assert child_env["HTTPS_PROXY"] == env["ANYGARDEN_SMOKE_PROXY_URL"]
+    assert child_env["http_proxy"] == env["ANYGARDEN_SMOKE_PROXY_URL"]
+    assert child_env["https_proxy"] == env["ANYGARDEN_SMOKE_PROXY_URL"]
+    assert "ALL_PROXY" not in child_env
+    assert "NO_PROXY" not in child_env
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "10.0.0.1",
+        "10.255.255.254",
+        "172.16.0.1",
+        "172.31.255.254",
+        "192.168.0.1",
+        "192.168.255.254",
+    ],
+)
+def test_proxy_url_accepts_only_rfc1918_networks(host: str) -> None:
+    env = configured_env()
+    env["ANYGARDEN_SMOKE_PROXY_URL"] = f"http://{host}:3129"
+
+    assert smoke.validate_proxy_url(env) == env["ANYGARDEN_SMOKE_PROXY_URL"]
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("HTTP_PROXY", ""),
+        ("HTTPS_PROXY", ""),
+        ("HTTP_PROXY", "http://192.168.100.98:3129"),
+        ("HTTPS_PROXY", "http://192.168.100.98:3129"),
+    ],
+)
+def test_proxy_transport_must_match_validated_endpoint(key: str, value: str) -> None:
+    env = configured_env()
+    env[key] = value
+
+    with pytest.raises(smoke.BlockedConfiguration):
+        smoke.validate_proxy_transport(env, smoke.validate_proxy_url(env))
 
 
 def test_runtime_state_dirs_are_created_privately_on_fixed_tmpfs(
