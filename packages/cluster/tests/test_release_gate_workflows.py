@@ -73,7 +73,15 @@ def test_live_canary_keeps_workspace_empty_and_state_on_tmpfs() -> None:
     assert "--tmpfs /tmp:rw,noexec,nosuid,size=16m" in live
     assert "--tmpfs /work:rw,noexec,nosuid,size=4m" in live
     assert "--workdir /work" in live
+    assert 'install -d -m 0755 "${EVIDENCE_DIR}"' in live
+    assert 'install -m 0666 /dev/null "${EVIDENCE_FILE}"' in live
+    assert "--user 65532:65532" in live
+    assert "size=16m,mode=1777" in live
+    assert "size=4m,mode=1777" in live
     assert "-e HOME=/tmp/home -e CODEX_HOME=/tmp/codex" in live
+    assert '-v "${EVIDENCE_DIR}:/evidence:ro"' in live
+    assert '-v "${EVIDENCE_FILE}:/evidence/evidence.json:rw"' in live
+    assert "engine-smoke-evidence:/evidence:rw" not in live
     assert "/work/home" not in live
     assert "/work/codex" not in live
     assert "mkdir -p /work" not in live

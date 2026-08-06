@@ -33,6 +33,15 @@ MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_PATTERN = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 ALLOWED_ITEM_TYPES = {"agent_message", "reasoning"}
+SMOKE_FAILURE_RESULT_CODES = {
+    "approval_requested": "FAIL_APPROVAL_REQUESTED",
+    "canary_mismatch": "FAIL_CANARY_MISMATCH",
+    "engine_nonzero": "FAIL_ENGINE_NONZERO",
+    "protocol_output_limit": "FAIL_PROTOCOL_OUTPUT_LIMIT",
+    "protocol_shape": "FAIL_PROTOCOL_SHAPE",
+    "response_limit": "FAIL_RESPONSE_LIMIT",
+    "tool_requested": "FAIL_TOOL_REQUESTED",
+}
 
 
 class BlockedConfiguration(Exception):
@@ -260,6 +269,13 @@ def run(mode: str, evidence_path: Path, env: Mapping[str, str]) -> int:
     except TimeoutError:
         write_evidence(evidence_path, make_evidence(env, "TIMEOUT", started))
         return 124
+    except SmokeFailure as exc:
+        reason = (
+            exc.args[0] if len(exc.args) == 1 and isinstance(exc.args[0], str) else ""
+        )
+        result = SMOKE_FAILURE_RESULT_CODES.get(reason, "FAIL")
+        write_evidence(evidence_path, make_evidence(env, result, started))
+        return 1
     except Exception:  # noqa: BLE001 - evidence must redact every unknown failure
         write_evidence(evidence_path, make_evidence(env, "FAIL", started))
         return 1

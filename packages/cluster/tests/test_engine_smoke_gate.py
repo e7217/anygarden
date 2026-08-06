@@ -170,6 +170,8 @@ def test_runtime_requires_isolated_empty_workspace(tmp_path: Path, monkeypatch) 
     ("error", "exit_code", "result_code"),
     [
         (TimeoutError("raw response"), 124, "TIMEOUT"),
+        (smoke.SmokeFailure("engine_nonzero"), 1, "FAIL_ENGINE_NONZERO"),
+        (smoke.SmokeFailure("embedded-sensitive-value"), 1, "FAIL"),
         (RuntimeError("/home/runner embedded-sensitive-value"), 1, "FAIL"),
     ],
 )
