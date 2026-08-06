@@ -1,0 +1,128 @@
+name: Engine Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  deployments: read
+
+jobs:
+  preflight:
+    name: Protected smoke preflight
+    runs-on: ubuntu-latest
+    environment: release-smoke
+    outputs:
+      protected: ${{ steps.protection.outputs.protected }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify protected environment
+        id: protection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ENVIRONMENT=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke" 2>/dev/null || true)
+          RULES=$(jq '.protection_rules | length' <<<"${ENVIRONMENT:-{}}" 2>/dev/null || echo 0)
+          CUSTOM_BRANCHES=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<<"${ENVIRONMENT:-{}}" 2>/dev/null || echo false)
+          MAIN_ONLY=$(gh api "repos/${GITHUB_REPOSITORY}/environments/release-smoke/deployment-branch-policies" \
+            --jq '[.branch_policies[].name] == ["main"]' 2>/dev/null || echo false)
+          if [ "${RULES}" -lt 1 ] || [ "${CUSTOM_BRANCHES}" != "true" ] || [ "${MAIN_ONLY}" != "true" ]; then
+            echo "ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED=false" >> "${GITHUB_ENV}"
+            echo "protected=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED=true" >> "${GITHUB_ENV}"
+            echo "protected=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Resolve exact checkout SHA
+        run: echo "ANYGARDEN_CHECKOUT_SHA=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
+
+      - name: Evaluate fail-closed configuration
+        env:
+          ANYGARDEN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ANYGARDEN_SMOKE_APPROVED: ${{ vars.ANYGARDEN_SMOKE_APPROVED }}
+          ANYGARDEN_SMOKE_BUDGET_POLICY: ${{ vars.ANYGARDEN_SMOKE_BUDGET_POLICY }}
+          ANYGARDEN_SMOKE_EGRESS_POLICY: ${{ vars.ANYGARDEN_SMOKE_EGRESS_POLICY }}
+          ANYGARDEN_SMOKE_CREDENTIAL_SCOPE: ${{ vars.ANYGARDEN_SMOKE_CREDENTIAL_SCOPE }}
+          ANYGARDEN_SMOKE_CONTAINER_IMAGE: ${{ vars.ANYGARDEN_SMOKE_CONTAINER_IMAGE }}
+          ANYGARDEN_SMOKE_MODEL: ${{ vars.ANYGARDEN_SMOKE_MODEL }}
+        run: python packages/cluster/scripts/engine_smoke_gate.py preflight --evidence smoke-evidence/evidence.json
+
+      - name: Package the reviewed runner only
+        run: |
+          mkdir smoke-runner
+          cp packages/cluster/scripts/engine_smoke_gate.py smoke-runner/
+
+      - name: Upload smoke runner
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-smoke-runner-${{ github.sha }}
+          path: smoke-runner/engine_smoke_gate.py
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload preflight evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-smoke-preflight-${{ github.sha }}
+          path: smoke-evidence/evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+  live-canary:
+    name: One-shot isolated canary
+    needs: preflight
+    runs-on: [self-hosted, linux, anygarden-release-smoke]
+    environment: release-smoke
+    timeout-minutes: 2
+    steps:
+      - name: Download reviewed runner
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-smoke-runner-${{ github.sha }}
+          path: ${{ runner.temp }}/engine-smoke-runner
+
+      - name: Run one isolated canary
+        env:
+          ANYGARDEN_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ANYGARDEN_CHECKOUT_SHA: ${{ github.sha }}
+          ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED: ${{ needs.preflight.outputs.protected }}
+          ANYGARDEN_SMOKE_APPROVED: ${{ vars.ANYGARDEN_SMOKE_APPROVED }}
+          ANYGARDEN_SMOKE_BUDGET_POLICY: ${{ vars.ANYGARDEN_SMOKE_BUDGET_POLICY }}
+          ANYGARDEN_SMOKE_EGRESS_POLICY: ${{ vars.ANYGARDEN_SMOKE_EGRESS_POLICY }}
+          ANYGARDEN_SMOKE_CREDENTIAL_SCOPE: ${{ vars.ANYGARDEN_SMOKE_CREDENTIAL_SCOPE }}
+          ANYGARDEN_SMOKE_CONTAINER_IMAGE: ${{ vars.ANYGARDEN_SMOKE_CONTAINER_IMAGE }}
+          ANYGARDEN_SMOKE_MODEL: ${{ vars.ANYGARDEN_SMOKE_MODEL }}
+          OPENAI_API_KEY: ${{ secrets.ANYGARDEN_SMOKE_OPENAI_API_KEY }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/engine-smoke-evidence"
+          docker run --rm --read-only --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --network anygarden-smoke-egress \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --tmpfs /work:rw,noexec,nosuid,size=4m \
+            --workdir /work \
+            -e GITHUB_EVENT_NAME -e GITHUB_REF -e GITHUB_SHA -e GITHUB_RUN_ID \
+            -e ANYGARDEN_DEFAULT_BRANCH -e ANYGARDEN_CHECKOUT_SHA \
+            -e ANYGARDEN_SMOKE_ENVIRONMENT_PROTECTED -e ANYGARDEN_SMOKE_APPROVED \
+            -e ANYGARDEN_SMOKE_BUDGET_POLICY -e ANYGARDEN_SMOKE_EGRESS_POLICY \
+            -e ANYGARDEN_SMOKE_CREDENTIAL_SCOPE -e ANYGARDEN_SMOKE_CONTAINER_IMAGE \
+            -e ANYGARDEN_SMOKE_MODEL -e OPENAI_API_KEY \
+            -e ANYGARDEN_SMOKE_RUNTIME_ISOLATED=container-readonly-empty-workspace \
+            -e HOME=/tmp/home -e CODEX_HOME=/tmp/codex \
+            -v "${RUNNER_TEMP}/engine-smoke-runner:/opt/anygarden:ro" \
+            -v "${RUNNER_TEMP}/engine-smoke-evidence:/evidence:rw" \
+            "${ANYGARDEN_SMOKE_CONTAINER_IMAGE}" \
+            python /opt/anygarden/engine_smoke_gate.py run --evidence /evidence/evidence.json
+
+      - name: Upload redacted smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-smoke-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/engine-smoke-evidence/evidence.json
+          if-no-files-found: error
+          retention-days: 30
