@@ -36,6 +36,46 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_PATTERN = re.compile(r"^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 ALLOWED_ITEM_TYPES = {"agent_message", "reasoning"}
 RUNTIME_STATE_ROOT = Path("/tmp")
+MAX_FAILURE_EVENT_BYTES = 64 * 1024
+MAX_FAILURE_MESSAGE_BYTES = 4 * 1024
+FAILURE_CATEGORY_NOT_APPLICABLE = "NOT_APPLICABLE"
+FAILURE_CATEGORY_UNKNOWN = "UNKNOWN"
+FAILURE_CATEGORIES = frozenset(
+    {
+        FAILURE_CATEGORY_NOT_APPLICABLE,
+        "AUTHENTICATION",
+        "MODEL",
+        "RATE_LIMIT",
+        "UPSTREAM",
+        FAILURE_CATEGORY_UNKNOWN,
+    }
+)
+HTTP_STATUS_PATTERN = re.compile(
+    r"(?:^|:\s)(?:unexpected status\s+|exceeded retry limit, last status:\s*)"
+    r"(?P<status>[1-5][0-9]{2})\b",
+    re.IGNORECASE,
+)
+MODEL_FAILURE_SIGNALS = (
+    "model not found",
+    "model does not exist",
+    "does not exist or you do not have access to it",
+    "invalid model",
+)
+RATE_LIMIT_FAILURE_SIGNALS = (
+    "quota exceeded.",
+    "you've hit your usage limit",
+    "you hit your spend cap",
+    "you've hit your spend cap",
+    "workspace is out of credits",
+)
+UPSTREAM_FAILURE_SIGNALS = (
+    "selected model is at capacity.",
+    "we're currently experiencing high demand",
+    "connection failed:",
+    "error while reading the server response:",
+    "stream disconnected before completion:",
+    "request timed out",
+)
 RFC1918_NETWORKS = (
     IPv4Network("10.0.0.0/8"),
     IPv4Network("172.16.0.0/12"),
@@ -59,6 +99,26 @@ class BlockedConfiguration(Exception):
 class SmokeFailure(Exception):
     """The engine ran but did not satisfy the fixed canary contract."""
 
+    def __init__(
+        self,
+        reason: str,
+        *,
+        failure_category: str | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        if failure_category is None:
+            failure_category = (
+                FAILURE_CATEGORY_UNKNOWN
+                if reason == "engine_nonzero"
+                else FAILURE_CATEGORY_NOT_APPLICABLE
+            )
+        self.failure_category = (
+            failure_category
+            if failure_category in FAILURE_CATEGORIES
+            else FAILURE_CATEGORY_UNKNOWN
+        )
+
 
 @dataclass(frozen=True)
 class SmokeEvidence:
@@ -68,6 +128,7 @@ class SmokeEvidence:
     engine_version: str
     model_version: str
     result_code: str
+    failure_category: str
     duration_ms: int
     input_sha256: str
     output_length: int
@@ -239,6 +300,75 @@ def parse_response(raw: bytes) -> bytes:
     return response
 
 
+def _classify_failure_message(message: str) -> str:
+    # Codex 0.146 JSONL exposes error messages but not its internal error enum.
+    # Match only fixed CLI wrappers/statuses and known constant client copy.
+    if len(message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
+        return FAILURE_CATEGORY_UNKNOWN
+    normalized = message.casefold()
+    match = HTTP_STATUS_PATTERN.search(message)
+    status = int(match.group("status")) if match else None
+    if status in {401, 403}:
+        return "AUTHENTICATION"
+    if status == 429:
+        return "RATE_LIMIT"
+    if status is not None and 500 <= status <= 599:
+        return "UPSTREAM"
+    if status in {None, 400, 404} and any(
+        signal in normalized for signal in MODEL_FAILURE_SIGNALS
+    ):
+        return "MODEL"
+    if status is None and any(
+        signal in normalized for signal in RATE_LIMIT_FAILURE_SIGNALS
+    ):
+        return "RATE_LIMIT"
+    if status is None and any(
+        signal in normalized for signal in UPSTREAM_FAILURE_SIGNALS
+    ):
+        return "UPSTREAM"
+    return FAILURE_CATEGORY_UNKNOWN
+
+
+def classify_failure(raw: bytes) -> str:
+    """Project Codex JSONL failures to a closed category without retaining text."""
+    if len(raw) > MAX_FAILURE_EVENT_BYTES:
+        return FAILURE_CATEGORY_UNKNOWN
+    try:
+        lines = raw.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return FAILURE_CATEGORY_UNKNOWN
+    categories: set[str] = set()
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return FAILURE_CATEGORY_UNKNOWN
+        if not isinstance(event, dict):
+            return FAILURE_CATEGORY_UNKNOWN
+        event_type = event.get("type")
+        message: object | None = None
+        if event_type == "error":
+            message = event.get("message")
+        elif event_type == "turn.failed":
+            error = event.get("error")
+            if not isinstance(error, dict):
+                return FAILURE_CATEGORY_UNKNOWN
+            message = error.get("message")
+        else:
+            continue
+        if not isinstance(message, str):
+            return FAILURE_CATEGORY_UNKNOWN
+        category = _classify_failure_message(message)
+        if category == FAILURE_CATEGORY_UNKNOWN:
+            return FAILURE_CATEGORY_UNKNOWN
+        categories.add(category)
+    if len(categories) == 1:
+        return categories.pop()
+    return FAILURE_CATEGORY_UNKNOWN
+
+
 def _terminate_group(proc: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(proc.pid, signal.SIGTERM)
@@ -282,14 +412,17 @@ def execute(model: str, env: Mapping[str, str]) -> tuple[bytes, str]:
         start_new_session=True,
     )
     try:
-        stdout, _stderr = proc.communicate(
+        stdout, stderr = proc.communicate(
             input=CANARY_PROMPT.encode(), timeout=HARD_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired as exc:
         _terminate_group(proc)
         raise TimeoutError from exc
+    del stderr
     if proc.returncode != 0:
-        raise SmokeFailure("engine_nonzero")
+        failure_category = classify_failure(stdout)
+        del stdout
+        raise SmokeFailure("engine_nonzero", failure_category=failure_category)
     return parse_response(stdout), engine_version
 
 
@@ -300,7 +433,13 @@ def make_evidence(
     *,
     output: bytes = b"",
     engine_version: str = "",
+    failure_category: str = FAILURE_CATEGORY_NOT_APPLICABLE,
 ) -> SmokeEvidence:
+    projected_category = (
+        failure_category
+        if failure_category in FAILURE_CATEGORIES
+        else FAILURE_CATEGORY_UNKNOWN
+    )
     return SmokeEvidence(
         exact_sha=env.get("GITHUB_SHA", ""),
         workflow_run=env.get("GITHUB_RUN_ID", ""),
@@ -308,6 +447,7 @@ def make_evidence(
         engine_version=engine_version,
         model_version=env.get("ANYGARDEN_SMOKE_MODEL", ""),
         result_code=result,
+        failure_category=projected_category,
         duration_ms=max(0, int((time.monotonic() - started) * 1000)),
         input_sha256=_sha256(CANARY_PROMPT.encode()),
         output_length=len(output),
@@ -346,11 +486,17 @@ def run(mode: str, evidence_path: Path, env: Mapping[str, str]) -> int:
         write_evidence(evidence_path, make_evidence(env, "TIMEOUT", started))
         return 124
     except SmokeFailure as exc:
-        reason = (
-            exc.args[0] if len(exc.args) == 1 and isinstance(exc.args[0], str) else ""
+        reason = exc.reason
+        failure_category = (
+            exc.failure_category
+            if reason == "engine_nonzero"
+            else FAILURE_CATEGORY_NOT_APPLICABLE
         )
         result = SMOKE_FAILURE_RESULT_CODES.get(reason, "FAIL")
-        write_evidence(evidence_path, make_evidence(env, result, started))
+        write_evidence(
+            evidence_path,
+            make_evidence(env, result, started, failure_category=failure_category),
+        )
         return 1
     except Exception:  # noqa: BLE001 - evidence must redact every unknown failure
         write_evidence(evidence_path, make_evidence(env, "FAIL", started))
