@@ -112,11 +112,11 @@ jobs:
             -e ANYGARDEN_SMOKE_CREDENTIAL_SCOPE -e ANYGARDEN_SMOKE_CONTAINER_IMAGE \
             -e ANYGARDEN_SMOKE_MODEL -e OPENAI_API_KEY \
             -e ANYGARDEN_SMOKE_RUNTIME_ISOLATED=container-readonly-empty-workspace \
-            -e HOME=/tmp/home -e CODEX_HOME=/tmp/codex \
+            -e HOME=/work/home -e CODEX_HOME=/work/codex \
             -v "${RUNNER_TEMP}/engine-smoke-runner:/opt/anygarden:ro" \
             -v "${RUNNER_TEMP}/engine-smoke-evidence:/evidence:rw" \
             "${ANYGARDEN_SMOKE_CONTAINER_IMAGE}" \
-            python /opt/anygarden/engine_smoke_gate.py run --evidence /evidence/evidence.json
+            sh -ec 'mkdir -p /work/home /work/codex; exec python /opt/anygarden/engine_smoke_gate.py run --evidence /evidence/evidence.json'
 
       - name: Upload redacted smoke evidence
         if: always()
