@@ -26,7 +26,10 @@ from anygarden.db.models import (
 )
 from anygarden.db.repository import append_message
 from anygarden.turns.service import create_turn, deliver_pending_outbox
-from anygarden.workspaces.lifecycle import revoke_invalid_attachments
+from anygarden.workspaces.lifecycle import (
+    handle_attach_receipt,
+    revoke_invalid_attachments,
+)
 from anygarden.workspaces.router import AttachmentCreate
 from anygarden.workspaces.service import (
     append_audit,
@@ -334,6 +337,65 @@ async def test_audit_strips_paths_content_secrets_and_chains(workspace_env) -> N
     assert rows[0].prompt_hmac and "do not persist" not in rows[0].prompt_hmac
     assert rows[1].previous_hash == rows[0].row_hash
     assert "stdout" not in (rows[1].details or {})
+
+
+@pytest.mark.asyncio
+async def test_machine_receipt_reason_cannot_leak_path_or_secret_to_audit(
+    workspace_env,
+) -> None:
+    """Machine-controlled receipt text is untrusted audit input.
+
+    A daemon must not be able to smuggle a host path or credential into the
+    cluster's immutable audit chain via its human-readable receipt reason.
+    """
+    async with workspace_env["factory"]() as db:
+        attachment = await db.get(WorkspaceAttachment, workspace_env["attachment"])
+        assert attachment is not None
+        attachment.state = "requested"
+        attachment.epoch = 9
+        attachment.room_approved_by_user_id = workspace_env["user"]
+        attachment.global_approved_by_user_id = workspace_env["user"]
+        await db.commit()
+        receipt_epoch = attachment.epoch
+
+    await handle_attach_receipt(
+        workspace_env["factory"],
+        machine_id=workspace_env["machine"],
+        data={
+            "attachment_id": workspace_env["attachment"],
+            "workspace_id": "ws_opaque_fixture",
+            "agent_id": workspace_env["agent"],
+            "epoch": receipt_epoch,
+            "status": "verified",
+            "reason": "verified /home/alice/private token=wsc_secret",
+            "fingerprint": "1" * 64,
+            "allowlist_hash": "2" * 64,
+            "capabilities": [
+                "workspace_attach_v1",
+                "workspace_write_root_v1",
+                "workspace_audit_signing_v1",
+            ],
+        },
+        lifecycle=FakeLifecycle(),
+    )
+
+    async with workspace_env["factory"]() as db:
+        rows = list(
+            (
+                await db.scalars(
+                    select(WorkspaceInvocationAudit)
+                    .where(
+                        WorkspaceInvocationAudit.attachment_id
+                        == workspace_env["attachment"]
+                    )
+                    .order_by(WorkspaceInvocationAudit.created_at)
+                )
+            ).all()
+        )
+
+    rendered = str([row.details for row in rows])
+    assert "/home/alice/private" not in rendered
+    assert "wsc_secret" not in rendered
 
 
 def test_legacy_or_unsupported_daemon_and_engine_fail_closed() -> None:
