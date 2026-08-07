@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -99,6 +100,35 @@ def test_nonzero_terminal_stdout_is_only_partial_shape() -> None:
     assert observation.historical_shape == "PARTIAL_2_OF_3"
     assert observation.failure_category == "UPSTREAM"
     assert observation.category_source == "STDOUT_TERMINAL"
+
+
+def test_valid_terminal_prefix_over_capture_limit_fails_closed() -> None:
+    terminal = (
+        b'{"type":"turn.failed","error":{"message":'
+        b'"stream disconnected before completion:"}}\n'
+    )
+    capture = transport._BoundedCapture()
+    capture.drain(io.BytesIO(terminal + b" " * smoke.MAX_FAILURE_EVENT_BYTES))
+    stdout, oversize = capture.take()
+    assert len(stdout) == smoke.MAX_FAILURE_EVENT_BYTES
+    assert oversize is True
+
+    observation = transport._observe(
+        transport.TransportCase(
+            "TRUNCATED_CHUNKED", transport.TransportMode.TRUNCATED_CHUNKED
+        ),
+        transport.RequestAudit(post_requests=1),
+        exit_state="NONZERO",
+        duration_ms=18_318,
+        stdout=stdout,
+        stdout_oversize=oversize,
+        stderr=bytearray(),
+        stderr_oversize=False,
+    )
+    assert observation.stdout_state == "OVERSIZE"
+    assert observation.stdout_oversize is True
+    assert observation.failure_category == smoke.FAILURE_CATEGORY_UNKNOWN
+    assert observation.category_source == "UNKNOWN"
 
 
 def test_timeout_never_counts_as_nonzero_exit() -> None:

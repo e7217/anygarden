@@ -401,10 +401,16 @@ def _closed_failure(
     *,
     exit_state: str,
     stdout: bytearray,
+    stdout_oversize: bool,
     stderr: bytearray,
     stderr_oversize: bool,
 ) -> tuple[str, str, str, str]:
-    stdout_category, stdout_state = smoke.classify_failure_observation(bytes(stdout))
+    if stdout_oversize:
+        stdout_category, stdout_state = smoke.FAILURE_CATEGORY_UNKNOWN, "OVERSIZE"
+    else:
+        stdout_category, stdout_state = smoke.classify_failure_observation(
+            bytes(stdout)
+        )
     stderr_category, stderr_state = smoke.classify_stderr_observation(
         stderr, oversize=stderr_oversize
     )
@@ -444,6 +450,7 @@ def _observe(
     failure_category, category_source, stdout_state, stderr_state = _closed_failure(
         exit_state=exit_state,
         stdout=stdout,
+        stdout_oversize=stdout_oversize,
         stderr=stderr,
         stderr_oversize=stderr_oversize,
     )
