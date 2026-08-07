@@ -499,6 +499,16 @@ def parse_response(raw: bytes) -> bytes:
     return response
 
 
+def _http_status_category(status: int) -> str | None:
+    if status in {401, 403}:
+        return "AUTH_REJECTED"
+    if status == 429:
+        return "RATE_LIMIT"
+    if 500 <= status <= 599:
+        return "UPSTREAM"
+    return None
+
+
 def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
     """Project one bounded message while preserving real repetition.
 
@@ -513,14 +523,19 @@ def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
     statuses = [
         int(match.group("status")) for match in HTTP_STATUS_PATTERN.finditer(message)
     ]
-    status_categories: list[str] = []
-    for status in statuses:
-        if status in {401, 403}:
-            status_categories.append("AUTH_REJECTED")
-        elif status == 429:
-            status_categories.append("RATE_LIMIT")
-        elif 500 <= status <= 599:
-            status_categories.append("UPSTREAM")
+    if len(statuses) > 1:
+        # Preserve every HTTP status occurrence before assigning meaning.  In
+        # particular, 400/404 are meaningful only with one model-access copy;
+        # dropping them here would let mixed or repeated statuses look unique.
+        return tuple(
+            _http_status_category(status) or FAILURE_CATEGORY_UNKNOWN
+            for status in statuses
+        )
+    status_categories = [
+        category
+        for status in statuses
+        if (category := _http_status_category(status)) is not None
+    ]
 
     signal_categories: list[str] = []
 

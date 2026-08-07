@@ -34,6 +34,8 @@ def test_cases_cover_fixed_wire_contract_and_isolated_state_dirs() -> None:
         "MODEL_403": (403, "MODEL_ACCESS"),
         "MODEL_404": (404, "MODEL_ACCESS"),
         "EMPTY_200": (200, "UPSTREAM"),
+        "MIXED_401_404": (401, "UNKNOWN"),
+        "REPEATED_404": (404, "UNKNOWN"),
     }
     assert set(stub.CASE_STATE_DIRS) == {case.name for case in stub.CASES}
     assert len(set(stub.CASE_STATE_DIRS.values())) == len(stub.CASE_STATE_DIRS)

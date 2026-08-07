@@ -31,6 +31,8 @@ CASE_STATE_DIRS = {
     "MODEL_403": "model-403",
     "MODEL_404": "model-404",
     "EMPTY_200": "empty-200",
+    "MIXED_401_404": "mixed-401-404",
+    "REPEATED_404": "repeated-404",
 }
 
 
@@ -124,6 +126,40 @@ CASES = (
         content_type="text/event-stream",
         body=b"",
         expected_category="UPSTREAM",
+    ),
+    StubCase(
+        name="MIXED_401_404",
+        status=401,
+        content_type="application/json",
+        body=json.dumps(
+            {
+                "error": {
+                    "message": "unexpected status 404 Not Found",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "invalid_api_key",
+                }
+            },
+            separators=(",", ":"),
+        ).encode(),
+        expected_category=smoke.FAILURE_CATEGORY_UNKNOWN,
+    ),
+    StubCase(
+        name="REPEATED_404",
+        status=404,
+        content_type="application/json",
+        body=json.dumps(
+            {
+                "error": {
+                    "message": "unexpected status 404 Not Found: Model not found",
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found",
+                }
+            },
+            separators=(",", ":"),
+        ).encode(),
+        expected_category=smoke.FAILURE_CATEGORY_UNKNOWN,
     ),
 )
 

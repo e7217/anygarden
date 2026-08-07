@@ -566,6 +566,14 @@ def test_stderr_classifier_adopts_exactly_one_bounded_allowlist_signal(
             b'401 Unauthorized"}}'
         ),
         (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized: '
+            b'unexpected status 404 Not Found"}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 404 Not Found: '
+            b'unexpected status 404 Not Found: Model not found"}'
+        ),
+        (
             b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
             + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1)
         ),
@@ -580,6 +588,8 @@ def test_stderr_classifier_adopts_exactly_one_bounded_allowlist_signal(
         "conflicting-events",
         "repeated-rate-events",
         "repeated-terminal-events",
+        "mixed-401-404-statuses",
+        "same-line-repeated-404-status",
         "event-oversize",
         "same-line-repeated-signal",
     ),
