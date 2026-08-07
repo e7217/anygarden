@@ -13,6 +13,7 @@ import argparse
 import http.server
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -34,6 +35,36 @@ CASE_STATE_DIRS = {
     "MIXED_401_404": "mixed-401-404",
     "REPEATED_404": "repeated-404",
 }
+CANONICAL_CASE_NAMES = frozenset({"AUTH_401", "MODEL_403", "MODEL_404", "EMPTY_200"})
+
+# Minimal fixed fragments derived from direct observation of Codex 0.146 in the
+# isolated loopback harness.  Dynamic URLs, request IDs, timestamps, and raw
+# provider copy are deliberately excluded.  These fragments are validation
+# inputs only; production classification remains centralized in
+# ``engine_smoke_gate``.
+DERIVED_ALLOWLIST_PATTERNS = {
+    "AUTH_401": ("unexpected status 401", "incorrect api key"),
+    "MODEL_403": (
+        "unexpected status 403",
+        "does not exist or you do not have access to it",
+    ),
+    "MODEL_404": ("unexpected status 404", "model does not exist"),
+    "EMPTY_200": ("stream disconnected before completion:",),
+}
+DERIVED_PATTERN_IDS = {
+    "AUTH_401": "HTTP_401+INCORRECT_API_KEY",
+    "MODEL_403": "HTTP_403+MODEL_ACCESS_COPY",
+    "MODEL_404": "HTTP_404+MODEL_NOT_FOUND_COPY",
+    "EMPTY_200": "STREAM_DISCONNECTED_BEFORE_COMPLETION",
+}
+PATH_ALIAS_WARNING_PATTERN = re.compile(
+    r"^WARNING: proceeding, even though we could not create PATH aliases: "
+    r"Refusing to create helper binaries under temporary dir"
+)
+WEBSOCKET_FALLBACK_PATTERN = re.compile(
+    r"ERROR codex_api::endpoint::responses_websocket: failed to connect to "
+    r"websocket: HTTP error: 501 Not Implemented, url: ws://127\.0\.0\.1:"
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +92,11 @@ class StubObservation:
     stdout_event_categories: tuple[str, ...]
     stderr_category: str
     stderr_state: str
+    category_source: str
+    derived_pattern_id: str
+    derived_pattern_matched: bool
+    stderr_structure: str
+    historical_canary_shape: str
     stdout_oversize: bool
     stderr_oversize: bool
 
@@ -335,6 +371,66 @@ def _project_stdout_failure_events(raw: bytes | bytearray) -> tuple[str, ...]:
     return tuple(categories)
 
 
+def _terminal_failure_messages(raw: bytes | bytearray) -> tuple[str, ...]:
+    """Return terminal messages for in-memory validation only.
+
+    Callers must discard the returned strings with the raw buffers.  They are
+    never included in ``StubObservation`` or serialized output.
+    """
+    try:
+        lines = raw.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return ()
+    messages: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(event, dict) or event.get("type") != "turn.failed":
+            continue
+        error = event.get("error")
+        message = error.get("message") if isinstance(error, dict) else None
+        if not isinstance(message, str):
+            return ()
+        messages.append(message)
+    return tuple(messages)
+
+
+def _matches_derived_pattern(case_name: str, raw: bytes | bytearray) -> bool:
+    expected = DERIVED_ALLOWLIST_PATTERNS.get(case_name)
+    if expected is None:
+        return False
+    messages = _terminal_failure_messages(raw)
+    if len(messages) != 1:
+        return False
+    normalized = messages[0].casefold()
+    matched = all(fragment in normalized for fragment in expected)
+    del messages
+    return matched
+
+
+def _project_stderr_structure(raw: bytes | bytearray) -> str:
+    """Project observed Codex stderr to a closed, non-authoritative shape."""
+    if not raw:
+        return "EMPTY"
+    try:
+        lines = raw.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return "OTHER"
+    saw_fallback = False
+    for line in lines:
+        if not line.strip() or PATH_ALIAS_WARNING_PATTERN.search(line):
+            continue
+        if WEBSOCKET_FALLBACK_PATTERN.search(line):
+            saw_fallback = True
+            continue
+        return "OTHER"
+    return "WEBSOCKET_FALLBACK_ONLY" if saw_fallback else "OTHER"
+
+
 def run_case(case: StubCase) -> StubObservation:
     audit = _RequestAudit()
     server = http.server.ThreadingHTTPServer(
@@ -357,6 +453,8 @@ def run_case(case: StubCase) -> StubObservation:
     stderr_category, stderr_state = smoke.classify_stderr_observation(
         stderr, oversize=stderr_oversize
     )
+    derived_pattern_matched = _matches_derived_pattern(case.name, stdout)
+    stderr_structure = _project_stderr_structure(stderr)
     if stdout_state in {"EMPTY", "NON_FAILURE_OUTPUT"}:
         observed_category = (
             stderr_category
@@ -367,6 +465,21 @@ def run_case(case: StubCase) -> StubObservation:
             observed_category = smoke.FAILURE_CATEGORY_ENGINE_EMPTY_OUTPUT
     else:
         observed_category = stdout_category
+    if stdout_state in {"SINGLE_FAILURE_EVENT", "TERMINAL_FAILURE"}:
+        category_source = "STDOUT_TERMINAL"
+    elif stderr_state == "SINGLE_FAILURE_SIGNAL":
+        category_source = "STDERR_ALLOWLIST"
+    elif stdout_state == "EMPTY" and stderr_state == "EMPTY":
+        category_source = "EMPTY_BOTH"
+    else:
+        category_source = "UNKNOWN"
+    historical_canary_shape = "NOT_APPLICABLE"
+    if case.name == "EMPTY_200":
+        historical_canary_shape = (
+            "MATCH"
+            if exit_state == "NONZERO" and not stdout and bool(stderr)
+            else "MISMATCH"
+        )
     observation = StubObservation(
         case=case.name,
         expected_category=case.expected_category,
@@ -375,6 +488,16 @@ def run_case(case: StubCase) -> StubObservation:
             and audit.count > 0
             and audit.path_valid
             and observed_category == case.expected_category
+            and (
+                case.name not in CANONICAL_CASE_NAMES
+                or (
+                    derived_pattern_matched
+                    and category_source == "STDOUT_TERMINAL"
+                    and stderr_state == "UNRECOGNIZED"
+                    and stderr_structure == "WEBSOCKET_FALLBACK_ONLY"
+                )
+            )
+            and (case.name != "EMPTY_200" or historical_canary_shape == "MISMATCH")
         ),
         exit_state=exit_state,
         request_count=audit.count,
@@ -387,6 +510,11 @@ def run_case(case: StubCase) -> StubObservation:
         stdout_event_categories=stdout_event_categories,
         stderr_category=stderr_category,
         stderr_state=stderr_state,
+        category_source=category_source,
+        derived_pattern_id=DERIVED_PATTERN_IDS.get(case.name, "NOT_APPLICABLE"),
+        derived_pattern_matched=derived_pattern_matched,
+        stderr_structure=stderr_structure,
+        historical_canary_shape=historical_canary_shape,
         stdout_oversize=stdout_oversize,
         stderr_oversize=stderr_oversize,
     )
@@ -419,7 +547,12 @@ def main() -> int:
             print(
                 f"{observation.case}: matched={str(observation.matched).lower()} "
                 f"category={observation.stdout_category} "
-                f"stdout={observation.stdout_state} stderr={observation.stderr_state}"
+                f"source={observation.category_source} "
+                f"pattern={observation.derived_pattern_id} "
+                f"pattern_matched={str(observation.derived_pattern_matched).lower()} "
+                f"stdout={observation.stdout_state} stderr={observation.stderr_state} "
+                f"stderr_structure={observation.stderr_structure} "
+                f"historical={observation.historical_canary_shape}"
             )
     return 0 if payload["all_matched"] else 1
 
