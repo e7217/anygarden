@@ -20,13 +20,17 @@ import subprocess
 import threading
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from ipaddress import AddressValueError, IPv4Address
+from pathlib import PurePosixPath
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 import engine_smoke_gate as smoke
 
 STUB_MODEL = "gpt-5.6-sol"
 STUB_CREDENTIAL = "stub-only-not-a-credential"
 STUB_TIMEOUT_SECONDS = smoke.HARD_TIMEOUT_SECONDS
+STUB_RESPONSES_PATH = "/v1/responses"
 CASE_STATE_DIRS = {
     "AUTH_401": "auth-401",
     "MODEL_403": "model-403",
@@ -59,11 +63,15 @@ DERIVED_PATTERN_IDS = {
 }
 PATH_ALIAS_WARNING_PATTERN = re.compile(
     r"^WARNING: proceeding, even though we could not create PATH aliases: "
-    r"Refusing to create helper binaries under temporary dir"
+    r'Refusing to create helper binaries under temporary dir "'
+    r'(?P<temp_dir>[^"\r\n]+)" \(codex_home: AbsolutePathBuf\("'
+    r'(?P<codex_home>[^"\r\n]+)"\)\)$'
 )
 WEBSOCKET_FALLBACK_PATTERN = re.compile(
-    r"ERROR codex_api::endpoint::responses_websocket: failed to connect to "
-    r"websocket: HTTP error: 501 Not Implemented, url: ws://127\.0\.0\.1:"
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,9})?Z) ERROR codex_api::endpoint::responses_websocket: "
+    r"failed to connect to websocket: HTTP error: 501 Not Implemented, "
+    r"url: (?P<url>\S+)$"
 )
 
 
@@ -272,7 +280,7 @@ def _make_handler(
 
         def do_POST(self) -> None:
             audit.count += 1
-            audit.path_valid = audit.path_valid and self.path == "/v1/responses"
+            audit.path_valid = audit.path_valid and self.path == STUB_RESPONSES_PATH
             remaining = int(self.headers.get("Content-Length", "0"))
             while remaining > 0:
                 chunk = self.rfile.read(min(8192, remaining))
@@ -422,13 +430,51 @@ def _project_stderr_structure(raw: bytes | bytearray) -> str:
         return "OTHER"
     saw_fallback = False
     for line in lines:
-        if not line.strip() or PATH_ALIAS_WARNING_PATTERN.search(line):
+        if not line.strip() or _is_expected_path_alias_warning(line):
             continue
-        if WEBSOCKET_FALLBACK_PATTERN.search(line):
+        if _is_expected_websocket_fallback(line):
             saw_fallback = True
             continue
         return "OTHER"
     return "WEBSOCKET_FALLBACK_ONLY" if saw_fallback else "OTHER"
+
+
+def _is_expected_path_alias_warning(line: str) -> bool:
+    match = PATH_ALIAS_WARNING_PATTERN.fullmatch(line)
+    if match is None:
+        return False
+    temp_dir = PurePosixPath(match.group("temp_dir"))
+    codex_home = PurePosixPath(match.group("codex_home"))
+    return (
+        temp_dir == PurePosixPath(smoke.RUNTIME_STATE_ROOT.as_posix())
+        and codex_home.is_absolute()
+        and codex_home.parts[: len(temp_dir.parts)] == temp_dir.parts
+        and ".." not in codex_home.parts
+        and codex_home.name == "codex"
+    )
+
+
+def _is_expected_websocket_fallback(line: str) -> bool:
+    match = WEBSOCKET_FALLBACK_PATTERN.fullmatch(line)
+    if match is None:
+        return False
+    try:
+        parsed = urlsplit(match.group("url"))
+        address = IPv4Address(parsed.hostname or "")
+        port = parsed.port
+    except (AddressValueError, ValueError):
+        return False
+    return (
+        parsed.scheme == "ws"
+        and address.is_loopback
+        and port is not None
+        and 0 < port <= 65535
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == STUB_RESPONSES_PATH
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def run_case(case: StubCase) -> StubObservation:

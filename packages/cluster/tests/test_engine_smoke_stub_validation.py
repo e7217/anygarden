@@ -133,7 +133,8 @@ def test_derived_patterns_match_one_terminal_event(
 def test_stderr_structure_projects_common_fallback_without_category_authority() -> None:
     raw = (
         b"WARNING: proceeding, even though we could not create PATH aliases: "
-        b"Refusing to create helper binaries under temporary dir\n"
+        b'Refusing to create helper binaries under temporary dir "/tmp" '
+        b'(codex_home: AbsolutePathBuf("/tmp/isolated/codex"))\n'
         b"2026-01-01T00:00:00Z ERROR "
         b"codex_api::endpoint::responses_websocket: failed to connect to "
         b"websocket: HTTP error: 501 Not Implemented, url: "
@@ -143,6 +144,39 @@ def test_stderr_structure_projects_common_fallback_without_category_authority() 
     assert stub._project_stderr_structure(raw) == "WEBSOCKET_FALLBACK_ONLY"
     assert smoke.classify_stderr_observation(raw) == ("UNKNOWN", "UNRECOGNIZED")
     assert stub._project_stderr_structure(b"case-specific failure") == "OTHER"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        (
+            b"2026-01-01T00:00:00Z ERROR "
+            b"codex_api::endpoint::responses_websocket: failed to connect to "
+            b"websocket: HTTP error: 501 Not Implemented, url: "
+            b"ws://127.0.0.1:12345/v1/responses case-specific-tail\n"
+        ),
+        (
+            b"2026-01-01T00:00:00Z ERROR "
+            b"codex_api::endpoint::responses_websocket: failed to connect to "
+            b"websocket: HTTP error: 501 Not Implemented, url: "
+            b"ws://192.0.2.1:12345/v1/responses\n"
+        ),
+        (
+            b"2026-01-01T00:00:00Z ERROR "
+            b"codex_api::endpoint::responses_websocket: failed to connect to "
+            b"websocket: HTTP error: 501 Not Implemented, url: "
+            b"ws://127.0.0.1:12345/v1/responses?extra=1\n"
+        ),
+        (
+            b"WARNING: proceeding, even though we could not create PATH aliases: "
+            b'Refusing to create helper binaries under temporary dir "/tmp" '
+            b'(codex_home: AbsolutePathBuf("/tmp/isolated/codex")) extra\n'
+        ),
+    ],
+    ids=("extra-tail", "non-loopback", "query", "warning-extra-tail"),
+)
+def test_stderr_structure_rejects_changed_or_extended_diagnostics(raw: bytes) -> None:
+    assert stub._project_stderr_structure(raw) == "OTHER"
 
 
 def test_payload_schema_cannot_emit_raw_output_or_dynamic_runtime_values() -> None:
