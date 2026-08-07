@@ -97,6 +97,9 @@ HTTP_STATUS_PATTERN = re.compile(
     r"(?P<status>[1-5][0-9]{2})\b",
     re.IGNORECASE,
 )
+# Codex 0.146 loopback observations use these fixed fragments in authoritative
+# stdout terminal events.  Dynamic endpoints, request IDs, and complete raw
+# messages are intentionally excluded from every allowlist below.
 MODEL_FAILURE_SIGNALS = (
     "model not found",
     "model does not exist",
