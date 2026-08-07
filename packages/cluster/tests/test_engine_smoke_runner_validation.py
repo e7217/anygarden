@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).parents[1] / "scripts"
 
@@ -25,8 +26,22 @@ sys.modules[RUNNER_SPEC.name] = runner
 RUNNER_SPEC.loader.exec_module(runner)
 
 
-def test_exact_runner_reproduces_stdout_empty_stderr_only_nonzero() -> None:
-    observations = [runner.run_case(case) for case in runner.CASES]
+def _fake_codex(tmp_path: Path) -> Path:
+    executable = tmp_path / "codex"
+    executable.write_text(
+        f"#!{sys.executable}\nprint('codex-cli 0.146.0')\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    return executable
+
+
+def test_exact_runner_reproduces_stdout_empty_stderr_only_nonzero(
+    tmp_path: Path,
+) -> None:
+    fake_codex = _fake_codex(tmp_path)
+    with patch.object(runner.smoke.shutil, "which", return_value=str(fake_codex)):
+        observations = [runner.run_case(case) for case in runner.CASES]
 
     assert all(observation.matched for observation in observations)
     assert all(
@@ -40,8 +55,12 @@ def test_exact_runner_reproduces_stdout_empty_stderr_only_nonzero() -> None:
     assert all(not observation.raw_retained for observation in observations)
 
 
-def test_runner_keeps_allowlist_match_distinct_from_closed_fallback() -> None:
-    by_case = {case.name: runner.run_case(case) for case in runner.CASES}
+def test_runner_keeps_allowlist_match_distinct_from_closed_fallback(
+    tmp_path: Path,
+) -> None:
+    fake_codex = _fake_codex(tmp_path)
+    with patch.object(runner.smoke.shutil, "which", return_value=str(fake_codex)):
+        by_case = {case.name: runner.run_case(case) for case in runner.CASES}
 
     assert by_case["STDERR_AUTH_MATCH"].allowlist_matched is True
     assert by_case["STDERR_AUTH_MATCH"].failure_category == "AUTH_REJECTED"
