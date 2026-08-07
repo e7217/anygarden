@@ -341,15 +341,16 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
         (b"", "ENGINE_EMPTY_OUTPUT"),
         (
             (
-                b'{"type":"error","message":"unexpected status 401 '
-                b'Unauthorized: provider-secret, url: https://example.invalid"}'
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b"status 401 Unauthorized: provider-secret, url: "
+                b'https://example.invalid"}}'
             ),
             "AUTH_REJECTED",
         ),
         (
             (
-                b'{"type":"error","message":"unexpected status 401 '
-                b'Unauthorized: Incorrect API key provided"}'
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized: Incorrect API key provided"}}'
             ),
             "AUTH_REJECTED",
         ),
@@ -370,8 +371,9 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
         ),
         (
             (
-                b'{"type":"error","message":"exceeded retry limit, last '
-                b'status: 429 Too Many Requests, request id: provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"exceeded retry '
+                b"limit, last status: 429 Too Many Requests, request id: "
+                b'provider-secret"}}'
             ),
             "RATE_LIMIT",
         ),
@@ -384,26 +386,30 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
         ),
         (
             (
-                b'{"type":"error","message":"You\'ve hit your usage '
-                b'limit. provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"You\'ve hit '
+                b'your usage limit. provider-secret"}}'
             ),
             "RATE_LIMIT",
         ),
         (
-            b'{"type":"error","message":"Connection failed: provider-secret"}',
-            "UPSTREAM",
-        ),
-        (
             (
-                b'{"type":"error","message":"unexpected status 503 '
-                b'Service Unavailable: Model not found provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"Connection '
+                b'failed: provider-secret"}}'
             ),
             "UPSTREAM",
         ),
         (
             (
-                b'{"type":"error","message":"unexpected status 401 '
-                b'Unauthorized: Model not found provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b"status 503 Service Unavailable: Model not found "
+                b'provider-secret"}}'
+            ),
+            "UPSTREAM",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized: Model not found provider-secret"}}'
             ),
             "AUTH_REJECTED",
         ),
@@ -442,7 +448,10 @@ def test_failure_classifier_projects_only_closed_categories(
     [
         (b"", "ENGINE_EMPTY_OUTPUT", "EMPTY"),
         (
-            b'{"type":"error","message":"unexpected status 401 Unauthorized"}',
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized"}}'
+            ),
             "AUTH_REJECTED",
             "SINGLE_FAILURE_EVENT",
         ),
@@ -475,6 +484,34 @@ def test_failure_classifier_records_only_closed_stdout_state(
 ) -> None:
     assert smoke.classify_failure_observation(raw) == (category, stdout_state)
     assert stdout_state in smoke.STDOUT_STATES
+
+
+@pytest.mark.parametrize(
+    ("raw", "stdout_state"),
+    [
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}',
+            "SINGLE_FAILURE_EVENT",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized"}\n'
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized"}'
+            ),
+            "MULTIPLE_FAILURE_EVENTS",
+        ),
+    ],
+    ids=("single-known-retry", "multiple-known-retries"),
+)
+def test_failure_classifier_never_trusts_errors_without_terminal(
+    raw: bytes, stdout_state: str
+) -> None:
+    assert smoke.classify_failure_observation(raw) == (
+        smoke.FAILURE_CATEGORY_UNKNOWN,
+        stdout_state,
+    )
 
 
 @pytest.mark.parametrize(

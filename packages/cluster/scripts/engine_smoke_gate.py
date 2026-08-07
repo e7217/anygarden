@@ -667,7 +667,9 @@ def classify_failure_observation(raw: bytes) -> tuple[str, str]:
         return FAILURE_CATEGORY_UNKNOWN, state
     if len(terminal_categories) > 1 or len(error_categories) > 1:
         return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_EVENTS"
-    return error_categories[0], "SINGLE_FAILURE_EVENT"
+    # Retry/intermediate error events are never authoritative without exactly
+    # one terminal turn.failed event, even when their copy is recognized.
+    return FAILURE_CATEGORY_UNKNOWN, "SINGLE_FAILURE_EVENT"
 
 
 def classify_failure(raw: bytes) -> str:
