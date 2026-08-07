@@ -72,6 +72,7 @@ STDOUT_STATES = frozenset(
     {
         "EMPTY",
         "SINGLE_FAILURE_EVENT",
+        "TERMINAL_FAILURE",
         "MULTIPLE_FAILURE_EVENTS",
         "MALFORMED",
         "OVERSIZE",
@@ -498,30 +499,64 @@ def parse_response(raw: bytes) -> bytes:
     return response
 
 
+def _http_status_category(status: int) -> str | None:
+    if status in {401, 403}:
+        return "AUTH_REJECTED"
+    if status == 429:
+        return "RATE_LIMIT"
+    if 500 <= status <= 599:
+        return "UPSTREAM"
+    return None
+
+
 def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
-    """Preserve every fixed allowlist occurrence in one bounded message."""
+    """Project one bounded message while preserving real repetition.
+
+    Codex flattens one HTTP failure into a status prefix plus the provider's
+    fixed error copy.  One status and one semantic signal that agree are one
+    corroborated failure, not two independent events.  Repeated statuses or
+    repeated semantic signals remain ambiguous and fail closed.
+    """
     if len(message.encode("utf-8")) > MAX_FAILURE_MESSAGE_BYTES:
         return ()
     normalized = message.casefold()
     statuses = [
         int(match.group("status")) for match in HTTP_STATUS_PATTERN.finditer(message)
     ]
-    categories: list[str] = []
-    for status in statuses:
-        if status in {401, 403}:
-            categories.append("AUTH_REJECTED")
-        elif status == 429:
-            categories.append("RATE_LIMIT")
-        elif 500 <= status <= 599:
-            categories.append("UPSTREAM")
+    if len(statuses) > 1:
+        # Preserve every HTTP status occurrence before assigning meaning.  In
+        # particular, 400/404 are meaningful only with one model-access copy;
+        # dropping them here would let mixed or repeated statuses look unique.
+        return tuple(
+            _http_status_category(status) or FAILURE_CATEGORY_UNKNOWN
+            for status in statuses
+        )
+    status_categories = [
+        category
+        for status in statuses
+        if (category := _http_status_category(status)) is not None
+    ]
+
+    signal_categories: list[str] = []
 
     def add_signal_occurrences(signals: Sequence[str], category: str) -> int:
-        matches = sum(normalized.count(signal) for signal in signals)
-        categories.extend([category] * matches)
-        return matches
+        spans: list[tuple[int, int]] = []
+        for signal_text in signals:
+            start = 0
+            while (index := normalized.find(signal_text, start)) >= 0:
+                spans.append((index, index + len(signal_text)))
+                start = index + 1
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start < merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        signal_categories.extend([category] * len(merged))
+        return len(merged)
 
     add_signal_occurrences(AUTH_FAILURE_SIGNALS, "AUTH_REJECTED")
-    if not statuses or set(statuses) <= {400, 404}:
+    if not statuses or set(statuses) <= {400, 403, 404}:
         add_signal_occurrences(MODEL_FAILURE_SIGNALS, "MODEL_ACCESS")
     if not statuses or set(statuses) <= {400}:
         config_matches = add_signal_occurrences(
@@ -534,7 +569,7 @@ def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
                 for word in ("invalid", "unknown", "unrecognized", "unsupported")
             )
         ):
-            categories.append("ENGINE_CONFIG")
+            signal_categories.append("ENGINE_CONFIG")
     if not statuses and any(
         signal in normalized for signal in RATE_LIMIT_FAILURE_SIGNALS
     ):
@@ -543,7 +578,22 @@ def _failure_message_category_occurrences(message: str) -> tuple[str, ...]:
         signal in normalized for signal in UPSTREAM_FAILURE_SIGNALS
     ):
         add_signal_occurrences(UPSTREAM_FAILURE_SIGNALS, "UPSTREAM")
-    return tuple(categories)
+    if len(status_categories) > 1 or len(signal_categories) > 1:
+        return (*status_categories, *signal_categories)
+    status_category = status_categories[0] if status_categories else None
+    signal_category = signal_categories[0] if signal_categories else None
+    if status_category is None:
+        return (signal_category,) if signal_category is not None else ()
+    if signal_category is None:
+        return (status_category,)
+    if status_category == signal_category:
+        return (status_category,)
+    # A 403 with explicit model-access copy is model authorization, whereas a
+    # generic 403 remains an authentication/credential rejection.
+    if statuses == [403] and signal_category == "MODEL_ACCESS":
+        return ("MODEL_ACCESS",)
+    # Concrete HTTP status categories keep precedence over unrelated copy.
+    return (status_category,)
 
 
 def _classify_failure_message(message: str) -> str:
@@ -566,7 +616,8 @@ def classify_failure_observation(raw: bytes) -> tuple[str, str]:
     except UnicodeDecodeError:
         return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
     saw_nonempty_line = False
-    failure_categories: list[str] = []
+    error_categories: list[str] = []
+    terminal_categories: list[str] = []
     for line in lines:
         if not line.strip():
             continue
@@ -590,12 +641,35 @@ def classify_failure_observation(raw: bytes) -> tuple[str, str]:
             continue
         if not isinstance(message, str):
             return FAILURE_CATEGORY_UNKNOWN, "MALFORMED"
-        failure_categories.append(_classify_failure_message(message))
-    if not saw_nonempty_line or not failure_categories:
+        category = _classify_failure_message(message)
+        if event_type == "turn.failed":
+            terminal_categories.append(category)
+        else:
+            error_categories.append(category)
+    failure_count = len(error_categories) + len(terminal_categories)
+    if not saw_nonempty_line or failure_count == 0:
         return FAILURE_CATEGORY_UNKNOWN, "NON_FAILURE_OUTPUT"
-    if len(failure_categories) > 1:
+    if len(terminal_categories) == 1:
+        terminal_category = terminal_categories[0]
+        recognized_errors = {
+            category
+            for category in error_categories
+            if category != FAILURE_CATEGORY_UNKNOWN
+        }
+        if terminal_category != FAILURE_CATEGORY_UNKNOWN and recognized_errors <= {
+            terminal_category
+        }:
+            state = "SINGLE_FAILURE_EVENT" if failure_count == 1 else "TERMINAL_FAILURE"
+            return terminal_category, state
+        state = (
+            "SINGLE_FAILURE_EVENT" if failure_count == 1 else "MULTIPLE_FAILURE_EVENTS"
+        )
+        return FAILURE_CATEGORY_UNKNOWN, state
+    if len(terminal_categories) > 1 or len(error_categories) > 1:
         return FAILURE_CATEGORY_UNKNOWN, "MULTIPLE_FAILURE_EVENTS"
-    return failure_categories[0], "SINGLE_FAILURE_EVENT"
+    # Retry/intermediate error events are never authoritative without exactly
+    # one terminal turn.failed event, even when their copy is recognized.
+    return FAILURE_CATEGORY_UNKNOWN, "SINGLE_FAILURE_EVENT"
 
 
 def classify_failure(raw: bytes) -> str:
