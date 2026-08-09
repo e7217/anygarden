@@ -56,14 +56,22 @@ server = [
     "opentelemetry-exporter-otlp-proto-http>=1.27",
     # #397 — the server imports ``anygarden_machine.safefs.secure_chmod``
     # at module load (app.py, llm_gateway/bootstrap.py), so the server
-    # extra must carry the machine package. The ``>=0.8`` floor resolves
-    # from PyPI; ``[tool.uv.sources]`` below keeps local dev on the
-    # sibling workspace path without leaking into wheel metadata.
-    "anygarden-machine>=0.8",
+    # extra must carry the machine package. ``[tool.uv.sources]`` below
+    # keeps local dev on the sibling workspace path without leaking into
+    # wheel metadata.
+    #
+    # The floor is ``>=0.15.0`` because #581 added ``generation`` to the
+    # spawn frame and made the daemon enforce a stop tombstone as a
+    # persistent high-watermark. A cluster on this version paired with an
+    # older daemon still dispatches, but the daemon ignores the field —
+    # the generation fence silently does nothing and the split-brain #581
+    # closed reopens. A version floor is the only place that pairing can
+    # be refused.
+    "anygarden-machine>=0.15.0",
 ]
 # Machine daemon only (``anygarden machine``). Kept light — no server stack.
 machine = [
-    "anygarden-machine>=0.8",
+    "anygarden-machine>=0.15.0",
 ]
 # Agent + interactive client (``anygarden agent`` / ``anygarden client``).
 agent = [
@@ -76,7 +84,7 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.9",
     # Exercised by the dispatcher delegation tests and the server suite.
-    "anygarden-machine>=0.8",
+    "anygarden-machine>=0.15.0",
     "fastapi>=0.110,<0.120",
     "uvicorn[standard]>=0.29",
     "sqlalchemy[asyncio]>=2.0,<2.1",

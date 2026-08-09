@@ -69,6 +69,31 @@ PyPI is irreversible and outward-facing, and the operator should decide
 when it happens. This commit only makes such a release possible without
 a version collision.
 
+**`anygarden-machine` floors raised to `>=0.15.0`** in the `server`,
+`machine`, and `dev` extras (previously `>=0.8`). This is not
+housekeeping. #581 added `generation` to the spawn frame and taught the
+daemon to hold a stop tombstone as a persistent high-watermark. A
+cluster at 0.19.0 paired with an older daemon still dispatches — the
+daemon simply ignores the field, the generation fence does nothing, and
+the split-brain #581 closed reopens silently. Nothing at runtime refuses
+that pairing, so the dependency floor is the only place it can be
+refused.
+
+## Rollout order
+
+**Upgrade remote daemons to `anygarden-machine>=0.15.0` before, or at
+the same time as, the cluster.** The reverse order leaves a window in
+which the server believes it is fencing and the daemon is not.
+
+- A daemon below 0.15.0 does not persist the stop tombstone, so a stop
+  followed by a start on another machine can leave the original
+  generation running.
+- Once a cluster at 0.19.0 has advanced a generation, legacy daemons are
+  out of contract for that agent: their reports are ignored by the
+  server, but their processes and side effects are not stopped by it.
+- `anygarden machine update` on each host, or **Admin → Machines →
+  Update** from the web UI, performs the daemon upgrade.
+
 ## Follow-up
 
 Deploying `main` to an existing instance requires the alembic upgrade
