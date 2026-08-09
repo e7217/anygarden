@@ -288,6 +288,9 @@ async def _reset_openhands_agents_for_restart(db) -> list[str]:
         agent.desired_state = "running"
         agent.pid = None
         agent.placed_on_machine_id = None
+        agent.lifecycle_lease_token = None
+        agent.lifecycle_lease_expires_at = None
+        agent.lifecycle_delivery_state = "released"
     return [a.id for a in agents]
 
 

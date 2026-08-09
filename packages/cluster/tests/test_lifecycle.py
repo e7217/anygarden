@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -32,6 +33,7 @@ from anygarden.scheduler.lifecycle import (
     sweep_stale_agents,
 )
 from anygarden.scheduler.machine_bus import MachineBus
+from anygarden_machine.daemon import MachineDaemon
 
 
 class FakeWS:
@@ -259,12 +261,14 @@ class TestAgentLifecycle:
             result = await db.execute(select(Agent).where(Agent.id == agent_id))
             agent = result.scalar_one()
             assert agent.desired_state == "stopped"
+            assert agent.generation == 1
 
         # A sync_desired_state frame with desired_state="stopped" should have been sent
         assert len(fake_ws.sent) > initial_sent_count
         frame = json.loads(fake_ws.sent[-1])
         assert frame["type"] == "sync_desired_state"
         assert frame["desired_state"] == "stopped"
+        assert frame["generation"] == 1
 
     # ── #219: stopping transitional state ─────────────────────────
 
@@ -722,7 +726,7 @@ class TestAgentLifecycle:
     async def test_stale_send_failure_cannot_clobber_stop_start_generation(
         self, lifecycle_env, monkeypatch
     ) -> None:
-        """A delayed result from generation N is fenced after stop/start N+1."""
+        """A delayed result from generation N is fenced after stop N+1/start N+2."""
         factory = lifecycle_env["factory"]
         bus = lifecycle_env["bus"]
         machine = lifecycle_env["machine"]
@@ -767,11 +771,102 @@ class TestAgentLifecycle:
             assert agent.desired_state == "running"
             assert agent.actual_state == "pending"
             assert agent.placed_on_machine_id == machine.id
-            assert agent.generation == 2
+            assert agent.generation == 3
             assert agent.lifecycle_delivery_state == "pending_ack"
             assert agent.unavailable_code is None
 
-        assert [frame["generation"] for frame in sent_frames] == [1, 1, 2]
+        assert [frame["generation"] for frame in sent_frames] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_delayed_running_dispatch_cannot_reanimate_after_stop(
+        self, lifecycle_env, monkeypatch, tmp_path
+    ) -> None:
+        """Actual wire order start N → stop N+1 → delayed running N is fenced."""
+        factory = lifecycle_env["factory"]
+        bus = lifecycle_env["bus"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+        daemon = MachineDaemon(
+            server_url="wss://cluster.test/ws/machines/lc-machine",
+            machine_id=machine.id,
+            machine_token="machine-token",
+            agent_dirs_root=tmp_path / "agents",
+            workspace_registry_path=tmp_path / "workspaces.json",
+            workspace_signing_key_path=tmp_path / "workspace-signing.key",
+        )
+        daemon._request_token_and_spawn = AsyncMock()  # type: ignore[method-assign]
+        first_running_entered = asyncio.Event()
+        release_first_running = asyncio.Event()
+        delivered: list[tuple[str, int]] = []
+
+        async def delayed_wire_send(machine_id: str, frame: dict) -> bool:
+            assert machine_id == machine.id
+            if frame["desired_state"] == "running":
+                first_running_entered.set()
+                await release_first_running.wait()
+            delivered.append((frame["desired_state"], frame["generation"]))
+            await daemon._handle(frame)
+            return True
+
+        monkeypatch.setattr(bus, "send", delayed_wire_send)
+        async with factory() as db:
+            agent = Agent(
+                name="agent-wire-stop-fence",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+
+        start_task = asyncio.create_task(lifecycle.request_start(agent_id))
+        await first_running_entered.wait()
+        await lifecycle.request_stop(agent_id)
+        release_first_running.set()
+        await start_task
+
+        # The daemon's next full report confirms that no process survived.
+        await lifecycle.handle_report_actual_state(machine.id, [])
+
+        assert delivered == [("stopped", 2), ("running", 1)]
+        daemon._request_token_and_spawn.assert_not_awaited()
+        manifest = daemon._manifest_store.load(agent_id)
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 2
+        async with factory() as db:
+            agent = await db.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.desired_state == "stopped"
+            assert agent.actual_state == "stopped"
+            assert agent.generation == 2
+
+        # A fresh daemon sharing the manifest disk enforces the same fence.
+        restarted = MachineDaemon(
+            server_url=daemon.server_url,
+            machine_id=daemon.machine_id,
+            machine_token=daemon.machine_token,
+            agent_dirs_root=tmp_path / "agents",
+            workspace_registry_path=tmp_path / "restart-workspaces.json",
+            workspace_signing_key_path=tmp_path / "restart-signing.key",
+        )
+        restarted._request_token_and_spawn = AsyncMock()  # type: ignore[method-assign]
+        await restarted._handle(
+            {
+                "type": "sync_desired_state",
+                "agent_id": agent_id,
+                "desired_state": "running",
+                "generation": 1,
+                "engine": "echo",
+            }
+        )
+        restarted._request_token_and_spawn.assert_not_awaited()
+        persisted = restarted._manifest_store.load(agent_id)
+        assert persisted is not None
+        assert persisted.desired_state == "stopped"
+        assert persisted.generation == 2
 
     @pytest.mark.asyncio
     async def test_unversioned_report_is_fenced_after_legacy_epoch(
@@ -971,7 +1066,9 @@ class TestAgentLifecycle:
             ).scalar_one()
             assert agent.desired_state == "stopped"
             assert agent.actual_state == "stopping"
+            assert agent.generation == 4
 
+        # A delayed crash from the old process generation is fenced too.
         await lifecycle.handle_report_actual_state(
             machine.id,
             [
@@ -979,6 +1076,24 @@ class TestAgentLifecycle:
                     "agent_id": agent_id,
                     "actual_state": "crashed",
                     "generation": 3,
+                    "last_crash_reason": "killed during shutdown",
+                }
+            ],
+        )
+        async with factory() as db:
+            agent = (
+                await db.execute(select(Agent).where(Agent.id == agent_id))
+            ).scalar_one()
+            assert agent.actual_state == "stopping"
+
+        # The stop generation's terminal observation completes the stop.
+        await lifecycle.handle_report_actual_state(
+            machine.id,
+            [
+                {
+                    "agent_id": agent_id,
+                    "actual_state": "crashed",
+                    "generation": 4,
                     "last_crash_reason": "killed during shutdown",
                 }
             ],

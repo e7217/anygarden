@@ -136,6 +136,65 @@ class TestManifestStoreSave:
         assert file_mode == 0o600
 
 
+class TestManifestStoreGenerationFence:
+    """Stopped manifests are persistent generation high-watermarks."""
+
+    def test_lower_running_generation_cannot_cross_stop_tombstone(
+        self, tmp_path: Path
+    ) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+
+        assert store.save_if_authoritative(make_frame(generation=1)) is True
+        assert store.save_if_authoritative(
+            make_frame(desired_state="stopped", generation=2)
+        ) is True
+        assert store.save_if_authoritative(make_frame(generation=1)) is False
+
+        manifest = store.load("agent-001")
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 2
+
+    def test_stopped_wins_same_generation(self, tmp_path: Path) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.save_if_authoritative(
+            make_frame(desired_state="stopped", generation=3)
+        )
+
+        assert store.save_if_authoritative(make_frame(generation=3)) is False
+        manifest = store.load("agent-001")
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 3
+
+    def test_higher_running_generation_can_restart_after_tombstone(
+        self, tmp_path: Path
+    ) -> None:
+        store = ManifestStore(agents_root=tmp_path)
+        store.save_if_authoritative(
+            make_frame(desired_state="stopped", generation=3)
+        )
+
+        assert store.save_if_authoritative(make_frame(generation=4)) is True
+        manifest = store.load("agent-001")
+        assert manifest is not None
+        assert manifest.desired_state == "running"
+        assert manifest.generation == 4
+
+    def test_tombstone_fence_survives_store_restart(self, tmp_path: Path) -> None:
+        first = ManifestStore(agents_root=tmp_path)
+        first.save_if_authoritative(
+            make_frame(desired_state="stopped", generation=7)
+        )
+
+        restarted = ManifestStore(agents_root=tmp_path)
+        assert restarted.save_if_authoritative(make_frame(generation=6)) is False
+        manifest = restarted.load("agent-001")
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 7
+
+
 class TestManifestStoreLoad:
     """load() reads a saved manifest back as SyncDesiredStateFrame."""
 

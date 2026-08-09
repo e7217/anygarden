@@ -69,6 +69,41 @@ class ManifestStore:
 
     # ── Write operations ─────────────────────────────────────────────
 
+    def save_if_authoritative(self, frame: SyncDesiredStateFrame) -> bool:
+        """Persist *frame* only when it does not cross a generation fence.
+
+        A stopped manifest is a durable tombstone/high-watermark. Lower
+        generations are always stale, and a same-generation running frame
+        cannot revive a stopped generation. Keeping the decision next to the
+        atomic manifest write makes the fence survive WebSocket reconnects and
+        daemon restarts without relying on in-memory generation tracking.
+
+        Returns ``True`` when the frame was saved and ``False`` when it was
+        rejected as stale.
+        """
+        current = self.load(frame.agent_id)
+        if current is not None:
+            stale_generation = frame.generation < current.generation
+            stopped_wins_same_generation = (
+                frame.generation == current.generation
+                and current.desired_state == "stopped"
+                and frame.desired_state == "running"
+            )
+            if stale_generation or stopped_wins_same_generation:
+                logger.warning(
+                    "Rejected stale manifest for agent %s: incoming=%s/%s "
+                    "current=%s/%s",
+                    frame.agent_id,
+                    frame.generation,
+                    frame.desired_state,
+                    current.generation,
+                    current.desired_state,
+                )
+                return False
+
+        self.save(frame)
+        return True
+
     def save(self, frame: SyncDesiredStateFrame) -> Path:
         """Persist *frame* to ``<agents_root>/<agent_id>/manifest.json``.
 

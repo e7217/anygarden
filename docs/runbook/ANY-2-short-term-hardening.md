@@ -12,9 +12,11 @@
   반영한다. Generation 보고 capability를 광고한 daemon의 무버전 보고는
   거절하고, legacy daemon의 무버전 보고도 migration 시점의 호환 epoch가
   지나면 거절한다.
-- stop 요청 뒤 늦게 도착한 `running`/`starting` 보고는 `stopping` 상태를
-  되돌리지 않는다. stop 중 발생한 `crashed` 보고는 의도한 `stopped`로
-  수렴시킨다.
+- stop 요청은 generation을 N→N+1로 올리는 단조 fencing transition이다.
+  daemon은 이 stopped manifest를 영속 high-watermark/tombstone으로 저장해
+  reconnect/restart 뒤에도 낮거나 같은 generation의 delayed `running` sync를
+  폐기한다. Stop generation보다 낮은 보고는 무시하며, current stop generation의
+  `crashed` 보고는 의도한 `stopped`로 수렴시킨다.
 - admin의 unplaced agent 목록은 구조화된 `unavailable_reason`을 우선하며,
   legacy `last_crash_reason`은 현재 상태가 실제 `crashed`일 때만 경고한다.
 
@@ -31,6 +33,8 @@
 | `lifecycle.report_missing_generation` | generation capability를 광고한 daemon이 무버전 보고 | daemon/protocol 버전과 frame 생성 경로 확인 |
 | `lifecycle.report_stale_legacy_epoch` | 허용된 legacy epoch 이후 무버전 보고 | daemon 업그레이드 후 versioned report 수신 확인 |
 | `lifecycle.report_ignored_during_stop` | stop commit 이전에 생성된 live 보고 | 다음 full report에서 absent/stopped 수렴 여부 |
+| `stale_desired_state_rejected` | daemon tombstone보다 낮거나 stopped와 같은 generation의 running sync 폐기 | server stop generation 및 manifest.json의 generation 확인 |
+| `readopt_fenced_by_tombstone` | daemon 재시작 때 살아 있던 이전 process를 영속 stop fence로 종료 | runtime.json generation과 stopped manifest generation 확인 |
 
 `lifecycle_dispatch_unknown` activity에는 machine id, generation 및
 `same_placement_reconcile` 복구 방식이 남는다. Agent의 구조화된
@@ -51,7 +55,9 @@
    daemon에서 이전 process가 종료되지 않은 상태를 조사한다.
 4. stop 후 `stopping`이 유지되면 machine report 주기 한 번을 기다린다.
    full report에서 agent가 사라지면 cluster가 `stopped`로 확정한다. machine이
-   offline이면 연결을 복구한 뒤 reconcile한다.
+   offline이면 연결을 복구한 뒤 reconcile한다. daemon 재시작 전에 이미 stop
+   tombstone이 저장됐다면 cold-start re-adopt도 이전 generation process를 먼저
+   종료한 뒤 report한다.
 
 ## 경고 해석
 
@@ -67,7 +73,7 @@
 ```bash
 pytest packages/cluster/tests/test_lifecycle.py -q
 pytest packages/cluster/tests/test_migrations.py -q
-pytest packages/machine/tests/test_daemon.py packages/machine/tests/test_protocol_frames.py -q
+pytest packages/machine/tests/test_manifest_store.py packages/machine/tests/test_daemon.py packages/machine/tests/test_protocol_frames.py -q
 npm -w anygarden-frontend test -- --run src/lib/admin-agent-warning.test.ts
 npm -w anygarden-frontend run build
 ```

@@ -252,6 +252,9 @@ class AgentLifecycle:
                     agent.desired_state = "running"
                     agent.placed_on_machine_id = None
                     agent.pid = None
+                    agent.lifecycle_lease_token = None
+                    agent.lifecycle_lease_expires_at = None
+                    agent.lifecycle_delivery_state = "released"
                     agent.last_crash_reason = (
                         "no rooms assigned \u2014 add the agent to at least one room "
                         "before starting"
@@ -308,6 +311,9 @@ class AgentLifecycle:
                     # release the placement so a newly-registered machine can adopt
                     # it, and leave an audit trail.
                     agent.placed_on_machine_id = None
+                    agent.lifecycle_lease_token = None
+                    agent.lifecycle_lease_expires_at = None
+                    agent.lifecycle_delivery_state = "released"
                     agent.last_crash_reason = (
                         f"no online machine supports engine '{agent.engine}'"
                     )
@@ -624,7 +630,7 @@ class AgentLifecycle:
         self._token_cache.pop(agent_id, None)
 
     async def request_stop(self, agent_id: str) -> None:
-        """Set desired_state='stopped' and push ``sync_desired_state``.
+        """Advance a stop fence and push ``sync_desired_state``.
 
         #219 — also flips ``actual_state`` into the transitional
         ``stopping`` badge immediately so admin UIs don't wait up to
@@ -636,47 +642,73 @@ class AgentLifecycle:
         # Issue #369 — evict the cached anygarden_token so the next
         # ``request_start`` mints a fresh one (rotation on respawn).
         self._token_cache.pop(agent_id, None)
+        machine_id: str | None = None
+        stop_generation: int | None = None
         async with self._db_factory() as db:
-            agent = await self._get_agent(db, agent_id)
-            if agent is None:
+            # Stop is a monotonic generation transition, not only a desired
+            # state bit. A running frame that already passed the sender's
+            # pre-dispatch check remains generation N; this atomic UPDATE
+            # moves the durable stop tombstone to N+1 before its frame is
+            # emitted, so the daemon can reject any delayed lower generation.
+            stopped = await db.execute(
+                update(Agent)
+                .where(Agent.id == agent_id)
+                .values(
+                    desired_state="stopped",
+                    actual_state=case(
+                        (Agent.placed_on_machine_id.is_(None), "stopped"),
+                        (
+                            Agent.actual_state.in_(
+                                ("running", "starting", "pending")
+                            ),
+                            "stopping",
+                        ),
+                        else_=Agent.actual_state,
+                    ),
+                    pid=case(
+                        (Agent.placed_on_machine_id.is_(None), None),
+                        else_=Agent.pid,
+                    ),
+                    generation=func.coalesce(Agent.generation, 0) + 1,
+                    lifecycle_lease_token=None,
+                    lifecycle_lease_expires_at=None,
+                    lifecycle_delivery_state="stopped",
+                    pending_generation=None,
+                    restart_requested_at=None,
+                    restart_deadline_at=None,
+                    pending_manifest_hash=None,
+                    unavailable_code=None,
+                    unavailable_detail=None,
+                    unavailable_since=None,
+                )
+                .returning(Agent.generation, Agent.placed_on_machine_id)
+                .execution_options(synchronize_session=False)
+            )
+            row = stopped.first()
+            if row is None:
+                await db.rollback()
                 return
-
-            agent.desired_state = "stopped"
-            # Cancel any in-flight lifecycle owner before the stop frame is
-            # emitted. A late send result from the old owner is fenced by the
-            # token/generation/desired-state CAS in ``_record_dispatch_result``.
-            agent.lifecycle_lease_token = None
-            agent.lifecycle_lease_expires_at = None
-            agent.lifecycle_delivery_state = "stopped"
-            agent.pending_generation = None
-            agent.restart_requested_at = None
-            agent.restart_deadline_at = None
-            agent.pending_manifest_hash = None
-            # #516 — an intentional stop is not a "problem"; clear any
-            # unavailability reason so the admin/user surfaces don't alarm.
-            _clear_unavailable(agent)
-            if agent.placed_on_machine_id:
-                if agent.actual_state in ("running", "starting", "pending"):
-                    agent.actual_state = "stopping"
-            else:
-                # Orphan path — no daemon will ever confirm the stop,
-                # so absent-from-report convergence won't fire either.
-                # Short-circuit to stopped to avoid a stuck row.
-                agent.actual_state = "stopped"
-                agent.pid = None
-            db.add(ActivityLog(agent_id=agent_id, event_type="stop_requested"))
+            stop_generation = int(row[0])
+            machine_id = row[1]
+            db.add(
+                ActivityLog(
+                    agent_id=agent_id,
+                    event_type="stop_requested",
+                    details={"generation": stop_generation},
+                )
+            )
             await db.commit()
 
-            if agent.placed_on_machine_id:
-                await self._machine_bus.send(
-                    agent.placed_on_machine_id,
-                    {
-                        "type": "sync_desired_state",
-                        "agent_id": agent.id,
-                        "desired_state": "stopped",
-                        "generation": agent.generation,
-                    },
-                )
+        if machine_id is not None and stop_generation is not None:
+            await self._machine_bus.send(
+                machine_id,
+                {
+                    "type": "sync_desired_state",
+                    "agent_id": agent_id,
+                    "desired_state": "stopped",
+                    "generation": stop_generation,
+                },
+            )
 
     async def handle_report_actual_state(
         self,

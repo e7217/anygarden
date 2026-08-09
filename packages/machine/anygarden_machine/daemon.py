@@ -356,6 +356,28 @@ class MachineDaemon:
                     self._running_generations[agent_id] = generation
                 else:
                     self._running_generations[agent_id] = 0
+
+                # A stopped manifest is a durable high-watermark. It may
+                # have been persisted immediately before the daemon exited,
+                # while the old process survived that exit. Enforce the
+                # tombstone before the first report so a cold restart cannot
+                # re-advertise or retain the fenced process.
+                manifest = self._manifest_store.load(agent_id)
+                runtime_generation = self._running_generations[agent_id]
+                if (
+                    manifest is not None
+                    and manifest.desired_state == "stopped"
+                    and manifest.generation >= runtime_generation
+                ):
+                    log.warning(
+                        "readopt_fenced_by_tombstone",
+                        agent_id=agent_id,
+                        runtime_generation=runtime_generation,
+                        tombstone_generation=manifest.generation,
+                    )
+                    await self._spawner.kill(agent_id)
+                    self._running_generations.pop(agent_id, None)
+                    continue
                 adopted += 1
 
         if adopted:
@@ -461,7 +483,7 @@ class MachineDaemon:
 
     async def _handle_sync_desired_state(self, frame: Any) -> None:
         """Handle a single agent's desired state declaration."""
-        self._manifest_store.save(frame)
+        await self._save_desired_frame(frame)
         await self._reconcile_agent(frame.agent_id)
 
     async def _handle_sync_batch(self, frame: Any) -> None:
@@ -480,7 +502,7 @@ class MachineDaemon:
         # Save all manifests
         desired_ids: set[str] = set()
         for agent_frame in frame.agents:
-            self._manifest_store.save(agent_frame)
+            await self._save_desired_frame(agent_frame)
             desired_ids.add(agent_frame.agent_id)
 
         if frame.is_full_snapshot:
@@ -494,6 +516,7 @@ class MachineDaemon:
                 if agent_id not in desired_ids:
                     log.info("killing_orphan", agent_id=agent_id)
                     async with self._lock_for(agent_id):
+                        self._persist_stop_tombstone(agent_id)
                         await self._spawner.kill(agent_id)
                         self._running_generations.pop(agent_id, None)
 
@@ -508,6 +531,47 @@ class MachineDaemon:
             lock = asyncio.Lock()
             self._agent_locks[agent_id] = lock
         return lock
+
+    async def _save_desired_frame(self, frame: SyncDesiredStateFrame) -> bool:
+        """Persist a desired-state frame behind its durable generation fence.
+
+        Manifest load/compare/write is serialized with reconcile and spawn for
+        this agent. A rejected frame still causes reconciliation by its caller:
+        the persisted tombstone must win operationally as well as on disk.
+        """
+        async with self._lock_for(frame.agent_id):
+            accepted = self._manifest_store.save_if_authoritative(frame)
+        if not accepted:
+            log.warning(
+                "stale_desired_state_rejected",
+                agent_id=frame.agent_id,
+                generation=frame.generation,
+                desired_state=frame.desired_state,
+            )
+        return accepted
+
+    def _persist_stop_tombstone(self, agent_id: str) -> None:
+        """Persist a stopped high-watermark for an authoritative local kill.
+
+        Full snapshots express absence as an authoritative stop. Preserve the
+        highest generation known from the manifest or in-memory reservation so
+        a delayed running frame at that generation cannot revive the orphan.
+        The caller must hold the matching per-agent lock.
+        """
+        current = self._manifest_store.load(agent_id)
+        generation = self._running_generations.get(agent_id, 0)
+        if current is not None:
+            generation = max(generation, current.generation)
+            tombstone = current.model_copy(
+                update={"desired_state": "stopped", "generation": generation}
+            )
+        else:
+            tombstone = SyncDesiredStateFrame(
+                agent_id=agent_id,
+                desired_state="stopped",
+                generation=generation,
+            )
+        self._manifest_store.save_if_authoritative(tombstone)
 
     async def _reconcile_agent(self, agent_id: str) -> None:
         """Reconcile a single agent's actual state toward its desired state."""
@@ -526,6 +590,9 @@ class MachineDaemon:
             running = self._spawner.get_running(agent_id)
 
             if manifest.desired_state == "stopped":
+                token_future = self._token_futures.get(agent_id)
+                if token_future is not None and not token_future.done():
+                    token_future.cancel()
                 if running is not None:
                     log.info("stopping_agent", agent_id=agent_id)
                     # #219 — annotate BEFORE kill so the report we push
@@ -604,14 +671,29 @@ class MachineDaemon:
 
         try:
             agent_token = await asyncio.wait_for(future, timeout=TOKEN_REQUEST_TIMEOUT)
+        except asyncio.CancelledError:
+            # Preserve real task cancellation (daemon shutdown). A stop fence
+            # cancels only the token Future, leaving this task uncancelled.
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            log.info(
+                "token_request_fenced",
+                agent_id=agent_id,
+                generation=manifest.generation,
+            )
+            await self._rollback_reservation(agent_id, manifest.generation)
+            self._clear_transitional(agent_id)
+            await self._report_actual_state()
+            return
         except asyncio.TimeoutError:
             log.error("token_request_timeout", agent_id=agent_id)
-            self._token_futures.pop(agent_id, None)
             # Roll back the pre-reservation so a retry can proceed.
             await self._rollback_reservation(agent_id, manifest.generation)
             return
         finally:
-            self._token_futures.pop(agent_id, None)
+            if self._token_futures.get(agent_id) is future:
+                self._token_futures.pop(agent_id, None)
 
         # Build SpawnManifest from manifest + token
         spawn_manifest = SpawnManifest(
@@ -657,7 +739,37 @@ class MachineDaemon:
             generation=manifest.generation,
         )
 
-        result = await self._spawner.spawn(spawn_manifest)
+        # The token round-trip is an unbounded wire-order gap: a stop or newer
+        # generation may have been persisted while this coroutine waited.
+        # Serialize the final manifest check with desired-state persistence and
+        # keep the lock through spawn dispatch. Therefore either spawn is
+        # ordered before the stop (which then kills it), or the stop tombstone
+        # is visible here and the stale process is never created.
+        fenced = False
+        async with self._lock_for(agent_id):
+            current = self._manifest_store.load(agent_id)
+            if (
+                current is None
+                or current.desired_state != "running"
+                or current.generation != manifest.generation
+            ):
+                fenced = True
+                result = None
+            else:
+                result = await self._spawner.spawn(spawn_manifest)
+
+        if fenced:
+            log.info(
+                "spawn_fenced_by_manifest",
+                agent_id=agent_id,
+                generation=manifest.generation,
+            )
+            await self._rollback_reservation(agent_id, manifest.generation)
+            self._clear_transitional(agent_id)
+            await self._report_actual_state()
+            return
+
+        assert result is not None
         if result.success:
             # ``_running_generations[agent_id]`` was already pre-reserved
             # by ``_reconcile_agent`` at the requested generation, so

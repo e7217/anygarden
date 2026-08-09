@@ -563,6 +563,66 @@ class TestSyncDesiredState:
         daemon._spawner.spawn.assert_called_once()
         assert daemon._running_generations.get("agent-001") == 2
 
+    async def test_stop_tombstone_rejects_delayed_running_across_restart(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """Wire order start N → stop N+1 → delayed start N cannot reanimate.
+
+        The first start remains in its token round-trip when stop arrives.
+        Stop cancels that spawn, and the persisted tombstone rejects the late
+        frame both in this daemon and in a fresh daemon using the same disk.
+        """
+        _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        running_n = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-fenced",
+            "desired_state": "running",
+            "generation": 1,
+            "engine": "claude-code",
+        }
+        stopped_n_plus_one = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-fenced",
+            "desired_state": "stopped",
+            "generation": 2,
+        }
+
+        await daemon._handle(running_n)
+        await asyncio.sleep(0)
+        assert "agent-fenced" in daemon._token_futures
+
+        await daemon._handle(stopped_n_plus_one)
+        await asyncio.sleep(0)
+        await daemon._handle(running_n)
+        await asyncio.sleep(0)
+
+        daemon._spawner.spawn.assert_not_awaited()
+        manifest = daemon._manifest_store.load("agent-fenced")
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 2
+
+        restarted = MachineDaemon(
+            server_url=daemon.server_url,
+            machine_id=daemon.machine_id,
+            machine_token=daemon.machine_token,
+            agent_dirs_root=tmp_path / "agents",
+            workspace_registry_path=tmp_path / "restart-workspaces.json",
+            workspace_signing_key_path=tmp_path / "restart-signing.key",
+        )
+        _capture_ws(restarted)
+        restarted._spawner.spawn = AsyncMock()
+
+        await restarted._handle(running_n)
+        await asyncio.sleep(0)
+
+        restarted._spawner.spawn.assert_not_awaited()
+        persisted = restarted._manifest_store.load("agent-fenced")
+        assert persisted is not None
+        assert persisted.desired_state == "stopped"
+        assert persisted.generation == 2
+
 
 # ── Per-agent reconcile serialization (#183) ─────────────────────────
 
@@ -1795,6 +1855,36 @@ class TestReadoptRunningAgents:
         assert "agent-dead" not in daemon._running_generations
         assert daemon._spawner.get_running("agent-dead") is None
         assert daemon._manifest_store.load_runtime("agent-dead") is None
+
+    async def test_readopt_kills_runtime_fenced_by_persisted_tombstone(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """A cold restart enforces its tombstone before the first report."""
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-fenced",
+                desired_state="stopped",
+                generation=5,
+            )
+        )
+        daemon._manifest_store.record_runtime(
+            "agent-fenced", self._runtime(generation=4)
+        )
+
+        with patch(
+            "anygarden_machine.spawner.is_group_alive", return_value=True
+        ), patch(
+            "anygarden_machine.spawner.psutil.Process"
+        ) as mock_proc_cls, patch(
+            "anygarden_machine.spawner.terminate_tree"
+        ) as terminate_tree:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        terminate_tree.assert_called_once_with(555, timeout=10)
+        assert daemon._spawner.get_running("agent-fenced") is None
+        assert "agent-fenced" not in daemon._running_generations
+        assert daemon._manifest_store.load_runtime("agent-fenced") is None
 
     async def test_readopt_skips_already_tracked_agent(
         self, daemon: MachineDaemon
