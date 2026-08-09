@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
@@ -14,15 +14,44 @@ import {
 import { parseHandoff, isHandoffStatusMessage } from '@/lib/handoff'
 import { parseServerDate } from '@/lib/datetime'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
+import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
+import { canHostThread, type ThreadIndex } from '@/lib/threads'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
   participants: Record<string, Participant>
   myParticipantId: string | null
   typingUsers?: Set<string>
+  /** Grouped view of ``messages`` — replies are rendered in the
+   *  thread panel, not inline in this timeline. Computed once by
+   *  ``ChatPage`` so the panel and the timeline agree.
+   *
+   *  Optional on purpose: the guest room (§11.5) is a single flat
+   *  surface with no thread panel to open, so it omits this and keeps
+   *  the pre-thread behaviour of rendering every message inline.
+   *  Grouping there would hide replies with no way to reach them. */
+  threadIndex?: ThreadIndex
+  /** Root id of the thread currently open — in the side panel or
+   *  expanded inline, depending on the display mode. */
+  activeThreadRootId?: string | null
+  onOpenThread?: (rootMessageId: string) => void
+  /** Slot rendered under a root while its thread is the active one.
+   *  Supplied only in inline mode; panel mode leaves it undefined and
+   *  renders the thread as a sibling column instead. Kept as a render
+   *  prop so ChatArea doesn't need the composer's dependencies. */
+  renderInlineThread?: (root: ChatMessage) => ReactNode
 }
 
-export default function ChatArea({ messages, participants, myParticipantId, typingUsers }: ChatAreaProps) {
+export default function ChatArea({
+  messages,
+  participants,
+  myParticipantId,
+  typingUsers,
+  threadIndex,
+  activeThreadRootId,
+  onOpenThread,
+  renderInlineThread,
+}: ChatAreaProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
   // Radix ScrollArea forwards the outer ref to its Root element;
   // the actual scrolling viewport is a descendant with
@@ -36,6 +65,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
   }, [])
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
   const { rooms, agentDMs } = useRooms()
+  const timeline = threadIndex ? threadIndex.roots : messages
 
   // Room-name resolver — checks regular project rooms first, then
   // agent DMs. Mirrors the lookup ``ChatPage.currentRoom`` does.
@@ -254,7 +284,12 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
       />
       <ScrollArea className="flex-1 bg-white" ref={scrollRootRef}>
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-4">
-          {messages.map((msg, i) => {
+          {/* With a thread index, only top-level messages appear here —
+              replies live in the panel. ``roots`` preserves stream order
+              and keeps orphaned replies (root outside the loaded
+              window) visible rather than dropping them. Without one
+              (guest room) every message renders inline as before. */}
+          {timeline.map((msg, i) => {
             // #238 — drop orchestrator status chatter that the UI
             // already expresses via HandoffMessageCard's breathing
             // border. Returning null here (not just an empty bubble)
@@ -274,7 +309,7 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
               return null
             }
             return (
-              <div key={msg.seq || i} data-message-id={msg.id}>
+              <div key={msg.seq || i} data-message-id={msg.id} className="group/message">
                 <MessageBubble
                   message={msg}
                   participants={participants}
@@ -283,6 +318,24 @@ export default function ChatArea({ messages, participants, myParticipantId, typi
                   handoffResolvedAt={handoffResolvedMap.get(msg.id) ?? null}
                   roomFiles={roomFiles}
                 />
+                {/* An orphaned reply renders here so it isn't lost, but it
+                    cannot host a thread — the server rejects a thread rooted
+                    at a reply, so an affordance would be a button that always
+                    fails. Its own thread is reachable once its root loads. */}
+                {threadIndex && onOpenThread && canHostThread(threadIndex, msg.id) && (
+                  <ThreadReplyAffordance
+                    root={msg}
+                    index={threadIndex}
+                    participants={participants}
+                    isMine={msg.participant_id === myParticipantId}
+                    active={activeThreadRootId === msg.id}
+                    onOpen={onOpenThread}
+                  />
+                )}
+                {renderInlineThread
+                  && activeThreadRootId === msg.id
+                  && (!threadIndex || canHostThread(threadIndex, msg.id))
+                  && renderInlineThread(msg)}
               </div>
             )
           })}

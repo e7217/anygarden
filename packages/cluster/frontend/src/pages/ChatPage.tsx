@@ -15,6 +15,11 @@ import RoomInviteDialog from '@/components/RoomInviteDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
+import ThreadPanel from '@/components/ThreadPanel'
+import ThreadInline from '@/components/ThreadInline'
+import { indexThreads, canHostThread } from '@/lib/threads'
+import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
+import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
@@ -75,6 +80,53 @@ export default function ChatPage() {
   const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(selectedRoom)
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
+  // Thread grouping is derived once here so the timeline and the side
+  // panel can never disagree about which messages are replies.
+  const threadIndex = useMemo(() => indexThreads(messages), [messages])
+  const [threadRootId, setThreadRootId] = useState<string | null>(null)
+  const [threadMode, setThreadMode] = useThreadDisplayMode()
+  // An orphaned reply is in ``roots`` so it stays visible, but it can
+  // never host a thread — the server rejects a thread rooted at a reply.
+  // ChatArea already hides the affordance; this second guard keeps the
+  // panel from opening one through any other path.
+  const threadRoot = useMemo(
+    () =>
+      threadRootId && canHostThread(threadIndex, threadRootId)
+        ? threadIndex.roots.find(m => m.id === threadRootId) ?? null
+        : null,
+    [threadRootId, threadIndex],
+  )
+  // Closing returns focus to the control that opened the thread.
+  // Without this the caret lands back at the top of the document and a
+  // keyboard user has to walk the whole timeline again to reach the
+  // message they were just reading. The composer's draft is dropped —
+  // an explicitly closed thread is a discarded one; a *layout switch*
+  // keeps it, which is the case the draft store exists for.
+  const closeThread = useCallback(() => {
+    const id = threadRootId
+    setThreadRootId(null)
+    if (!id) return
+    clearDraft(threadDraftKey(id))
+    // Rendered by ChatArea, so query rather than thread a ref through
+    // the timeline for a control that may not exist after a reflow.
+    requestAnimationFrame(() => {
+      const trigger = document.querySelector<HTMLElement>(
+        `[data-thread-trigger="${id}"]`,
+      )
+      trigger?.focus()
+    })
+  }, [threadRootId])
+
+  // Close the panel when the room changes, and when the open root
+  // leaves the loaded window (history is capped, so a long-lived
+  // session can scroll it out). Without the second guard the panel
+  // would stay mounted with nothing to show.
+  useEffect(() => {
+    setThreadRootId(null)
+  }, [selectedRoom])
+  useEffect(() => {
+    if (threadRootId && !threadRoot) setThreadRootId(null)
+  }, [threadRootId, threadRoot])
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
@@ -541,6 +593,10 @@ export default function ChatPage() {
                     : undefined
                 }
                 onSearch={() => setSearchOpen(true)}
+                threadDisplayMode={threadMode}
+                onToggleThreadDisplayMode={() =>
+                  setThreadMode(threadMode === 'panel' ? 'inline' : 'panel')
+                }
                 onShowArtifacts={() => setArtifactsOpen(true)}
                 onShowRoomActivity={
                   user?.is_admin ? () => setRoomActivityOpen(true) : undefined
@@ -575,6 +631,38 @@ export default function ChatPage() {
               participants={participants}
               myParticipantId={myParticipantId}
               typingUsers={typingUsers}
+              threadIndex={threadIndex}
+              activeThreadRootId={threadRootId}
+              // Re-clicking the open thread's trigger is a close like any
+              // other, so it routes through ``closeThread`` — clearing the
+              // draft and restoring focus. Setting the id to null here
+              // directly would leave a discarded draft to resurface on
+              // reopen, contradicting the contract stated in the PR.
+              onOpenThread={id => {
+                if (threadRootId === id) closeThread()
+                else setThreadRootId(id)
+              }}
+              renderInlineThread={
+                threadMode === 'inline' && selectedRoom
+                  ? root => (
+                      <ThreadInline
+                        root={root}
+                        replies={threadIndex.repliesByRoot.get(root.id) ?? []}
+                        participants={participants}
+                        myParticipantId={myParticipantId}
+                        roomId={selectedRoom}
+                        connected={connected}
+                        mentionUsers={mentionUsers}
+                        mentionRooms={mentionRooms}
+                        onSend={(content, metadata) =>
+                          send(content, metadata, root.id)
+                        }
+                        onTyping={sendTyping}
+                                onCollapse={closeThread}
+                      />
+                    )
+                  : undefined
+              }
             />
             <TypingIndicator
               typingUsers={typingUsers}
@@ -674,12 +762,34 @@ export default function ChatPage() {
           overlay (mobile, drawer). The rail itself early-returns null
           when ``roomId`` is null, so it's safe to mount unconditionally
           on routes that may not yet have a selected room. */}
-      <RightContextRail
-        roomId={selectedRoom}
-        participants={participants}
-        open={rightRailOpen}
-        onClose={() => setRightRailOpen(false)}
-      />
+      {/* Thread panel and context rail share the right-hand slot: at
+          common laptop widths a fourth column squeezes the chat to
+          ~256px and the room header overflows it. An open thread takes
+          the slot; closing it restores the rail in whatever state the
+          user had left it, since the rail's own collapse flag is never
+          touched here. */}
+      {selectedRoom && threadRoot && threadMode === 'panel' ? (
+        <ThreadPanel
+          root={threadRoot}
+          replies={threadIndex.repliesByRoot.get(threadRoot.id) ?? []}
+          participants={participants}
+          myParticipantId={myParticipantId}
+          roomId={selectedRoom}
+          connected={connected}
+          mentionUsers={mentionUsers}
+          mentionRooms={mentionRooms}
+          onSend={(content, metadata) => send(content, metadata, threadRoot.id)}
+          onTyping={sendTyping}
+          onClose={closeThread}
+        />
+      ) : (
+        <RightContextRail
+          roomId={selectedRoom}
+          participants={participants}
+          open={rightRailOpen}
+          onClose={() => setRightRailOpen(false)}
+        />
+      )}
     </div>
   )
 }
