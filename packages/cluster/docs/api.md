@@ -53,55 +53,65 @@ Base URL: `/api/v1`
 | `/ws/chat` | 유저/에이전트 채팅 연결 |
 | `/ws/machines/{id}` | 머신 데몬 연결 |
 
-## Error response
+## Scoped public error metadata
 
-Any API failure follows one of the shapes below:
+There is not yet one error schema for every API route. FastAPI validation,
+authorization, and endpoints outside the machine/task scope below retain their
+existing response shapes. In particular, pre-existing task conflicts such as
+`TASK_CLAIM_CONFLICT` still expose their endpoint-specific object below the
+outer `detail` key.
 
-1) Plain string detail (`"Not found"`)
-
-2) Structured object:
+ANY-3 adds a stable top-level `code` and a display-oriented top-level `message`
+to selected machine/task errors. The FastAPI outer wrapper remains visible and
+the value and type of its `detail` field are unchanged throughout API v1:
 
 ```json
 {
-  "code": "TASK_NOT_FOUND",
-  "message": "Task not found",
-  "detail": "Task not found"
+  "detail": "Machine is not connected",
+  "code": "MACHINE_OFFLINE",
+  "message": "Machine is not connected"
 }
 ```
 
-`code` is the machine-readable identifier for clients.
-`message` and `detail` are human-readable message aliases for compatibility.
-Deprecated legacy fields (`error`) may exist temporarily on migration paths.
+Clients may branch on top-level `code` for the registry below. Existing v1
+clients may continue to read or compare `detail`. `message` is for display and
+must not be used as a machine identifier.
 
-예시:
+### v1 additive code registry
 
-```bash
-# 머신 오프라인
-curl -i -X POST http://localhost:8000/api/v1/machines/<id>/update \
-  -H "Authorization: Bearer <token>"
+| Code | Status | Covered machine/task condition |
+|---|---:|---|
+| `MACHINE_REGISTRATION_FORBIDDEN` | 403 | non-user machine registration |
+| `MACHINE_LIST_FORBIDDEN` | 403 | non-user machine listing |
+| `MACHINE_HAS_ACTIVE_AGENTS` | 409 | non-forced delete with active agents |
+| `MACHINE_OFFLINE` | 409 | daemon update or engine operation while disconnected |
+| `MACHINE_NOT_FOUND` | 404 | migrated machine resource lookups |
+| `MACHINE_ACCESS_DENIED` | 403 | owned-machine lookup by another user |
+| `TASK_ASSIGNEE_NOT_IN_ROOM` | 400 | assignee is absent from the task room |
+| `TASK_ROOM_NOT_FOUND` | 404 | task creation for a missing room |
+| `TASK_SOURCE_MESSAGE_NOT_FOUND` | 404 | message-to-task conversion with no same-room source |
+| `TASK_NOT_FOUND` | 404 | migrated task update/claim/requeue/delete lookups |
+| `TASK_INVALID_MUTATION` | 400 | assignee and status changed together |
+| `TASK_ROOM_PARTICIPANT_REQUIRED` | 403 | claim attempted without a room participant |
+| `TASK_HUMAN_ASSIGNMENT_DISABLED` | 403 | human claim disabled by room policy |
 
+The machine-delete 409 already had an object-valued `detail`. That object is
+preserved exactly while the same top-level metadata is added:
+
+```json
 {
   "detail": {
-    "code": "MACHINE_OFFLINE",
-    "message": "Machine is not connected",
-    "detail": "Machine is not connected"
-  }
-}
-```
-
-```bash
-# 삭제 대상 머신에 에이전트가 존재
-curl -i -X DELETE http://localhost:8000/api/v1/machines/<id> \
-  -H "Authorization: Bearer <token>"
-
-{
-  "detail": {
-    "code": "MACHINE_HAS_ACTIVE_AGENTS",
     "error": "machine_has_active_agents",
     "agent_count": 2,
     "message": "2 agent(s) are still placed on this machine..."
-  }
+  },
+  "code": "MACHINE_HAS_ACTIVE_AGENTS",
+  "message": "2 agent(s) are still placed on this machine..."
 }
 ```
 
-`error` is intentionally kept as a compatibility key while clients migrate to `code`.
+Within v1, registered codes and legacy `detail` types are stable. New codes and
+top-level context fields may be added. Removing or renaming a code, changing a
+legacy `detail` type/value contract, or removing the nested
+`machine_has_active_agents` `error` key requires a versioned API change and a
+documented deprecation period.

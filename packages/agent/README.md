@@ -1,19 +1,11 @@
-# dragent
+# anygarden-agent
 
 Python SDK for the Anygarden multi-agent chat platform.
 
 ## Installation
 
 ```bash
-pip install dragent
-```
-
-### Optional engine integrations
-
-```bash
-pip install dragent[openai]       # OpenAI integration
-pip install dragent[claude-code]  # Claude Code SDK integration
-pip install dragent[all-engines]  # All engine integrations
+pip install anygarden-agent
 ```
 
 ## Quick Start
@@ -35,7 +27,7 @@ await client.run()
 
 ```bash
 # Run an agent
-anygarden-agent --engine openai --name PM --server ws://localhost:8000 --token $TOK --room room1
+anygarden-agent --engine codex-cli --name PM --server ws://localhost:8000 --token $TOK --room room1
 
 # Run a text chat client
 anygarden-client --server ws://localhost:8000 --user me --room sprint-42

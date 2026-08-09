@@ -750,10 +750,10 @@ class TestMessageLinkedTasksAndClaims:
             headers=_auth(tasks_env["token"]),
         )
         assert cross_response.status_code == 404
-        assert cross_response.json()["detail"] == {
+        assert cross_response.json() == {
+            "detail": "Message not found",
             "code": "TASK_SOURCE_MESSAGE_NOT_FOUND",
             "message": "Message not found",
-            "detail": "Message not found",
         }
 
         system_response = await tasks_env["client"].post(

@@ -238,10 +238,10 @@ class TestMachinesAPI:
         )
 
         assert resp.status_code == 404
-        assert resp.json()["detail"] == {
+        assert resp.json() == {
+            "detail": "Machine not found",
             "code": "MACHINE_NOT_FOUND",
             "message": "Machine not found",
-            "detail": "Machine not found",
         }
 
     @pytest.mark.asyncio
@@ -262,10 +262,10 @@ class TestMachinesAPI:
         )
 
         assert resp.status_code == 409
-        assert resp.json()["detail"] == {
+        assert resp.json() == {
+            "detail": "Machine is not connected",
             "code": "MACHINE_OFFLINE",
             "message": "Machine is not connected",
-            "detail": "Machine is not connected",
         }
 
     @pytest.mark.asyncio
@@ -373,10 +373,19 @@ class TestMachinesAPI:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 409
-        body = resp.json()
-        assert body["detail"].get("code") == "MACHINE_HAS_ACTIVE_AGENTS"
-        assert body["detail"].get("error") == "machine_has_active_agents"
-        assert body["detail"]["agent_count"] == 1
+        message = (
+            "1 agent(s) are still placed on this machine. Stop or reassign them, "
+            "or pass ?force=true to forcibly stop them."
+        )
+        assert resp.json() == {
+            "detail": {
+                "error": "machine_has_active_agents",
+                "agent_count": 1,
+                "message": message,
+            },
+            "code": "MACHINE_HAS_ACTIVE_AGENTS",
+            "message": message,
+        }
 
     @pytest.mark.asyncio
     async def test_delete_machine_force_stops_agents(self, machines_env) -> None:

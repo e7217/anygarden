@@ -25,6 +25,7 @@ from anygarden.ws.handler import router as ws_router
 from anygarden.ws.machine_handler import router as machine_ws_router
 from anygarden.api.v1.machines import router as machines_api_router
 from anygarden.api.v1.agents import router as agents_api_router
+from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.skills import router as skills_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
@@ -1030,6 +1031,7 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
         config = AnygardenSettings()
 
     app = FastAPI(title="Anygarden", version="0.2.0", lifespan=lifespan)
+    app.add_exception_handler(PublicAPIError, public_api_error_handler)
     app.state.config = config
     app.include_router(ws_router)
     app.include_router(machine_ws_router)
