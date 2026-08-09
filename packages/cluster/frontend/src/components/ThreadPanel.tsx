@@ -158,6 +158,7 @@ export default function ThreadPanel({
             mentionUsers={mentionUsers}
             mentionRooms={mentionRooms}
             roomId={roomId}
+            placeholder="Reply to thread…"
           />
         </div>
       </aside>

@@ -16,7 +16,9 @@ import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel from '@/components/ThreadPanel'
+import ThreadInline from '@/components/ThreadInline'
 import { indexThreads } from '@/lib/threads'
+import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
@@ -81,6 +83,7 @@ export default function ChatPage() {
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
   const [threadRootId, setThreadRootId] = useState<string | null>(null)
+  const [threadMode, setThreadMode] = useThreadDisplayMode()
   const threadRoot = useMemo(
     () =>
       threadRootId
@@ -564,6 +567,10 @@ export default function ChatPage() {
                     : undefined
                 }
                 onSearch={() => setSearchOpen(true)}
+                threadDisplayMode={threadMode}
+                onToggleThreadDisplayMode={() =>
+                  setThreadMode(threadMode === 'panel' ? 'inline' : 'panel')
+                }
                 onShowArtifacts={() => setArtifactsOpen(true)}
                 onShowRoomActivity={
                   user?.is_admin ? () => setRoomActivityOpen(true) : undefined
@@ -600,7 +607,30 @@ export default function ChatPage() {
               typingUsers={typingUsers}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
-              onOpenThread={setThreadRootId}
+              onOpenThread={id =>
+                setThreadRootId(prev => (prev === id ? null : id))
+              }
+              renderInlineThread={
+                threadMode === 'inline' && selectedRoom
+                  ? root => (
+                      <ThreadInline
+                        root={root}
+                        replies={threadIndex.repliesByRoot.get(root.id) ?? []}
+                        participants={participants}
+                        myParticipantId={myParticipantId}
+                        roomId={selectedRoom}
+                        connected={connected}
+                        mentionUsers={mentionUsers}
+                        mentionRooms={mentionRooms}
+                        onSend={(content, metadata) =>
+                          send(content, metadata, root.id)
+                        }
+                        onTyping={sendTyping}
+                        onCollapse={() => setThreadRootId(null)}
+                      />
+                    )
+                  : undefined
+              }
             />
             <TypingIndicator
               typingUsers={typingUsers}
@@ -706,7 +736,7 @@ export default function ChatPage() {
           the slot; closing it restores the rail in whatever state the
           user had left it, since the rail's own collapse flag is never
           touched here. */}
-      {selectedRoom && threadRoot ? (
+      {selectedRoom && threadRoot && threadMode === 'panel' ? (
         <ThreadPanel
           root={threadRoot}
           replies={threadIndex.repliesByRoot.get(threadRoot.id) ?? []}

@@ -23,6 +23,11 @@ interface MessageInputProps {
   /** Room the message will land in; required to upload file
    * attachments (#246). Falsy = upload UI is hidden. */
   roomId?: string
+  /** Overrides the composer prompt. The thread surfaces set this so a
+   * nested composer says what it replies to — with two inputs on
+   * screen, identical placeholders leave the target ambiguous. The
+   * "Connecting..." disabled state still wins. */
+  placeholder?: string
 }
 
 interface Attachment {
@@ -52,7 +57,7 @@ interface TrackedFileReference {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
-  roomId,
+  roomId, placeholder,
 }: MessageInputProps) {
   const [value, setValue] = useState('')
   // #269 — inline error from a malformed slash command (e.g. ``/task``
@@ -441,7 +446,11 @@ export default function MessageInput({
             onChange={handleChange}
             onKeyDown={handleKeyDown}
             disabled={disabled}
-            placeholder={disabled ? 'Connecting...' : 'Type a message... (@ to mention, # for rooms)'}
+            placeholder={
+              disabled
+                ? 'Connecting...'
+                : placeholder ?? 'Type a message... (@ to mention, # for rooms)'
+            }
             rows={1}
             className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
           />

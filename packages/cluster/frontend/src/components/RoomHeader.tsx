@@ -1,6 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search } from 'lucide-react'
+import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search, PanelRight, ListTree } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -80,6 +80,11 @@ interface RoomHeaderProps {
    *  a row that ⌘K already covers. ``undefined`` hides the button
    *  (guest pages, routes without the search dialog). */
   onSearch?: () => void
+  /** Thread layout A/B switch. Both handler and value must be
+   *  supplied for the control to render; it is temporary scaffolding
+   *  while the shape is being chosen, not a settled setting. */
+  threadDisplayMode?: 'panel' | 'inline'
+  onToggleThreadDisplayMode?: () => void
   /** #329 Phase 3 — artifacts trigger. Forwarded to the overflow
    *  menu so every room member (not just admins) can browse the
    *  agent-produced artifacts without the header growing another
@@ -136,6 +141,8 @@ export default function RoomHeader({
   ephemeral,
   onToggleEphemeral,
   onSearch,
+  threadDisplayMode,
+  onToggleThreadDisplayMode,
   onShowArtifacts,
   onShowRoomActivity,
   rightRailSlot,
@@ -291,6 +298,23 @@ export default function RoomHeader({
             className="hidden sm:inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
           >
             <Search className="h-4 w-4" />
+          </button>
+        )}
+        {threadDisplayMode && onToggleThreadDisplayMode && (
+          <button
+            type="button"
+            onClick={onToggleThreadDisplayMode}
+            title={`Threads: ${threadDisplayMode} — click to switch`}
+            aria-label={`Thread layout: ${threadDisplayMode}. Switch to ${threadDisplayMode === 'panel' ? 'inline' : 'panel'}.`}
+            data-testid="thread-mode-toggle"
+            className="hidden sm:inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+          >
+            {threadDisplayMode === 'panel' ? (
+              <PanelRight className="h-4 w-4" />
+            ) : (
+              <ListTree className="h-4 w-4" />
+            )}
+            {threadDisplayMode}
           </button>
         )}
         <RoomSettingsMenu
