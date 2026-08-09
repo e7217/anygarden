@@ -5,6 +5,7 @@ import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
+import { threadDraftKey } from '@/lib/composerDrafts'
 
 interface ThreadInlineProps {
   root: ChatMessage
@@ -99,6 +100,8 @@ export default function ThreadInline({
           mentionRooms={mentionRooms}
           roomId={roomId}
           placeholder="Reply to thread…"
+          autoFocus
+          draftKey={threadDraftKey(root.id)}
         />
       </div>
     </div>

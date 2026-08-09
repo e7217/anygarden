@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Paperclip, Send, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
+import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
 import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { parseSlashCommand } from '@/lib/slashCommands'
@@ -28,6 +29,13 @@ interface MessageInputProps {
    * screen, identical placeholders leave the target ambiguous. The
    * "Connecting..." disabled state still wins. */
   placeholder?: string
+  /** Focus the textarea on mount. Set by the thread surfaces so opening
+   * a thread puts the caret where the user is about to type. */
+  autoFocus?: boolean
+  /** Parks unsent text under this key so it survives unmount. The thread
+   * layouts share one key per thread, which is what keeps a draft alive
+   * across a panel/inline switch. Omitted = no draft retention. */
+  draftKey?: string
 }
 
 interface Attachment {
@@ -57,14 +65,36 @@ interface TrackedFileReference {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
-  roomId, placeholder,
+  roomId, placeholder, autoFocus, draftKey,
 }: MessageInputProps) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(() => readDraft(draftKey))
   // #269 — inline error from a malformed slash command (e.g. ``/task``
   // without an assignee, or a server-side 4xx). Cleared whenever the
   // user types again so a stale error doesn't linger after recovery.
   const [slashError, setSlashError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Mirror the live value so an unmount (layout switch, thread close)
+  // has nothing left to lose. Writing on change rather than on unmount
+  // keeps this correct even when React discards the tree without
+  // running cleanup in the order we'd expect.
+  useEffect(() => {
+    writeDraft(draftKey, value)
+  }, [draftKey, value])
+
+  // Restore when the key changes — switching threads swaps drafts
+  // rather than carrying one thread's text into another.
+  const lastDraftKey = useRef(draftKey)
+  useEffect(() => {
+    if (lastDraftKey.current === draftKey) return
+    lastDraftKey.current = draftKey
+    setValue(readDraft(draftKey))
+  }, [draftKey])
+
+  useEffect(() => {
+    if (!autoFocus) return
+    textareaRef.current?.focus()
+  }, [autoFocus])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [mention, setMention] = useState<MentionState | null>(null)
@@ -215,6 +245,7 @@ export default function MessageInput({
           // and a duplicate submission while waiting on the response
           // would just race with itself.
           setValue('')
+          clearDraft(draftKey)
           trackedMentions.current = []
           trackedFileReferences.current = []
           setMention(null)
@@ -250,6 +281,7 @@ export default function MessageInput({
     if (references.length > 0) metadata.references = references
     onSend(content, Object.keys(metadata).length > 0 ? metadata : undefined)
     setValue('')
+    clearDraft(draftKey)
     trackedMentions.current = []
     trackedFileReferences.current = []
     setAttachments([])

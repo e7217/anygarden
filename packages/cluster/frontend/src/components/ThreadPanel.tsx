@@ -7,6 +7,7 @@ import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
+import { threadDraftKey } from '@/lib/composerDrafts'
 
 interface ThreadPanelProps {
   /** The top-level message the thread hangs off. */
@@ -161,6 +162,8 @@ export default function ThreadPanel({
             mentionRooms={mentionRooms}
             roomId={roomId}
             placeholder="Reply to thread…"
+            autoFocus
+            draftKey={threadDraftKey(root.id)}
           />
         </div>
       </aside>

@@ -45,6 +45,7 @@ export default function ThreadReplyAffordance({
         <button
           type="button"
           onClick={() => onOpen(root.id)}
+          data-thread-trigger={root.id}
           aria-label="Reply in thread"
           className={`
             flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5
@@ -71,6 +72,7 @@ export default function ThreadReplyAffordance({
       <button
         type="button"
         onClick={() => onOpen(root.id)}
+        data-thread-trigger={root.id}
         aria-label={`Open thread, ${count} ${count === 1 ? 'reply' : 'replies'}`}
         aria-expanded={active}
         className={`

@@ -18,6 +18,7 @@ import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel from '@/components/ThreadPanel'
 import ThreadInline from '@/components/ThreadInline'
 import { indexThreads, canHostThread } from '@/lib/threads'
+import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
 import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
@@ -95,6 +96,27 @@ export default function ChatPage() {
         : null,
     [threadRootId, threadIndex],
   )
+  // Closing returns focus to the control that opened the thread.
+  // Without this the caret lands back at the top of the document and a
+  // keyboard user has to walk the whole timeline again to reach the
+  // message they were just reading. The composer's draft is dropped —
+  // an explicitly closed thread is a discarded one; a *layout switch*
+  // keeps it, which is the case the draft store exists for.
+  const closeThread = useCallback(() => {
+    const id = threadRootId
+    setThreadRootId(null)
+    if (!id) return
+    clearDraft(threadDraftKey(id))
+    // Rendered by ChatArea, so query rather than thread a ref through
+    // the timeline for a control that may not exist after a reflow.
+    requestAnimationFrame(() => {
+      const trigger = document.querySelector<HTMLElement>(
+        `[data-thread-trigger="${id}"]`,
+      )
+      trigger?.focus()
+    })
+  }, [threadRootId])
+
   // Close the panel when the room changes, and when the open root
   // leaves the loaded window (history is capped, so a long-lived
   // session can scroll it out). Without the second guard the panel
@@ -630,7 +652,7 @@ export default function ChatPage() {
                           send(content, metadata, root.id)
                         }
                         onTyping={sendTyping}
-                        onCollapse={() => setThreadRootId(null)}
+                                onCollapse={closeThread}
                       />
                     )
                   : undefined
@@ -752,7 +774,7 @@ export default function ChatPage() {
           mentionRooms={mentionRooms}
           onSend={(content, metadata) => send(content, metadata, threadRoot.id)}
           onTyping={sendTyping}
-          onClose={() => setThreadRootId(null)}
+          onClose={closeThread}
         />
       ) : (
         <RightContextRail
