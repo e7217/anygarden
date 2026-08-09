@@ -358,6 +358,7 @@ class RequestReplacementFrame(BaseModel):
     type: Literal["request_replacement"] = "request_replacement"
     agent_id: str
     reason: str = ""
+    generation: int | None = None
 
 
 class AgentMemoryUpdateFrame(BaseModel):

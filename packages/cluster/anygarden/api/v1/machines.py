@@ -241,6 +241,9 @@ async def delete_machine(
         agent.placed_on_machine_id = None
         agent.actual_state = "stopped"
         agent.desired_state = "stopped"
+        agent.lifecycle_lease_token = None
+        agent.lifecycle_lease_expires_at = None
+        agent.lifecycle_delivery_state = "released"
 
     # Delete tokens, then the machine
     result = await db.execute(

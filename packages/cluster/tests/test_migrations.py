@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "062"
+                assert version == "063"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -110,6 +110,7 @@ class TestMigrations:
                 assert "ix_room_authorization_audits_scope_at" in indexes
                 assert "ix_messages_room_root_seq" in indexes
                 assert "ix_thread_participant_states_root_read" in indexes
+                assert "ix_agents_lifecycle_delivery_lease" in indexes
 
                 fts_triggers = {
                     row[0]
@@ -131,6 +132,17 @@ class TestMigrations:
                     for row in conn.execute(text("PRAGMA table_info(messages)"))
                 }
                 assert {"parent_message_id", "root_message_id"} <= message_columns
+
+                agent_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(agents)"))
+                }
+                assert {
+                    "lifecycle_lease_token",
+                    "lifecycle_lease_expires_at",
+                    "lifecycle_delivery_state",
+                    "legacy_report_generation",
+                } <= agent_columns
 
                 # Authorization audits are append-only historical evidence.
                 # Actor and room deletion must never cascade into this table.
@@ -470,7 +482,7 @@ class TestMigrations:
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
                 # is still present after upgrading through to head.
-                assert version == "062"
+                assert version == "063"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -530,7 +542,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -577,7 +589,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -644,7 +656,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -798,6 +810,78 @@ class TestMigrations:
             except OSError:
                 pass
 
+    def test_063_lifecycle_dispatch_lease_up_and_down(self) -> None:
+        """063 adds durable dispatch ownership and a legacy report epoch."""
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "062")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "INSERT INTO agents "
+                        "(id, name, engine, placed_on_machine_id, generation, "
+                        "created_at) "
+                        "VALUES ('placed-agent', 'placed', 'echo', "
+                        "'machine-old', 9, CURRENT_TIMESTAMP)"
+                    )
+                )
+            engine.dispose()
+
+            command.upgrade(cfg, "head")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "063"
+                agent_columns = {
+                    row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
+                }
+                assert {
+                    "lifecycle_lease_token",
+                    "lifecycle_lease_expires_at",
+                    "lifecycle_delivery_state",
+                    "legacy_report_generation",
+                } <= agent_columns
+                legacy_epoch = conn.execute(
+                    text(
+                        "SELECT legacy_report_generation FROM agents "
+                        "WHERE id = 'placed-agent'"
+                    )
+                ).scalar_one()
+                assert legacy_epoch == 9
+                indexes = {
+                    row[0]
+                    for row in conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='index'")
+                    )
+                }
+                assert "ix_agents_lifecycle_delivery_lease" in indexes
+            engine.dispose()
+
+            command.downgrade(cfg, "062")
+            engine = create_engine(f"sqlite:///{db_path}")
+            with engine.connect() as conn:
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+                assert version == "062"
+                agent_columns = {
+                    row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
+                }
+                assert "lifecycle_lease_token" not in agent_columns
+                assert "legacy_report_generation" not in agent_columns
+            engine.dispose()
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
     def test_downgrade_to_base_and_back(self) -> None:
         """Full round-trip: head → base → head must succeed."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -855,7 +939,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -895,7 +979,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
             sync_engine.dispose()
         finally:
             try:
@@ -929,7 +1013,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "062"
+            assert head == "063"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1031,7 +1115,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "062"
+                assert version == "063"
             sync_engine.dispose()
         finally:
             try:

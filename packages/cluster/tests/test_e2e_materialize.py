@@ -250,6 +250,9 @@ async def test_deleted_manifest_skill_is_preserved_on_respawn(pipeline) -> None:
         agent.actual_state = "pending"
         agent.placed_on_machine_id = None
         agent.pid = None
+        agent.lifecycle_lease_token = None
+        agent.lifecycle_lease_expires_at = None
+        agent.lifecycle_delivery_state = "released"
         await db.commit()
 
     await pipeline["lifecycle"].request_start(agent_id)
@@ -291,6 +294,9 @@ async def test_runtime_file_survives_respawn(pipeline) -> None:
         agent.actual_state = "pending"
         agent.placed_on_machine_id = None
         agent.pid = None
+        agent.lifecycle_lease_token = None
+        agent.lifecycle_lease_expires_at = None
+        agent.lifecycle_delivery_state = "released"
         await db.commit()
 
     await pipeline["lifecycle"].request_start(agent_id)

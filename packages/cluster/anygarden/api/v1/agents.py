@@ -964,6 +964,9 @@ async def start_agent(
     agent.desired_state = "running"
     agent.pid = None
     agent.placed_on_machine_id = None
+    agent.lifecycle_lease_token = None
+    agent.lifecycle_lease_expires_at = None
+    agent.lifecycle_delivery_state = "released"
     await db.commit()
 
     await lifecycle.request_start(agent.id)

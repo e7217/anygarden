@@ -120,7 +120,13 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
             elif frame_type == "request_replacement":
                 agent_id = data.get("agent_id", "")
                 reason = data.get("reason", "")
-                await lifecycle.handle_request_replacement(machine_id, agent_id, reason)
+                generation = data.get("generation")
+                await lifecycle.handle_request_replacement(
+                    machine_id,
+                    agent_id,
+                    reason,
+                    generation=(generation if isinstance(generation, int) else None),
+                )
 
             elif frame_type == "self_update_result":
                 # #550 — daemon reported self-update progress/outcome.
