@@ -11,14 +11,15 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.api.v1.errors import make_api_error
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Message, Participant, Room, Task
 from anygarden.dependencies import get_current_identity, get_db
+from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import (
     fanout_task_event,
     inject_task_assignment_message,
 )
-from anygarden.messages.serialization import message_to_frame
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.task_service import (
     TaskMutationConflict,
@@ -29,6 +30,7 @@ from anygarden.task_service import (
     update_open_task_cas,
     update_task_title_cas,
 )
+
 # #471 — validate ``status`` against the single canonical vocabulary
 # (the same set the MCP ``mark_task_status`` path enforces) so the REST
 # surface can't persist an out-of-band status the rest of the system
@@ -168,9 +170,11 @@ async def _validate_assignee_in_room(
         await db.execute(select(Participant).where(Participant.id == participant_id))
     ).scalar_one_or_none()
     if p is None or p.room_id != room_id:
-        raise HTTPException(
+        raise make_api_error(
             status_code=400,
-            detail="assignee_participant_id is not a participant of this room",
+            code="TASK_ASSIGNEE_NOT_IN_ROOM",
+            message="assignee_participant_id is not a participant of this room",
+            field="assignee_participant_id",
         )
     return p
 
@@ -271,7 +275,11 @@ async def create_task(
     )
     room = (await db.execute(select(Room).where(Room.id == room_id))).scalar_one_or_none()
     if room is None:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_ROOM_NOT_FOUND",
+            message="Room not found",
+        )
 
     assignee: Optional[Participant] = None
     if body.assignee_participant_id is not None:
@@ -349,7 +357,11 @@ async def create_message_task(
         select(Message).where(Message.id == message_id, Message.room_id == room_id)
     )
     if source is None:
-        raise HTTPException(status_code=404, detail="Message not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_SOURCE_MESSAGE_NOT_FOUND",
+            message="Message not found",
+        )
     if _is_system_source(source):
         raise HTTPException(
             status_code=400,
@@ -462,7 +474,11 @@ async def update_task(
     """Apply a guarded edit or assignee-owned lifecycle transition."""
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_NOT_FOUND",
+            message="Task not found",
+        )
 
     access = await require_capability(
         db,
@@ -480,9 +496,10 @@ async def update_task(
 
     assignee_was_set = "assignee_participant_id" in body.model_fields_set
     if assignee_was_set and body.status is not None:
-        raise HTTPException(
+        raise make_api_error(
             status_code=400,
-            detail="Change an assignee or a status in one request, not both",
+            code="TASK_INVALID_MUTATION",
+            message="Change an assignee or a status in one request, not both",
         )
     if assignee_was_set and body.assignee_participant_id is not None:
         new_assignee_participant = await _validate_assignee_in_room(
@@ -719,7 +736,11 @@ async def claim_task(
 
     task = await db.scalar(select(Task).where(Task.id == task_id))
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_NOT_FOUND",
+            message="Task not found",
+        )
     access = await require_capability(
         db,
         room_id=task.room_id,
@@ -728,11 +749,16 @@ async def claim_task(
         task=task,
     )
     if access.participant is None:
-        raise HTTPException(status_code=403, detail="Room participant required")
-    if identity.kind == "user" and not access.room.allow_human_assignment:
-        raise HTTPException(
+        raise make_api_error(
             status_code=403,
-            detail="Human task assignment is disabled for this room",
+            code="TASK_ROOM_PARTICIPANT_REQUIRED",
+            message="Room participant required",
+        )
+    if identity.kind == "user" and not access.room.allow_human_assignment:
+        raise make_api_error(
+            status_code=403,
+            code="TASK_HUMAN_ASSIGNMENT_DISABLED",
+            message="Human task assignment is disabled for this room",
         )
     try:
         claimed = await claim_task_cas(
@@ -769,7 +795,11 @@ async def requeue_task(
 
     task = await db.scalar(select(Task).where(Task.id == task_id))
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_NOT_FOUND",
+            message="Task not found",
+        )
     access = await require_capability(
         db,
         room_id=task.room_id,
@@ -829,7 +859,11 @@ async def delete_task(
     """Delete a task."""
     task = (await db.execute(select(Task).where(Task.id == task_id))).scalar_one_or_none()
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise make_api_error(
+            status_code=404,
+            code="TASK_NOT_FOUND",
+            message="Task not found",
+        )
 
     await require_capability(
         db,

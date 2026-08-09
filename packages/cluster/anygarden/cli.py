@@ -9,19 +9,29 @@ import click
 
 
 @click.group(invoke_without_command=True)
-@click.option("--host", default="127.0.0.1", help="Bind address")
-@click.option("--port", default=8000, type=int, help="Bind port")
+@click.option("--host", default=None, help="Bind address (default: 127.0.0.1)")
+@click.option("--port", default=None, type=int, help="Bind port (default: 8000)")
 @click.option("--db", "db_url", default=None, help="Database URL override")
-@click.option("--config", "config_path", default=None, type=click.Path(), help="Config file path")
-@click.option("--log-level", default="INFO", help="Log level (DEBUG, INFO, WARNING, ERROR)")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="ANYGARDEN_* .env file path",
+)
+@click.option(
+    "--log-level",
+    default=None,
+    help="Log level (default: INFO; DEBUG, INFO, WARNING, ERROR)",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
-    host: str,
-    port: int,
+    host: str | None,
+    port: int | None,
     db_url: str | None,
     config_path: str | None,
-    log_level: str,
+    log_level: str | None,
 ) -> None:
     """Anygarden — lightweight multi-agent chat server."""
     ctx.ensure_object(dict)
@@ -33,7 +43,7 @@ def main(
 
     # Default action: start the server
     if ctx.invoked_subcommand is None:
-        _run_server(host, port, db_url, log_level)
+        _run_server(host, port, db_url, log_level, config_path)
 
 
 @main.command()
@@ -125,18 +135,57 @@ def _apply_runtime_env(
         os.environ["ANYGARDEN_PORT"] = str(port)
 
 
-def _run_server(host: str, port: int, db_url: str | None, log_level: str) -> None:
+def _load_server_settings(
+    host: str | None,
+    port: int | None,
+    db_url: str | None,
+    log_level: str | None,
+    config_path: str | None,
+):
+    """Load the .env config and apply explicitly supplied CLI overrides."""
+    from anygarden.config import AnygardenSettings
+
+    resolved_config = Path(config_path) if config_path else None
+    default_config = Path.home() / ".anygarden" / "config.env"
+    if resolved_config is None and default_config.is_file():
+        resolved_config = default_config
+    if resolved_config is not None:
+        config = AnygardenSettings(  # type: ignore[call-arg]
+            _env_file=str(resolved_config)
+        )
+    else:
+        config = AnygardenSettings()
+    if host is not None:
+        config.host = host
+    if port is not None:
+        config.port = port
+    if db_url is not None:
+        config.db_url = db_url
+    if log_level is not None:
+        config.log_level = log_level
+    return config
+
+
+def _run_server(
+    host: str | None,
+    port: int | None,
+    db_url: str | None,
+    log_level: str | None,
+    config_path: str | None,
+) -> None:
     """Start uvicorn with the configured settings."""
     import uvicorn
 
-    _apply_runtime_env(host, port, db_url, log_level)
+    from anygarden.app import create_app
+
+    config = _load_server_settings(host, port, db_url, log_level, config_path)
+    _apply_runtime_env(config.host, config.port, config.db_url, config.log_level)
 
     uvicorn.run(
-        "anygarden.app:create_app",
-        factory=True,
-        host=host,
-        port=port,
-        log_level=log_level.lower(),
+        create_app(config),
+        host=config.host,
+        port=config.port,
+        log_level=config.log_level.lower(),
         # Issue #190 — codex agents can legitimately hold a turn for
         # 5+ minutes while the SDK waits on tool chains. uvicorn's
         # default ``ws_ping_interval=20, ws_ping_timeout=20`` closes

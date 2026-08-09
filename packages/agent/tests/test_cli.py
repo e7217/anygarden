@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 import yaml
-from click.testing import CliRunner
-
 from anygarden_agent.cli import agent_main, client_main
 from anygarden_agent.integrations import ENGINES, get_adapter
 from anygarden_agent.profile.loader import load_profile
-from anygarden_agent.profile.schema import AgentProfile
+from click.testing import CliRunner
 
 
 class TestAgentCLI:
@@ -21,9 +20,16 @@ class TestAgentCLI:
         result = runner.invoke(agent_main, ["--help"])
         assert result.exit_code == 0
         assert "--engine" in result.output
-        # All 6 engines should appear in the help text
+        # Every supported engine should appear in the help text.
         for engine_name in ENGINES:
             assert engine_name in result.output
+
+    def test_readme_engine_examples_use_supported_choices(self) -> None:
+        """README commands must stay aligned with Click's engine choices."""
+        readme = (Path(__file__).parents[1] / "README.md").read_text()
+        documented = set(re.findall(r"--engine\s+([a-z0-9-]+)", readme))
+        assert documented
+        assert documented <= set(ENGINES)
 
 
 class TestClientCLI:

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.api.v1.errors import make_api_error
 from anygarden.auth.dependencies import Identity
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 from anygarden.db.models import (
@@ -92,7 +93,11 @@ async def register_machine(
 ):
     """Register a new machine and return a one-time machine token."""
     if identity.kind != "user":
-        raise HTTPException(status_code=403, detail="Only users can register machines")
+        raise make_api_error(
+            status_code=403,
+            code="MACHINE_REGISTRATION_FORBIDDEN",
+            message="Only users can register machines",
+        )
 
     machine = Machine(
         name=body.name,
@@ -137,7 +142,11 @@ async def list_machines(
     if identity.claims and not identity.claims.is_admin:
         stmt = stmt.where(Machine.owner_user_id == identity.id)
     elif identity.kind != "user":
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise make_api_error(
+            status_code=403,
+            code="MACHINE_LIST_FORBIDDEN",
+            message="Forbidden",
+        )
 
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -204,16 +213,15 @@ async def delete_machine(
     active_agents = list(result.scalars().all())
 
     if active_agents and not force:
-        raise HTTPException(
+        raise make_api_error(
             status_code=409,
-            detail={
-                "error": "machine_has_active_agents",
-                "agent_count": len(active_agents),
-                "message": (
-                    f"{len(active_agents)} agent(s) are still placed on this machine. "
-                    "Stop or reassign them, or pass ?force=true to forcibly stop them."
-                ),
-            },
+            code="MACHINE_HAS_ACTIVE_AGENTS",
+            message=(
+                f"{len(active_agents)} agent(s) are still placed on this machine. "
+                "Stop or reassign them, or pass ?force=true to forcibly stop them."
+            ),
+            legacy_error="machine_has_active_agents",
+            agent_count=len(active_agents),
         )
 
     # Force stop: tell lifecycle to send kill_agent to the daemon (best-effort)
@@ -370,7 +378,11 @@ async def update_machine_daemon(
         machine_id, {"type": "self_update", "target_version": target_version}
     )
     if not sent:
-        raise HTTPException(status_code=409, detail="Machine is not connected")
+        raise make_api_error(
+            status_code=409,
+            code="MACHINE_OFFLINE",
+            message="Machine is not connected",
+        )
 
     machine.update_status = "updating"
     machine.update_error = None
@@ -414,11 +426,19 @@ async def _get_owned_machine(
     result = await db.execute(select(Machine).where(Machine.id == machine_id))
     machine = result.scalar_one_or_none()
     if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+        raise make_api_error(
+            status_code=404,
+            code="MACHINE_NOT_FOUND",
+            message="Machine not found",
+        )
     if identity.kind == "user" and identity.claims and identity.claims.is_admin:
         return machine
     if machine.owner_user_id != identity.id:
-        raise HTTPException(status_code=403, detail="Not the owner of this machine")
+        raise make_api_error(
+            status_code=403,
+            code="MACHINE_ACCESS_DENIED",
+            message="Not the owner of this machine",
+        )
     return machine
 
 
@@ -472,7 +492,11 @@ async def list_machine_agents(
         await db.execute(select(Machine).where(Machine.id == machine_id))
     ).scalar_one_or_none()
     if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+        raise make_api_error(
+            status_code=404,
+            code="MACHINE_NOT_FOUND",
+            message="Machine not found",
+        )
 
     agents = (
         (
@@ -529,7 +553,11 @@ async def list_machine_engines(
         await db.execute(select(Machine).where(Machine.id == machine_id))
     ).scalar_one_or_none()
     if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+        raise make_api_error(
+            status_code=404,
+            code="MACHINE_NOT_FOUND",
+            message="Machine not found",
+        )
 
     rows = (
         (
@@ -608,7 +636,11 @@ async def check_machine_engine(
         machine_id, {"type": "engine_check", "engine": engine}
     )
     if not sent:
-        raise HTTPException(status_code=409, detail="Machine is not connected")
+        raise make_api_error(
+            status_code=409,
+            code="MACHINE_OFFLINE",
+            message="Machine is not connected",
+        )
     return {"status": "checking", "engine": engine}
 
 
@@ -632,7 +664,11 @@ async def update_machine_engine(
         machine_id, {"type": "engine_update", "engine": engine}
     )
     if not sent:
-        raise HTTPException(status_code=409, detail="Machine is not connected")
+        raise make_api_error(
+            status_code=409,
+            code="MACHINE_OFFLINE",
+            message="Machine is not connected",
+        )
 
     status = await _get_or_create_engine_status(db, machine_id, engine)
     status.update_status = "updating"
@@ -671,7 +707,11 @@ async def get_machine_activity(
         await db.execute(select(Machine).where(Machine.id == machine_id))
     ).scalar_one_or_none()
     if machine is None:
-        raise HTTPException(status_code=404, detail="Machine not found")
+        raise make_api_error(
+            status_code=404,
+            code="MACHINE_NOT_FOUND",
+            message="Machine not found",
+        )
 
     stmt = (
         select(MachineActivityLog)

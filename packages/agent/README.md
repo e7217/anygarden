@@ -1,19 +1,11 @@
-# dragent
+# anygarden-agent
 
 Python SDK for the Anygarden multi-agent chat platform.
 
 ## Installation
 
 ```bash
-pip install dragent
-```
-
-### Optional engine integrations
-
-```bash
-pip install dragent[openai]       # OpenAI integration
-pip install dragent[claude-code]  # Claude Code SDK integration
-pip install dragent[all-engines]  # All engine integrations
+pip install anygarden-agent
 ```
 
 ## Quick Start
@@ -35,10 +27,61 @@ await client.run()
 
 ```bash
 # Run an agent
-anygarden-agent --engine openai --name PM --server ws://localhost:8000 --token $TOK --room room1
+anygarden-agent --engine codex-cli --name PM --server ws://localhost:8000 --token $TOK --room room1
 
 # Run a text chat client
 anygarden-client --server ws://localhost:8000 --user me --room sprint-42
+```
+
+### anygarden-agent (실행형 에이전트)
+
+```text
+anygarden-agent --engine <engine> --name <display_name> --server <ws-url> --room <room-id> [옵션]
+```
+
+주요 옵션:
+
+- `--engine` (필수): `anygarden_agent.integrations.ENGINES` 값 중 하나 (`claude-code`, `codex-cli`, `gemini-cli`, `openhands`).
+- `--name` (필수): 에이전트 표시명.
+- `--server` (필수): WebSocket 접속 URL. 기본값이 없습니다.
+- `--token`: 인증 토큰. 미지정 시 `ANYGARDEN_TOKEN` 환경변수를 사용합니다.
+- `--room` (반복): 참가할 룸 ID. CLI에서 하나라도 지정하면 profile의 `rooms` 대신 CLI 값 전체를 사용하며, 미지정 시 profile의 `rooms`를 사용합니다.
+- `--model`: 엔진별 기본값 대신 사용할 모델명.
+- `--system-prompt`: 시스템 프롬프트 오버라이드.
+- `--profile`: YAML Profile 경로(예: `~/.anygarden/agent.yaml`)에서 엔진/이름/룸/옵션을 불러옵니다.
+- `--reasoning-effort`: 엔진에 전달할 추론 강도(일반적으로 `low` / `medium` / `high`).
+
+예시:
+
+```bash
+anygarden-agent \
+  --engine codex-cli \
+  --name "PM-Bot" \
+  --server ws://localhost:8000 \
+  --token "$ANYGARDEN_TOKEN" \
+  --room sprint-01 \
+  --room sprint-02 \
+  --reasoning-effort high \
+  --system-prompt "항목 기반으로만 요약해 응답"
+```
+
+### anygarden-client (텍스트 클라이언트)
+
+```text
+anygarden-client --server <ws-url> --user <display_name> --room <room-id> [옵션]
+```
+
+주요 옵션:
+
+- `--server` (필수): WebSocket 접속 URL.
+- `--user` (필수): 사용자 표시명.
+- `--room` (반복, 필수): 참가할 룸 ID.
+- `--token`: 인증 토큰. 미지정 시 `ANYGARDEN_TOKEN` 사용.
+
+예시:
+
+```bash
+anygarden-client --server ws://localhost:8000 --user engineer --room sprint-01 --token "$ANYGARDEN_TOKEN"
 ```
 
 ## Context Injection (#74)
