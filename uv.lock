@@ -224,7 +224,7 @@ wheels = [
 
 [[package]]
 name = "anygarden"
-version = "0.18.0"
+version = "0.19.0"
 source = { editable = "packages/cluster" }
 dependencies = [
     { name = "click" },
@@ -392,7 +392,7 @@ provides-extras = ["claude-code", "gemini-cli", "openhands", "dev"]
 
 [[package]]
 name = "anygarden-machine"
-version = "0.14.1"
+version = "0.15.0"
 source = { editable = "packages/machine" }
 dependencies = [
     { name = "argon2-cffi" },

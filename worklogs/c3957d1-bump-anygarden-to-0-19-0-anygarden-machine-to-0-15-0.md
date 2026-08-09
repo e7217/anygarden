@@ -32,8 +32,7 @@ would attempt to publish `0.18.0` a second time.
 
 - `anygarden` (cluster) 0.18.0 → **0.19.0**
 - `anygarden-machine` 0.14.1 → **0.15.0**
-- `pyproject.toml` only — `uv.lock` is excluded from release commits,
-  matching #552 and #555.
+- `pyproject.toml` **and `uv.lock`**.
 
 ## Action
 
@@ -41,6 +40,17 @@ Bumped `[project] version` in `packages/cluster/pyproject.toml` and
 `packages/machine/pyproject.toml`.
 
 ## Decisions
+
+**`uv.lock` is included, breaking with #552 and #555.** Those release
+commits deliberately excluded the lockfile, and this change first
+followed them — CI rejected it. Phase 0 (#559/#560) added
+`uv lock --check` to the test job on 2026-08-06, after those releases.
+Workspace members carry their versions in the lockfile, so a bump that
+touches only `pyproject.toml` now leaves the two out of sync and fails
+the gate. The lock diff is exactly the two version lines.
+
+The older convention is obsolete rather than wrong; it predates the
+frozen-lockfile gate by six weeks.
 
 **Minor, not patch, for both.** The cluster gained user-visible features
 (threads, workspace attachments, room authorization, durable turns) and
