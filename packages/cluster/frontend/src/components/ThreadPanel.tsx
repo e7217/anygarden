@@ -93,13 +93,15 @@ export default function ThreadPanel({
           md:static md:z-auto md:w-72 md:shadow-none lg:w-80 xl:w-96
         "
       >
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
+        {/* Header carries the same brand tint the inline layout uses,
+            so both surfaces read as one feature rather than two. */}
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-brand-tint-bg)] px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <MessagesSquare className="h-4 w-4 shrink-0 text-[var(--color-foreground-muted)]" />
-            <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">
+            <MessagesSquare className="h-4 w-4 shrink-0 text-[var(--color-brand-tint-text)]" />
+            <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
               Thread
             </h2>
-            <span className="text-badge text-[var(--color-foreground-subtle)]">
+            <span className="text-badge text-[var(--color-brand-tint-text)] opacity-80">
               {replies.length === 0
                 ? 'No replies yet'
                 : `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}

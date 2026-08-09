@@ -49,10 +49,16 @@ export default function ThreadInline({
   return (
     <div
       data-testid="thread-inline-root"
-      className="mt-2 ml-3 border-l-2 border-[var(--color-border-strong)] pl-4"
+      // The tint is the brand's, not the neutral section shade the
+      // context rail uses — a thread belongs to the message above it,
+      // it isn't chrome. Same hue as the reply affordance's active
+      // state, so opening one continues a colour already on screen.
+      // Left corners stay square so the rule reads as the thread's
+      // spine rather than a floating card edge.
+      className="mt-2 ml-8 rounded-r-[var(--radius-md)] border-l-2 border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)] px-4 py-2.5"
     >
-      <div className="flex items-center justify-between pb-1">
-        <span className="text-badge text-[var(--color-foreground-subtle)]">
+      <div className="flex items-center justify-between pb-1.5">
+        <span className="text-badge font-medium text-[var(--color-brand-tint-text)]">
           {replies.length === 0
             ? 'No replies yet'
             : `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}
@@ -61,7 +67,7 @@ export default function ThreadInline({
           type="button"
           onClick={onCollapse}
           aria-label="Collapse thread"
-          className="flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-badge text-[var(--color-foreground-muted)] hover:bg-black/5"
+          className="flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-badge text-[var(--color-brand-tint-text)] hover:bg-black/5"
         >
           <ChevronUp className="h-3 w-3" />
           Collapse
