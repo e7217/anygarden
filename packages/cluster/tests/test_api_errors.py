@@ -122,7 +122,7 @@ async def test_machine_active_agents_object_detail_snapshot() -> None:
 def test_machine_task_call_sites_match_public_error_registry() -> None:
     """Adding a migrated error requires an explicit snapshot and registry entry."""
     api_dir = Path(__file__).parents[1] / "anygarden" / "api" / "v1"
-    observed: set[str] = set()
+    observed: set[tuple[str, int]] = set()
     for filename in ("machines.py", "tasks.py"):
         tree = ast.parse((api_dir / filename).read_text())
         for node in ast.walk(tree):
@@ -130,18 +130,20 @@ def test_machine_task_call_sites_match_public_error_registry() -> None:
                 continue
             if not isinstance(node.func, ast.Name) or node.func.id != "make_api_error":
                 continue
-            code_keyword = next(
-                (keyword for keyword in node.keywords if keyword.arg == "code"), None
-            )
-            assert code_keyword is not None
-            assert isinstance(code_keyword.value, ast.Constant)
-            assert isinstance(code_keyword.value.value, str)
-            observed.add(code_keyword.value.value)
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords}
+            code_node = keywords.get("code")
+            status_node = keywords.get("status_code")
+            assert isinstance(code_node, ast.Constant)
+            assert isinstance(code_node.value, str)
+            assert isinstance(status_node, ast.Constant)
+            assert isinstance(status_node.value, int)
+            observed.add((code_node.value, status_node.value))
 
-    snapshotted = {case[0] for case in STRING_DETAIL_CASES} | {
-        "MACHINE_HAS_ACTIVE_AGENTS"
+    snapshotted = {(case[0], case[1]) for case in STRING_DETAIL_CASES} | {
+        ("MACHINE_HAS_ACTIVE_AGENTS", 409)
     }
-    assert observed == set(PUBLIC_ERROR_CODES) == snapshotted
+    assert {code for code, _status in observed} == set(PUBLIC_ERROR_CODES)
+    assert observed == snapshotted
 
 
 def test_error_context_cannot_replace_envelope_fields() -> None:

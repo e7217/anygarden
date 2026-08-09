@@ -27,9 +27,11 @@ Registry는 `packages/cluster/anygarden/api/v1/errors.py`의 `PUBLIC_ERROR_CODES
 ### 2) CLI 사용성
 
 - 대상: `anygarden`, `anygarden-agent`, `anygarden-client`
-- 개선: 옵션 목록/예시 문서 보강
-- 호환성 범위:
-  - 실행 동작은 동일, 문서/README만 보강됨
+- 문서: 지원 engine과 agent 필수 `--engine/--name/--server/--room`,
+  machine `run` passthrough를 실제 help와 일치
+- 동작 수정: `anygarden server --config PATH`가 실제 `.env`를 로드하며,
+  미지정 시 `server init`이 만든 `~/.anygarden/config.env`를 자동 사용
+- 우선순위: 명시적 CLI 옵션 > 프로세스 `ANYGARDEN_*` 환경변수 > `.env` > 기본값
 
 ## 릴리스별 호환성 계획
 
@@ -46,4 +48,10 @@ Registry는 `packages/cluster/anygarden/api/v1/errors.py`의 `PUBLIC_ERROR_CODES
 - [x] 실제 machine/task 대표 호출의 FastAPI wrapper 응답 확인 (`test_machines_api.py`, `test_tasks_api.py`)
 - [x] `PUBLIC_ERROR_CODES`와 machine/task helper 호출 및 snapshot 목록의 집합 일치 확인 (`test_api_errors.py`)
 - [x] `anygarden-agent --help`의 engine 목록과 README 명령의 `--engine` 값이 실제 `ENGINES` 안에 있는지 확인 (`test_cli.py`)
-- [ ] 기존 API 클라이언트에서 `detail.error` 의존 코드가 있다면 점진적 마이그레이션 계획 수립 (현재 1개 항목: `machine delete 409`)
+- [x] 저장소 공개 SDK/CLI에서 machine/task REST `detail`/`error` 분기 의존 없음
+  (`rg` 확인; agent의 `detail` 사용은 WebSocket server-error 로깅으로 별도 계약)
+- [x] 알 수 없는 외부 소비자는 테스트로 고정된 기존 `detail` 값/타입을 그대로
+  받으므로 0.18.x에서 마이그레이션 없이 동작
+- [x] unified server/machine/agent/client `--help`, 명시/default config 및
+  CLI override 우선순위 검증 (`test_cli_usability.py`)
+- [x] `packages/cluster/CHANGELOG.md` Unreleased에 additive 계약과 CLI 수정 기록

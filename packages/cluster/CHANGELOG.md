@@ -3,6 +3,22 @@
 
 ## Unreleased
 
+### Added
+
+- Selected `/api/v1/machines` and `/api/v1/tasks` failures now expose stable,
+  top-level `code` and `message` fields. This is additive in 0.18.x: existing
+  string/object `detail` values and the machine-delete `detail.error` key are
+  preserved. See `docs/api.md` for the 13 code/status contracts.
+
+### Fixed
+
+- Corrected the unified and agent CLI examples to use supported engines and
+  all runtime-required agent options; removed the nonexistent machine
+  `--daemon` example.
+- `anygarden server --config PATH` now loads the specified `ANYGARDEN_*`
+  `.env` file. When omitted, an existing `~/.anygarden/config.env` produced by
+  `anygarden server init` is loaded automatically; explicit CLI options win.
+
 ## v0.10.1 (2026-06-22)
 
 ### Fixes

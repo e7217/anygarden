@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -41,13 +44,39 @@ def configured_env() -> dict[str, str]:
     }
 
 
+def popen_with_stderr(process: object, stderr: bytes) -> Callable[..., object]:
+    def factory(*_args: object, **kwargs: object) -> object:
+        if stderr:
+            stderr_fd = kwargs["stderr"]
+            assert isinstance(stderr_fd, int)
+            writer_fd = os.dup(stderr_fd)
+
+            def write_stderr() -> None:
+                remaining = memoryview(stderr)
+                try:
+                    while remaining:
+                        remaining = remaining[os.write(writer_fd, remaining) :]
+                finally:
+                    os.close(writer_fd)
+
+            threading.Thread(target=write_stderr, daemon=True).start()
+        return process
+
+    return factory
+
+
 def test_missing_configuration_is_blocked_and_redacted(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence.json"
 
     assert smoke.run("preflight", evidence, {}) == 2
 
     payload = evidence.read_text()
-    assert json.loads(payload)["result_code"] == "BLOCKED_CONFIGURATION"
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "BLOCKED_CONFIGURATION"
+    assert decoded["failure_phase"] == "ENGINE_LAUNCH"
+    assert decoded["engine_exit_state"] == "NOT_OBSERVED"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
+    assert decoded["stderr_state"] == "NOT_OBSERVED"
     assert "prompt" not in payload
     assert "response" not in payload
     assert "credential" not in payload
@@ -109,23 +138,36 @@ def test_preflight_evidence_has_only_redacted_contract_fields(tmp_path: Path) ->
 
     payload = json.loads(evidence.read_text())
     assert set(payload) == {
+        "classification_ms",
         "duration_ms",
         "engine",
+        "engine_exit_state",
+        "engine_ms",
         "engine_version",
         "exact_sha",
         "failure_category",
+        "failure_phase",
         "input_sha256",
         "model_version",
         "output_length",
         "output_sha256",
         "result_code",
+        "setup_ms",
+        "stderr_state",
+        "stdout_state",
         "workflow_run",
     }
     assert payload["result_code"] == "PREFLIGHT_PASS"
     assert payload["failure_category"] == "NOT_APPLICABLE"
+    assert payload["failure_phase"] == "ENGINE_LAUNCH"
+    assert payload["engine_exit_state"] == "NOT_OBSERVED"
+    assert payload["stdout_state"] == "NOT_OBSERVED"
+    assert payload["stderr_state"] == "NOT_OBSERVED"
+    assert payload["model_version"] == ""
     assert payload["exact_sha"] == env["GITHUB_SHA"]
     assert payload["input_sha256"] == smoke._sha256(smoke.CANARY_PROMPT.encode())
     assert credential not in evidence.read_text()
+    assert env["ANYGARDEN_SMOKE_MODEL"] not in evidence.read_text()
     assert smoke.CANARY_PROMPT not in evidence.read_text()
 
 
@@ -154,6 +196,17 @@ def test_command_is_fixed_read_only_ephemeral_single_turn() -> None:
     assert "resume" not in command
     assert smoke.HARD_TIMEOUT_SECONDS == 60
     assert smoke.MAX_RESPONSE_BYTES == 256
+
+
+@pytest.mark.parametrize(
+    ("returncode", "state"),
+    [(0, "ZERO"), (1, "NONZERO"), (-9, "SIGNAL"), (None, "NOT_OBSERVED")],
+)
+def test_raw_exit_code_projects_to_fixed_state(
+    returncode: int | None, state: str
+) -> None:
+    assert smoke._engine_exit_state(returncode) == state
+    assert state in smoke.ENGINE_EXIT_STATES
 
 
 def test_child_env_passes_only_validated_proxy_endpoint() -> None:
@@ -285,24 +338,42 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
 @pytest.mark.parametrize(
     ("raw", "category"),
     [
+        (b"", "ENGINE_EMPTY_OUTPUT"),
         (
             (
-                b'{"type":"error","message":"unexpected status 401 '
-                b'Unauthorized: provider-secret, url: https://example.invalid"}'
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b"status 401 Unauthorized: provider-secret, url: "
+                b'https://example.invalid"}}'
             ),
-            "AUTHENTICATION",
+            "AUTH_REJECTED",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized: Incorrect API key provided"}}'
+            ),
+            "AUTH_REJECTED",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b"status 403 Forbidden: The requested model does not exist or "
+                b'you do not have access to it"}}'
+            ),
+            "MODEL_ACCESS",
         ),
         (
             (
                 b'{"type":"turn.failed","error":{"message":"unexpected '
                 b'status 404 Not Found: Model not found provider-secret"}}'
             ),
-            "MODEL",
+            "MODEL_ACCESS",
         ),
         (
             (
-                b'{"type":"error","message":"exceeded retry limit, last '
-                b'status: 429 Too Many Requests, request id: provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"exceeded retry '
+                b"limit, last status: 429 Too Many Requests, request id: "
+                b'provider-secret"}}'
             ),
             "RATE_LIMIT",
         ),
@@ -315,28 +386,32 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
         ),
         (
             (
-                b'{"type":"error","message":"You\'ve hit your usage '
-                b'limit. provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"You\'ve hit '
+                b'your usage limit. provider-secret"}}'
             ),
             "RATE_LIMIT",
         ),
         (
-            b'{"type":"error","message":"Connection failed: provider-secret"}',
-            "UPSTREAM",
-        ),
-        (
             (
-                b'{"type":"error","message":"unexpected status 503 '
-                b'Service Unavailable: Model not found provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"Connection '
+                b'failed: provider-secret"}}'
             ),
             "UPSTREAM",
         ),
         (
             (
-                b'{"type":"error","message":"unexpected status 401 '
-                b'Unauthorized: Model not found provider-secret"}'
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b"status 503 Service Unavailable: Model not found "
+                b'provider-secret"}}'
             ),
-            "AUTHENTICATION",
+            "UPSTREAM",
+        ),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized: Model not found provider-secret"}}'
+            ),
+            "AUTH_REJECTED",
         ),
         (
             (
@@ -346,12 +421,156 @@ def test_response_parser_rejects_tools_approval_mismatch_and_oversize(
             "UNKNOWN",
         ),
     ],
+    ids=(
+        "empty",
+        "auth-status",
+        "auth-status-and-copy",
+        "model-access-403",
+        "model-access",
+        "rate-status",
+        "upstream-status",
+        "rate-copy",
+        "upstream-copy",
+        "status-precedence",
+        "auth-precedence",
+        "non-failure-event",
+    ),
 )
 def test_failure_classifier_projects_only_closed_categories(
     raw: bytes, category: str
 ) -> None:
     assert smoke.classify_failure(raw) == category
     assert category in smoke.FAILURE_CATEGORIES
+
+
+@pytest.mark.parametrize(
+    ("raw", "category", "stdout_state"),
+    [
+        (b"", "ENGINE_EMPTY_OUTPUT", "EMPTY"),
+        (
+            (
+                b'{"type":"turn.failed","error":{"message":"unexpected '
+                b'status 401 Unauthorized"}}'
+            ),
+            "AUTH_REJECTED",
+            "SINGLE_FAILURE_EVENT",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 429 Too Many '
+                b'Requests"}\n'
+                b'{"type":"error","message":"unexpected status 429 Too Many '
+                b'Requests"}'
+            ),
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_EVENTS",
+        ),
+        (b"not-json", "UNKNOWN", "MALFORMED"),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
+            + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
+            "UNKNOWN",
+            "OVERSIZE",
+        ),
+        (
+            b'{"type":"thread.started","thread_id":"opaque"}',
+            "UNKNOWN",
+            "NON_FAILURE_OUTPUT",
+        ),
+    ],
+)
+def test_failure_classifier_records_only_closed_stdout_state(
+    raw: bytes, category: str, stdout_state: str
+) -> None:
+    assert smoke.classify_failure_observation(raw) == (category, stdout_state)
+    assert stdout_state in smoke.STDOUT_STATES
+
+
+@pytest.mark.parametrize(
+    ("raw", "stdout_state"),
+    [
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}',
+            "SINGLE_FAILURE_EVENT",
+        ),
+        (
+            (
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized"}\n'
+                b'{"type":"error","message":"unexpected status 401 '
+                b'Unauthorized"}'
+            ),
+            "MULTIPLE_FAILURE_EVENTS",
+        ),
+    ],
+    ids=("single-known-retry", "multiple-known-retries"),
+)
+def test_failure_classifier_never_trusts_errors_without_terminal(
+    raw: bytes, stdout_state: str
+) -> None:
+    assert smoke.classify_failure_observation(raw) == (
+        smoke.FAILURE_CATEGORY_UNKNOWN,
+        stdout_state,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "category", "stderr_state"),
+    [
+        (b"", "ENGINE_EMPTY_OUTPUT", "EMPTY"),
+        (b"authentication failed", "AUTH_REJECTED", "SINGLE_FAILURE_SIGNAL"),
+        (b"model not found", "MODEL_ACCESS", "SINGLE_FAILURE_SIGNAL"),
+        (b"invalid reasoning effort", "ENGINE_CONFIG", "SINGLE_FAILURE_SIGNAL"),
+        (b"connection failed:", "UPSTREAM", "SINGLE_FAILURE_SIGNAL"),
+        (
+            b"authentication failed\nmodel not found",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
+            b"authentication failed\nauthentication failed",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
+            b"authentication failed authentication failed",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
+            b"unexpected status 401 Unauthorized: unexpected status 401 Unauthorized",
+            "UNKNOWN",
+            "MULTIPLE_FAILURE_SIGNALS",
+        ),
+        (
+            b"x" * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
+            "UNKNOWN",
+            "OVERSIZE",
+        ),
+        (b"\xff", "UNKNOWN", "MALFORMED"),
+        (b"opaque failure", "UNKNOWN", "UNRECOGNIZED"),
+    ],
+    ids=(
+        "empty",
+        "auth",
+        "model-access",
+        "engine-config",
+        "upstream",
+        "conflicting-signals",
+        "repeated-signal",
+        "same-line-repeated-signal",
+        "same-line-repeated-status",
+        "oversize",
+        "malformed",
+        "unrecognized",
+    ),
+)
+def test_stderr_classifier_adopts_exactly_one_bounded_allowlist_signal(
+    raw: bytes, category: str, stderr_state: str
+) -> None:
+    assert smoke.classify_stderr_observation(raw) == (category, stderr_state)
+    assert category in smoke.FAILURE_CATEGORIES
+    assert stderr_state in smoke.STDERR_STATES
 
 
 @pytest.mark.parametrize(
@@ -372,47 +591,158 @@ def test_failure_classifier_projects_only_closed_categories(
             b'503 Service Unavailable"}}'
         ),
         (
-            b'{"type":"error","message":"unexpected status 401 Unauthorized"}\n'
-            b'{"type":"turn.failed","error":{"message":"unexpected status '
-            b'401 Unauthorized"}}'
-        ),
-        (
             b'{"type":"error","message":"unexpected status 429 Too Many '
             b'Requests"}\n'
             b'{"type":"error","message":"unexpected status 429 Too Many '
             b'Requests"}'
         ),
         (
-            b'{"type":"error","message":"unrecognized provider-secret"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}\n'
             b'{"type":"turn.failed","error":{"message":"unexpected status '
             b'401 Unauthorized"}}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized: '
+            b'unexpected status 404 Not Found"}'
+        ),
+        (
+            b'{"type":"error","message":"unexpected status 404 Not Found: '
+            b'unexpected status 404 Not Found: Model not found"}'
         ),
         (
             b'{"type":"error","message":"unexpected status 401 Unauthorized"}'
             + b" " * (smoke.MAX_FAILURE_EVENT_BYTES + 1)
         ),
+        (b'{"type":"error","message":"authentication failed authentication failed"}'),
     ],
+    ids=(
+        "non-json",
+        "non-string-message",
+        "invalid-error-shape",
+        "unrecognized",
+        "message-oversize",
+        "conflicting-events",
+        "repeated-rate-events",
+        "repeated-terminal-events",
+        "mixed-401-404-statuses",
+        "same-line-repeated-404-status",
+        "event-oversize",
+        "same-line-repeated-signal",
+    ),
 )
 def test_failure_classifier_collapses_unsafe_input_to_unknown(raw: bytes) -> None:
     assert smoke.classify_failure(raw) == "UNKNOWN"
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        (
+            b'{"type":"error","message":"unexpected status 401 Unauthorized"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}'
+        ),
+        (
+            b'{"type":"error","message":"unrecognized retry diagnostic"}\n'
+            b'{"type":"turn.failed","error":{"message":"unexpected status '
+            b'401 Unauthorized"}}'
+        ),
+    ],
+    ids=("same-category-retry", "unrecognized-retry"),
+)
+def test_failure_classifier_uses_one_authoritative_terminal_event(
+    raw: bytes,
+) -> None:
+    assert smoke.classify_failure_observation(raw) == (
+        "AUTH_REJECTED",
+        "TERMINAL_FAILURE",
+    )
+
+
 def test_evidence_boundary_collapses_unlisted_category_without_leaking() -> None:
-    sensitive_category = "AUTHENTICATION:raw-provider-secret"
+    sensitive_category = "AUTH_REJECTED:raw-provider-secret"
 
     evidence = smoke.make_evidence(
         configured_env(),
         "FAIL_ENGINE_NONZERO",
         0,
+        engine_version="codex-cli raw-provider-secret",
         failure_category=sensitive_category,
+        diagnostics=smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT:raw-provider-secret",
+            engine_exit_state="137",
+            stdout_state="raw-provider-secret",
+            setup_ms=-1,
+            engine_ms=True,
+            classification_ms=smoke.MAX_EVIDENCE_DURATION_MS + 1,
+        ),
     )
 
     assert evidence.failure_category == "UNKNOWN"
+    assert evidence.engine_version == ""
+    assert evidence.failure_phase == "ENGINE_LAUNCH"
+    assert evidence.engine_exit_state == "NOT_OBSERVED"
+    assert evidence.stdout_state == "NOT_OBSERVED"
+    assert evidence.stderr_state == "NOT_OBSERVED"
+    assert evidence.setup_ms == 0
+    assert evidence.engine_ms == 0
+    assert evidence.classification_ms == smoke.MAX_EVIDENCE_DURATION_MS
     assert sensitive_category not in json.dumps(evidence.__dict__)
+    assert "raw-provider-secret" not in json.dumps(evidence.__dict__)
 
 
 @pytest.mark.parametrize(
-    ("stdout", "stderr", "category"),
+    "diagnostics",
+    [
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="ZERO",
+            stdout_state="EMPTY",
+        ),
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="SIGNAL",
+            stdout_state="EMPTY",
+        ),
+        smoke.ExecutionDiagnostics(
+            failure_phase="ENGINE_EXIT",
+            engine_exit_state="NONZERO",
+            stdout_state="NON_FAILURE_OUTPUT",
+            stderr_state="EMPTY",
+        ),
+        smoke.ExecutionDiagnostics(),
+    ],
+    ids=(
+        "zero-exit",
+        "signal-exit",
+        "nonempty-stdout",
+        "not-observed",
+    ),
+)
+def test_engine_empty_output_requires_nonzero_and_zero_byte_stdout(
+    diagnostics: object,
+) -> None:
+    evidence = smoke.make_evidence(
+        configured_env(),
+        "FAIL_ENGINE_NONZERO",
+        0,
+        failure_category="ENGINE_EMPTY_OUTPUT",
+        diagnostics=diagnostics,
+    )
+
+    assert evidence.failure_category == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    (
+        "stdout",
+        "stderr",
+        "category",
+        "stdout_state",
+        "stderr_state",
+        "failure_phase",
+    ),
     [
         (
             (
@@ -420,14 +750,78 @@ def test_evidence_boundary_collapses_unlisted_category_without_leaking() -> None
                 b'status 401 Unauthorized: raw-provider-secret"}}'
             ),
             b"raw-stderr-secret",
-            "AUTHENTICATION",
+            "AUTH_REJECTED",
+            "SINGLE_FAILURE_EVENT",
+            "UNRECOGNIZED",
+            "STDOUT_CLASSIFICATION",
         ),
         (
             b'{"type":"turn.failed","error":{"message":"unknown raw failure"}}',
             b"unexpected status 401 Unauthorized: stderr-only-secret",
             "UNKNOWN",
+            "SINGLE_FAILURE_EVENT",
+            "SINGLE_FAILURE_SIGNAL",
+            "STDOUT_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"unexpected status 401 Unauthorized: stderr-only-secret",
+            "AUTH_REJECTED",
+            "EMPTY",
+            "SINGLE_FAILURE_SIGNAL",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"invalid reasoning effort",
+            "ENGINE_CONFIG",
+            "EMPTY",
+            "SINGLE_FAILURE_SIGNAL",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"authentication failed\nmodel not found",
+            "UNKNOWN",
+            "EMPTY",
+            "MULTIPLE_FAILURE_SIGNALS",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"authentication failed authentication failed",
+            "UNKNOWN",
+            "EMPTY",
+            "MULTIPLE_FAILURE_SIGNALS",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"x" * (smoke.MAX_FAILURE_EVENT_BYTES + 1),
+            "UNKNOWN",
+            "EMPTY",
+            "OVERSIZE",
+            "STDERR_CLASSIFICATION",
+        ),
+        (
+            b"",
+            b"opaque failure",
+            "UNKNOWN",
+            "EMPTY",
+            "UNRECOGNIZED",
+            "STDERR_CLASSIFICATION",
         ),
     ],
+    ids=(
+        "stdout-category-wins",
+        "unknown-stdout-fails-closed",
+        "stderr-auth",
+        "stderr-config",
+        "stderr-multiple",
+        "stderr-same-line-repeat",
+        "stderr-oversize",
+        "stderr-unrecognized",
+    ),
 )
 def test_nonzero_engine_evidence_keeps_only_projected_category(
     tmp_path: Path,
@@ -435,6 +829,9 @@ def test_nonzero_engine_evidence_keeps_only_projected_category(
     stdout: bytes,
     stderr: bytes,
     category: str,
+    stdout_state: str,
+    stderr_state: str,
+    failure_phase: str,
 ) -> None:
     workspace = tmp_path / "workspace"
     runtime_root = tmp_path / "runtime"
@@ -454,10 +851,10 @@ def test_nonzero_engine_evidence_keeps_only_projected_category(
         returncode = 1
 
         def communicate(self, **_kwargs):
-            return stdout, stderr
+            return stdout, None
 
     monkeypatch.setattr(
-        smoke.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess()
+        smoke.subprocess, "Popen", popen_with_stderr(FakeProcess(), stderr)
     )
     env = configured_env()
     env.update(
@@ -475,11 +872,263 @@ def test_nonzero_engine_evidence_keeps_only_projected_category(
     decoded = json.loads(payload)
     assert decoded["result_code"] == "FAIL_ENGINE_NONZERO"
     assert decoded["failure_category"] == category
-    assert stdout.decode() not in payload
+    assert decoded["failure_phase"] == failure_phase
+    assert decoded["engine_exit_state"] == "NONZERO"
+    assert decoded["stdout_state"] == stdout_state
+    assert decoded["stderr_state"] == stderr_state
+    assert decoded["engine_version"] == "codex-cli 0.146.0"
+    if stdout:
+        assert stdout.decode() not in payload
     assert stderr.decode() not in payload
     assert "raw-provider-secret" not in payload
     assert "raw-stderr-secret" not in payload
     assert "stderr-only-secret" not in payload
+    assert env["ANYGARDEN_SMOKE_MODEL"] not in payload
+
+
+def test_provider_free_fake_engine_reproduces_empty_stdout_nonzero(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    class FakeEngine:
+        returncode = 1
+
+        def communicate(self, **_kwargs):
+            return b"", None
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", popen_with_stderr(FakeEngine(), b""))
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 1
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "FAIL_ENGINE_NONZERO"
+    assert decoded["failure_category"] == "ENGINE_EMPTY_OUTPUT"
+    assert decoded["failure_phase"] == "ENGINE_EXIT"
+    assert decoded["engine_exit_state"] == "NONZERO"
+    assert decoded["stdout_state"] == "EMPTY"
+    assert decoded["stderr_state"] == "EMPTY"
+    assert decoded["engine_version"] == "codex-cli 0.146.0"
+    assert decoded["output_length"] == 0
+    assert decoded["output_sha256"] == ""
+    assert decoded["setup_ms"] >= 0
+    assert decoded["engine_ms"] >= 0
+    assert decoded["classification_ms"] >= 0
+    assert env["OPENAI_API_KEY"] not in payload
+    assert env["ANYGARDEN_SMOKE_PROXY_URL"] not in payload
+
+
+def test_engine_version_must_match_fixed_non_sensitive_shape(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli sensitive-version-secret"
+        ),
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("engine must not start")
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", forbidden)
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 2
+
+    payload = evidence.read_text()
+    assert json.loads(payload)["result_code"] == "BLOCKED_CONFIGURATION"
+    assert "sensitive-version-secret" not in payload
+
+
+def test_provider_free_success_keeps_closed_observability_defaults(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    class FakeEngine:
+        returncode = 0
+
+        def communicate(self, **_kwargs):
+            return (
+                (
+                    b'{"type":"item.completed","item":{"type":"agent_message",'
+                    b'"text":"ANYGARDEN_SMOKE_OK"}}'
+                ),
+                None,
+            )
+
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "Popen",
+        popen_with_stderr(FakeEngine(), b"sensitive-success-stderr"),
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 0
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "PASS"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "RESPONSE_PARSE"
+    assert decoded["engine_exit_state"] == "ZERO"
+    assert decoded["stdout_state"] == "NON_FAILURE_OUTPUT"
+    assert decoded["stderr_state"] == "NOT_OBSERVED"
+    assert decoded["output_length"] == len(smoke.CANARY_RESPONSE)
+    assert decoded["output_sha256"] == smoke._sha256(smoke.CANARY_RESPONSE.encode())
+    assert "sensitive-success-stderr" not in payload
+
+
+def test_engine_launch_failure_records_only_fixed_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+
+    def fail_launch(*_args, **_kwargs):
+        raise OSError("sensitive-launch-exception")
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", fail_launch)
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 1
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "FAIL"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "ENGINE_LAUNCH"
+    assert decoded["engine_exit_state"] == "NOT_OBSERVED"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
+    assert decoded["stderr_state"] == "NOT_OBSERVED"
+    assert "sensitive-launch-exception" not in payload
+
+
+def test_engine_timeout_records_only_fixed_state(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    runtime_root = tmp_path / "runtime"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr(smoke, "RUNTIME_STATE_ROOT", runtime_root)
+    monkeypatch.setattr(smoke.shutil, "which", lambda _name: "/fake/codex")
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout=b"codex-cli 0.146.0"
+        ),
+    )
+    monkeypatch.setattr(smoke, "_terminate_group", lambda _proc: None)
+
+    class TimeoutEngine:
+        returncode = None
+
+        def communicate(self, **_kwargs):
+            raise smoke.subprocess.TimeoutExpired(
+                "sensitive-command", smoke.HARD_TIMEOUT_SECONDS
+            )
+
+    monkeypatch.setattr(
+        smoke.subprocess, "Popen", popen_with_stderr(TimeoutEngine(), b"")
+    )
+    env = configured_env()
+    env.update(
+        {
+            "ANYGARDEN_SMOKE_RUNTIME_ISOLATED": ("container-readonly-empty-workspace"),
+            "HOME": str(runtime_root / "home"),
+            "CODEX_HOME": str(runtime_root / "codex"),
+        }
+    )
+    evidence = tmp_path / "evidence.json"
+
+    assert smoke.run("run", evidence, env) == 124
+
+    payload = evidence.read_text()
+    decoded = json.loads(payload)
+    assert decoded["result_code"] == "TIMEOUT"
+    assert decoded["failure_category"] == "NOT_APPLICABLE"
+    assert decoded["failure_phase"] == "ENGINE_EXECUTION"
+    assert decoded["engine_exit_state"] == "SIGNAL"
+    assert decoded["stdout_state"] == "NOT_OBSERVED"
+    assert decoded["stderr_state"] == "NOT_OBSERVED"
+    assert "sensitive-command" not in payload
 
 
 def test_runtime_requires_isolated_empty_workspace(tmp_path: Path, monkeypatch) -> None:
