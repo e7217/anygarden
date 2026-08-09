@@ -154,8 +154,16 @@ export default function RoomHeader({
     : null
 
   return (
-    <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
-      <div className="flex min-w-0 items-center gap-2">
+    // Container query, not a viewport breakpoint: opening the thread
+    // panel narrows this column while the viewport is unchanged, so
+    // ``sm:``/``lg:`` cannot see the squeeze that collapsed the title.
+    <div className="@container/header flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
+      {/* ``flex-1`` matters as much as ``min-w-0``: the control cluster
+          opposite is ``shrink-0``, so without a grow factor this group
+          sizes to content and then collapses to nothing when the thread
+          panel narrows the column — the title vanished to ~1.5px at
+          1024px. Growing first, then truncating, keeps it readable. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {onOpenSidebar && (
           <Button
             variant="ghost"
@@ -295,7 +303,7 @@ export default function RoomHeader({
             title="Search messages (⌘K)"
             aria-label="Search messages"
             data-testid="room-header-search"
-            className="hidden sm:inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[30rem]/header:inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
           >
             <Search className="h-4 w-4" />
           </button>
@@ -307,7 +315,7 @@ export default function RoomHeader({
             title={`Threads: ${threadDisplayMode} — click to switch`}
             aria-label={`Thread layout: ${threadDisplayMode}. Switch to ${threadDisplayMode === 'panel' ? 'inline' : 'panel'}.`}
             data-testid="thread-mode-toggle"
-            className="hidden sm:inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[34rem]/header:inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
           >
             {threadDisplayMode === 'panel' ? (
               <PanelRight className="h-4 w-4" />

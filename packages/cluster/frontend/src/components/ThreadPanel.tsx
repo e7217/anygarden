@@ -77,6 +77,7 @@ export default function ThreadPanel({
       <button
         type="button"
         aria-label="Close thread"
+        data-testid="thread-panel-backdrop"
         className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
         onClick={onClose}
       />

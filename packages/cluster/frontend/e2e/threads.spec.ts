@@ -324,6 +324,58 @@ test.describe('thread composer contract', () => {
     ).toHaveValue('')
   })
 
+  test('the room title stays readable with the panel open at 1024px', async ({
+    page,
+  }) => {
+    // The control cluster opposite the title is shrink-0, so the title
+    // group must grow-then-truncate. Without that it collapsed to ~1.5px
+    // once the thread panel narrowed the column.
+    await page.setViewportSize({ width: 1024, height: 800 })
+    await openRoom(page)
+    await threadTrigger(page).click()
+    await expect(page.getByTestId('thread-panel-root')).toBeVisible()
+
+    const title = page.getByRole('heading', { name: 'e2e-room', level: 2 })
+    await expect(title).toBeVisible()
+    const box = await title.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.width).toBeGreaterThan(60)
+
+    // Auxiliary controls yield first; the title never overlaps them.
+    const controls = page.getByRole('button', { name: 'Room settings' })
+    const controlsBox = await controls.boundingBox()
+    expect(controlsBox).not.toBeNull()
+    expect(box!.x + box!.width).toBeLessThanOrEqual(controlsBox!.x + 1)
+  })
+
+  test('the mobile backdrop closes the thread, restores focus, and drops the draft', async ({
+    page,
+  }) => {
+    // Below md the panel is an overlay with a scrim. Dismissing by scrim
+    // is an explicit close and must behave like Escape.
+    await page.setViewportSize({ width: 640, height: 800 })
+    await openRoom(page)
+    await threadTrigger(page).click()
+    await page
+      .getByTestId('thread-panel-root')
+      .getByPlaceholder('Reply to thread…')
+      .fill('dismissed by scrim')
+
+    const backdrop = page.getByTestId('thread-panel-backdrop')
+    await expect(backdrop).toBeVisible()
+    // The scrim spans the viewport and the panel sits on top of its right
+    // edge, so click near the left where the scrim is actually exposed.
+    await backdrop.click({ position: { x: 10, y: 10 } })
+
+    await expect(page.getByTestId('thread-panel-root')).toHaveCount(0)
+    await expect(threadTrigger(page)).toBeFocused()
+
+    await threadTrigger(page).click()
+    await expect(
+      page.getByTestId('thread-panel-root').getByPlaceholder('Reply to thread…'),
+    ).toHaveValue('')
+  })
+
   test('closing a thread discards its draft', async ({ page }) => {
     // The counterpart to the rule above: an explicitly closed thread is a
     // discarded one, so reopening starts clean.
