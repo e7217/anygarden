@@ -4,6 +4,7 @@ import {
   replyCount,
   lastReplyAt,
   threadParticipantIds,
+  canHostThread,
 } from './threads'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 
@@ -64,6 +65,25 @@ describe('indexThreads', () => {
 
     expect(index.roots.map(m => m.id)).toEqual(['orphan'])
     expect(index.repliesByRoot.size).toBe(0)
+  })
+
+  it('marks a surfaced orphan so callers can tell it apart from a real root', () => {
+    const realRoot = msg({ id: 'root', seq: 1 })
+    const orphan = reply('scrolled-away', { id: 'orphan', seq: 5 })
+
+    const index = indexThreads([realRoot, orphan])
+
+    expect(index.orphanIds.has('orphan')).toBe(true)
+    expect(index.orphanIds.has('root')).toBe(false)
+  })
+
+  it('does not mark a reply as an orphan when its root is loaded', () => {
+    const index = indexThreads([
+      msg({ id: 'root', seq: 1 }),
+      reply('root', { id: 'r1', seq: 2 }),
+    ])
+
+    expect(index.orphanIds.size).toBe(0)
   })
 
   it('returns empty structures for an empty stream', () => {
@@ -133,5 +153,27 @@ describe('threadParticipantIds', () => {
     ])
 
     expect(threadParticipantIds(index, root)).toEqual(['bob'])
+  })
+})
+
+describe('canHostThread', () => {
+  it('refuses an orphaned reply and allows a genuine root', () => {
+    // The server rejects a thread rooted at a reply
+    // ("Thread root must be a top-level message"), so surfacing a reply
+    // affordance on an orphan would be a control that always fails.
+    const index = indexThreads([
+      msg({ id: 'root', seq: 1 }),
+      reply('scrolled-away', { id: 'orphan', seq: 2 }),
+    ])
+
+    expect(canHostThread(index, 'root')).toBe(true)
+    expect(canHostThread(index, 'orphan')).toBe(false)
+  })
+
+  it('allows an id the index has never seen', () => {
+    // Absence of evidence isn't evidence of an orphan — an unknown id
+    // is treated as threadable and the server remains the authority.
+    const index = indexThreads([])
+    expect(canHostThread(index, 'unknown')).toBe(true)
   })
 })

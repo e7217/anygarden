@@ -15,7 +15,7 @@ import { parseHandoff, isHandoffStatusMessage } from '@/lib/handoff'
 import { parseServerDate } from '@/lib/datetime'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
-import type { ThreadIndex } from '@/lib/threads'
+import { canHostThread, type ThreadIndex } from '@/lib/threads'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -318,7 +318,11 @@ export default function ChatArea({
                   handoffResolvedAt={handoffResolvedMap.get(msg.id) ?? null}
                   roomFiles={roomFiles}
                 />
-                {threadIndex && onOpenThread && (
+                {/* An orphaned reply renders here so it isn't lost, but it
+                    cannot host a thread — the server rejects a thread rooted
+                    at a reply, so an affordance would be a button that always
+                    fails. Its own thread is reachable once its root loads. */}
+                {threadIndex && onOpenThread && canHostThread(threadIndex, msg.id) && (
                   <ThreadReplyAffordance
                     root={msg}
                     index={threadIndex}
@@ -328,7 +332,9 @@ export default function ChatArea({
                     onOpen={onOpenThread}
                   />
                 )}
-                {renderInlineThread && activeThreadRootId === msg.id
+                {renderInlineThread
+                  && activeThreadRootId === msg.id
+                  && (!threadIndex || canHostThread(threadIndex, msg.id))
                   && renderInlineThread(msg)}
               </div>
             )

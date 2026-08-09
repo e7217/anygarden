@@ -17,7 +17,7 @@ import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
 import ThreadPanel from '@/components/ThreadPanel'
 import ThreadInline from '@/components/ThreadInline'
-import { indexThreads } from '@/lib/threads'
+import { indexThreads, canHostThread } from '@/lib/threads'
 import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
@@ -84,9 +84,13 @@ export default function ChatPage() {
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
   const [threadRootId, setThreadRootId] = useState<string | null>(null)
   const [threadMode, setThreadMode] = useThreadDisplayMode()
+  // An orphaned reply is in ``roots`` so it stays visible, but it can
+  // never host a thread — the server rejects a thread rooted at a reply.
+  // ChatArea already hides the affordance; this second guard keeps the
+  // panel from opening one through any other path.
   const threadRoot = useMemo(
     () =>
-      threadRootId
+      threadRootId && canHostThread(threadIndex, threadRootId)
         ? threadIndex.roots.find(m => m.id === threadRootId) ?? null
         : null,
     [threadRootId, threadIndex],

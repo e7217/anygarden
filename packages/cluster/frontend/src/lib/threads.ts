@@ -5,6 +5,14 @@ export interface ThreadIndex {
   roots: ChatMessage[]
   /** ``root_message_id`` → replies, ordered by ``seq``. */
   repliesByRoot: Map<string, ChatMessage[]>
+  /**
+   * Ids of entries in ``roots`` that are actually replies whose own root
+   * fell outside the loaded window. They are shown so nothing vanishes,
+   * but they cannot host a thread: the server rejects a thread rooted at
+   * a reply ("Thread root must be a top-level message"), so offering to
+   * reply under one would be a button that always fails.
+   */
+  orphanIds: Set<string>
 }
 
 /**
@@ -31,10 +39,14 @@ export function indexThreads(messages: ChatMessage[]): ThreadIndex {
 
   const roots: ChatMessage[] = []
   const repliesByRoot = new Map<string, ChatMessage[]>()
+  const orphanIds = new Set<string>()
   for (const msg of messages) {
     const rootId = msg.root_message_id
     if (!rootId || !rootIds.has(rootId)) {
       roots.push(msg)
+      // Distinguish "is a top-level message" from "is a reply we had to
+      // surface anyway" — callers must not offer to thread the latter.
+      if (rootId) orphanIds.add(msg.id)
       continue
     }
     const bucket = repliesByRoot.get(rootId)
@@ -48,7 +60,15 @@ export function indexThreads(messages: ChatMessage[]): ThreadIndex {
     bucket.sort((a, b) => a.seq - b.seq)
   }
 
-  return { roots, repliesByRoot }
+  return { roots, repliesByRoot, orphanIds }
+}
+
+/**
+ * True when *messageId* may host a thread. False for an orphaned reply,
+ * whose thread lives under a root the client hasn't loaded.
+ */
+export function canHostThread(index: ThreadIndex, messageId: string): boolean {
+  return !index.orphanIds.has(messageId)
 }
 
 /** Number of replies filed under *rootId*; 0 when the thread is empty. */
