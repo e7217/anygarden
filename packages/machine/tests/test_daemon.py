@@ -115,6 +115,7 @@ class TestRegisterFrame:
         assert len(frame["capabilities"]) == 1
         assert frame["capabilities"][0]["engine"] == "claude-code"
         assert frame["workspace_signing_public_key"].startswith("ed25519pk_")
+        assert "agent_generation_reports_v1" in frame["control_capabilities"]
         assert "workspace_receipt_signing_v1" in frame["control_capabilities"]
 
     async def test_register_includes_system_info(self, daemon: MachineDaemon) -> None:
@@ -1071,6 +1072,7 @@ class TestCrashHandling:
         ]
         assert len(replacement_frames) == 1
         assert replacement_frames[0]["agent_id"] == "agent-crash"
+        assert replacement_frames[0]["generation"] == 1
 
         # Manifest should be marked stopped so daemon restart does not
         # re-spawn this agent behind the server's back (#182).

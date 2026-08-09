@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,20 @@ from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 logger = structlog.get_logger(__name__)
+
+GENERATION_REPORT_CAPABILITY = "agent_generation_reports_v1"
+LIFECYCLE_LEASE_SEC_DEFAULT = 120
+_RETRYABLE_DELIVERY_STATES = frozenset({"dispatching", "pending_ack", "unknown"})
+
+
+def _lifecycle_lease_expiry(now: datetime) -> datetime:
+    """Return the bounded cross-worker lifecycle ownership deadline."""
+
+    try:
+        seconds = max(1, int(os.environ.get("ANYGARDEN_LIFECYCLE_LEASE_SEC", "120")))
+    except ValueError:
+        seconds = LIFECYCLE_LEASE_SEC_DEFAULT
+    return now + timedelta(seconds=seconds)
 
 
 def _manifest_hash(frame: dict, *, agent: Agent | None = None) -> str:
@@ -160,7 +175,14 @@ class AgentLifecycle:
         self._start_inflight: set[str] = set()
 
     async def request_start(self, agent_id: str) -> None:
-        """Select a machine, bump generation, send ``sync_desired_state``."""
+        """Claim durable lifecycle ownership and dispatch desired state.
+
+        The database lease is the cross-worker authority. ``_start_inflight``
+        remains only a same-process fast path; it is never relied on for
+        correctness. A websocket ``False`` result is treated as unknown
+        delivery, so the committed placement/generation stay intact and a
+        later owner may only retry the same generation on the same machine.
+        """
         # Issue #369 — invalidate any cached anygarden_token on each
         # explicit start. The new spawn frame mints a fresh token and
         # re-populates the cache; subsequent rebuilds reuse it. Without
@@ -177,28 +199,42 @@ class AgentLifecycle:
             return
 
         self._start_inflight.add(agent_id)
-        # Only the call that wins the in-flight gate rotates the cached
-        # token. A duplicate call can arrive after the winner committed but
-        # before its frame was sent; evicting before the gate would discard
-        # that freshly committed cache entry and make a later sync mint an
-        # unnecessary second token.
-        self._token_cache.pop(agent_id, None)
-        async with self._db_factory() as db:
-            try:
+        try:
+            ownership_token = secrets.token_urlsafe(32)
+            generation: int | None = None
+            machine_id: str | None = None
+            frame: dict | None = None
+
+            async with self._db_factory() as db:
                 agent = await self._get_agent(db, agent_id)
                 if agent is None:
                     logger.error("lifecycle.agent_not_found", agent_id=agent_id)
                     return
 
+                now = datetime.now(timezone.utc)
+                lease_active = bool(
+                    agent.lifecycle_lease_token
+                    and agent.lifecycle_lease_expires_at
+                    and agent.lifecycle_lease_expires_at > now
+                )
+                if lease_active:
+                    logger.info(
+                        "lifecycle.start_skipped_inflight",
+                        agent_id=agent_id,
+                        reason="durable_lease_active",
+                        existing_machine_id=agent.placed_on_machine_id,
+                    )
+                    return
+
                 if (
                     agent.desired_state == "running"
-                    and agent.actual_state in ("starting", "pending")
+                    and agent.actual_state == "running"
                     and agent.placed_on_machine_id
                 ):
                     logger.info(
                         "lifecycle.start_skipped_inflight",
                         agent_id=agent_id,
-                        reason="already_starting",
+                        reason="already_running",
                         existing_machine_id=agent.placed_on_machine_id,
                     )
                     return
@@ -209,7 +245,9 @@ class AgentLifecycle:
                 )
                 rooms = [row[0] for row in result.all()]
                 if not rooms:
-                    logger.warning("lifecycle.spawn_refused_no_rooms", agent_id=agent_id)
+                    logger.warning(
+                        "lifecycle.spawn_refused_no_rooms", agent_id=agent_id
+                    )
                     agent.actual_state = "pending"
                     agent.desired_state = "running"
                     agent.placed_on_machine_id = None
@@ -222,9 +260,41 @@ class AgentLifecycle:
                     await db.commit()
                     return
 
-                try:
-                    machine = await select_machine_for(agent.engine, db, self._machine_bus)
-                except NoSuitableMachineError:
+                retry_same_generation = bool(
+                    agent.placed_on_machine_id
+                    and agent.desired_state == "running"
+                    and agent.actual_state in ("starting", "pending")
+                    and (
+                        agent.lifecycle_delivery_state in _RETRYABLE_DELIVERY_STATES
+                        or agent.lifecycle_delivery_state is None
+                    )
+                )
+
+                machine: Machine | None
+                if agent.placed_on_machine_id:
+                    # Unknown delivery is never permission to choose a second
+                    # machine. Reconciliation stays on the committed placement
+                    # until that machine reports the matching generation.
+                    machine = await db.get(Machine, agent.placed_on_machine_id)
+                    if machine is None or not self._machine_bus.is_connected(
+                        machine.id
+                    ):
+                        logger.info(
+                            "lifecycle.start_waiting_for_placement",
+                            agent_id=agent_id,
+                            machine_id=agent.placed_on_machine_id,
+                            reason="same_placement_not_connected",
+                        )
+                        return
+                else:
+                    try:
+                        machine = await select_machine_for(
+                            agent.engine, db, self._machine_bus
+                        )
+                    except NoSuitableMachineError:
+                        machine = None
+
+                if machine is None:
                     logger.warning(
                         "lifecycle.no_machine",
                         agent_id=agent_id,
@@ -248,69 +318,216 @@ class AgentLifecycle:
                         ActivityLog(
                             agent_id=agent_id,
                             event_type="agent_unavailable",
-                            details={"code": NO_MACHINE_FOR_ENGINE, "engine": agent.engine},
+                            details={
+                                "code": NO_MACHINE_FOR_ENGINE,
+                                "engine": agent.engine,
+                            },
                         )
                     )
                     await db.commit()
                     return
 
-                agent.placed_on_machine_id = machine.id
-                agent.desired_state = "running"
-                agent.actual_state = "pending"
-                agent.generation = (agent.generation or 0) + 1
-                agent.started_at = datetime.now(timezone.utc)
+                old_generation = int(agent.generation or 0)
+                expected_placement = agent.placed_on_machine_id
+                lease_available = or_(
+                    Agent.lifecycle_lease_token.is_(None),
+                    Agent.lifecycle_lease_expires_at.is_(None),
+                    Agent.lifecycle_lease_expires_at <= now,
+                )
+                claim_values: dict = {
+                    "lifecycle_lease_token": ownership_token,
+                    "lifecycle_lease_expires_at": _lifecycle_lease_expiry(now),
+                    "lifecycle_delivery_state": "dispatching",
+                }
+                if retry_same_generation:
+                    claimed_generation = old_generation
+                else:
+                    claimed_generation = old_generation + 1
+                    claim_values.update(
+                        {
+                            "placed_on_machine_id": machine.id,
+                            "desired_state": "running",
+                            "actual_state": "pending",
+                            "generation": claimed_generation,
+                            "started_at": now,
+                            "pending_generation": None,
+                            "restart_requested_at": None,
+                            "restart_deadline_at": None,
+                            "pending_manifest_hash": None,
+                        }
+                    )
+                    capabilities = set(machine.control_capabilities or [])
+                    if (
+                        GENERATION_REPORT_CAPABILITY not in capabilities
+                        and agent.legacy_report_generation is None
+                    ):
+                        claim_values["legacy_report_generation"] = claimed_generation
+
+                claim = await db.execute(
+                    update(Agent)
+                    .where(
+                        Agent.id == agent_id,
+                        Agent.generation == old_generation,
+                        Agent.placed_on_machine_id == expected_placement,
+                        lease_available,
+                    )
+                    .values(**claim_values)
+                    .execution_options(synchronize_session=False)
+                )
+                if claim.rowcount != 1:
+                    await db.rollback()
+                    logger.info(
+                        "lifecycle.start_skipped_inflight",
+                        agent_id=agent_id,
+                        reason="durable_claim_lost",
+                    )
+                    return
+
+                await db.commit()
+                await db.refresh(agent)
+                generation = claimed_generation
+                machine_id = machine.id
+
+                # Only the durable claim winner rotates/builds process
+                # credentials. Cross-worker losers never mint or dispatch.
+                self._token_cache.pop(agent_id, None)
                 # A machine was found — the prior no_machine / no_room reason (if
                 # any) no longer applies. A later spawn failure re-stamps a fresh
                 # reason via ``handle_report_actual_state``.
-                _clear_unavailable(agent)
+                if not retry_same_generation:
+                    _clear_unavailable(agent)
 
                 frame = await self._build_sync_frame(db, agent, rooms)
                 agent.manifest_hash = _manifest_hash(frame, agent=agent)
-                agent.pending_generation = None
-                agent.restart_requested_at = None
-                agent.restart_deadline_at = None
-                agent.pending_manifest_hash = None
                 db.add(
                     ActivityLog(
                         agent_id=agent_id,
-                        event_type="start_requested",
-                        details={"machine_id": machine.id, "generation": agent.generation},
+                        event_type=(
+                            "start_reconciled"
+                            if retry_same_generation
+                            else "start_requested"
+                        ),
+                        details={
+                            "machine_id": machine.id,
+                            "generation": claimed_generation,
+                            "delivery_state": "dispatching",
+                        },
                     )
                 )
                 await db.commit()
 
-                sent = await self._machine_bus.send(machine.id, frame)
-                if not sent:
-                    logger.warning(
-                        "lifecycle.sync_send_failed",
+            assert (
+                frame is not None and generation is not None and machine_id is not None
+            )
+            if not await self._dispatch_claim_is_current(
+                agent_id=agent_id,
+                generation=generation,
+                machine_id=machine_id,
+                ownership_token=ownership_token,
+            ):
+                return
+            sent = await self._machine_bus.send(machine_id, frame)
+            await self._record_dispatch_result(
+                agent_id=agent_id,
+                generation=generation,
+                machine_id=machine_id,
+                ownership_token=ownership_token,
+                sent=sent,
+            )
+        finally:
+            self._start_inflight.discard(agent_id)
+
+    async def _dispatch_claim_is_current(
+        self,
+        *,
+        agent_id: str,
+        generation: int,
+        machine_id: str,
+        ownership_token: str,
+    ) -> bool:
+        """Fresh-read the durable authority immediately before dispatch."""
+
+        async with self._db_factory() as db:
+            current = await db.scalar(
+                select(func.count())
+                .select_from(Agent)
+                .where(
+                    Agent.id == agent_id,
+                    Agent.generation == generation,
+                    Agent.placed_on_machine_id == machine_id,
+                    Agent.desired_state == "running",
+                    Agent.lifecycle_lease_token == ownership_token,
+                    Agent.lifecycle_delivery_state == "dispatching",
+                )
+            )
+            return bool(current)
+
+    async def _record_dispatch_result(
+        self,
+        *,
+        agent_id: str,
+        generation: int,
+        machine_id: str,
+        ownership_token: str,
+        sent: bool,
+    ) -> bool:
+        """CAS the result without letting a stale sender erase newer state."""
+
+        state = "pending_ack" if sent else "unknown"
+        async with self._db_factory() as db:
+            result = await db.execute(
+                update(Agent)
+                .where(
+                    Agent.id == agent_id,
+                    Agent.generation == generation,
+                    Agent.placed_on_machine_id == machine_id,
+                    Agent.desired_state == "running",
+                    Agent.lifecycle_lease_token == ownership_token,
+                    Agent.lifecycle_delivery_state == "dispatching",
+                )
+                .values(lifecycle_delivery_state=state)
+                .execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                await db.rollback()
+                logger.info(
+                    "lifecycle.dispatch_result_fenced",
+                    agent_id=agent_id,
+                    machine_id=machine_id,
+                    generation=generation,
+                )
+                return False
+
+            if not sent:
+                logger.warning(
+                    "lifecycle.sync_delivery_unknown",
+                    agent_id=agent_id,
+                    machine_id=machine_id,
+                    generation=generation,
+                )
+                agent = await self._get_agent(db, agent_id)
+                assert agent is not None
+                agent.last_crash_reason = (
+                    f"dispatch_unknown to {machine_id}: awaiting machine reconciliation"
+                )
+                _mark_unavailable(
+                    agent,
+                    SPAWN_FAILED,
+                    {"machine_id": machine_id, "reason": "delivery_unknown"},
+                )
+                db.add(
+                    ActivityLog(
                         agent_id=agent_id,
-                        machine_id=machine.id,
+                        event_type="lifecycle_dispatch_unknown",
+                        details={
+                            "machine_id": machine_id,
+                            "generation": generation,
+                            "recovery": "same_placement_reconcile",
+                        },
                     )
-                    # Send failed means the agent is visible as unplaced for
-                    # orphan recovery again and keeps re-dispatchable.
-                    agent.placed_on_machine_id = None
-                    agent.last_crash_reason = (
-                        f"dispatch_failed to {machine.id}: sync frame not delivered"
-                    )
-                    _mark_unavailable(
-                        agent,
-                        SPAWN_FAILED,
-                        {"machine_id": machine.id, "reason": "dispatch_failed"},
-                    )
-                    db.add(
-                        ActivityLog(
-                            agent_id=agent_id,
-                            event_type="agent_unavailable",
-                            details={
-                                "code": SPAWN_FAILED,
-                                "machine_id": machine.id,
-                                "reason": "dispatch_failed",
-                            },
-                        )
-                    )
-                    await db.commit()
-            finally:
-                self._start_inflight.discard(agent_id)
+                )
+            await db.commit()
+            return True
 
     def _acquire_anygarden_token(self, db: AsyncSession, agent_id: str) -> str:
         """Return the per-agent ``anygarden_token``, minting one on cache miss.
@@ -425,6 +642,12 @@ class AgentLifecycle:
                 return
 
             agent.desired_state = "stopped"
+            # Cancel any in-flight lifecycle owner before the stop frame is
+            # emitted. A late send result from the old owner is fenced by the
+            # token/generation/desired-state CAS in ``_record_dispatch_result``.
+            agent.lifecycle_lease_token = None
+            agent.lifecycle_lease_expires_at = None
+            agent.lifecycle_delivery_state = "stopped"
             agent.pending_generation = None
             agent.restart_requested_at = None
             agent.restart_deadline_at = None
@@ -475,6 +698,12 @@ class AgentLifecycle:
         # ``old_state`` is read before we overwrite it.
         backfill_targets: list[str] = []
         async with self._db_factory() as db:
+            machine = await db.get(Machine, machine_id)
+            generation_reports_required = bool(
+                machine
+                and GENERATION_REPORT_CAPABILITY
+                in set(machine.control_capabilities or [])
+            )
             for entry in agents_data:
                 aid = entry.get("agent_id")
                 if not aid:
@@ -494,6 +723,31 @@ class AgentLifecycle:
 
                 new_state = entry.get("actual_state")
                 reported_generation = entry.get("generation")
+                if reported_generation is None:
+                    if generation_reports_required:
+                        logger.warning(
+                            "lifecycle.report_missing_generation",
+                            agent_id=aid,
+                            machine_id=machine_id,
+                            expected=agent.generation,
+                            reason="capability_requires_generation",
+                        )
+                        continue
+                    if agent.legacy_report_generation is None:
+                        # Compatibility bootstrap for rows created directly by
+                        # older deployments/tests. Migration 063 pre-populates
+                        # this epoch for every already-placed production row.
+                        agent.legacy_report_generation = int(agent.generation or 0)
+                    elif agent.legacy_report_generation != agent.generation:
+                        logger.warning(
+                            "lifecycle.report_stale_legacy_epoch",
+                            agent_id=aid,
+                            machine_id=machine_id,
+                            expected=agent.generation,
+                            allowed_legacy_generation=agent.legacy_report_generation,
+                            reported_state=new_state,
+                        )
+                        continue
                 if (
                     reported_generation is not None
                     and reported_generation != agent.generation
@@ -511,6 +765,15 @@ class AgentLifecycle:
                         reported_state=new_state,
                     )
                     continue
+
+                # A report from the committed machine and generation is the
+                # durable acknowledgement for a running desired-state
+                # dispatch. Stop already revoked the start owner; a late
+                # pre-stop report must not relabel that terminal ownership.
+                if agent.desired_state == "running":
+                    agent.lifecycle_lease_token = None
+                    agent.lifecycle_lease_expires_at = None
+                    agent.lifecycle_delivery_state = "acknowledged"
 
                 if agent.desired_state == "stopped" and new_state in (
                     "running",
@@ -575,6 +838,9 @@ class AgentLifecycle:
                         },
                     )
                 elif new_state == "stopped":
+                    agent.lifecycle_lease_token = None
+                    agent.lifecycle_lease_expires_at = None
+                    agent.lifecycle_delivery_state = "stopped"
                     _clear_unavailable(agent)
 
                 # Only log when state actually changed (skip heartbeat noise)
@@ -615,6 +881,9 @@ class AgentLifecycle:
                     old = agent.actual_state
                     agent.actual_state = "stopped"
                     agent.pid = None
+                    agent.lifecycle_lease_token = None
+                    agent.lifecycle_lease_expires_at = None
+                    agent.lifecycle_delivery_state = "stopped"
                     _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
                     db.add(
                         ActivityLog(
@@ -734,21 +1003,80 @@ class AgentLifecycle:
         machine_id: str,
         agent_id: str,
         reason: str,
+        generation: int | None = None,
     ) -> None:
-        """Machine requests the server to re-place an agent elsewhere."""
+        """Machine relinquishes one fenced generation before replacement."""
         async with self._db_factory() as db:
             agent = await self._get_agent(db, agent_id)
             if agent is None:
                 return
-            agent.placed_on_machine_id = None
-            agent.pid = None
-            agent.actual_state = "pending"
-            agent.last_crash_reason = reason
+            machine = await db.get(Machine, machine_id)
+            requires_generation = bool(
+                machine
+                and GENERATION_REPORT_CAPABILITY
+                in set(machine.control_capabilities or [])
+            )
+            if agent.placed_on_machine_id != machine_id:
+                logger.warning(
+                    "lifecycle.replacement_wrong_machine",
+                    agent_id=agent_id,
+                    expected=agent.placed_on_machine_id,
+                    got=machine_id,
+                )
+                return
+            if generation is None:
+                if requires_generation or (
+                    agent.legacy_report_generation is not None
+                    and agent.legacy_report_generation != agent.generation
+                ):
+                    logger.warning(
+                        "lifecycle.replacement_missing_generation",
+                        agent_id=agent_id,
+                        machine_id=machine_id,
+                        expected=agent.generation,
+                    )
+                    return
+            elif generation != agent.generation:
+                logger.warning(
+                    "lifecycle.replacement_stale_generation",
+                    agent_id=agent_id,
+                    machine_id=machine_id,
+                    expected=agent.generation,
+                    got=generation,
+                )
+                return
+
+            current_generation = int(agent.generation or 0)
+            released = await db.execute(
+                update(Agent)
+                .where(
+                    Agent.id == agent_id,
+                    Agent.placed_on_machine_id == machine_id,
+                    Agent.generation == current_generation,
+                )
+                .values(
+                    placed_on_machine_id=None,
+                    pid=None,
+                    actual_state="pending",
+                    last_crash_reason=reason,
+                    lifecycle_lease_token=None,
+                    lifecycle_lease_expires_at=None,
+                    lifecycle_delivery_state="released",
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if released.rowcount != 1:
+                await db.rollback()
+                return
             db.add(
                 ActivityLog(
                     agent_id=agent_id,
                     event_type="replacement_requested",
-                    details={"machine_id": machine_id, "reason": reason},
+                    details={
+                        "machine_id": machine_id,
+                        "generation": current_generation,
+                        "reason": reason,
+                    },
                 )
             )
             await db.commit()

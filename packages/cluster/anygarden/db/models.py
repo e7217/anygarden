@@ -263,6 +263,14 @@ class Agent(Base):
         Index("ix_agents_placed_state", "placed_on_machine_id", "actual_state"),
         # #516 — admin query "which agents are unavailable, and why".
         Index("ix_agents_unavailable_code", "unavailable_code"),
+        # PR #581 — durable ownership for lifecycle dispatch/recovery. The
+        # expiry makes abandoned worker claims discoverable without turning a
+        # failed websocket write into proof that the machine never received it.
+        Index(
+            "ix_agents_lifecycle_delivery_lease",
+            "lifecycle_delivery_state",
+            "lifecycle_lease_expires_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -342,6 +350,27 @@ class Agent(Base):
     )
     restart_policy: Mapped[str] = mapped_column(String(64), default="restart_anywhere")
     generation: Mapped[int] = mapped_column(Integer, default=0)
+    # PR #581 — durable cross-worker lifecycle ownership. A start/recovery
+    # caller must win a compare-and-swap on this opaque token before it may
+    # advance generation or dispatch desired state. ``pending_ack`` and
+    # ``unknown`` remain bound to the current placement until that machine
+    # reports the matching generation; they are never treated as an orphan.
+    lifecycle_lease_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None
+    )
+    lifecycle_lease_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    lifecycle_delivery_state: Mapped[Optional[str]] = mapped_column(
+        String(24), nullable=True, default=None
+    )
+    # Compatibility epoch for daemons that omit ``generation`` from actual
+    # state reports. The first legacy generation may report unversioned; once
+    # ``Agent.generation`` advances, the mismatch fences every late legacy
+    # report instead of letting it overwrite the current process state.
+    legacy_report_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
     # Phase 4 — durable drain state for process-affecting config changes.
     pending_generation: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True, default=None

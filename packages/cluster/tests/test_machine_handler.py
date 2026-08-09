@@ -26,7 +26,10 @@ from anygarden.db.models import (
 )
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 from anygarden.scheduler.machine_bus import MachineBus
-from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.lifecycle import (
+    GENERATION_REPORT_CAPABILITY,
+    AgentLifecycle,
+)
 from anygarden.ws.machine_handler import (
     _authenticate_machine,
     _handle_register,
@@ -413,6 +416,58 @@ class TestMachineHandler:
             assert replaced.last_crash_reason == "engine OOM"
 
         # request_start should have been called for re-placement
+        assert started_ids == [agent.id]
+
+    @pytest.mark.asyncio
+    async def test_request_replacement_is_generation_fenced(self, handler_env) -> None:
+        """A capable daemon cannot release a different process generation."""
+        factory = handler_env["factory"]
+        machine = handler_env["machine"]
+        agent = handler_env["agent"]
+        lifecycle = handler_env["lifecycle"]
+
+        async with factory() as db:
+            enrolled = await db.get(Machine, machine.id)
+            current = await db.get(Agent, agent.id)
+            assert enrolled is not None and current is not None
+            enrolled.control_capabilities = [GENERATION_REPORT_CAPABILITY]
+            current.actual_state = "running"
+            current.generation = 5
+            current.pid = 5555
+            await db.commit()
+
+        original_request_start = lifecycle.request_start
+        started_ids: list[str] = []
+
+        async def mock_request_start(aid: str) -> None:
+            started_ids.append(aid)
+
+        lifecycle.request_start = mock_request_start
+        try:
+            await lifecycle.handle_request_replacement(
+                machine.id, agent.id, "stale crash", generation=4
+            )
+            await lifecycle.handle_request_replacement(
+                machine.id, agent.id, "missing generation"
+            )
+            async with factory() as db:
+                unchanged = await db.get(Agent, agent.id)
+                assert unchanged is not None
+                assert unchanged.placed_on_machine_id == machine.id
+                assert unchanged.generation == 5
+
+            await lifecycle.handle_request_replacement(
+                machine.id, agent.id, "current crash", generation=5
+            )
+        finally:
+            lifecycle.request_start = original_request_start
+
+        async with factory() as db:
+            released = await db.get(Agent, agent.id)
+            assert released is not None
+            assert released.placed_on_machine_id is None
+            assert released.actual_state == "pending"
+            assert released.last_crash_reason == "current crash"
         assert started_ids == [agent.id]
 
     @pytest.mark.asyncio

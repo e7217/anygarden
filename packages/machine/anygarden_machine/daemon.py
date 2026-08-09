@@ -303,6 +303,7 @@ class MachineDaemon:
             # signing are intentionally absent, so the cluster must reject
             # every write activation from this daemon version.
             control_capabilities=[
+                "agent_generation_reports_v1",
                 "workspace_attach_v1",
                 "workspace_receipt_signing_v1",
             ],
@@ -790,6 +791,7 @@ class MachineDaemon:
                 # Ask server to reschedule on another machine
                 replacement = RequestReplacementFrame(
                     agent_id=agent_id,
+                    generation=manifest.generation,
                     reason=f"Crash budget exhausted ({budget.crash_count} "
                     f"crashes in {manifest.restart_window_seconds}s)",
                 )

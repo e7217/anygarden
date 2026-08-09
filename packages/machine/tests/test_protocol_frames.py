@@ -343,14 +343,18 @@ class TestTokenRequestFrame:
 
 class TestRequestReplacementFrame:
     def test_basic(self):
-        frame = RequestReplacementFrame(agent_id="agent-x", reason="OOM killed repeatedly")
+        frame = RequestReplacementFrame(
+            agent_id="agent-x", reason="OOM killed repeatedly", generation=7
+        )
         assert frame.type == "request_replacement"
         assert frame.agent_id == "agent-x"
         assert frame.reason == "OOM killed repeatedly"
+        assert frame.generation == 7
 
     def test_default_reason(self):
         frame = RequestReplacementFrame(agent_id="agent-y")
         assert frame.reason == ""
+        assert frame.generation is None
 
     def test_roundtrip(self):
         frame = RequestReplacementFrame(agent_id="agent-z", reason="crash loop")
