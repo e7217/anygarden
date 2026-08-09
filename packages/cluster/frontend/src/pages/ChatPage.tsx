@@ -15,6 +15,8 @@ import RoomInviteDialog from '@/components/RoomInviteDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
+import ThreadPanel from '@/components/ThreadPanel'
+import { indexThreads } from '@/lib/threads'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
@@ -75,6 +77,27 @@ export default function ChatPage() {
   const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(selectedRoom)
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
+  // Thread grouping is derived once here so the timeline and the side
+  // panel can never disagree about which messages are replies.
+  const threadIndex = useMemo(() => indexThreads(messages), [messages])
+  const [threadRootId, setThreadRootId] = useState<string | null>(null)
+  const threadRoot = useMemo(
+    () =>
+      threadRootId
+        ? threadIndex.roots.find(m => m.id === threadRootId) ?? null
+        : null,
+    [threadRootId, threadIndex],
+  )
+  // Close the panel when the room changes, and when the open root
+  // leaves the loaded window (history is capped, so a long-lived
+  // session can scroll it out). Without the second guard the panel
+  // would stay mounted with nothing to show.
+  useEffect(() => {
+    setThreadRootId(null)
+  }, [selectedRoom])
+  useEffect(() => {
+    if (threadRootId && !threadRoot) setThreadRootId(null)
+  }, [threadRootId, threadRoot])
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
@@ -575,6 +598,9 @@ export default function ChatPage() {
               participants={participants}
               myParticipantId={myParticipantId}
               typingUsers={typingUsers}
+              threadIndex={threadIndex}
+              activeThreadRootId={threadRootId}
+              onOpenThread={setThreadRootId}
             />
             <TypingIndicator
               typingUsers={typingUsers}
@@ -674,12 +700,34 @@ export default function ChatPage() {
           overlay (mobile, drawer). The rail itself early-returns null
           when ``roomId`` is null, so it's safe to mount unconditionally
           on routes that may not yet have a selected room. */}
-      <RightContextRail
-        roomId={selectedRoom}
-        participants={participants}
-        open={rightRailOpen}
-        onClose={() => setRightRailOpen(false)}
-      />
+      {/* Thread panel and context rail share the right-hand slot: at
+          common laptop widths a fourth column squeezes the chat to
+          ~256px and the room header overflows it. An open thread takes
+          the slot; closing it restores the rail in whatever state the
+          user had left it, since the rail's own collapse flag is never
+          touched here. */}
+      {selectedRoom && threadRoot ? (
+        <ThreadPanel
+          root={threadRoot}
+          replies={threadIndex.repliesByRoot.get(threadRoot.id) ?? []}
+          participants={participants}
+          myParticipantId={myParticipantId}
+          roomId={selectedRoom}
+          connected={connected}
+          mentionUsers={mentionUsers}
+          mentionRooms={mentionRooms}
+          onSend={(content, metadata) => send(content, metadata, threadRoot.id)}
+          onTyping={sendTyping}
+          onClose={() => setThreadRootId(null)}
+        />
+      ) : (
+        <RightContextRail
+          roomId={selectedRoom}
+          participants={participants}
+          open={rightRailOpen}
+          onClose={() => setRightRailOpen(false)}
+        />
+      )}
     </div>
   )
 }
