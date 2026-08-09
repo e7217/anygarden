@@ -633,9 +633,15 @@ export default function ChatPage() {
               typingUsers={typingUsers}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
-              onOpenThread={id =>
-                setThreadRootId(prev => (prev === id ? null : id))
-              }
+              // Re-clicking the open thread's trigger is a close like any
+              // other, so it routes through ``closeThread`` — clearing the
+              // draft and restoring focus. Setting the id to null here
+              // directly would leave a discarded draft to resurface on
+              // reopen, contradicting the contract stated in the PR.
+              onOpenThread={id => {
+                if (threadRootId === id) closeThread()
+                else setThreadRootId(id)
+              }}
               renderInlineThread={
                 threadMode === 'inline' && selectedRoom
                   ? root => (

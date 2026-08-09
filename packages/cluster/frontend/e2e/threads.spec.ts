@@ -301,6 +301,29 @@ test.describe('thread composer contract', () => {
     )
   })
 
+  test('re-clicking the open trigger closes it and discards the draft', async ({
+    page,
+  }) => {
+    // The affordance doubles as a close control. That is still an
+    // explicit close, so it must behave like Escape rather than merely
+    // hiding the panel and leaving the draft to resurface.
+    await openRoom(page)
+    await threadTrigger(page).click()
+    await page
+      .getByTestId('thread-panel-root')
+      .getByPlaceholder('Reply to thread…')
+      .fill('toggled away')
+
+    await threadTrigger(page).click()
+    await expect(page.getByTestId('thread-panel-root')).toHaveCount(0)
+    await expect(threadTrigger(page)).toBeFocused()
+
+    await threadTrigger(page).click()
+    await expect(
+      page.getByTestId('thread-panel-root').getByPlaceholder('Reply to thread…'),
+    ).toHaveValue('')
+  })
+
   test('closing a thread discards its draft', async ({ page }) => {
     // The counterpart to the rule above: an explicitly closed thread is a
     // discarded one, so reopening starts clean.
