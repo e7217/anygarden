@@ -949,12 +949,16 @@ class MachineDaemon:
         shouldn't linger forever.
         """
         now = time.time()
-        self._prune_stale_transitional(now)
+        running_agents = self._spawner.list_running()
+        self._prune_stale_transitional(
+            now,
+            running_agent_ids={info["agent_id"] for info in running_agents},
+        )
 
         agents: list[AgentActual] = []
         seen: set[str] = set()
 
-        for info in self._spawner.list_running():
+        for info in running_agents:
             agent_id = info["agent_id"]
             seen.add(agent_id)
             state = self._transitional_states.get(agent_id) or "running"
@@ -993,17 +997,20 @@ class MachineDaemon:
         # avoids spinning up a parallel scheduler. Failures are logged
         # but never abort the report path — sync-back is best-effort.
         try:
-            await self._flush_memory_updates()
+            await self._flush_memory_updates(running_agents=running_agents)
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("memory_flush_failed", error=str(exc))
 
         # Issue #290 — same cadence for the room-artifact outbox.
         try:
-            await self._flush_outbox_artifacts()
+            await self._flush_outbox_artifacts(running_agents=running_agents)
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("artifact_flush_failed", error=str(exc))
 
-    async def _flush_memory_updates(self) -> None:
+    async def _flush_memory_updates(
+        self,
+        running_agents: list[dict] | None = None,
+    ) -> None:
         """Detect ``memory/notes.md`` changes for each running agent and
         emit ``agent_memory_update`` frames.
 
@@ -1017,7 +1024,10 @@ class MachineDaemon:
         """
         import hashlib
 
-        for info in self._spawner.list_running():
+        if running_agents is None:
+            running_agents = self._spawner.list_running()
+
+        for info in running_agents:
             agent_id = info["agent_id"]
             try:
                 agent_root = self._spawner.get_agent_root(agent_id)
@@ -1052,7 +1062,10 @@ class MachineDaemon:
                 bytes=len(body),
             )
 
-    async def _flush_outbox_artifacts(self) -> None:
+    async def _flush_outbox_artifacts(
+        self,
+        running_agents: list[dict] | None = None,
+    ) -> None:
         """Detect new / changed files under each running agent's
         ``memory/outbox/`` and emit ``room_artifact_produced`` frames.
 
@@ -1077,7 +1090,10 @@ class MachineDaemon:
         import hashlib
         import mimetypes
 
-        for info in self._spawner.list_running():
+        if running_agents is None:
+            running_agents = self._spawner.list_running()
+
+        for info in running_agents:
             agent_id = info["agent_id"]
             try:
                 agent_root = self._spawner.get_agent_root(agent_id)
@@ -1171,10 +1187,18 @@ class MachineDaemon:
         self._transitional_states.pop(agent_id, None)
         self._transitional_set_at.pop(agent_id, None)
 
-    def _prune_stale_transitional(self, now: float) -> None:
+    def _prune_stale_transitional(
+        self,
+        now: float,
+        running_agent_ids: set[str] | None = None,
+    ) -> None:
         """Reclaim annotations stuck past ``TRANSITIONAL_LEAK_GRACE`` with
         no running process — belt-and-suspenders for missed callbacks."""
-        running_ids = {info["agent_id"] for info in self._spawner.list_running()}
+        running_ids = (
+            running_agent_ids
+            if running_agent_ids is not None
+            else {info["agent_id"] for info in self._spawner.list_running()}
+        )
         stale = [
             aid
             for aid, ts in self._transitional_set_at.items()

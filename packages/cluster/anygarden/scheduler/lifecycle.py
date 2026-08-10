@@ -13,11 +13,12 @@ import hashlib
 import json
 import os
 import secrets
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, func, or_, select, update
+from sqlalchemy import and_, case, event, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -729,6 +730,11 @@ class AgentLifecycle:
         # merely confirms an already-running agent stays no-op because
         # ``old_state`` is read before we overwrite it.
         backfill_targets: list[str] = []
+        reported_ids = {
+            entry.get("agent_id")
+            for entry in agents_data
+            if entry.get("agent_id") is not None
+        }
         async with self._db_factory() as db:
             machine = await db.get(Machine, machine_id)
             generation_reports_required = bool(
@@ -736,11 +742,20 @@ class AgentLifecycle:
                 and GENERATION_REPORT_CAPABILITY
                 in set(machine.control_capabilities or [])
             )
+            reported_agents_by_id: dict[str, Agent] = {}
+            if reported_ids:
+                reported_agents = (
+                    (await db.execute(select(Agent).where(Agent.id.in_(reported_ids))))
+                    .scalars()
+                    .all()
+                )
+                reported_agents_by_id = {agent.id: agent for agent in reported_agents}
+
             for entry in agents_data:
                 aid = entry.get("agent_id")
                 if not aid:
                     continue
-                agent = await self._get_agent(db, aid)
+                agent = reported_agents_by_id.get(aid)
                 if agent is None:
                     continue
                 # Only accept reports from the machine the agent is placed on.
@@ -894,41 +909,38 @@ class AgentLifecycle:
             # Agents placed on this machine but absent from the report:
             # if desired=stopped they are confirmed stopped. Keep
             # placed_on_machine_id so the machine page still lists them.
-            reported_ids = {e.get("agent_id") for e in agents_data if e.get("agent_id")}
+            where_conditions = [
+                Agent.placed_on_machine_id == machine_id,
+                Agent.desired_state == "stopped",
+                Agent.actual_state != "stopped",
+            ]
+            if reported_ids:
+                where_conditions.append(not_(Agent.id.in_(reported_ids)))
             placed_on_machine = (
-                (
-                    await db.execute(
-                        select(Agent).where(
-                            Agent.placed_on_machine_id == machine_id,
-                        )
-                    )
-                )
+                (await db.execute(select(Agent).where(and_(*where_conditions))))
                 .scalars()
                 .all()
             )
             for agent in placed_on_machine:
-                if agent.id in reported_ids:
-                    continue
-                if agent.desired_state == "stopped" and agent.actual_state != "stopped":
-                    old = agent.actual_state
-                    agent.actual_state = "stopped"
-                    agent.pid = None
-                    agent.lifecycle_lease_token = None
-                    agent.lifecycle_lease_expires_at = None
-                    agent.lifecycle_delivery_state = "stopped"
-                    _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
-                    db.add(
-                        ActivityLog(
-                            agent_id=agent.id,
-                            event_type="state_changed",
-                            details={
-                                "from": old,
-                                "to": "stopped",
-                                "machine_id": machine_id,
-                                "reason": "absent_from_report",
-                            },
-                        )
+                old = agent.actual_state
+                agent.actual_state = "stopped"
+                agent.pid = None
+                agent.lifecycle_lease_token = None
+                agent.lifecycle_lease_expires_at = None
+                agent.lifecycle_delivery_state = "stopped"
+                _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
+                db.add(
+                    ActivityLog(
+                        agent_id=agent.id,
+                        event_type="state_changed",
+                        details={
+                            "from": old,
+                            "to": "stopped",
+                            "machine_id": machine_id,
+                            "reason": "absent_from_report",
+                        },
                     )
+                )
 
             await db.commit()
 
@@ -957,17 +969,18 @@ class AgentLifecycle:
         from anygarden.rooms import shared_files as shared_files_service
 
         async with self._db_factory() as db:
+            room_map: dict[str, list[str]] = defaultdict(list)
+            if agent_ids:
+                room_rows = await db.execute(
+                    select(Participant.agent_id, Participant.room_id).where(
+                        Participant.agent_id.in_(agent_ids)
+                    )
+                )
+                for row in room_rows:
+                    room_map[row[0]].append(row[1])
+
             for aid in agent_ids:
-                rooms = [
-                    row[0]
-                    for row in (
-                        await db.execute(
-                            select(Participant.room_id).where(
-                                Participant.agent_id == aid
-                            )
-                        )
-                    ).all()
-                ]
+                rooms = room_map.get(aid, [])
                 for room_id in rooms:
                     try:
                         await shared_files_service.backfill_agent(
@@ -1130,14 +1143,20 @@ class AgentLifecycle:
             )
             agents = result.scalars().all()
 
-            frames: list[dict] = []
-            for agent in agents:
-                room_result = await db.execute(
-                    select(Participant.room_id).where(
-                        Participant.agent_id == agent.id,
+            room_rows_by_agent: dict[str, list[str]] = defaultdict(list)
+            if agents:
+                agent_ids = [agent.id for agent in agents]
+                room_rows = await db.execute(
+                    select(Participant.agent_id, Participant.room_id).where(
+                        Participant.agent_id.in_(agent_ids)
                     )
                 )
-                rooms = [row[0] for row in room_result.all()]
+                for row in room_rows:
+                    room_rows_by_agent[row[0]].append(row[1])
+
+            frames: list[dict] = []
+            for agent in agents:
+                rooms = room_rows_by_agent.get(agent.id, [])
                 frame = await self._build_sync_frame(db, agent, rooms)
                 frames.append(frame)
 

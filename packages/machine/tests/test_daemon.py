@@ -196,11 +196,13 @@ class TestReportActualState:
         assert report["agents"][0]["generation"] == 3
 
     async def test_report_empty_when_no_agents(self, daemon: MachineDaemon) -> None:
-        """Report should send empty agents list when nothing is running."""
+        """An empty snapshot is reused without polling the spawner again."""
         sent_frames = _capture_ws(daemon)
+        daemon._spawner.list_running = MagicMock(return_value=[])
 
         await daemon._report_actual_state()
 
+        daemon._spawner.list_running.assert_called_once_with()
         assert len(sent_frames) == 1
         report = sent_frames[0]
         assert report["type"] == "report_actual_state"

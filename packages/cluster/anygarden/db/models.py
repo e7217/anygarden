@@ -782,6 +782,7 @@ class Participant(Base):
         # every inbound WS frame. Pairing room_id with role keeps role-scoped
         # admin/observer scans cheap as rooms grow.
         Index("ix_participants_room_role", "room_id", "role"),
+        Index("ix_participants_agent_room", "agent_id", "room_id"),
         # A user (or agent) must appear at most once per room. Without
         # this guard duplicate rows crept in via non-idempotent add
         # paths, and ``require_room_member``'s single-row fetch then
