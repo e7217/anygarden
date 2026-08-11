@@ -31,7 +31,7 @@
     - `packages/cluster/tests/test_e2e_materialize.py`
     - `packages/cluster/tests/test_e2e_real_conversation.py` (`pytest -m slow`)
     - `packages/cluster/scripts/e2e_full_pipeline.py` (수동 실행 스크립트)
-    - `packages/cluster/tests/test_e2e_gate_catalog.py` (**신규: ANY-6 산출물**) 
+    - `packages/cluster/tests/test_e2e_gate_catalog.py` (**신규: ANY-6 산출물**)
   - CI 실행
     - `test-linux`의 클러스터 테스트 전체 (`pytest -x`)
     - E2E 스몰: `test_e2e_scenario.py`, `test_e2e_materialize.py`
