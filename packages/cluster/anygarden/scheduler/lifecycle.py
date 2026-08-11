@@ -13,11 +13,12 @@ import hashlib
 import json
 import os
 import secrets
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import and_, case, event, func, or_, select, update
+from sqlalchemy import and_, case, event, func, not_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -52,6 +53,81 @@ logger = structlog.get_logger(__name__)
 GENERATION_REPORT_CAPABILITY = "agent_generation_reports_v1"
 LIFECYCLE_LEASE_SEC_DEFAULT = 120
 _RETRYABLE_DELIVERY_STATES = frozenset({"dispatching", "pending_ack", "unknown"})
+
+
+@dataclass(frozen=True)
+class _ReportAgentSnapshot:
+    """Preloaded report state plus the authority that makes it current."""
+
+    id: str
+    placed_on_machine_id: str | None
+    generation: int | None
+    desired_state: str
+    actual_state: str
+    engine: str
+    lifecycle_lease_token: str | None
+    lifecycle_lease_expires_at: datetime | None
+    lifecycle_delivery_state: str | None
+    legacy_report_generation: int | None
+    unavailable_code: str | None
+
+
+def _report_agent_snapshot(agent: Agent) -> _ReportAgentSnapshot:
+    """Detach the fields used to validate and apply a machine report."""
+
+    return _ReportAgentSnapshot(
+        id=agent.id,
+        placed_on_machine_id=agent.placed_on_machine_id,
+        generation=agent.generation,
+        desired_state=agent.desired_state,
+        actual_state=agent.actual_state,
+        engine=agent.engine,
+        lifecycle_lease_token=agent.lifecycle_lease_token,
+        lifecycle_lease_expires_at=agent.lifecycle_lease_expires_at,
+        lifecycle_delivery_state=agent.lifecycle_delivery_state,
+        legacy_report_generation=agent.legacy_report_generation,
+        unavailable_code=agent.unavailable_code,
+    )
+
+
+def _report_authority_conditions(agent: _ReportAgentSnapshot) -> tuple:
+    """Return the apply-time CAS for a preloaded lifecycle report row."""
+
+    lease_token_matches = (
+        Agent.lifecycle_lease_token.is_(None)
+        if agent.lifecycle_lease_token is None
+        else Agent.lifecycle_lease_token == agent.lifecycle_lease_token
+    )
+    lease_expiry_matches = (
+        Agent.lifecycle_lease_expires_at.is_(None)
+        if agent.lifecycle_lease_expires_at is None
+        else Agent.lifecycle_lease_expires_at == agent.lifecycle_lease_expires_at
+    )
+    delivery_state_matches = (
+        Agent.lifecycle_delivery_state.is_(None)
+        if agent.lifecycle_delivery_state is None
+        else Agent.lifecycle_delivery_state == agent.lifecycle_delivery_state
+    )
+    legacy_epoch_matches = (
+        Agent.legacy_report_generation.is_(None)
+        if agent.legacy_report_generation is None
+        else Agent.legacy_report_generation == agent.legacy_report_generation
+    )
+    generation_matches = (
+        Agent.generation.is_(None)
+        if agent.generation is None
+        else Agent.generation == agent.generation
+    )
+    return (
+        Agent.id == agent.id,
+        Agent.placed_on_machine_id == agent.placed_on_machine_id,
+        generation_matches,
+        Agent.desired_state == agent.desired_state,
+        lease_token_matches,
+        lease_expiry_matches,
+        delivery_state_matches,
+        legacy_epoch_matches,
+    )
 
 
 def _lifecycle_lease_expiry(now: datetime) -> datetime:
@@ -710,6 +786,22 @@ class AgentLifecycle:
                 },
             )
 
+    async def _preload_report_agents(
+        self,
+        db: AsyncSession,
+        reported_ids: set[str],
+    ) -> dict[str, _ReportAgentSnapshot]:
+        """Batch-load report rows as detached lifecycle snapshots."""
+
+        if not reported_ids:
+            return {}
+        reported_agents = (
+            (await db.execute(select(Agent).where(Agent.id.in_(reported_ids))))
+            .scalars()
+            .all()
+        )
+        return {agent.id: _report_agent_snapshot(agent) for agent in reported_agents}
+
     async def handle_report_actual_state(
         self,
         machine_id: str,
@@ -729,6 +821,11 @@ class AgentLifecycle:
         # merely confirms an already-running agent stays no-op because
         # ``old_state`` is read before we overwrite it.
         backfill_targets: list[str] = []
+        reported_ids = {
+            entry.get("agent_id")
+            for entry in agents_data
+            if entry.get("agent_id") is not None
+        }
         async with self._db_factory() as db:
             machine = await db.get(Machine, machine_id)
             generation_reports_required = bool(
@@ -736,11 +833,13 @@ class AgentLifecycle:
                 and GENERATION_REPORT_CAPABILITY
                 in set(machine.control_capabilities or [])
             )
+            reported_agents_by_id = await self._preload_report_agents(db, reported_ids)
+
             for entry in agents_data:
                 aid = entry.get("agent_id")
                 if not aid:
                     continue
-                agent = await self._get_agent(db, aid)
+                agent = reported_agents_by_id.get(aid)
                 if agent is None:
                     continue
                 # Only accept reports from the machine the agent is placed on.
@@ -755,6 +854,7 @@ class AgentLifecycle:
 
                 new_state = entry.get("actual_state")
                 reported_generation = entry.get("generation")
+                legacy_report_generation: int | None = None
                 if reported_generation is None:
                     if generation_reports_required:
                         logger.warning(
@@ -769,7 +869,7 @@ class AgentLifecycle:
                         # Compatibility bootstrap for rows created directly by
                         # older deployments/tests. Migration 063 pre-populates
                         # this epoch for every already-placed production row.
-                        agent.legacy_report_generation = int(agent.generation or 0)
+                        legacy_report_generation = int(agent.generation or 0)
                     elif agent.legacy_report_generation != agent.generation:
                         logger.warning(
                             "lifecycle.report_stale_legacy_epoch",
@@ -798,15 +898,6 @@ class AgentLifecycle:
                     )
                     continue
 
-                # A report from the committed machine and generation is the
-                # durable acknowledgement for a running desired-state
-                # dispatch. Stop already revoked the start owner; a late
-                # pre-stop report must not relabel that terminal ownership.
-                if agent.desired_state == "running":
-                    agent.lifecycle_lease_token = None
-                    agent.lifecycle_lease_expires_at = None
-                    agent.lifecycle_delivery_state = "acknowledged"
-
                 if agent.desired_state == "stopped" and new_state in (
                     "running",
                     "starting",
@@ -830,14 +921,30 @@ class AgentLifecycle:
                     # a successful stop race.
                     new_state = "stopped"
                 old_state = agent.actual_state
+                apply_values: dict = {}
+                if legacy_report_generation is not None:
+                    apply_values["legacy_report_generation"] = legacy_report_generation
+
+                # A report from the committed machine and generation is the
+                # durable acknowledgement for a running desired-state
+                # dispatch. The conditional UPDATE below also matches the
+                # preloaded lease, so a stop/restart committed after the batch
+                # SELECT cannot have its newer owner acknowledged or released.
+                if agent.desired_state == "running":
+                    apply_values.update(
+                        lifecycle_lease_token=None,
+                        lifecycle_lease_expires_at=None,
+                        lifecycle_delivery_state="acknowledged",
+                    )
+
                 if new_state:
-                    agent.actual_state = new_state
+                    apply_values["actual_state"] = new_state
                 if "pid" in entry:
-                    agent.pid = entry["pid"]
+                    apply_values["pid"] = entry["pid"]
                 if "last_crash_reason" in entry:
-                    agent.last_crash_reason = entry["last_crash_reason"]
+                    apply_values["last_crash_reason"] = entry["last_crash_reason"]
                 if new_state == "running":
-                    agent.last_heartbeat_at = datetime.now(timezone.utc)
+                    apply_values["last_heartbeat_at"] = datetime.now(timezone.utc)
 
                 # #516 — maintain the structured unavailability reason from the
                 # report. The live process carries its own ``engine`` so engine
@@ -846,34 +953,64 @@ class AgentLifecycle:
                 if new_state == "running":
                     reported_engine = (entry.get("engine") or "").strip()
                     if reported_engine and reported_engine != agent.engine:
-                        _mark_unavailable(
-                            agent,
-                            ENGINE_MISMATCH,
-                            {
+                        apply_values.update(
+                            unavailable_code=ENGINE_MISMATCH,
+                            unavailable_detail={
                                 "db_engine": agent.engine,
                                 "running_engine": reported_engine,
                             },
                         )
+                        if agent.unavailable_code != ENGINE_MISMATCH:
+                            apply_values["unavailable_since"] = datetime.now(
+                                timezone.utc
+                            )
                     else:
-                        _clear_unavailable(agent)
+                        apply_values.update(
+                            unavailable_code=None,
+                            unavailable_detail=None,
+                            unavailable_since=None,
+                        )
                 elif new_state == "crashed":
                     # uptime≈0 ⇒ it never really started (spawn failure);
                     # otherwise it ran and then died.
                     uptime = entry.get("uptime_seconds") or 0
                     code = SPAWN_FAILED if uptime <= 0 else CRASHED
-                    _mark_unavailable(
-                        agent,
-                        code,
-                        {
+                    apply_values.update(
+                        unavailable_code=code,
+                        unavailable_detail={
                             "engine": agent.engine,
                             "stderr_tail": entry.get("last_crash_reason"),
                         },
                     )
+                    if agent.unavailable_code != code:
+                        apply_values["unavailable_since"] = datetime.now(timezone.utc)
                 elif new_state == "stopped":
-                    agent.lifecycle_lease_token = None
-                    agent.lifecycle_lease_expires_at = None
-                    agent.lifecycle_delivery_state = "stopped"
-                    _clear_unavailable(agent)
+                    apply_values.update(
+                        lifecycle_lease_token=None,
+                        lifecycle_lease_expires_at=None,
+                        lifecycle_delivery_state="stopped",
+                        unavailable_code=None,
+                        unavailable_detail=None,
+                        unavailable_since=None,
+                    )
+
+                if not apply_values:
+                    continue
+                applied = await db.execute(
+                    update(Agent)
+                    .where(*_report_authority_conditions(agent))
+                    .values(**apply_values)
+                    .execution_options(synchronize_session=False)
+                )
+                if applied.rowcount != 1:
+                    logger.info(
+                        "lifecycle.report_apply_fenced",
+                        agent_id=aid,
+                        machine_id=machine_id,
+                        generation=agent.generation,
+                        reported_state=new_state,
+                    )
+                    continue
 
                 # Only log when state actually changed (skip heartbeat noise)
                 if new_state and new_state != old_state:
@@ -894,41 +1031,56 @@ class AgentLifecycle:
             # Agents placed on this machine but absent from the report:
             # if desired=stopped they are confirmed stopped. Keep
             # placed_on_machine_id so the machine page still lists them.
-            reported_ids = {e.get("agent_id") for e in agents_data if e.get("agent_id")}
+            where_conditions = [
+                Agent.placed_on_machine_id == machine_id,
+                Agent.desired_state == "stopped",
+                Agent.actual_state != "stopped",
+            ]
+            if reported_ids:
+                where_conditions.append(not_(Agent.id.in_(reported_ids)))
             placed_on_machine = (
-                (
-                    await db.execute(
-                        select(Agent).where(
-                            Agent.placed_on_machine_id == machine_id,
-                        )
-                    )
-                )
+                (await db.execute(select(Agent).where(and_(*where_conditions))))
                 .scalars()
                 .all()
             )
-            for agent in placed_on_machine:
-                if agent.id in reported_ids:
-                    continue
-                if agent.desired_state == "stopped" and agent.actual_state != "stopped":
-                    old = agent.actual_state
-                    agent.actual_state = "stopped"
-                    agent.pid = None
-                    agent.lifecycle_lease_token = None
-                    agent.lifecycle_lease_expires_at = None
-                    agent.lifecycle_delivery_state = "stopped"
-                    _clear_unavailable(agent)  # #516 — confirmed stop, not a problem
-                    db.add(
-                        ActivityLog(
-                            agent_id=agent.id,
-                            event_type="state_changed",
-                            details={
-                                "from": old,
-                                "to": "stopped",
-                                "machine_id": machine_id,
-                                "reason": "absent_from_report",
-                            },
-                        )
+            for placed_agent in placed_on_machine:
+                agent = _report_agent_snapshot(placed_agent)
+                old = agent.actual_state
+                applied = await db.execute(
+                    update(Agent)
+                    .where(*_report_authority_conditions(agent))
+                    .values(
+                        actual_state="stopped",
+                        pid=None,
+                        lifecycle_lease_token=None,
+                        lifecycle_lease_expires_at=None,
+                        lifecycle_delivery_state="stopped",
+                        unavailable_code=None,
+                        unavailable_detail=None,
+                        unavailable_since=None,
                     )
+                    .execution_options(synchronize_session=False)
+                )
+                if applied.rowcount != 1:
+                    logger.info(
+                        "lifecycle.report_absent_apply_fenced",
+                        agent_id=agent.id,
+                        machine_id=machine_id,
+                        generation=agent.generation,
+                    )
+                    continue
+                db.add(
+                    ActivityLog(
+                        agent_id=agent.id,
+                        event_type="state_changed",
+                        details={
+                            "from": old,
+                            "to": "stopped",
+                            "machine_id": machine_id,
+                            "reason": "absent_from_report",
+                        },
+                    )
+                )
 
             await db.commit()
 
@@ -957,17 +1109,18 @@ class AgentLifecycle:
         from anygarden.rooms import shared_files as shared_files_service
 
         async with self._db_factory() as db:
+            room_map: dict[str, list[str]] = defaultdict(list)
+            if agent_ids:
+                room_rows = await db.execute(
+                    select(Participant.agent_id, Participant.room_id).where(
+                        Participant.agent_id.in_(agent_ids)
+                    )
+                )
+                for row in room_rows:
+                    room_map[row[0]].append(row[1])
+
             for aid in agent_ids:
-                rooms = [
-                    row[0]
-                    for row in (
-                        await db.execute(
-                            select(Participant.room_id).where(
-                                Participant.agent_id == aid
-                            )
-                        )
-                    ).all()
-                ]
+                rooms = room_map.get(aid, [])
                 for room_id in rooms:
                     try:
                         await shared_files_service.backfill_agent(
@@ -1130,14 +1283,20 @@ class AgentLifecycle:
             )
             agents = result.scalars().all()
 
-            frames: list[dict] = []
-            for agent in agents:
-                room_result = await db.execute(
-                    select(Participant.room_id).where(
-                        Participant.agent_id == agent.id,
+            room_rows_by_agent: dict[str, list[str]] = defaultdict(list)
+            if agents:
+                agent_ids = [agent.id for agent in agents]
+                room_rows = await db.execute(
+                    select(Participant.agent_id, Participant.room_id).where(
+                        Participant.agent_id.in_(agent_ids)
                     )
                 )
-                rooms = [row[0] for row in room_result.all()]
+                for row in room_rows:
+                    room_rows_by_agent[row[0]].append(row[1])
+
+            frames: list[dict] = []
+            for agent in agents:
+                rooms = room_rows_by_agent.get(agent.id, [])
                 frame = await self._build_sync_frame(db, agent, rooms)
                 frames.append(frame)
 

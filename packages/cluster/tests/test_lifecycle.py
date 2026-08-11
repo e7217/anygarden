@@ -1025,6 +1025,110 @@ class TestAgentLifecycle:
             assert agent.pid is None
 
     @pytest.mark.asyncio
+    async def test_batch_preload_stop_restart_fences_stale_report(
+        self, lifecycle_env, monkeypatch
+    ) -> None:
+        """A report preloaded before stop/restart cannot ack the new lease."""
+        factory = lifecycle_env["factory"]
+        lifecycle = lifecycle_env["lifecycle"]
+        machine = lifecycle_env["machine"]
+
+        old_lease = "pre-stop-report-owner"
+        async with factory() as db:
+            agent = Agent(
+                name="agent-report-apply-cas",
+                engine="echo",
+                desired_state="running",
+                actual_state="pending",
+                placed_on_machine_id=machine.id,
+                generation=1,
+                legacy_report_generation=1,
+                lifecycle_lease_token=old_lease,
+                lifecycle_lease_expires_at=datetime.now(timezone.utc)
+                + timedelta(minutes=5),
+                lifecycle_delivery_state="pending_ack",
+            )
+            db.add(agent)
+            await db.commit()
+            agent_id = agent.id
+        await lifecycle_env["attach_to_room"](agent_id)
+
+        batch_select_complete = asyncio.Event()
+        resume_stale_report = asyncio.Event()
+        original_preload = lifecycle._preload_report_agents
+
+        async def pause_after_batch_select(db, reported_ids):
+            snapshots = await original_preload(db, reported_ids)
+            batch_select_complete.set()
+            await resume_stale_report.wait()
+            return snapshots
+
+        monkeypatch.setattr(
+            lifecycle, "_preload_report_agents", pause_after_batch_select
+        )
+        stale_report = asyncio.create_task(
+            lifecycle.handle_report_actual_state(
+                machine.id,
+                [
+                    {
+                        "agent_id": agent_id,
+                        "actual_state": "running",
+                        "generation": 1,
+                        "pid": 111,
+                    }
+                ],
+            )
+        )
+        await asyncio.wait_for(batch_select_complete.wait(), timeout=2)
+
+        try:
+            # Commit a full stop/restart while the report still holds its
+            # generation-1 batch snapshot. The restart owns generation 3.
+            await asyncio.wait_for(lifecycle.request_stop(agent_id), timeout=2)
+            await asyncio.wait_for(lifecycle.request_start(agent_id), timeout=2)
+            async with factory() as db:
+                restarted = await db.get(Agent, agent_id)
+                assert restarted is not None
+                assert restarted.generation == 3
+                assert restarted.desired_state == "running"
+                assert restarted.actual_state == "pending"
+                assert restarted.lifecycle_lease_token not in (None, old_lease)
+                assert restarted.lifecycle_delivery_state == "pending_ack"
+                restart_lease = restarted.lifecycle_lease_token
+                restart_lease_expiry = restarted.lifecycle_lease_expires_at
+        except BaseException:
+            resume_stale_report.set()
+            await stale_report
+            raise
+
+        resume_stale_report.set()
+        await stale_report
+
+        async with factory() as db:
+            agent = await db.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.generation == 3
+            assert agent.desired_state == "running"
+            assert agent.actual_state == "pending"
+            assert agent.pid is None
+            assert agent.lifecycle_lease_token == restart_lease
+            assert agent.lifecycle_lease_expires_at == restart_lease_expiry
+            assert agent.lifecycle_delivery_state == "pending_ack"
+            state_changes = (
+                (
+                    await db.execute(
+                        select(ActivityLog).where(
+                            ActivityLog.agent_id == agent_id,
+                            ActivityLog.event_type == "state_changed",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert state_changes == []
+
+    @pytest.mark.asyncio
     async def test_late_running_report_cannot_reverse_requested_stop(
         self, lifecycle_env
     ) -> None:
