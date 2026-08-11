@@ -69,16 +69,16 @@ jobs:
             exit 1
           fi
 
-  build-and-release:
-    name: Build & Release ${{ github.ref_name }}
+  build-package:
+    name: Build ${{ github.ref_name }}
     needs: release-gate
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      # #402 — OIDC token for PyPI Trusted Publishing. ``id-token: write``
-      # lets the runner mint a short-lived OIDC token that PyPI exchanges
-      # for an upload grant, so no long-lived API token secret is stored.
-      id-token: write
+      contents: read
+    outputs:
+      dist_name: ${{ steps.parse.outputs.dist_name }}
+      package: ${{ steps.parse.outputs.package }}
+      version: ${{ steps.parse.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,10 +151,41 @@ jobs:
           # by distribution name.
           uv build --package "${{ steps.parse.outputs.dist_name }}"
 
+      - name: Upload release artifacts
+        id: publish_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ steps.parse.outputs.package }}-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-package:
+    name: Publish ${{ github.ref_name }}
+    needs: build-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      # #402 — OIDC token for PyPI Trusted Publishing. ``id-token: write``
+      # lets the runner mint a short-lived OIDC token that PyPI exchanges
+      # for an upload grant, so no long-lived API token secret is stored.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts-${{ needs.build-package.outputs.package }}-${{ github.sha }}
+          path: dist/
+
       - name: Resolve previous tag for same package
         id: prev
         run: |
-          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
+          DIST_NAME="${{ needs.build-package.outputs.dist_name }}"
           CURRENT="${GITHUB_REF_NAME}"
           PREV=$(git tag --list "${DIST_NAME}-v*" --sort=-version:refname \
             | grep -vx "${CURRENT}" \
@@ -170,8 +201,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          DIST_NAME="${{ steps.parse.outputs.dist_name }}"
-          VERSION="${{ steps.parse.outputs.version }}"
+          DIST_NAME="${{ needs.build-package.outputs.dist_name }}"
+          VERSION="${{ needs.build-package.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           # uv normalizes hyphens to underscores in wheel/sdist
           # filenames (PEP 491/625), so anygarden-machine ships as
@@ -195,6 +226,37 @@ jobs:
       # tag idempotent instead of failing on an already-published file.
       # Requires a trusted publisher registered on PyPI for each project
       # (owner e7217 / repo anygarden / workflow release.yml).
+      # ANY-7 / PR #585 review — the rollout contract recorded in #582 says
+      # remote machine daemons must reach the required anygarden-machine
+      # version *before or at the same time as* the cluster. Nothing here can
+      # see those daemons, but this gate removes the case that makes the
+      # unsafe order unavoidable: if the required machine wheel is not on
+      # PyPI yet, an operator physically cannot upgrade daemons first, so
+      # publishing the cluster would guarantee the fencing mismatch that
+      # #581 closed. Fails closed — an unreadable floor, an ambiguous floor,
+      # or an unreachable index all block the publish.
+      - name: Require the machine floor to be publishable first
+        if: needs.build-package.outputs.dist_name == 'anygarden'
+        run: |
+          set -euo pipefail
+          FLOORS=$(grep -oE '"anygarden-machine>=[^"]+"' packages/cluster/pyproject.toml \
+            | sed -E 's/.*>=([^"]+)".*/\1/' | sort -u)
+          COUNT=$(printf '%s\n' "${FLOORS}" | grep -c . || true)
+          if [ "${COUNT}" -ne 1 ]; then
+            echo "::error::Release blocked: expected exactly one anygarden-machine floor in packages/cluster/pyproject.toml, found ${COUNT}."
+            printf '%s\n' "${FLOORS}"
+            exit 1
+          fi
+          FLOOR="${FLOORS}"
+          echo "Required anygarden-machine floor: ${FLOOR}"
+          if ! curl -fsSL --retry 3 --max-time 30 \
+                 "https://pypi.org/pypi/anygarden-machine/${FLOOR}/json" -o /dev/null; then
+            echo "::error::Release blocked: anygarden-machine ${FLOOR} is not published."
+            echo "::error::Publish anygarden-machine ${FLOOR} first so operators can upgrade daemons before or with this cluster release. See docs/runbook/release-operations.md."
+            exit 1
+          fi
+          echo "anygarden-machine ${FLOOR} is available; a daemon-first upgrade is possible."
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
