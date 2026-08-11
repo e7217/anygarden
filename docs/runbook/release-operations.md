@@ -2,7 +2,40 @@
 
 This runbook is the operator-facing companion for `ANY-7` and the release gate.
 
+## 배포 수용 조건 — daemon 우선 업그레이드 (차단 조건)
+
+**이것은 권고가 아니라 릴리스·배포의 수용 조건이다.** 충족되지 않으면 진행하지 않는다.
+
+- cluster(`anygarden`)를 배포하기 전에, 또는 **동시에**, 원격 machine daemon을
+  cluster가 요구하는 `anygarden-machine` floor 이상으로 올려야 한다.
+  현재 floor는 `packages/cluster/pyproject.toml`의 `server`/`machine`/`dev` extras에 있다.
+- 역순(cluster 먼저)은 **서버는 fencing 중이라고 믿고 daemon은 아닌 구간**을 만든다.
+  floor 미만 daemon은 stop tombstone을 영속 high-watermark로 들지 않으므로, stop 뒤
+  다른 머신에서 start하면 원래 generation이 계속 살아 있을 수 있다(#581이 막은 split-brain).
+- **legacy generation-advance 한계**: cluster가 한 번 generation을 올린 뒤로 floor 미만
+  daemon은 해당 에이전트에 대해 계약 밖이다. 서버는 그 daemon의 보고를 무시하지만,
+  **프로세스와 그 부작용까지 멈추지는 못한다.** 즉 이 조건 위반은 서버 재시작으로
+  복구되지 않는다.
+- daemon 업그레이드 수단: 각 호스트에서 `anygarden machine update`, 또는 웹 UI의
+  **Admin → Machines → Update**.
+
+### 자동화가 강제하는 범위 (fail closed)
+
+`release.yml`의 `publish-package`는 cluster 태그(`anygarden-v*`)에서
+**"Require the machine floor to be publishable first"** 로 차단한다.
+
+- cluster가 요구하는 floor를 `pyproject.toml`에서 읽어, 그 버전의
+  `anygarden-machine`이 **PyPI에 이미 게시되어 있는지** 확인한다. 없으면 publish를 막는다.
+- floor를 읽지 못하거나 여러 개가 나오거나 인덱스에 도달하지 못하면 **모두 차단**한다.
+  통과는 명시적 확인에만 주어진다.
+
+**자동화가 덮지 못하는 것**: 이 게이트는 "운영자가 daemon을 먼저 올릴 수 *있는* 상태"만
+보장한다. 실제로 원격 daemon이 올라갔는지는 CI에서 관측할 수 없으므로 **운영자가 위 수용
+조건으로 확인해야 한다.** 게이트 통과를 롤아웃 완료의 증거로 읽지 말 것.
+
 ## 배포 실행 전 체크리스트
+
+- **위 daemon 우선 업그레이드 수용 조건이 충족되었다** (충족 전에는 진행 금지).
 
 - Tag targets are correct: anygarden-v*, anygarden-machine-v*, anygarden-agent-v*.
 - CI is green for the exact release commit in `ci.yml`.
@@ -33,6 +66,11 @@ This runbook is the operator-facing companion for `ANY-7` and the release gate.
 - Live canary step must only pass `OPENAI_API_KEY` into container runtime.
 - Child runtime env in `engine_smoke_gate.py` includes only allowlisted proxy and runtime keys.
 - `secret-audit` artifact (`engine-smoke-secret-audit-<sha>`) must exist after preflight.
+  This artifact is **workflow-scope evidence**: it records which secrets and variables the
+  workflow declares in scope for that SHA. It is **not** proof that a secret was
+  dynamically absent from any process at runtime — it cannot observe the child process
+  environment. Runtime absence is enforced separately by the allowlist in
+  `engine_smoke_gate.py` and by the preflight job not referencing `OPENAI_API_KEY`.
 
 ## 임시 자원 정리
 
