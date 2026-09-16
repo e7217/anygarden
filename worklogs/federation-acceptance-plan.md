@@ -44,8 +44,9 @@ The fixture's internal commands must never be promoted into a production API.
 |---|---|---|
 | N01 #588 | Clean standalone startup, second supervisor, reload, partial startup failure | One execution owner; no orphan child; local message/task usable; actual process IDs + DB owner/lease evidence |
 | N02 #588 | Two node processes with independent roots | Distinct stable identities, DBs and workspaces; one node write absent from unshared peer state; identity persists across restart |
-| T01 #590 | Invite/accept; expired/reused/forged invite; wrong peer/version | Authenticated accepted peer only; rejection causes zero grant/new receipt/execution; check both databases |
-| T02 #590/#593 | Unshared channel/agent, observer, removed member, archived room; search/autocomplete | Denied API and no UI disclosure; zero execution; never infer global rights from connected peer |
+| T01 #590 | Real loopback TLS invite/redeem; concurrent consumption; ACK loss; expired/reused/forged invite; wrong peer/version | Actual connection key possession; one local transaction winner; same authenticated request recovers receipt without restoring revoked grant; local acceptance differs from peer ACK; pending identity cannot read channels |
+| T02 #590/#593 | Unshared channel/agent, observer, removed member, archived room; search/autocomplete; failed revoke delivery and control-only replay | Immediate local revoke persists despite outbox failure; current pinned identity required for control; obsolete revoke epoch cannot restore access; control cannot read/write channels or grant/rotate/administer |
+| T03 #590 | Rotate pin with old socket open and old-key invite pending | Atomic pin/certificate-generation change; per-request current identity recheck rejects old connection and old-key bootstrap; no grace overlap; revoked grant remains revoked; certificate generation distinct from channel/local policy epochs |
 | C01 #591 | Text/thread/member sync in A-owned and B-owned channels | Same committed IDs/order/root linkage; authority verified per channel; local-only data absent |
 | C02 #591 | Drop ACK after durable receive, duplicate event, same ID/different body, reorder/gap | Same payload produces one visible event; changed payload rejected; cursor cannot skip missing committed event; receipt and UI count agree |
 | C03 #591 | Kill/restart sender and receiver, disconnect before and after durable receive | Persisted outbox replay; no fabricated ACK; recovery converges once; record exact crash boundaries |
@@ -111,9 +112,11 @@ clear denominator. No synthetic fixture timing is an operational baseline.
 
 ## Canonical contract hookup (2026-09-16)
 
-Source: PR #596 exact `7ff28be1709f037e6e549df3946deef4ea617fc2`.
+Source: PR #596 exact `ac7667718f26a78e4a4b686011ee456ab074c9b5`.
 Initial `77807f9` was cherry-picked as `24181c4`; its result-state correction
-`7ff28be` was cherry-picked as `4a9a8f5`, both without modification. The seven
+`7ff28be` was cherry-picked as `4a9a8f5`, both without modification. The subsequent ADR-only bootstrap/rotation/control
+clarification `ac76677` is also included unchanged; contract files remain identical
+to `7ff28be`. The seven
 contract/ADR files match that source exactly. PR #595 currently includes this
 unmerged dependency; it must not bypass the independent #596 review. After #596
 is merged, refresh the QA branch against main and confirm that only QA/CI changes
@@ -140,3 +143,7 @@ rejection releasing the reservation without a replay clearing a newer claim.
 Known failed execution stays distinct from unknown execution and cancelled work.
 Product durability, process termination,
 TLS, session migration and real runtime compatibility remain NOT RUN.
+
+ADR-only update: bootstrap, pin rotation and control-only revocation expand the
+product matrix to 17 NOT RUN rows. These requirements are not new fixture/model
+test coverage. No TLS or invite transaction was exercised by this preparation.
