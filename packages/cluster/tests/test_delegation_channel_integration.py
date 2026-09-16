@@ -1,0 +1,294 @@
+"""Actual #590/#591 DB services + #592; authenticated transport boundary injected.
+
+Two SQLite databases, current peer grants, wire schemas, channel log/replay,
+source ID mapping and task projections. This is not real network/node acceptance.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import func, select, update
+
+from anygarden.db.models import Participant, Room, Task
+from anygarden.federation.delegation import (
+    DelegationError,
+    DelegationService,
+    LateResultAfterCancel,
+)
+from anygarden.federation.delegation_models import (
+    DelegationMirror,
+    DelegationObservation,
+)
+from anygarden.federation.delegation_projection import install_projections
+from anygarden.federation.errors import PeerError
+from anygarden.federation.models import PeerGrant
+from anygarden.federation.schemas import InviteAccept
+from anygarden.shared_channels.models import (
+    ChannelEvent,
+    ChannelStream,
+    CommandReceipt,
+    SharedMessage,
+)
+from anygarden.shared_channels.schemas import ChannelError
+from anygarden.shared_channels.service import ChannelService
+
+from . import test_federation_trust as trust
+from .test_federation_trust import endpoint, invitation
+
+# The upstream ``pair`` fixture registers through its marker name; a direct
+# import would be shadowed by every ``product(pair)`` parameter (F811).
+pair = trust.pair
+
+
+def uid():
+    return str(uuid4())
+
+
+@pytest.fixture
+async def product(pair):
+    a, b = pair
+    invite = invitation(a, b)
+    invite.scopes[0].capabilities += ["task.request", "task.cancel"]
+    bundle = await a.s.create_invite(a.admin, invite)
+    ack = await a.s.redeem(
+        b.s.identity,
+        b.s.node_id,
+        str(bundle.invite_id),
+        bundle.token.get_secret_value(),
+    )
+    accept = InviteAccept(bundle=bundle, issuer_endpoint=endpoint())
+    await b.s.begin_accept(b.admin, accept)
+    await b.s.finish_accept(b.admin, accept, ack)
+    for n in (a, b):
+        n.c = ChannelService(node_id=n.s.node_id, peers=n.s, sessions=n.s.sessions)
+    async with a.s.sessions.begin() as db:
+        await a.c.bind(
+            db,
+            actor_id=a.admin,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            local_room_id=a.channel,
+        )
+    mirror = uid()
+    async with b.s.sessions.begin() as db:
+        db.add(Room(id=mirror, name="mirror"))
+        await db.flush()
+        await b.c.bind(
+            db,
+            actor_id=b.admin,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            local_room_id=mirror,
+        )
+    actor = {"node_id": b.s.node_id, "kind": "agent", "principal_id": b.actor}
+    did, execution, task, source, participant = [uid() for _ in range(5)]
+
+    def cmd(kind, revision=0, **payload):
+        p = {"delegation_id": did, "expected_revision": revision}
+        if kind == "task.request":
+            p.update(
+                task_id=task,
+                source_message_id=source,
+                executor={"node_id": b.s.node_id, "agent_id": b.actor},
+            )
+        elif kind not in {"task.cancel", "task.reject"}:
+            p["execution_id"] = execution
+        p.update(payload)
+        return {
+            "protocol_version": 1,
+            "request_id": uid(),
+            "sender_node_id": b.s.node_id,
+            "authority_node_id": a.s.node_id,
+            "channel_id": a.channel,
+            "grant_epoch": 1,
+            "actor": actor,
+            "kind": kind,
+            "payload": p,
+        }
+
+    root = cmd("message.send")
+    root["payload"] = {"message_id": source, "thread_root_id": None, "text": "work"}
+    async with a.s.sessions.begin() as db:
+        await a.c.commit_command(db, root, tls=b.s.identity)
+        projected = await db.get(SharedMessage, (a.s.node_id, a.channel, source))
+        assert projected.local_message_id != source
+        db.add(Participant(id=participant, room_id=a.channel, role="member"))
+        await db.flush()
+        db.add(
+            Task(
+                id=task,
+                room_id=a.channel,
+                title="remote",
+                source_message_id=projected.local_message_id,
+            )
+        )
+
+    async def resolve(db, channel, principal):
+        return participant if channel == a.channel and principal == actor else None
+
+    async def exported(db, channel, executor):
+        grant = await db.get(
+            PeerGrant, (b.s.node_id, a.s.node_id, channel), populate_existing=True
+        )
+        return (
+            executor == {"node_id": b.s.node_id, "agent_id": b.actor}
+            and grant is not None
+            and grant.active
+            and actor in grant.actors
+            and "task.execute" in grant.capabilities
+        )
+
+    async def local_policy(db, auth):
+        return await exported(
+            db,
+            auth.channel_id,
+            {
+                "node_id": auth.principal.node_id.__str__(),
+                "agent_id": str(auth.principal.principal_id),
+            },
+        )
+
+    a.s.local_policy = local_policy
+    service = DelegationService(a.s.node_id, resolve, executor_allowed=exported)
+    service.install_guards(a.c)
+    service.install_submitters(a.c)
+    install_projections(b.c)
+
+    async def send(command):
+        # The exact entry the /commands router uses: submitters registry first.
+        return await a.c.submit(command, tls=b.s.identity)
+
+    async def replay():
+        async with a.s.sessions.begin() as db:
+            log = await a.c.events(db, root, tls=b.s.identity)
+        async with b.s.sessions.begin() as db:
+            return await b.c.receive(
+                db,
+                log,
+                tls=a.s.identity,
+                authority_node_id=a.s.node_id,
+                channel_id=a.channel,
+                grant_epoch=1,
+            )
+
+    return SimpleNamespace(
+        a=a,
+        b=b,
+        service=service,
+        cmd=cmd,
+        send=send,
+        replay=replay,
+        did=did,
+        task=task,
+        source=source,
+        participant=participant,
+    )
+
+
+async def test_real_channel_source_mapping_receipt_replay_and_follower_completion(
+    product,
+):
+    p = product
+    for command in (
+        p.cmd("task.request"),
+        p.cmd("task.accept", 1),
+        p.cmd("task.started", 2),
+        p.cmd("task.result", 3, outcome="succeeded", text="done"),
+    ):
+        receipt = await p.send(command)
+        assert await p.send(command) == receipt
+    assert (await p.replay())["ack_seq"] == 5
+    assert (await p.replay())["ack_seq"] == 5
+    async with p.a.s.sessions() as db:
+        assert (await db.get(Task, p.task)).result_markdown == "done"
+        assert await db.scalar(select(func.count()).select_from(CommandReceipt)) == 5
+    async with p.b.s.sessions() as db:
+        mirror = await db.get(DelegationMirror, (p.a.s.node_id, p.a.channel, p.did))
+        assert (
+            mirror.state == "completed"
+            and mirror.task_status == "done"
+            and mirror.revision == 4
+        )
+        assert await db.scalar(select(func.count()).select_from(Task)) == 0
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+async def test_real_channel_missing_task_guard_fails_before_new_or_duplicate_receipt(
+    product, duplicate
+):
+    p = product
+    command = p.cmd("task.request")
+    if duplicate:
+        await p.send(command)
+    del p.a.c.command_guards["task.request"]
+    with pytest.raises(ChannelError, match="COMMAND_GUARD_REQUIRED"):
+        await p.send(command)
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+async def test_real_channel_guard_without_submitter_fails_closed(product, duplicate):
+    p = product
+    command = p.cmd("task.request")
+    if duplicate:
+        await p.send(command)
+    del p.a.c.submitters["task.request"]
+    with pytest.raises(DelegationError, match="SUBMITTER_REQUIRED"):
+        await p.send(command)
+    # The registered entry point keeps working after the registry is restored.
+    p.service.install_submitters(p.a.c)
+    receipt = await p.send(command)
+    assert await p.send(command) == receipt
+
+
+async def test_real_channel_role_revocation_and_peer_revocation_before_replay(product):
+    p = product
+    command = p.cmd("task.request")
+    await p.send(command)
+    async with p.a.s.sessions.begin() as db:
+        await db.execute(
+            update(Participant)
+            .where(Participant.id == p.participant)
+            .values(role="observer")
+        )
+    with pytest.raises(DelegationError, match="PRINCIPAL_DENIED"):
+        await p.send(command)
+    await p.a.s.revoke_grant(p.a.admin, p.b.s.node_id, p.a.channel)
+    with pytest.raises(PeerError, match="GRANT_DENIED"):
+        await p.send(command)
+
+
+async def test_real_channel_cancel_audit_rollback_has_no_event_and_mirrors_stop(
+    product,
+):
+    p = product
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.accept", 1))
+    await p.send(p.cmd("task.cancel", 2))
+    late = p.cmd("task.result", 2, outcome="succeeded", text="must never publish")
+    for _ in range(2):
+        with pytest.raises(LateResultAfterCancel):
+            await p.send(late)
+    async with p.a.s.sessions() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(DelegationObservation))
+            == 1
+        )
+        assert await db.scalar(select(func.count()).select_from(ChannelEvent)) == 4
+        assert (await db.get(ChannelStream, (p.a.s.node_id, p.a.channel))).last_seq == 4
+        assert (await db.get(Task, p.task)).result_markdown is None
+    await p.send(p.cmd("task.cancelled", 3, process_state="stopped"))
+    await p.replay()
+    async with p.b.s.sessions() as db:
+        mirror = await db.get(DelegationMirror, (p.a.s.node_id, p.a.channel, p.did))
+        assert mirror.state == "cancelled" and mirror.process_state == "stopped"
+
+
+async def test_wire_source_cannot_be_replaced_by_local_message_id(product):
+    p = product
+    async with p.a.s.sessions() as db:
+        task = await db.get(Task, p.task)
+    with pytest.raises(DelegationError, match="SOURCE_DENIED"):
+        await p.send(p.cmd("task.request", source_message_id=task.source_message_id))

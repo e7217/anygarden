@@ -2353,8 +2353,9 @@ class VersionCheck(Base):
         String(255), nullable=True, default=None
     )
 
-# Register opt-in peer control-plane tables for create_all / Alembic metadata.
-# Federation never maps a remote principal onto a local User/Agent credential.
+# Register opt-in federation tables after Base and local Task are defined.
+# Mirrors do not grant a remote principal local User/Agent credentials.
+from anygarden.federation import delegation_models as _delegation_models  # noqa: E402,F401
 from anygarden.federation import models as _federation_models  # noqa: E402,F401
 
 # Shared channel identities and durable synchronization state are explicit;
