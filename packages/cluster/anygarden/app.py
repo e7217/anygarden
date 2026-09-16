@@ -374,13 +374,27 @@ def _compose_federation_services(app: FastAPI) -> None:
     from anygarden.federation.service import PeerService
     from anygarden.shared_channels.service import ChannelService
 
-    identity = inspect_certificate(cert_path.read_text())
-    peers = PeerService(
-        node_id=identity.node_id,
-        cert_path=cert_path,
-        key_path=key_path,
-        sessions=app.state.session_factory,
-    )
+    try:
+        identity = inspect_certificate(cert_path.read_text())
+        peers = PeerService(
+            node_id=identity.node_id,
+            cert_path=cert_path,
+            key_path=key_path,
+            sessions=app.state.session_factory,
+        )
+    except Exception as exc:
+        # P4 (task #40 review): an unreadable/expired/mismatched credential
+        # pair must not crash boot — same fail-closed posture as partial or
+        # absent credentials: routes stay mounted but disabled, the operator
+        # sees why, and no child surface starts half-configured.
+        import structlog
+
+        structlog.get_logger("federation").error(
+            "peer_credentials.invalid",
+            directory=str(peer_dir),
+            error=str(exc),
+        )
+        return
     app.state.peer_service = peers
     if getattr(app.state, "channel_service", None) is None:
         app.state.channel_service = ChannelService(

@@ -490,3 +490,19 @@ async def test_guest_identities_never_see_shared_rooms(composed):
             )
             == frozenset()
         )
+
+
+async def test_invalid_credentials_warn_and_stay_disabled(wiring):
+    """P4 (task #40): a broken credential pair never crashes boot."""
+    engine, factory, config, peer_dir = wiring
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    (peer_dir).mkdir(parents=True, exist_ok=True)
+    (peer_dir / "peer-cert.pem").write_text("not a certificate")
+    (peer_dir / "peer-key.pem").write_text("not a key")
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    _compose_federation_services(app)
+    assert app.state.peer_service is None
+    assert app.state.channel_service is None
