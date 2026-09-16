@@ -22,7 +22,7 @@ from anygarden.federation.delegation_models import DelegationMirror
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.shared_channels.models import ChannelStream
 
-router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
+router = APIRouter(tags=["rooms"])
 
 
 class DelegationStatusOut(BaseModel):
