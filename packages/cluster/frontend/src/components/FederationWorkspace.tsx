@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
+  applyParticipantChanged,
   delegationLabels,
   initialFederationScenario,
   type DelegationState,
@@ -69,13 +70,19 @@ export default function FederationWorkspace({
   const [announcement, setAnnouncement] = useState('')
 
   const visibleAgents = useMemo(
-    () => scenario.agents.filter((agent) => agent.origin === 'local' || agent.shared),
+    () => scenario.agents.filter((agent) => agent.published && agent.participant.active),
     [scenario.agents],
+  )
+  const remoteBuilder = scenario.agents.find(
+    (agent) => agent.nodeId === scenario.remoteNode.id && agent.id === 'builder',
   )
   const remoteConnected = scenario.remoteNode.connection === 'accepted'
     && scenario.remoteNode.acknowledgement === 'confirmed'
   const ownerOnline = scenario.localNode.reachability === 'online'
   const executorOnline = scenario.remoteNode.reachability === 'online'
+  const remoteAgentCanRun = remoteConnected
+    && remoteBuilder?.participant.active === true
+    && remoteBuilder.executionAllowed
 
   function emit(intent: FederationIntent, message: string) {
     onIntent?.(intent)
@@ -192,6 +199,32 @@ export default function FederationWorkspace({
       { type: 'report_known_failure', errorCode: 'ENGINE_ERROR' },
       'Mock engine failure recorded after confirmed process termination.',
     )
+  }
+
+  function removeRemoteParticipant() {
+    if (!remoteBuilder) return
+    setScenario((current) => applyParticipantChanged(current, {
+      seq: 42,
+      kind: 'participant.changed',
+      principal: { nodeId: remoteBuilder.nodeId, agentId: remoteBuilder.id },
+      active: false,
+      role: remoteBuilder.participant.role,
+      revision: remoteBuilder.participant.revision + 1,
+    }))
+    setAnnouncement('Mock participant removal applied. Authorization grants were not changed by this roster event.')
+  }
+
+  function replayStaleParticipantAdd() {
+    if (!remoteBuilder) return
+    setScenario((current) => applyParticipantChanged(current, {
+      seq: 41,
+      kind: 'participant.changed',
+      principal: { nodeId: remoteBuilder.nodeId, agentId: remoteBuilder.id },
+      active: true,
+      role: remoteBuilder.participant.role,
+      revision: Math.max(1, remoteBuilder.participant.revision - 1),
+    }))
+    setAnnouncement('Stale participant event ignored. The removal tombstone still wins.')
   }
 
   const currentIndex = scenario.delegationState === 'rejected'
@@ -343,11 +376,24 @@ export default function FederationWorkspace({
                         <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)]"><UserRound className="size-4" aria-hidden="true" /></div>
                         <div className="min-w-0"><p className="truncate font-medium">{agent.name}</p><p className="truncate text-xs text-[var(--color-foreground-muted)]">{agent.nodeId} · {agent.id}</p></div>
                       </div>
-                      <Badge variant={agent.origin === 'local' ? 'secondary' : 'default'}>{agent.origin === 'local' ? 'Local' : 'Remote'}</Badge>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <Badge variant={agent.origin === 'local' ? 'secondary' : 'default'}>{agent.origin === 'local' ? 'Local' : `Remote · ${agent.participant.role}`}</Badge>
+                        <span className="text-badge text-[var(--color-foreground-subtle)]">{agent.executionAllowed ? 'Execution allowed' : 'No execution access'}</span>
+                      </div>
                     </div>
                   ))}
               </div>
-              <p className="mt-4 flex items-center gap-2 text-sm text-[var(--color-foreground-muted)]"><ShieldCheck className="size-4" aria-hidden="true" />Only agents explicitly shared with this channel appear here or in search.</p>
+              {remoteConnected && remoteBuilder && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 text-sm">
+                  <p className="text-[var(--color-foreground-muted)]">
+                    Participant revision {remoteBuilder.participant.revision} · {remoteBuilder.participant.active ? 'active roster entry' : 'inactive tombstone retained'}
+                  </p>
+                  {remoteBuilder.participant.active
+                    ? <Button size="sm" variant="outline" onClick={removeRemoteParticipant}>Preview participant removal</Button>
+                    : <Button size="sm" variant="outline" onClick={replayStaleParticipantAdd}>Replay stale add event</Button>}
+                </div>
+              )}
+              <p className="mt-4 flex items-start gap-2 text-sm text-[var(--color-foreground-muted)]"><ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />Roster visibility is projected from participant events. Channel grants and execution permission are checked separately and cannot be created or revived by a display event.</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -402,12 +448,12 @@ export default function FederationWorkspace({
               <CardContent className="space-y-4">
                 <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-4 text-sm">
                   <p className="font-medium">{delegationLabels[scenario.delegationState]}</p>
-                  <p className="mt-1 text-[var(--color-foreground-muted)]">Task · {scenario.taskStatus.replace('_', ' ')} · process · {scenario.processState.replace('_', ' ')}. {!remoteConnected ? 'Accept the node invitation before sending this request.' : !ownerOnline ? 'Wait for the owner node before confirming shared state.' : !executorOnline ? 'Wait for the execution node. Do not automatically retry.' : 'Both nodes are reachable in this mock.'}</p>
+                  <p className="mt-1 text-[var(--color-foreground-muted)]">Task · {scenario.taskStatus.replace('_', ' ')} · process · {scenario.processState.replace('_', ' ')}. {!remoteConnected ? 'Accept the node invitation before sending this request.' : !remoteBuilder?.participant.active ? 'Builder is no longer an active participant.' : !remoteBuilder.executionAllowed ? 'Builder is visible but has no execution permission.' : !ownerOnline ? 'Wait for the owner node before confirming shared state.' : !executorOnline ? 'Wait for the execution node. Do not automatically retry.' : 'Both nodes are reachable in this mock.'}</p>
                 </div>
-                {scenario.delegationState === 'draft' && <Button className="w-full" disabled={!executorOnline || !remoteConnected} onClick={advanceDelegation}>Preview task request <ArrowRight aria-hidden="true" /></Button>}
+                {scenario.delegationState === 'draft' && <Button className="w-full" disabled={!executorOnline || !remoteAgentCanRun} onClick={advanceDelegation}>Preview task request <ArrowRight aria-hidden="true" /></Button>}
                 {scenario.delegationState === 'unconfirmed' && <Button className="w-full" disabled={!ownerOnline} onClick={advanceDelegation}>Preview authority confirmation <ArrowRight aria-hidden="true" /></Button>}
-                {scenario.delegationState === 'requested' && <><Button className="w-full" disabled={!ownerOnline || !executorOnline || !remoteConnected} onClick={advanceDelegation}>Preview remote acceptance <ArrowRight aria-hidden="true" /></Button><Button className="w-full" variant="outline" disabled={!executorOnline} onClick={rejectDelegation}>Preview remote rejection</Button></>}
-                {scenario.delegationState === 'accepted' && <Button className="w-full" disabled={!executorOnline} onClick={advanceDelegation}>Preview execution start <ArrowRight aria-hidden="true" /></Button>}
+                {scenario.delegationState === 'requested' && <><Button className="w-full" disabled={!ownerOnline || !executorOnline || !remoteAgentCanRun} onClick={advanceDelegation}>Preview remote acceptance <ArrowRight aria-hidden="true" /></Button><Button className="w-full" variant="outline" disabled={!executorOnline || !remoteBuilder?.participant.active} onClick={rejectDelegation}>Preview remote rejection</Button></>}
+                {scenario.delegationState === 'accepted' && <Button className="w-full" disabled={!executorOnline || !remoteAgentCanRun} onClick={advanceDelegation}>Preview execution start <ArrowRight aria-hidden="true" /></Button>}
                 {scenario.delegationState === 'running' && <><Button className="w-full" disabled={!ownerOnline || !executorOnline} onClick={advanceDelegation}>Preview result confirmation</Button><Button className="w-full" variant="outline" disabled={!executorOnline} onClick={reportKnownFailure}>Preview known failure</Button><Button className="w-full" variant="outline" onClick={requestCancel}>Preview stop request</Button></>}
                 {(scenario.delegationState === 'accepted' || scenario.delegationState === 'running') && !executorOnline && <Button className="w-full" variant="outline" onClick={markUnknown}>Preview outcome unknown</Button>}
                 {scenario.delegationState === 'cancel_requested' && <Button className="w-full" variant="destructive" disabled={!executorOnline} onClick={confirmStop}>Preview stop confirmation</Button>}

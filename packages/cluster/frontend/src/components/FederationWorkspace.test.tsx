@@ -141,4 +141,38 @@ describe('FederationWorkspace mock UI', () => {
     expect(screen.getByText(/Task · failed · process · finished/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Task failed' })).toBeDisabled()
   })
+
+  it('retains a participant removal tombstone and ignores a stale add event', () => {
+    render(<FederationWorkspace initialScenario={scenario({
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
+    })} />)
+
+    selectTab('2. Shared channel')
+    expect(screen.getByText('Builder')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview participant removal' }))
+    expect(screen.queryByText('Builder')).not.toBeInTheDocument()
+    expect(screen.getByText('Participant revision 4 · inactive tombstone retained')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replay stale add event' }))
+    expect(screen.queryByText('Builder')).not.toBeInTheDocument()
+    expect(screen.getByText('Participant revision 4 · inactive tombstone retained')).toBeInTheDocument()
+  })
+
+  it('keeps roster visibility separate from execution permission', () => {
+    const agents = initialFederationScenario.agents.map((agent) => (
+      agent.id === 'builder' ? { ...agent, executionAllowed: false } : { ...agent }
+    ))
+    render(<FederationWorkspace initialScenario={scenario({
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
+      agents,
+    })} />)
+
+    selectTab('2. Shared channel')
+    expect(screen.getByText('Builder')).toBeInTheDocument()
+    expect(screen.getByText('No execution access')).toBeInTheDocument()
+
+    selectTab('3. Task handoff')
+    expect(screen.getByRole('button', { name: /Preview task request/ })).toBeDisabled()
+    expect(screen.getByText(/visible but has no execution permission/)).toBeInTheDocument()
+  })
 })

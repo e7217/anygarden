@@ -17,7 +17,22 @@ export interface FederatedAgent {
   name: string
   origin: 'local' | 'remote'
   available: boolean
-  shared: boolean
+  published: boolean
+  participant: {
+    active: boolean
+    role: 'observer' | 'member' | 'admin' | 'owner'
+    revision: number
+  }
+  executionAllowed: boolean
+}
+
+export interface ParticipantChangedEvent {
+  seq: number
+  kind: 'participant.changed'
+  principal: { nodeId: string; agentId: string }
+  active: boolean
+  role: FederatedAgent['participant']['role']
+  revision: number
 }
 
 export type DelegationState =
@@ -94,7 +109,9 @@ export const initialFederationScenario: FederationScenario = {
       name: 'Planner',
       origin: 'local',
       available: true,
-      shared: true,
+      published: true,
+      participant: { active: true, role: 'owner', revision: 1 },
+      executionAllowed: true,
     },
     {
       id: 'builder',
@@ -102,7 +119,9 @@ export const initialFederationScenario: FederationScenario = {
       name: 'Builder',
       origin: 'remote',
       available: true,
-      shared: true,
+      published: true,
+      participant: { active: true, role: 'member', revision: 3 },
+      executionAllowed: true,
     },
     {
       id: 'private-reviewer',
@@ -110,7 +129,9 @@ export const initialFederationScenario: FederationScenario = {
       name: 'Private reviewer',
       origin: 'remote',
       available: true,
-      shared: false,
+      published: false,
+      participant: { active: false, role: 'observer', revision: 1 },
+      executionAllowed: false,
     },
   ],
   delegationState: 'draft',
@@ -130,4 +151,35 @@ export const delegationLabels: Record<DelegationState, string> = {
   cancel_requested: 'Stop requested — execution may still be active',
   cancelled: 'Stopped and cancellation confirmed',
   unknown: 'Execution outcome is unknown — do not retry',
+}
+
+/**
+ * Apply the display-only participant projection from PR #596.
+ * Old/duplicate revisions are ignored, so an inactive tombstone cannot be
+ * revived by a delayed event. Grants and execution consent are intentionally
+ * untouched: participant.changed is roster state, not authorization.
+ */
+export function applyParticipantChanged(
+  scenario: FederationScenario,
+  event: ParticipantChangedEvent,
+): FederationScenario {
+  const index = scenario.agents.findIndex(
+    (agent) => agent.nodeId === event.principal.nodeId && agent.id === event.principal.agentId,
+  )
+  if (index < 0) return scenario
+
+  const current = scenario.agents[index]
+  if (event.revision <= current.participant.revision) return scenario
+  if (event.revision !== current.participant.revision + 1) return scenario
+
+  const agents = [...scenario.agents]
+  agents[index] = {
+    ...current,
+    participant: {
+      active: event.active,
+      role: event.role,
+      revision: event.revision,
+    },
+  }
+  return { ...scenario, agents }
 }
