@@ -1884,3 +1884,10 @@ async def get_room_activity(
         )
         for r in rows
     ]
+
+
+# #593 support — read-only delegation mirrors for the shared channel bound
+# to a room. Kept in its own module; see rooms/delegation_status.py.
+from anygarden.rooms.delegation_status import router as delegation_status_router  # noqa: E402
+
+router.include_router(delegation_status_router)
