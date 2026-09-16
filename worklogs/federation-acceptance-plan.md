@@ -50,7 +50,7 @@ The fixture's internal commands must never be promoted into a production API.
 | C02 #591 | Drop ACK after durable receive, duplicate event, same ID/different body, reorder/gap | Same payload produces one visible event; changed payload rejected; cursor cannot skip missing committed event; receipt and UI count agree |
 | C03 #591 | Kill/restart sender and receiver, disconnect before and after durable receive | Persisted outbox replay; no fabricated ACK; recovery converges once; record exact crash boundaries |
 | C04 #591/#588 | Disconnect channel authority while peer stays up | Shared changes pending/unconfirmed, never locally granted; separate local task continues; no automatic authority promotion |
-| D01 #592/#589 | A delegates to B; B accepts then emits fake progress/result | Authority task → B Turn/Attempt → receipt trace; exactly one visible completion; runtime invocation ledger separately counted |
+| D01 #592/#589 | A delegates to B; B accepts then emits fake progress/success or known failure | Authority task → B Turn/Attempt → receipt trace; one terminal result with success/known failure/unknown distinct; runtime invocation ledger separately counted |
 | D02 #592 | A/B race to claim one task using a barrier | One authoritative winner, loser never starts runtime; assert persisted owner and invocation IDs, not HTTP success alone |
 | D03 #592 | Lost execution ACK; restart after runtime start but before receipt | Existing execution reconciled or explicit unknown; invocation ledger has no blind replay; no exactly-once external side-effect claim |
 | D04 #592 | Cancel request before start / during execution / before result commit; delayed old-generation result | Cancellation request differs from stopped acknowledgement; terminal decision has one ordering authority; stale result cannot restore running/completed; process-tree state observed |
@@ -111,8 +111,9 @@ clear denominator. No synthetic fixture timing is an operational baseline.
 
 ## Canonical contract hookup (2026-09-16)
 
-Source: PR #596 exact `77807f94e45a0ed9a056147d7d0d475a10401f91`,
-cherry-picked without modification as `24181c4` into this QA branch. The seven
+Source: PR #596 exact `7ff28be1709f037e6e549df3946deef4ea617fc2`.
+Initial `77807f9` was cherry-picked as `24181c4`; its result-state correction
+`7ff28be` was cherry-picked as `4a9a8f5`, both without modification. The seven
 contract/ADR files match that source exactly. PR #595 currently includes this
 unmerged dependency; it must not bypass the independent #596 review. After #596
 is merged, refresh the QA branch against main and confirm that only QA/CI changes
@@ -124,8 +125,8 @@ workspace sync using `uv run --no-project contracts/federation/v1/check.py`.
 The latter installs the script's pinned jsonschema dependency if uncached. Missing
 contract files fail these steps rather than skipping or fetching another branch.
 
-Local results: six fixture tests passed; the unchanged checker passed 38 command
-scenarios / 115 decisions and 8 event scenarios / 18 decisions. The additional
+Local results: six fixture tests passed; the unchanged checker passed 47 command
+scenarios / 164 decisions and 8 event scenarios / 18 decisions. The additional
 fixture test transports the complete normal-completion command payloads, restarts
 the receiver, replays them, and compares stored JSON to the canonical source.
 It does not apply commands or establish authorization/execution correctness.
@@ -134,5 +135,8 @@ must be checked on the pushed head; local results do not imply hosted success.
 
 The initial contract now specifies first-confirmed cancel/result ordering,
 separate process_state, bounded late-result observation after cancellation,
-and session scoping including agent_id. Product durability, process termination,
+session scoping including agent_id, succeeded/failed outcome separation, and
+rejection releasing the reservation without a replay clearing a newer claim.
+Known failed execution stays distinct from unknown execution and cancelled work.
+Product durability, process termination,
 TLS, session migration and real runtime compatibility remain NOT RUN.
