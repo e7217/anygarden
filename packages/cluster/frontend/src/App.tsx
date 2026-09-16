@@ -13,6 +13,7 @@ import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
 import AdminLLMGatewayPage from '@/pages/AdminLLMGatewayPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
+import FederationPreviewPage from '@/pages/FederationPreviewPage'
 import { ModelsSection } from '@/components/admin-llm-gateway/ModelsSection'
 import { SecretsSection } from '@/components/admin-llm-gateway/SecretsSection'
 import { StatusSection } from '@/components/admin-llm-gateway/StatusSection'
@@ -38,6 +39,18 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // #593 — keep the fixture-only preview outside all product providers so
+  // opening it cannot trigger room fetches, auth checks, or WebSockets.
+  if (import.meta.env.DEV && window.location.pathname === '/__preview/federation') {
+    return (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/__preview/federation" element={<FederationPreviewPage />} />
+        </Routes>
+      </BrowserRouter>
+    )
+  }
+
   return (
     <BrowserRouter>
       {/* RoomsProvider hosts the single projects/rooms store so
