@@ -259,6 +259,47 @@ never advances the ACK cursor past the gap. Keep receipts/tombstones for channel
 lifetime in v1; resetting cursor or dropping dedup history requires an explicit
 resync protocol, not automatic replay into a fresh DB.
 
+### Participant control events (#591)
+
+`event.schema.json` accepts either the existing command/receipt event unchanged
+or `participant-event.schema.json`, a closed `kind=participant.changed` event.
+Control fields are protocol_version, event_id, authority_node_id, channel_id,
+seq, actor, principal, role, active and revision. Both actor and principal use
+(node_id, kind, principal_id); role is observer/member/admin/owner, matching the
+existing room vocabulary. A display role never grants administration on a
+receiving node. Control events have no command request or command receipt and
+must never be encoded as message.send or a peer grant update.
+
+Only an authenticated local administrator at the authority may commit this
+mutation; actor.node_id must equal authority_node_id. Receiving a peer-supplied
+participant event is not a way to mutate the authority roster. Current local
+admin permission and approved principal publication/export consent are checked
+before local operation dedup. The local API needs a stable operation ID and
+expected participant revision; changed-body reuse conflicts. A first change has
+revision 1, and each change of the same full principal increments exactly once.
+An inactive tombstone is retained for the channel lifetime, including across
+re-addition. Principal removal does not require new publication consent; it
+must remain possible after consent is withdrawn. Unknown/invalid roles fail.
+
+Participant CAS, local operation receipt, event and outbox commit in one local
+transaction and allocate from the SAME contiguous channel seq as command events.
+The local operation receipt is not receipt.schema.json and is not sent to peers.
+Replay/snapshot consumers must preserve participant tombstones and revision as
+well as the common event dedup/cursor. Follower receipt handling branches on the
+closed event variant; it must not assume every stream item has request/receipt.
+A follower checks current authenticated authority identity and read grant BEFORE
+event dedup, rejects gaps and altered IDs/seq, and accepts only previous per-
+principal revision + 1. Projection and common cursor commit atomically, then ACK.
+No automatic snapshot/reset is introduced here; new mirrors replay from genesis.
+
+This event only projects explicitly shared participants. It neither creates nor
+revives peer/channel/action grants, exported execution permission, or local
+consent. Authorization still intersects current membership, #590 grants, local
+policy and epochs. Removing access must update authoritative policy immediately;
+event delivery is not its security boundary. A revoked reader is denied normal
+replay, including roster discovery, even if that prevents receiving a tombstone;
+its local revoked projection must already be hidden by the grant control path.
+
 Message sequence and thread root are authority-local; a thread references an
 existing root in the same channel. Cross-channel roots fail. Message envelopes
 contain only selected text and explicit shared IDs; no automatic history,

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anygarden:federation:v1:participant-event",
+  "type": "object",
+  "properties": {
+    "protocol_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "authority_node_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "channel_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "kind": {
+      "const": "participant.changed"
+    },
+    "actor": {
+      "$ref": "urn:anygarden:federation:v1:command#/$defs/principal"
+    },
+    "principal": {
+      "$ref": "urn:anygarden:federation:v1:command#/$defs/principal"
+    },
+    "role": {
+      "enum": [
+        "observer",
+        "member",
+        "admin",
+        "owner"
+      ]
+    },
+    "active": {
+      "type": "boolean"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "protocol_version",
+    "event_id",
+    "authority_node_id",
+    "channel_id",
+    "seq",
+    "kind",
+    "actor",
+    "principal",
+    "role",
+    "active",
+    "revision"
+  ],
+  "additionalProperties": false
+}
