@@ -5,6 +5,7 @@ export interface FederationNode {
   id: string
   name: string
   connection: NodeConnectionState
+  acknowledgement: 'not_required' | 'waiting' | 'confirmed'
   reachability: NodeReachability
   direction: 'sent' | 'received'
   sharedChannels: number
@@ -54,6 +55,7 @@ export interface FederationScenario {
 /** Presentation-only intents. A future #590–592 adapter can implement these. */
 export type FederationIntent =
   | { type: 'accept_node_invite'; nodeId: string }
+  | { type: 'confirm_peer_receipt'; nodeId: string }
   | { type: 'revoke_node_access'; nodeId: string }
   | { type: 'request_delegation'; agentId: string; nodeId: string }
   | { type: 'confirm_authority_commit' }
@@ -70,6 +72,7 @@ export const initialFederationScenario: FederationScenario = {
     id: 'node-garden',
     name: 'Garden studio',
     connection: 'accepted',
+    acknowledgement: 'confirmed',
     reachability: 'online',
     direction: 'sent',
     sharedChannels: 2,
@@ -78,6 +81,7 @@ export const initialFederationScenario: FederationScenario = {
     id: 'node-orchard',
     name: 'Orchard lab',
     connection: 'pending',
+    acknowledgement: 'not_required',
     reachability: 'online',
     direction: 'received',
     sharedChannels: 0,

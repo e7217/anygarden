@@ -73,6 +73,7 @@ export default function FederationWorkspace({
     [scenario.agents],
   )
   const remoteConnected = scenario.remoteNode.connection === 'accepted'
+    && scenario.remoteNode.acknowledgement === 'confirmed'
   const ownerOnline = scenario.localNode.reachability === 'online'
   const executorOnline = scenario.remoteNode.reachability === 'online'
 
@@ -85,9 +86,18 @@ export default function FederationWorkspace({
     const intent: FederationIntent = { type: 'accept_node_invite', nodeId: scenario.remoteNode.id }
     setScenario((current) => ({
       ...current,
-      remoteNode: { ...current.remoteNode, connection: 'accepted', sharedChannels: 1 },
+      remoteNode: { ...current.remoteNode, connection: 'accepted', acknowledgement: 'waiting', sharedChannels: 0 },
     }))
-    emit(intent, 'Mock invite accepted. No server request was sent.')
+    emit(intent, 'Mock invite accepted locally. Peer acknowledgement is still pending.')
+  }
+
+  function confirmPeer() {
+    const intent: FederationIntent = { type: 'confirm_peer_receipt', nodeId: scenario.remoteNode.id }
+    setScenario((current) => ({
+      ...current,
+      remoteNode: { ...current.remoteNode, acknowledgement: 'confirmed', sharedChannels: 1 },
+    }))
+    emit(intent, 'Mock peer acknowledgement received. The scoped connection is now active.')
   }
 
   function revokeAccess() {
@@ -272,7 +282,7 @@ export default function FederationWorkspace({
                     <CardDescription>Review the node and its proposed sharing boundary before accepting.</CardDescription>
                   </div>
                   <Badge variant={scenario.remoteNode.connection === 'accepted' ? 'default' : scenario.remoteNode.connection === 'revoked' ? 'destructive' : 'outline'}>
-                    {scenario.remoteNode.connection === 'accepted' ? 'Connected' : scenario.remoteNode.connection === 'revoked' ? 'Access revoked' : 'Needs your review'}
+                    {remoteConnected ? 'Connected' : scenario.remoteNode.connection === 'accepted' ? 'Accepted locally · waiting for peer' : scenario.remoteNode.connection === 'revoked' ? 'Access revoked' : 'Needs your review'}
                   </Badge>
                 </div>
               </CardHeader>
@@ -290,6 +300,7 @@ export default function FederationWorkspace({
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
                   {scenario.remoteNode.connection === 'pending' && <Button onClick={acceptInvite}>Preview accept</Button>}
+                  {scenario.remoteNode.connection === 'accepted' && scenario.remoteNode.acknowledgement === 'waiting' && <Button onClick={confirmPeer}>Preview peer confirmation</Button>}
                   {scenario.remoteNode.connection === 'accepted' && <Button variant="destructive" onClick={revokeAccess}>Preview revoke access</Button>}
                   {scenario.remoteNode.connection === 'revoked' && <Button variant="outline" disabled>Invitation required again</Button>}
                 </div>

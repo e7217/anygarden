@@ -40,9 +40,15 @@ describe('FederationWorkspace mock UI', () => {
     render(<FederationWorkspace onIntent={onIntent} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview accept' }))
-    expect(screen.getByText('Connected')).toBeInTheDocument()
+    expect(screen.getByText('Accepted locally · waiting for peer')).toBeInTheDocument()
     expect(onIntent).toHaveBeenCalledWith({ type: 'accept_node_invite', nodeId: 'node-orchard' })
 
+    selectTab('2. Shared channel')
+    expect(screen.queryByText('Builder')).not.toBeInTheDocument()
+
+    selectTab('1. Connection')
+    fireEvent.click(screen.getByRole('button', { name: 'Preview peer confirmation' }))
+    expect(screen.getByText('Connected')).toBeInTheDocument()
     selectTab('2. Shared channel')
     expect(screen.getByText('Builder')).toBeInTheDocument()
     expect(screen.queryByText('Private reviewer')).not.toBeInTheDocument()
@@ -51,7 +57,7 @@ describe('FederationWorkspace mock UI', () => {
   it('distinguishes channel-owner downtime from execution-node downtime', () => {
     render(<FederationWorkspace initialScenario={scenario({
       localNode: { ...initialFederationScenario.localNode, reachability: 'offline' },
-      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted' },
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed' },
     })} />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('Channel owner is offline')
@@ -66,7 +72,7 @@ describe('FederationWorkspace mock UI', () => {
   it('keeps acceptance, execution, completion, stop request, and stop confirmation distinct', () => {
     const onIntent = vi.fn()
     render(<FederationWorkspace initialScenario={scenario({
-      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', sharedChannels: 1 },
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
     })} onIntent={onIntent} />)
 
     selectTab('3. Task handoff')
@@ -96,7 +102,7 @@ describe('FederationWorkspace mock UI', () => {
 
   it('shows remote rejection as terminal without implying execution', () => {
     render(<FederationWorkspace initialScenario={scenario({
-      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', sharedChannels: 1 },
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
       delegationState: 'requested',
     })} />)
 
@@ -110,7 +116,7 @@ describe('FederationWorkspace mock UI', () => {
   it('keeps an owner-offline submission unconfirmed until authority returns', () => {
     render(<FederationWorkspace initialScenario={scenario({
       localNode: { ...initialFederationScenario.localNode, reachability: 'offline' },
-      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', sharedChannels: 1 },
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
     })} />)
 
     selectTab('3. Task handoff')
@@ -122,7 +128,7 @@ describe('FederationWorkspace mock UI', () => {
 
   it('separates a known terminal failure from an unknown execution outcome', () => {
     render(<FederationWorkspace initialScenario={scenario({
-      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', sharedChannels: 1 },
+      remoteNode: { ...initialFederationScenario.remoteNode, connection: 'accepted', acknowledgement: 'confirmed', sharedChannels: 1 },
       delegationState: 'running',
       processState: 'running',
       taskStatus: 'in_progress',
