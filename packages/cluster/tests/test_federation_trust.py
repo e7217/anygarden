@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,6 +23,7 @@ from anygarden.federation.models import (
     Peer,
     PeerAcceptance,
     PeerAudit,
+    PeerConsent,
     PeerControlEvent,
     PeerGrant,
     PeerInvite,
@@ -36,6 +39,7 @@ from anygarden.federation.schemas import (
 from anygarden.federation.service import PeerService, now
 from anygarden.federation.transport import PeerListener, post
 from httpx import ASGITransport, AsyncClient
+from pydantic import ValidationError
 from sqlalchemy import func, select, update
 
 
@@ -993,3 +997,164 @@ async def test_client_refuses_redirect_without_forwarding_credentials(pair):
     finally:
         server.close()
         await server.wait_closed()
+
+
+# Principal definition copied verbatim from the contract SHA recorded in the
+# fixture. Its examples cover both schema enum values (the original scenarios
+# exercised only agent). Rebind identifiers to each isolated test node below.
+PRINCIPAL_CONTRACT = json.loads(
+    (Path(__file__).parent / "fixtures/federation_principals.json").read_text()
+)
+
+
+def test_principal_vocabulary_matches_original_contract():
+    assert set(Principal.model_json_schema()["properties"]["kind"]["enum"]) == set(
+        PRINCIPAL_CONTRACT["schema"]["properties"]["kind"]["enum"]
+    )
+    for fixture in PRINCIPAL_CONTRACT["principals"]:
+        assert Principal.model_validate(fixture).model_dump(mode="json") == fixture
+    with pytest.raises(ValidationError):
+        Principal.model_validate(
+            {**PRINCIPAL_CONTRACT["principals"][0], "kind": "user"}
+        )
+
+
+@pytest.mark.parametrize(
+    "fixture", PRINCIPAL_CONTRACT["principals"], ids=lambda p: p["kind"]
+)
+async def test_contract_principal_invite_accept_and_authorize(pair, fixture):
+    a, b = pair
+    principal = Principal.model_validate({**fixture, "node_id": b.s.node_id})
+    body = invitation(a, b)
+    body.scopes[0].actors = [principal]
+    bundle = await a.s.create_invite(a.admin, body)
+    args = (
+        b.s.identity,
+        b.s.node_id,
+        str(bundle.invite_id),
+        bundle.token.get_secret_value(),
+    )
+    receipt = await a.s.redeem(*args)
+    accept = InviteAccept(bundle=bundle, issuer_endpoint=endpoint())
+    await b.s.begin_accept(b.admin, accept)
+    await b.s.finish_accept(b.admin, accept, receipt)
+    assert await a.s.redeem(*args) == receipt
+    assert await b.s.begin_accept(b.admin, accept) == receipt
+    async with a.s.sessions.begin() as db:
+        auth = await a.s.authorize(
+            db,
+            b.s.identity,
+            sender_node_id=b.s.node_id,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            principal=principal,
+            action="message.send",
+            grant_epoch=1,
+        )
+        assert auth.principal == principal
+    async with b.s.sessions() as db:
+        grant = await db.get(PeerGrant, (a.s.node_id, a.s.node_id, a.channel))
+        assert grant.actors == [principal.model_dump(mode="json")]
+
+
+async def withdraw_approval(node, key, change):
+    async with node.s.sessions.begin() as db:
+        # Use the same peer lock as a product policy writer.
+        await node.s.lock_peer(db, key[0])
+        if change == "admin":
+            (await db.get(User, node.admin)).is_admin = False
+        elif change == "archive":
+            (await db.get(Room, key[2])).archived_at = now()
+        elif change == "dm":
+            (await db.get(Room, key[2])).is_dm = True
+        elif change == "consent":
+            (await db.get(PeerConsent, key)).active = False
+        elif change == "inactive":
+            (await db.get(PeerGrant, key)).active = False
+        elif change == "expired":
+            (await db.get(PeerGrant, key)).expires_at = now() - timedelta(seconds=1)
+        elif change == "epoch":
+            (await db.get(PeerGrant, key)).epoch += 1
+        else:
+            raise AssertionError(change)
+
+
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ("admin", "ADMIN_REQUIRED"),
+        ("archive", "CHANNEL_DENIED"),
+        ("dm", "CHANNEL_DENIED"),
+        ("consent", "LOCAL_POLICY_DENIED"),
+        ("inactive", "GRANT_DENIED"),
+        ("expired", "GRANT_DENIED"),
+        ("epoch", "GRANT_DENIED"),
+    ],
+)
+async def test_redeem_receipt_rechecks_current_channel_approval(pair, change, code):
+    a, b = pair
+    bundle, receipt = await admit(a, b)
+    audit_count = await count(a.s, PeerAudit)
+    await withdraw_approval(a, (b.s.node_id, a.s.node_id, a.channel), change)
+    with pytest.raises(PeerError, match=code):
+        await authorize(a, b)
+    with pytest.raises(PeerError, match=code):
+        await a.s.redeem(
+            b.s.identity,
+            b.s.node_id,
+            str(bundle.invite_id),
+            bundle.token.get_secret_value(),
+        )
+    assert await count(a.s, PeerAudit) == audit_count
+    assert await count(a.s, PeerGrant) == 1
+    async with a.s.sessions() as db:
+        assert (await db.get(PeerInvite, str(bundle.invite_id))).receipt == receipt
+
+
+@pytest.mark.parametrize("path", ["begin", "finish"])
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ("admin", "ADMIN_REQUIRED"),
+        ("consent", "LOCAL_POLICY_DENIED"),
+        ("inactive", "GRANT_DENIED"),
+        ("expired", "GRANT_DENIED"),
+        ("epoch", "GRANT_DENIED"),
+    ],
+)
+async def test_accept_receipt_rechecks_current_local_approval(pair, path, change, code):
+    a, b = pair
+    bundle, receipt = await admit(a, b)
+    accept = InviteAccept(bundle=bundle, issuer_endpoint=endpoint())
+    # A different still-active administrator cannot recover a receipt whose
+    # original grant approver has lost authority.
+    retry_admin = uid()
+    async with b.s.sessions.begin() as db:
+        db.add(
+            User(
+                id=retry_admin,
+                email="retry@example.test",
+                password_hash="synthetic",
+                is_admin=True,
+            )
+        )
+    audit_count = await count(b.s, PeerAudit)
+    await withdraw_approval(b, (a.s.node_id, a.s.node_id, a.channel), change)
+    with pytest.raises(PeerError, match=code):
+        async with b.s.sessions.begin() as db:
+            await b.s.authorize_delivery(
+                db,
+                a.s.identity,
+                authority_node_id=a.s.node_id,
+                channel_id=a.channel,
+                grant_epoch=1,
+            )
+    with pytest.raises(PeerError, match=code):
+        if path == "begin":
+            await b.s.begin_accept(retry_admin, accept)
+        else:
+            await b.s.finish_accept(retry_admin, accept, receipt)
+    assert await count(b.s, PeerAudit) == audit_count
+    assert await count(b.s, PeerGrant) == 1
+    async with b.s.sessions() as db:
+        assert (await db.get(PeerAcceptance, str(bundle.invite_id))).receipt == receipt

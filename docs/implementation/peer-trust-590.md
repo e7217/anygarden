@@ -4,7 +4,9 @@ This implementation follows ADR 007 from PR #596 at
 `ac7667718f26a78e4a4b686011ee456ab074c9b5` (wire schemas unchanged from
 `7ff28be1709f037e6e549df3946deef4ea617fc2`). It is based on main
 `66235f332f6538bceb1591f1c8b12bde4dbbb7ef`. The contract files remain owned by
-#587 and are not copied or modified here.
+#587 and are not modified here. The principal definition is copied verbatim into
+a test fixture with its source SHA and JSON pointer; examples exercise both
+`human` and `agent` (the original scenario corpus covered only `agent`).
 
 ## Integration boundaries
 
@@ -71,7 +73,8 @@ admin APIs or local credentials. Revoked peers can authenticate only for the
 revoke/ACK control paths (or a newly approved invitation). Key mismatch and
 expired certificates still fail; revocation delivery never relaxes authentication.
 
-`Scope.actors` holds node-qualified remote principals. `Scope.role` is the local
+`Scope.actors` holds node-qualified remote principals with the original wire
+vocabulary `human`/`agent`; local authentication's `user` kind is not a wire alias. `Scope.role` is the local
 admin-approved role of those remote principals for that shared channel, not a
 local User/Agent impersonation. Scope intersects with grant state/epoch/expiry,
 current Room existence/archive, current approving-admin authority and local
@@ -92,6 +95,13 @@ redemption and pin/grant activation are one transaction, serialized by an actual
 SQL UPDATE on the peer row, including SQLite. Concurrent identical redemption
 returns the one durable receipt; one consumption audit and one grant are written.
 Changed identity/token, consumed or revoked scope and stale epochs fail closed.
+Receipt recovery shares the current grant checks with normal authorization in
+the same peer-locked transaction: active grant and matching epoch, current grant
+expiry, authority-owned Room state, current approving-admin role and local
+consent. Every channel in the receipt must pass. Neither issuer ACK recovery nor
+confirmed acceptance replay can reuse a cached receipt after those approvals
+are withdrawn. Receipt recovery itself does not start execution or invoke the
+separate per-execution policy callback.
 
 On the invited node, acceptance intent and issuer ACK confirmation are separate
 local states. There is no distributed transaction. A lost ACK leaves local state
@@ -168,5 +178,9 @@ scopes, role/action/principal boundaries, absent local execution approval, endpo
 SSRF and redirect rejection, pin rotation with an old socket kept alive, immediate
 local revocation during delivery failure, authenticated control ACKs, mirror
 admission, targeted grant tombstones, SQLite revoke/effect ordering, and migration
-up/down/schema correspondence. No external peer, provider, runtime engine or
+up/down/schema correspondence. Contract-derived human/agent examples cover the
+full invitation and authorization path; issuer and accepting-node replay tests
+withdraw administrator authority, channel state, consent, grant state/epoch and
+grant expiry, including retry by a different currently authorized administrator.
+No external peer, provider, runtime engine or
 production database is contacted by these tests.

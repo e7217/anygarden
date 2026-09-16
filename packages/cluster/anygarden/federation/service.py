@@ -269,16 +269,7 @@ class PeerService:
                 # Reauthorize before returning the durable ACK; never mint another grant.
                 if peer.state != "active" or row.grant_expires_at <= now():
                     raise PeerError("GRANT_DENIED")
-                for grant_info in row.receipt["grants"]:
-                    g = await db.get(
-                        PeerGrant, (sender, self.node_id, grant_info["channel_id"])
-                    )
-                    if (
-                        g is None
-                        or not g.active
-                        or g.epoch != grant_info["grant_epoch"]
-                    ):
-                        raise PeerError("GRANT_DENIED")
+                await self._reauthorize_receipt(db, peer, self.node_id, row.receipt)
                 return row.receipt
             if row.state != "pending" or row.expires_at <= now():
                 raise PeerError("INVITE_CONSUMED_OR_EXPIRED", 409)
@@ -366,8 +357,8 @@ class PeerService:
                 if row.receipt:
                     if b.grant_expires_at <= now():
                         raise PeerError("GRANT_DENIED")
-                    await self.check_received_grants(
-                        db, str(b.issuer_node_id), row.receipt
+                    await self._reauthorize_receipt(
+                        db, peer, str(b.issuer_node_id), row.receipt
                     )
                 return row.receipt
             if b.expires_at <= now():
@@ -424,6 +415,9 @@ class PeerService:
                 raise PeerError("GRANT_DENIED")
             await self.check_received_grants(db, str(b.issuer_node_id), receipt)
             if row.state == "confirmed":
+                await self._reauthorize_receipt(
+                    db, peer, str(b.issuer_node_id), row.receipt
+                )
                 return row.receipt
             # This mirror grant permits delivery from the authority only; it
             # never exposes a channel owned by this node or any local credential.
@@ -575,6 +569,45 @@ class PeerService:
                 )
             return {"event_id": event_id, "state": "revoked"}
 
+    async def _current_grant(self, db, key, grant_epoch, policy_epoch=None):
+        """Check current approval inside the caller's peer-locked transaction."""
+        grant = await db.get(PeerGrant, key, populate_existing=True)
+        if (
+            grant is None
+            or not grant.active
+            or grant.epoch != grant_epoch
+            or grant.expires_at <= now()
+        ):
+            raise PeerError("GRANT_DENIED")
+        if key[1] == self.node_id:
+            room = await db.get(Room, key[2], populate_existing=True)
+            if room is None or room.archived_at or room.is_dm:
+                raise PeerError("CHANNEL_DENIED")
+        await self.admin(db, grant.approved_by)
+        consent = await db.get(PeerConsent, key, populate_existing=True)
+        if (
+            consent is None
+            or not consent.active
+            or (policy_epoch is not None and policy_epoch != consent.policy_epoch)
+        ):
+            raise PeerError("LOCAL_POLICY_DENIED")
+        return grant, consent
+
+    async def _reauthorize_receipt(self, db, peer, authority_node_id, receipt):
+        # An ACK recovers a prior result; it must not revive withdrawn approval.
+        # This shares the current grant checks with traffic authorization, but
+        # does not start work or invoke the per-execution local policy callback.
+        if peer.state != "active":
+            raise PeerError("PEER_DENIED")
+        for info in receipt["grants"]:
+            await self._current_grant(
+                db,
+                (peer.node_id, authority_node_id, info["channel_id"]),
+                info["grant_epoch"],
+            )
+        if authority_node_id != self.node_id:
+            await self.check_received_grants(db, authority_node_id, receipt)
+
     async def authorize(
         self,
         db: AsyncSession,
@@ -594,31 +627,13 @@ class PeerService:
         if authority_node_id != self.node_id:
             raise PeerError("AUTHORITY_UNAVAILABLE", 503)
         key = (sender_node_id, authority_node_id, channel_id)
-        grant = await db.get(PeerGrant, key, populate_existing=True)
-        if (
-            grant is None
-            or not grant.active
-            or grant.epoch != grant_epoch
-            or grant.expires_at <= now()
-        ):
-            raise PeerError("GRANT_DENIED")
+        grant, consent = await self._current_grant(db, key, grant_epoch, policy_epoch)
         if principal.model_dump(mode="json") not in grant.actors:
             raise PeerError("PRINCIPAL_DENIED")
         if action not in grant.capabilities:
             raise PeerError("SCOPE_DENIED")
-        room = await db.get(Room, channel_id, populate_existing=True)
-        if room is None or room.archived_at or room.is_dm:
-            raise PeerError("CHANNEL_DENIED")
         if grant.role == "observer" and action != "channel.read":
             raise PeerError("SCOPE_DENIED")
-        await self.admin(db, grant.approved_by)
-        consent = await db.get(PeerConsent, key, populate_existing=True)
-        if (
-            consent is None
-            or not consent.active
-            or (policy_epoch is not None and policy_epoch != consent.policy_epoch)
-        ):
-            raise PeerError("LOCAL_POLICY_DENIED")
         auth = AuthorizedPeer(
             sender_node_id,
             authority_node_id,
@@ -852,23 +867,9 @@ class PeerService:
             raise PeerError("WRONG_AUTHORITY")
         peer = await self.authenticate(db, tls, authority_node_id)
         key = (authority_node_id, authority_node_id, channel_id)
-        grant = await db.get(PeerGrant, key, populate_existing=True)
-        if (
-            grant is None
-            or not grant.active
-            or grant.epoch != grant_epoch
-            or grant.expires_at <= now()
-            or "channel.read" not in grant.capabilities
-        ):
+        grant, consent = await self._current_grant(db, key, grant_epoch, policy_epoch)
+        if "channel.read" not in grant.capabilities:
             raise PeerError("GRANT_DENIED")
-        consent = await db.get(PeerConsent, key, populate_existing=True)
-        if (
-            consent is None
-            or not consent.active
-            or (policy_epoch is not None and consent.policy_epoch != policy_epoch)
-        ):
-            raise PeerError("LOCAL_POLICY_DENIED")
-        await self.admin(db, grant.approved_by)
         await self.check_received_grants(
             db,
             authority_node_id,

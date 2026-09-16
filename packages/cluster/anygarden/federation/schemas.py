@@ -19,7 +19,7 @@ class ClosedModel(BaseModel):
 
 class Principal(ClosedModel):
     node_id: UUID
-    kind: Literal["user", "agent"]
+    kind: Literal["human", "agent"]
     principal_id: UUID
 
 
