@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import select
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -77,6 +78,38 @@ class FixtureTests(unittest.TestCase):
         self.b.start()
         self.assertEqual(self.b.request(**self.event())['status'], 'duplicate')
         self.assertEqual(self.b.request(op='count')['count'], 1)
+
+    def test_canonical_contract_payload_survives_transport_and_restart(self):
+        # Data preservation only: the worker never authorizes/applies commands.
+        fixture = WORKER.parents[2] / 'contracts/federation/v1/scenarios.json'
+        cases = json.loads(fixture.read_text())
+        case = next(c for c in cases['scenarios'] if c['name'] == 'normal_completion')
+        commands = [step['command'] for step in case['steps']]
+        identities = {command['sender_node_id'] for command in commands}
+        self.assertEqual(len(identities), 2)
+        for command in commands:
+            self.assertEqual(self.b.request(
+                op='receive', origin=command['sender_node_id'],
+                event=command['request_id'], body=command,
+            )['status'], 'stored')
+        self.b.stop()
+        self.b.start()
+        for command in commands:
+            self.assertEqual(self.b.request(
+                op='receive', origin=command['sender_node_id'],
+                event=command['request_id'], body=command,
+            )['status'], 'duplicate')
+        db = sqlite3.connect(self.b.root / 'state.sqlite3')
+        try:
+            for command in commands:
+                stored = db.execute(
+                    'SELECT body FROM receipts WHERE origin=? AND event=?',
+                    (command['sender_node_id'], command['request_id']),
+                ).fetchone()[0]
+                self.assertEqual(json.loads(stored), command)
+        finally:
+            db.close()
+        self.assertEqual(self.b.request(op='count')['count'], len(commands))
 
     def test_conflicting_replay_and_origin_scoping(self):
         event = self.event()

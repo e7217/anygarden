@@ -24,9 +24,9 @@ From repository root, on Linux with Python 3.12+ and no installed dependencies:
 python3 -m unittest discover -s tests/federation_harness -v
 ```
 
-Five self-tests cover separate resources, lost-ACK replay after receiver restart,
+Six self-tests cover separate resources, lost-ACK replay after receiver restart,
 conflicting payload reuse/origin scoping, independent local receipt storage while
-peer is down, and concurrent duplicate delivery. Child environment is explicitly
+peer is down, concurrent duplicate delivery, and canonical contract payload preservation across restart. Child environment is explicitly
 minimal, with no inherited provider credentials. Temporary databases are removed;
 there are no network calls. These results must be labelled `fixture_only`.
 
@@ -70,8 +70,8 @@ changes at this baseline; integration must record their eventual inclusion.
 Architecture acknowledged QA feedback in Raft `e863da51` and `6d3ab409`:
 ACK only after authorized durable apply; replays require matching ID/body and
 current authorization; unknown execution cannot be blindly replayed; task state
-and delegation state are distinct. Exact fields and cancel/result ordering are
-still pending. Required before product adapter implementation:
+and delegation state are distinct. The initial v1 fields and cancel/result ordering are now supplied by PR #596.
+The following remain required observations when connecting the product adapter:
 
 - Request/event/receipt identity scopes and canonical payload digest rules.
 - Authority sequence/cursor gap handling and durable ACK/replay decision surface.
@@ -80,8 +80,8 @@ still pending. Required before product adapter implementation:
 - Cancellation linearization point and allowed late-result states.
 - Unknown execution reconciliation and which node may confirm final outcome.
 
-When the versioned contract lands, consume its fixtures/validator directly rather
-than copying its schema. Add a product driver that starts two actual AnyGarden
+This branch consumes the versioned fixtures/validator directly without schema forks.
+Next add a product driver that starts two actual AnyGarden
 instances with independent configuration and a deterministic fake runtime. Keep
 fault injection in the transport/runtime boundary and expected states in these
 acceptance assertions; do not implement business decisions inside the test driver.
@@ -97,8 +97,9 @@ Keep logs free of credential values and host-private paths. Use elapsed monotoni
 time for first task and recovery; report success/failure/unknown counts with a
 clear denominator. No synthetic fixture timing is an operational baseline.
 
-1. Current checkpoint: five fixture self-tests; matrix and contract feedback.
-2. Contract checkpoint: canonical fixtures validated and adapter fields bound.
+1. Current checkpoint: six fixture self-tests; matrix and canonical contract hookup.
+2. Contract checkpoint: canonical fixtures validated and payload preservation checked;
+   binding actual product adapter fields remains NOT RUN.
 3. Product checkpoint: actual two-node provider-free backend suite on an exact
    integrated commit, preserving existing permission/lease/generation regression.
 4. Browser checkpoint: two browser contexts against those nodes; backend evidence
@@ -107,3 +108,31 @@ clear denominator. No synthetic fixture timing is an operational baseline.
    isolation. Two real hosts and actual first runtime require separate scope and
    environment; historical Codex 0.146.0 fixture is not compatibility evidence for
    host 0.154.0. Issue #578 actual provider smoke remains a separate investigation.
+
+## Canonical contract hookup (2026-09-16)
+
+Source: PR #596 exact `77807f94e45a0ed9a056147d7d0d475a10401f91`,
+cherry-picked without modification as `24181c4` into this QA branch. The seven
+contract/ADR files match that source exactly. PR #595 currently includes this
+unmerged dependency; it must not bypass the independent #596 review. After #596
+is merged, refresh the QA branch against main and confirm that only QA/CI changes
+remain in the PR diff. No target branch or PR has been merged by this work.
+
+CI dependency order: fixture self-tests use Python stdlib and committed
+`scenarios.json`; contract model validation runs after Install uv and before
+workspace sync using `uv run --no-project contracts/federation/v1/check.py`.
+The latter installs the script's pinned jsonschema dependency if uncached. Missing
+contract files fail these steps rather than skipping or fetching another branch.
+
+Local results: six fixture tests passed; the unchanged checker passed 38 command
+scenarios / 115 decisions and 8 event scenarios / 18 decisions. The additional
+fixture test transports the complete normal-completion command payloads, restarts
+the receiver, replays them, and compares stored JSON to the canonical source.
+It does not apply commands or establish authorization/execution correctness.
+The contract checker is a separate in-memory reference-model check. Hosted CI
+must be checked on the pushed head; local results do not imply hosted success.
+
+The initial contract now specifies first-confirmed cancel/result ordering,
+separate process_state, bounded late-result observation after cancellation,
+and session scoping including agent_id. Product durability, process termination,
+TLS, session migration and real runtime compatibility remain NOT RUN.

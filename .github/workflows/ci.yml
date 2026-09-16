@@ -40,6 +40,10 @@ jobs:
       - name: Check lockfile
         run: uv lock --check
 
+      # Canonical in-memory contract model; not an actual two-node service test.
+      - name: Test federation contract reference model (no product E2E)
+        run: uv run --no-project contracts/federation/v1/check.py
+
       - name: Sync workspace
         run: uv sync --frozen --all-packages --all-extras
 
