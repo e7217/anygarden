@@ -11,7 +11,7 @@ redirect.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,6 +59,11 @@ async def list_room_delegations(
     Requires ordinary room read capability; the shared-room opt-in keeps
     membership, archive and role checks intact. Rooms without a bound
     channel simply have no delegations.
+
+    Guests are rejected after the room gate with the same error outsiders
+    see: channel membership authority is the federated roster, and a local
+    guest binding must not bypass it (#34 B-6 fail-closed parity with the
+    shared-channel snapshot API).
     """
     await require_capability(
         db,
@@ -67,6 +72,11 @@ async def list_room_delegations(
         capability=Capability.ROOM_READ,
         allow_shared=True,
     )
+    if identity.kind not in {"user", "agent"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this room",
+        )
     rows = (
         await db.scalars(
             select(DelegationMirror)

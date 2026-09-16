@@ -197,11 +197,13 @@ async def test_ordinary_room_returns_empty_list_for_member(env, client):
     assert r.json() == []
 
 
-async def test_guest_reads_only_bound_mirror_room(env, client):
+async def test_guest_cannot_read_federated_delegation_state(env, client):
+    # Channel membership authority is the federated roster; a local guest
+    # binding must not bypass it (P2 fix, #34 B-6 parity). Both the bound and
+    # the cross-room guest get the outsider-indistinguishable 403.
     env["identity_for"](env["guest"], guest_of=env["room"])
-    allowed = await client.get(f"/api/v1/rooms/{env['room']}/delegations")
-    assert allowed.status_code == 200
-    assert len(allowed.json()) == 5
-    env["identity_for"](env["guest"], guest_of=env["other"])
-    denied = await client.get(f"/api/v1/rooms/{env['room']}/delegations")
-    assert denied.status_code == 403
+    bound = await client.get(f"/api/v1/rooms/{env['room']}/delegations")
+    assert bound.status_code == 403
+    env["identity_for"](env["outsider"])
+    outsider = await client.get(f"/api/v1/rooms/{env['room']}/delegations")
+    assert bound.json() == outsider.json()
