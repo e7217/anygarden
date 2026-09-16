@@ -26,6 +26,7 @@ dependencies = [
 # Full chat server (``anygarden server``). Everything the FastAPI app and
 # its CLI (init/migrate/run) import lives here.
 server = [
+    "jsonschema>=4.23,<5",
     "fastapi>=0.110,<0.120",
     "uvicorn[standard]>=0.29",
     "sqlalchemy[asyncio]>=2.0,<2.1",

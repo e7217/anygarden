@@ -1082,7 +1082,7 @@ async def _run_span_reaper(
             return
 
 
-def create_app(config: AnygardenSettings | None = None) -> FastAPI:
+def create_app(config: AnygardenSettings | None = None, *, channel_service=None) -> FastAPI:
     """Build and return the configured FastAPI application."""
     if config is None:
         config = AnygardenSettings()
@@ -1092,6 +1092,8 @@ def create_app(config: AnygardenSettings | None = None) -> FastAPI:
     app.state.config = config
     app.include_router(ws_router)
     app.include_router(machine_ws_router)
+    from anygarden.shared_channels.router import mount_local
+    mount_local(app, channel_service)
     app.include_router(rooms_router)
     app.include_router(messages_router)
     app.include_router(machines_api_router)

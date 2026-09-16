@@ -272,6 +272,7 @@ async def resolve_access(
     *,
     room_id: str,
     identity: Identity,
+    allow_shared: bool = False,
 ) -> RoomAccess:
     """Resolve current room access or raise 403/404.
 
@@ -286,6 +287,11 @@ async def resolve_access(
     or room lifecycle. ``observer`` remains read-only so operators can keep an
     agent visible in a room without granting execution/lifecycle authority.
     """
+
+    if not allow_shared:
+        from anygarden.shared_channels.models import ChannelStream
+        if await db.scalar(select(ChannelStream.local_room_id).where(ChannelStream.local_room_id == room_id)):
+            raise HTTPException(status_code=409, detail="Use the shared-channel API")
 
     if is_global_admin(identity):
         room = await db.scalar(select(Room).where(Room.id == room_id))
@@ -441,7 +447,7 @@ async def accessible_room_ids(
                     "visible_room_count": len(room_ids),
                 },
             )
-        return room_ids
+        return await _without_shared(db, room_ids)
 
     if identity.kind == "guest":
         if not isinstance(identity.claims, GuestClaims):
@@ -464,7 +470,13 @@ async def accessible_room_ids(
     if room_id is not None:
         stmt = stmt.where(Participant.room_id == room_id)
     rows = await db.scalars(stmt)
-    return frozenset(rows.all())
+    return await _without_shared(db, frozenset(rows.all()))
+
+
+async def _without_shared(db, room_ids):
+    from anygarden.shared_channels.models import ChannelStream
+    shared = frozenset((await db.scalars(select(ChannelStream.local_room_id))).all())
+    return room_ids - shared
 
 
 def require_active_room(access: RoomAccess | Room) -> RoomAccess | Room:
@@ -571,6 +583,7 @@ async def require_capability(
     capability: Capability,
     task: Task | None = None,
     changed_fields: AbstractSet[str] | None = None,
+    allow_shared: bool = False,
 ) -> RoomAccess:
     """Resolve access and require *capability* against current room state.
 
@@ -579,7 +592,7 @@ async def require_capability(
     effective without reconnecting the client.
     """
 
-    access = await resolve_access(db, room_id=room_id, identity=identity)
+    access = await resolve_access(db, room_id=room_id, identity=identity, allow_shared=allow_shared)
 
     if access.is_archived and capability not in _ARCHIVED_ALLOWED_CAPABILITIES:
         require_active_room(access)
