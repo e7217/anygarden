@@ -2352,3 +2352,7 @@ class VersionCheck(Base):
     error: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True, default=None
     )
+
+# Register opt-in peer control-plane tables for create_all / Alembic metadata.
+# Federation never maps a remote principal onto a local User/Agent credential.
+from anygarden.federation import models as _federation_models  # noqa: E402,F401
