@@ -1,0 +1,44 @@
+{
+  "source": {
+    "commit": "7ff28be1709f037e6e549df3946deef4ea617fc2",
+    "path": "contracts/federation/v1/envelope.schema.json",
+    "pointer": "/$defs/principal"
+  },
+  "schema": {
+    "type": "object",
+    "properties": {
+      "node_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "kind": {
+        "enum": [
+          "agent",
+          "human"
+        ]
+      },
+      "principal_id": {
+        "type": "string",
+        "format": "uuid"
+      }
+    },
+    "required": [
+      "node_id",
+      "kind",
+      "principal_id"
+    ],
+    "additionalProperties": false
+  },
+  "principals": [
+    {
+      "node_id": "00000000-0000-4000-8000-000000000002",
+      "kind": "agent",
+      "principal_id": "00000000-0000-4000-8000-00000000000b"
+    },
+    {
+      "node_id": "00000000-0000-4000-8000-000000000002",
+      "kind": "human",
+      "principal_id": "00000000-0000-4000-8000-00000000000b"
+    }
+  ]
+}
