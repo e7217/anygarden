@@ -378,6 +378,12 @@ def start_node(data_dir: Path, host: str | None, port: int | None,
     server.run()
     if not server.started:
         raise click.ClickException("Node did not start; see the startup error above")
+    # Uvicorn logs lifespan failures instead of propagating them to run().
+    # A started server is not evidence that its owned children stopped safely.
+    if not getattr(app.state, "node_shutdown_complete", False):
+        raise click.ClickException("Node shutdown failed; cleanup was not confirmed and recovery is required")
+    if getattr(app.state.local_execution, "failed", False):
+        raise click.ClickException("Local execution failed; see the server error above")
 
 
 @dispatch.command(name="stop")

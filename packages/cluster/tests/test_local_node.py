@@ -413,7 +413,10 @@ async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
                 await proc.wait()
 
 
-def test_real_cli_start_stop_and_restart_without_network_daemon(tmp_path):
+@pytest.mark.parametrize("cleanup_failure", [None, "backend", "server"])
+def test_real_cli_start_stop_and_restart_without_network_daemon(
+    tmp_path, cleanup_failure
+):
     import os
     import socket
     import time
@@ -434,11 +437,32 @@ def test_real_cli_start_stop_and_restart_without_network_daemon(tmp_path):
     ):
         environment["ANYGARDEN_" + key] = "0"
     command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+    start_command = command
+    if cleanup_failure:
+        failure_patch = (
+            "LocalExecutionBackend.close = fail_cleanup"
+            if cleanup_failure == "backend"
+            else "app_module._shutdown_server = fail_cleanup"
+        )
+        start_command = [
+            sys.executable,
+            "-c",
+            """
+from anygarden.node.execution import LocalExecutionBackend
+import anygarden.app as app_module
+from anygarden.cli import dispatch
+async def fail_cleanup(*args):
+    raise RuntimeError("injected unconfirmed cleanup")
+"""
+            + failure_patch
+            + "\ndispatch()\n",
+        ]
     identity = None
-    for _ in range(2):
+    for _ in range(1 if cleanup_failure else 2):
         with (tmp_path / "server.log").open("w") as log:
             process = subprocess.Popen(
-                command + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
+                start_command
+                + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
                 env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
@@ -479,11 +503,29 @@ def test_real_cli_start_stop_and_restart_without_network_daemon(tmp_path):
                     text=True,
                     timeout=15,
                 )
-                assert stopped.returncode == 0, stopped.stdout + stopped.stderr
-                assert process.wait(timeout=10) == 0, (
-                    tmp_path / "server.log"
-                ).read_text()
-                assert read_object(tmp_path / "node-owner.json")["state"] == "stopped"
+                exited = process.wait(timeout=10)
+                owner_state = read_object(tmp_path / "node-owner.json")["state"]
+                if cleanup_failure:
+                    assert stopped.returncode != 0
+                    assert exited != 0
+                    assert owner_state == "running"
+                    assert (
+                        "Node shutdown failed" in (tmp_path / "server.log").read_text()
+                    )
+                    restarted = subprocess.run(
+                        command
+                        + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    assert restarted.returncode != 0
+                    assert "recovery required" in restarted.stdout + restarted.stderr
+                else:
+                    assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+                    assert exited == 0, (tmp_path / "server.log").read_text()
+                    assert owner_state == "stopped"
             finally:
                 if process.poll() is None:
                     process.kill()
@@ -522,3 +564,81 @@ def test_incomplete_ownership_metadata_requires_recovery(tmp_path, missing, reas
     with pytest.raises(NodeOwnershipError, match=reason):
         NodeOwner(tmp_path).acquire()
     assert not (tmp_path / missing).exists()
+
+
+@pytest.mark.parametrize("runtime", ["python", "typescript"])
+async def test_integrated_agent_process_inherits_only_explicit_environment(
+    tmp_path, monkeypatch, runtime
+):
+    import json
+    import os
+    from uuid import uuid4
+
+    from anygarden_machine.spawner import SpawnManifest
+
+    for key in (
+        "ANYGARDEN_JWT_SECRET",
+        "ANYGARDEN_MCP_SECRETS_KEY",
+        "ANYGARDEN_DB_URL",
+        "OPENAI_API_KEY",
+        "UNLISTED_FUTURE_SERVER_SECRET",
+        "PYTHONPATH",
+    ):
+        monkeypatch.setenv(key, "synthetic-server-value")
+    owner = NodeOwner(tmp_path / "node")
+    owner.acquire()
+    app = SimpleNamespace(state=SimpleNamespace(config=node_config(owner.data_dir)))
+    backend = LocalExecutionBackend(app, owner)
+    spawner = backend.daemon._spawner
+    spawner._on_stopped = AsyncMock()
+    spawner._on_crashed = AsyncMock()
+    recorded = tmp_path / "child.json"
+    create_process = asyncio.create_subprocess_exec
+
+    async def substitute_fake_agent(*args, **kwargs):
+        # Exercise the real spawner's final env, stdin and process ownership,
+        # replacing only the installed agent binary with a provider-free child.
+        return await create_process(
+            sys.executable,
+            "-c",
+            "import json,os,sys; from pathlib import Path; "
+            "Path(sys.argv[1]).write_text(json.dumps({'env':dict(os.environ),'stdin':sys.stdin.read()}))",
+            str(recorded),
+            **kwargs,
+        )
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", substitute_fake_agent)
+    try:
+        agent_id = str(uuid4())
+        result = await spawner.spawn(
+            SpawnManifest(
+                agent_id=agent_id,
+                engine="echo",
+                runtime=runtime,
+                agent_token="scoped-agent-token",
+                anygarden_mcp_token="scoped-mcp-token",
+                engine_secrets={"OPENAI_API_KEY": "explicit-agent-secret"},
+            )
+        )
+        assert result.success
+        running = spawner._agents[agent_id]
+        assert await asyncio.wait_for(running.proc.wait(), timeout=10) == 0
+        # The legacy watcher cancels itself as part of its completed cleanup.
+        await asyncio.gather(running.watch_task, return_exceptions=True)
+        child = json.loads(recorded.read_text())
+        for key in (
+            "ANYGARDEN_JWT_SECRET",
+            "ANYGARDEN_MCP_SECRETS_KEY",
+            "ANYGARDEN_DB_URL",
+            "OPENAI_API_KEY",
+            "UNLISTED_FUTURE_SERVER_SECRET",
+            "PYTHONPATH",
+        ):
+            assert key not in child["env"]
+        assert child["env"]["PATH"] == os.environ["PATH"]
+        assert child["env"]["ANYGARDEN_TOKEN"] == "scoped-agent-token"
+        assert child["env"]["ANYGARDEN_AGENT_TOKEN"] == "scoped-mcp-token"
+        assert json.loads(child["stdin"]) == {"OPENAI_API_KEY": "explicit-agent-secret"}
+    finally:
+        await spawner.drain()
+        owner.release(clean=True)

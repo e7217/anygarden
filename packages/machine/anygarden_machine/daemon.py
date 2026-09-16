@@ -140,6 +140,7 @@ class MachineDaemon:
         agent_dirs_root: Path | None = None,
         workspace_registry_path: Path | None = None,
         workspace_signing_key_path: Path | None = None,
+        agent_environment: dict[str, str] | None = None,
     ) -> None:
         self.server_url = server_url
         self.machine_id = machine_id
@@ -167,6 +168,7 @@ class MachineDaemon:
             # reads (re-adopt) and writes (spawn/cleanup) stay consistent
             # within one process.
             manifest_store=self._manifest_store,
+            base_environment=agent_environment,
         )
         self._crash_budgets: dict[str, CrashBudget] = {}
         self._token_futures: dict[str, asyncio.Future[str]] = {}

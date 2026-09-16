@@ -310,6 +310,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owner.acquire()  # Before schema/startup writes or any child process.
         app.state.local_machine_id = owner.identity["machine_id"]
         app.state.node_owner = owner
+        app.state.node_shutdown_complete = False
     clean = False
     try:
         await _startup_server(app)
@@ -323,15 +324,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         try:
-            if backend is not None:
-                await backend.close()
+            try:
+                if backend is not None:
+                    await backend.close()
+            finally:
+                await _shutdown_server(app, engine_provided)
             clean = True
         finally:
-            try:
-                await _shutdown_server(app, engine_provided)
-            finally:
-                if owner is not None:
-                    owner.release(clean=clean)
+            if owner is not None:
+                owner.release(clean=clean)
+                app.state.node_shutdown_complete = clean
 
 
 async def _startup_server(app: FastAPI) -> None:

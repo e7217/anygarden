@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
 import socket
 from pathlib import Path
 
@@ -16,6 +17,25 @@ from anygarden.ws.machine_handler import handle_machine_frame
 from anygarden_machine.daemon import MachineDaemon
 
 log = structlog.get_logger(__name__)
+
+# Operating-system process/bootstrap values only. Application/provider secrets,
+# Python import hooks and arbitrary server configuration are never inherited.
+AGENT_ENVIRONMENT_KEYS = (
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+)
 
 
 class LocalDaemon(MachineDaemon):
@@ -50,6 +70,11 @@ class LocalExecutionBackend:
             workspace_registry_path=self.data_dir / "workspace-registry.json",
             workspace_signing_key_path=self.data_dir / "workspace-signing.key",
             receive_frame=self._receive,
+            agent_environment={
+                key: os.environ[key]
+                for key in AGENT_ENVIRONMENT_KEYS
+                if key in os.environ
+            },
         )
 
     async def start(self) -> None:

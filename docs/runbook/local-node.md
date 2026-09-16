@@ -50,7 +50,9 @@ Restore that file with the node DB and other state. Changing hostnames or URLs
 must not create a new identity. Do not run copies of the same identity as peers.
 
 An OS file lock on `node.lock` is held across startup, execution, shutdown, and
-resource cleanup. The lock file is never replaced or removed by the program.
+resource cleanup. Both local execution and server resource cleanup must succeed
+before the stopped receipt is written. Foreground `start` and the requesting
+`stop` command exit nonzero if cleanup fails. The lock file is never replaced or removed by the program.
 `node-owner.json` is atomically written and flushed before execution is allowed;
 its state is `starting`, `running`, or `stopped`. A missing/corrupt/unclean receipt
 is not proof that an earlier child exited. A second owner cannot overwrite it.
@@ -68,6 +70,15 @@ only means queued delivery. Local register/report/token/replacement frames use
 the existing lifecycle handlers and conditional DB updates. Generation, dispatch
 lease, stopped high-watermark and room authorization remain authoritative.
 No Task or Machine schema change is introduced.
+
+The integrated backend passes an explicit OS bootstrap environment to agent
+processes (executable lookup, home/temp directories, Windows process variables,
+and locale). It does not inherit server/application configuration, ambient
+provider credentials, Python import hooks or arbitrary future environment keys.
+The spawner then adds only the agent-scoped token, configured MCP token and
+manifest execution settings; explicitly assigned engine credentials keep their
+existing stdin transport. The standalone daemon retains its legacy inheritance.
+This environment boundary is not an OS/filesystem sandbox.
 
 Shutdown refuses new spawns, discards unapplied transport messages, waits for
 already-started process creation, terminates owned process trees, marks the local
