@@ -1,0 +1,717 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anygarden:federation:v1:command",
+  "$defs": {
+    "principal": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "enum": [
+            "agent",
+            "human"
+          ]
+        },
+        "principal_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "node_id",
+        "kind",
+        "principal_id"
+      ],
+      "additionalProperties": false
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "agent_id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "node_id",
+        "agent_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "message.send"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "message_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "thread_root_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          },
+          "required": [
+            "message_id",
+            "thread_root_id",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.request"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "task_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "source_message_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "executor": {
+              "$ref": "#/$defs/agent"
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "task_id",
+            "source_message_id",
+            "executor"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.accept"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "execution_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "execution_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.reject"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "reason": {
+              "enum": [
+                "POLICY_DENIED",
+                "UNAVAILABLE",
+                "UNSUPPORTED"
+              ]
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.started"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "execution_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "execution_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.result"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "execution_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "execution_id",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.cancel"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.cancelled"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "execution_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "process_state": {
+              "enum": [
+                "not_started",
+                "stopped"
+              ]
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "execution_id",
+            "process_state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "request_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sender_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "grant_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "actor": {
+          "$ref": "#/$defs/principal"
+        },
+        "kind": {
+          "const": "task.unknown"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "delegation_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "expected_revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "execution_id": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "delegation_id",
+            "expected_revision",
+            "execution_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocol_version",
+        "request_id",
+        "sender_node_id",
+        "authority_node_id",
+        "channel_id",
+        "grant_epoch",
+        "actor",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}
