@@ -266,6 +266,7 @@ async def create_room(
 
 @router.get("", response_model=list[RoomOut])
 async def list_rooms(
+    request: Request,
     project_id: Optional[str] = None,
     is_dm: Optional[bool] = None,
     representative_agent_id: Optional[str] = None,
@@ -287,6 +288,8 @@ async def list_rooms(
         db,
         identity=identity,
         scope="rooms.collection",
+        channel_service=getattr(request.app.state, "channel_service", None),
+        include_shared=True,
     )
     if not allowed_room_ids:
         return []
@@ -427,12 +430,40 @@ async def get_room(
     Guests may only read the room their JWT is bound to. We check
     the claim BEFORE the DB lookup so a guest can't learn whether
     an unrelated room id exists by comparing 403 vs 404.
+
+    #593 — shared-channel-bound rooms open for **metadata-only** reads
+    (this Room object) when the shared visibility predicate passes. Every
+    sub-resource route (messages, threads, participants, settings, …) keeps
+    the default 409 SHARED_CHANNEL_API_REQUIRED, so no new content path is
+    created; message/thread content stays on the shared-channel snapshot
+    API. Archived shared rooms reuse the ordinary archived handling.
     """
+    channel_service = getattr(request.app.state, "channel_service", None)
+    from anygarden.shared_channels.models import ChannelStream
+    from anygarden.shared_channels.visibility import visible_shared_room_ids
+
+    stream = (
+        await db.scalars(
+            select(ChannelStream).where(ChannelStream.local_room_id == room_id)
+        )
+    ).first()
+    if stream is not None:
+        visible = await visible_shared_room_ids(
+            db,
+            identity=identity,
+            room_ids=frozenset({room_id}),
+            channel_service=channel_service,
+        )
+        if room_id not in visible:
+            # Fail closed like any other non-visible room; do not leak
+            # the existence of a shared room to non-participants.
+            raise HTTPException(status_code=404, detail="Room not found")
     await require_capability(
         db,
         room_id=room_id,
         identity=identity,
         capability=Capability.ROOM_READ,
+        allow_shared=stream is not None,
     )
 
     result = await db.execute(
@@ -1212,6 +1243,7 @@ async def stop_all_agents_in_room(
 
 @router.get("/{room_id}/sub-rooms", response_model=list[RoomOut])
 async def list_sub_rooms(
+    request: Request,
     room_id: str,
     name: str | None = None,
     # Sub-room listing is a tree-nav feature — guests live in a
@@ -1230,6 +1262,8 @@ async def list_sub_rooms(
         db,
         identity=identity,
         scope="rooms.subrooms",
+        channel_service=getattr(request.app.state, "channel_service", None),
+        include_shared=True,
     )
     query = select(Room).where(
         Room.parent_room_id == room_id,

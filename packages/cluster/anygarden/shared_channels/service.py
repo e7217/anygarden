@@ -734,6 +734,31 @@ class ChannelService:
             raise ChannelError("SUBMISSION_NOT_FOUND", 404)
         return self.submission_view(row)
 
+    async def require_local_admin(self, db, actor_id):
+        """Public admin gate for local router endpoints (fresh DB role check)."""
+        await self._admin(db, actor_id)
+
+    async def bindings(self, db):
+        """Metadata-only listing of shared-channel bindings (#593 task #34).
+
+        Authority/channel/local-room identity and stream sequence state only:
+        no invite tokens, certificate material, credentials, or message and
+        submission bodies ever leave this view.
+        """
+        from sqlalchemy import select
+
+        rows = (await db.scalars(select(ChannelStream))).unique().all()
+        return [
+            {
+                "authority_node_id": row.authority_node_id,
+                "channel_id": row.channel_id,
+                "local_room_id": row.local_room_id,
+                "last_seq": row.last_seq,
+                "applied_seq": row.applied_seq,
+            }
+            for row in rows
+        ]
+
     async def submit_local(self, db, envelope, *, identity):
         """Local authority command: authenticated identity + explicit publication.
 
