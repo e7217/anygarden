@@ -693,14 +693,7 @@ class ChannelService:
         )
         if (
             envelope["actor"] not in grant.actors
-            or (
-                {
-                    "message.send": "message.send",
-                    "task.request": "task.request",
-                    "task.cancel": "task.cancel",
-                }.get(envelope["kind"], "task.execute")
-            )
-            not in grant.capabilities
+            or command_action(envelope["kind"]) not in grant.capabilities
             or grant.role == "observer"
         ):
             raise ChannelError("SCOPE_DENIED", 403)
