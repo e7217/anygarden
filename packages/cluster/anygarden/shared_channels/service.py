@@ -7,14 +7,14 @@ network call happens in an effect callback. HTTP adapters commit before ACK.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
-from typing import Awaitable, Callable
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Message, Participant, Room, User
+from anygarden.db.models import Agent, Message, Room, User
 from anygarden.federation.schemas import Principal
 from anygarden.shared_channels.models import (
     ChannelDelivery,
@@ -23,10 +23,10 @@ from anygarden.shared_channels.models import (
     ChannelSubmission,
     CommandReceipt,
     InboxEvent,
+    ParticipantOperation,
+    PublicationConsent,
     SharedMessage,
     SharedParticipant,
-    PublicationConsent,
-    ParticipantOperation,
 )
 from anygarden.shared_channels.schemas import (
     ChannelError,
@@ -42,6 +42,7 @@ class ChannelService:
     def __init__(self, *, node_id: str, peers, sessions):
         self.node_id, self.peers, self.sessions = node_id, peers, sessions
         self.command_guards: dict[str, Callable] = {}
+        self.submitters: dict[str, Callable] = {}
         self.effects: dict[str, Effect] = {"message.send": self.apply_message}
         self.projections: dict[str, Callable] = {"message.send": self.project_message}
 
@@ -70,6 +71,7 @@ class ChannelService:
         return stream
 
     async def bind(self, db, *, actor_id, authority_node_id, channel_id, local_room_id):
+        await self._admin(db, actor_id)
         user = await db.get(User, actor_id, populate_existing=True)
         room = await db.get(Room, local_room_id, populate_existing=True)
         if (
@@ -125,6 +127,20 @@ class ChannelService:
             action=action,
             grant_epoch=envelope["grant_epoch"],
         )
+
+    async def submit(self, envelope, *, tls):
+        """Commit before replying, or delegate the full transaction lifecycle.
+
+        #592 registers only its task submit coordinator here so a designated
+        late-result refusal can roll back before a separately authorized audit.
+        The coordinator must still call commit_command for normal mutations.
+        """
+        validate("command", envelope)
+        submitter = self.submitters.get(envelope["kind"])
+        if submitter is not None:
+            return await submitter(envelope, tls=tls)
+        async with self.sessions.begin() as db:
+            return await self.commit_command(db, envelope, tls=tls)
 
     async def commit_command(
         self, db, envelope, apply_effect: Effect | None = None, *, tls
@@ -544,7 +560,7 @@ class ChannelService:
                     grant_epoch=grant.epoch,
                 )
             else:
-                model = User if principal["kind"] == "human" else Participant
+                model = User if principal["kind"] == "human" else Agent
                 if (
                     await db.get(
                         model, principal["principal_id"], populate_existing=True
@@ -629,13 +645,15 @@ class ChannelService:
         if identity.kind == "user" and getattr(identity.claims, "is_admin", False):
             await self._admin(db, identity.id)
         if authority != self.node_id:
-            await self.mirror_policy(db, authority, channel)
+            _, grant = await self.mirror_policy(db, authority, channel)
+            if self.local_principal(identity) not in grant.actors:
+                raise ChannelError("PRINCIPAL_DENIED", 403)
         return stream
 
     async def mirror_policy(self, db, authority, channel, epoch=None):
         """Local policy check only; never used as proof of an inbound TLS peer."""
-        from anygarden.federation.models import PeerGrant
         from anygarden.federation.certificates import inspect_certificate
+        from anygarden.federation.models import PeerGrant
 
         if self.peers is None:
             raise ChannelError("PEERING_DISABLED", 503)
@@ -680,7 +698,14 @@ class ChannelService:
         )
         if (
             envelope["actor"] not in grant.actors
-            or envelope["kind"] not in grant.capabilities
+            or (
+                {
+                    "message.send": "message.send",
+                    "task.request": "task.request",
+                    "task.cancel": "task.cancel",
+                }.get(envelope["kind"], "task.execute")
+            )
+            not in grant.capabilities
             or grant.role == "observer"
         ):
             raise ChannelError("SCOPE_DENIED", 403)
@@ -709,6 +734,17 @@ class ChannelService:
             "receipt": row.receipt,
             "error_code": row.error_code,
         }
+
+    async def submission_status(self, db, *, identity, authority, channel, request_id):
+        await self.local_access(
+            db, identity=identity, authority=authority, channel=channel
+        )
+        row = await db.get(ChannelSubmission, (authority, channel, request_id))
+        if row is None or json.loads(row.body)["actor"] != self.local_principal(
+            identity
+        ):
+            raise ChannelError("SUBMISSION_NOT_FOUND", 404)
+        return self.submission_view(row)
 
     async def submit_local(self, db, envelope, *, identity):
         """Local authority command: authenticated identity + explicit publication.

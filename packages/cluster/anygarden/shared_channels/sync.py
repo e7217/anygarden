@@ -41,6 +41,18 @@ async def retry_submission(service, identity, authority, channel, request_id):
             envelope,
         )
         validate("receipt", receipt)
+        validate(
+            "event",
+            {
+                "protocol_version": 1,
+                "event_id": receipt["event_id"],
+                "authority_node_id": authority,
+                "channel_id": channel,
+                "seq": receipt["seq"],
+                "request": envelope,
+                "receipt": receipt,
+            },
+        )
         for field in ("request_id", "authority_node_id", "channel_id"):
             if receipt[field] != envelope[field]:
                 raise ChannelError("RECEIPT_INTEGRITY")
@@ -48,7 +60,8 @@ async def retry_submission(service, identity, authority, channel, request_id):
         async with service.sessions.begin() as db:
             await service.queue(db, envelope, identity=identity)
             row = await db.get(ChannelSubmission, key)
-            row.error_code = error.code
+            if row.receipt is None:
+                row.error_code = error.code
             return service.submission_view(row)
     async with service.sessions.begin() as db:
         await service.queue(db, envelope, identity=identity)

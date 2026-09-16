@@ -5,18 +5,19 @@ network/TLS coverage; the transport integration test is named separately.
 """
 
 from __future__ import annotations
+
 import asyncio
 import copy
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
-
 from anygarden.db.models import Message, Room
 from anygarden.federation.errors import PeerError
 from anygarden.shared_channels.models import ChannelEvent, CommandReceipt, InboxEvent
 from anygarden.shared_channels.schemas import ChannelError, parse_json
 from anygarden.shared_channels.service import ChannelService
+from sqlalchemy import func, select
+
 from .test_federation_trust import admit, pair  # noqa: F401
 
 
@@ -25,7 +26,7 @@ def uid():
 
 
 @pytest.fixture
-async def channels(pair):
+async def channels(pair):  # noqa: F811
     a, b = pair
     await admit(a, b)
     mirror = uid()
@@ -337,122 +338,454 @@ async def test_revoke_first_denies_effect_and_ack_jump(channels):
 
 
 @pytest.fixture
-async def human_channels(pair):
-    from .test_federation_trust import invitation, endpoint
-    from anygarden.federation.schemas import Principal, InviteAccept
+async def human_channels(pair):  # noqa: F811
     from anygarden.auth.dependencies import Identity
     from anygarden.auth.jwt import UserClaims
-    a,b=pair
-    body=invitation(a,b)
-    body.scopes[0].actors=[Principal(node_id=b.s.node_id,kind="human",principal_id=b.admin)]
-    bundle=await a.s.create_invite(a.admin,body)
-    receipt=await a.s.redeem(b.s.identity,b.s.node_id,str(bundle.invite_id),bundle.token.get_secret_value())
-    acceptance=InviteAccept(bundle=bundle,issuer_endpoint=endpoint())
-    await b.s.begin_accept(b.admin,acceptance)
-    await b.s.finish_accept(b.admin,acceptance,receipt)
-    for n in(a,b):
-        n.c=ChannelService(node_id=n.s.node_id,peers=n.s,sessions=n.s.sessions)
-        n.identity=Identity("user",n.admin,UserClaims(n.admin,"test@example.test",True))
-    b.mirror=uid()
+    from anygarden.federation.schemas import InviteAccept, Principal
+
+    from .test_federation_trust import endpoint, invitation
+
+    a, b = pair
+    body = invitation(a, b)
+    body.scopes[0].actors = [
+        Principal(node_id=b.s.node_id, kind="human", principal_id=b.admin)
+    ]
+    bundle = await a.s.create_invite(a.admin, body)
+    receipt = await a.s.redeem(
+        b.s.identity,
+        b.s.node_id,
+        str(bundle.invite_id),
+        bundle.token.get_secret_value(),
+    )
+    acceptance = InviteAccept(bundle=bundle, issuer_endpoint=endpoint())
+    await b.s.begin_accept(b.admin, acceptance)
+    await b.s.finish_accept(b.admin, acceptance, receipt)
+    for n in (a, b):
+        n.c = ChannelService(node_id=n.s.node_id, peers=n.s, sessions=n.s.sessions)
+        n.identity = Identity(
+            "user", n.admin, UserClaims(n.admin, "test@example.test", True)
+        )
+    b.mirror = uid()
     async with a.s.sessions.begin() as db:
-        await a.c.bind(db,actor_id=a.admin,authority_node_id=a.s.node_id,channel_id=a.channel,local_room_id=a.channel)
+        await a.c.bind(
+            db,
+            actor_id=a.admin,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            local_room_id=a.channel,
+        )
     async with b.s.sessions.begin() as db:
-        db.add(Room(id=b.mirror,name="human mirror"));await db.flush()
-        await b.c.bind(db,actor_id=b.admin,authority_node_id=a.s.node_id,channel_id=a.channel,local_room_id=b.mirror)
-    b.command=command(a,b)
-    b.command["actor"]={"node_id":b.s.node_id,"kind":"human","principal_id":b.admin}
-    return a,b
+        db.add(Room(id=b.mirror, name="human mirror"))
+        await db.flush()
+        await b.c.bind(
+            db,
+            actor_id=b.admin,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            local_room_id=b.mirror,
+        )
+    b.command = command(a, b)
+    b.command["actor"] = {
+        "node_id": b.s.node_id,
+        "kind": "human",
+        "principal_id": b.admin,
+    }
+    return a, b
 
 
-async def test_actual_mtls_durable_retry_human_replay_and_local_isolation(human_channels, monkeypatch):
-    from anygarden.federation.transport import PeerListener
-    from anygarden.federation.models import Peer
-    from anygarden.shared_channels.sync import retry_submission, pull
+async def test_actual_mtls_durable_retry_human_replay_and_local_isolation(
+    human_channels, monkeypatch
+):
     from anygarden.db.repository import append_message
+    from anygarden.federation.models import Peer
+    from anygarden.federation.transport import PeerListener
     from anygarden.rooms.authorization import accessible_room_ids, resolve_access
+    from anygarden.shared_channels.sync import pull, retry_submission
     from fastapi import HTTPException
+
     from .test_federation_trust import endpoint
-    a,b=human_channels
-    listener=await PeerListener(a.s,channel_service=a.c).start()
+
+    a, b = human_channels
+    listener = await PeerListener(a.s, channel_service=a.c).start()
     try:
         async with b.s.sessions.begin() as db:
-            peer=await db.get(Peer,a.s.node_id);peer.endpoint=endpoint(listener.port).model_dump()
-            queued=await b.c.queue(db,b.command,identity=b.identity)
-            assert queued["state"]=="unconfirmed"
-        assert await count(b,Message)==0
-        result=await retry_submission(b.c,b.identity,a.s.node_id,a.channel,b.command["request_id"])
-        assert result["state"]=="confirmed"
-        assert await count(a,Message)==1 and await count(b,Message)==0
+            peer = await db.get(Peer, a.s.node_id)
+            peer.endpoint = endpoint(listener.port).model_dump()
+            queued = await b.c.queue(db, b.command, identity=b.identity)
+            assert queued["state"] == "unconfirmed"
+        assert await count(b, Message) == 0
+        result = await retry_submission(
+            b.c, b.identity, a.s.node_id, a.channel, b.command["request_id"]
+        )
+        assert result["state"] == "confirmed"
+        assert await count(a, Message) == 1 and await count(b, Message) == 0
         # Retry after restarting service returns same persisted receipt.
-        b.c=ChannelService(node_id=b.s.node_id,peers=b.s,sessions=b.s.sessions)
-        assert await retry_submission(b.c,b.identity,a.s.node_id,a.channel,b.command["request_id"])==result
-        scope={k:b.command[k] for k in("protocol_version","sender_node_id","authority_node_id","channel_id","grant_epoch","actor")}
-        assert (await pull(b.c,b.identity,scope))["ack_seq"]==1
-        assert (await pull(b.c,b.identity,scope))["ack_seq"]==1
+        b.c = ChannelService(node_id=b.s.node_id, peers=b.s, sessions=b.s.sessions)
+        assert (
+            await retry_submission(
+                b.c, b.identity, a.s.node_id, a.channel, b.command["request_id"]
+            )
+            == result
+        )
+        scope = {
+            k: b.command[k]
+            for k in (
+                "protocol_version",
+                "sender_node_id",
+                "authority_node_id",
+                "channel_id",
+                "grant_epoch",
+                "actor",
+            )
+        }
+        assert (await pull(b.c, b.identity, scope))["ack_seq"] == 1
+        assert (await pull(b.c, b.identity, scope))["ack_seq"] == 1
         async with b.s.sessions.begin() as db:
-            snapshot=await b.c.snapshot(db,identity=b.identity,authority=a.s.node_id,channel=a.channel)
-            assert snapshot["messages"][0]["actor"]["kind"]=="human"
-            assert b.mirror not in await accessible_room_ids(db,identity=b.identity)
-            with pytest.raises(HTTPException,match="shared-channel"):
-                await resolve_access(db,room_id=b.mirror,identity=b.identity)
-            with pytest.raises(ChannelError,match="SHARED_CHANNEL_API_REQUIRED"):
-                await append_message(db,b.mirror,None,"bypass")
-            await append_message(db,b.channel,None,"independent local work")
-        await b.s.revoke(b.admin,a.s.node_id)
+            snapshot = await b.c.snapshot(
+                db, identity=b.identity, authority=a.s.node_id, channel=a.channel
+            )
+            assert snapshot["messages"][0]["actor"]["kind"] == "human"
+            assert b.mirror not in await accessible_room_ids(db, identity=b.identity)
+            with pytest.raises(HTTPException, match="shared-channel"):
+                await resolve_access(db, room_id=b.mirror, identity=b.identity)
+            with pytest.raises(ChannelError, match="SHARED_CHANNEL_API_REQUIRED"):
+                await append_message(db, b.mirror, None, "bypass")
+            await append_message(db, b.channel, None, "independent local work")
+        await b.s.revoke(b.admin, a.s.node_id)
         async with b.s.sessions.begin() as db:
             with pytest.raises(PeerError):
-                await b.c.snapshot(db,identity=b.identity,authority=a.s.node_id,channel=a.channel)
-        assert await count(b,Message)==2
+                await b.c.snapshot(
+                    db, identity=b.identity, authority=a.s.node_id, channel=a.channel
+                )
+        assert await count(b, Message) == 2
     finally:
         await listener.stop()
 
 
-async def test_outage_and_lost_response_never_confirm_locally(human_channels,monkeypatch):
+async def test_outage_and_lost_response_never_confirm_locally(
+    human_channels, monkeypatch
+):
     from anygarden.shared_channels import sync
-    from anygarden.shared_channels.models import ChannelSubmission
-    a,b=human_channels
+
+    a, b = human_channels
     async with b.s.sessions.begin() as db:
-        await b.c.queue(db,b.command,identity=b.identity)
-    async def unavailable(*args):raise PeerError("PEER_UNAVAILABLE",503)
-    monkeypatch.setattr(sync,"post",unavailable)
-    result=await sync.retry_submission(b.c,b.identity,a.s.node_id,a.channel,b.command["request_id"])
-    assert result["state"]=="unconfirmed" and await count(b,Message)==0
+        await b.c.queue(db, b.command, identity=b.identity)
+
+    async def unavailable(*args):
+        raise PeerError("PEER_UNAVAILABLE", 503)
+
+    monkeypatch.setattr(sync, "post", unavailable)
+    result = await sync.retry_submission(
+        b.c, b.identity, a.s.node_id, a.channel, b.command["request_id"]
+    )
+    assert result["state"] == "unconfirmed" and await count(b, Message) == 0
+
     async def lost(*args):
-        await send(a,b,b.command)
-        raise PeerError("PEER_UNAVAILABLE",503)
-    monkeypatch.setattr(sync,"post",lost)
-    assert (await sync.retry_submission(b.c,b.identity,a.s.node_id,a.channel,b.command["request_id"]))["state"]=="unconfirmed"
-    assert await count(a,Message)==1
-    async def retry(*args):return await send(a,b,b.command)
-    monkeypatch.setattr(sync,"post",retry)
-    assert (await sync.retry_submission(b.c,b.identity,a.s.node_id,a.channel,b.command["request_id"]))["state"]=="confirmed"
-    assert await count(a,Message)==1 and await count(b,Message)==0
+        await send(a, b, b.command)
+        raise PeerError("PEER_UNAVAILABLE", 503)
+
+    monkeypatch.setattr(sync, "post", lost)
+    assert (
+        await sync.retry_submission(
+            b.c, b.identity, a.s.node_id, a.channel, b.command["request_id"]
+        )
+    )["state"] == "unconfirmed"
+    assert await count(a, Message) == 1
+
+    async def retry(*args):
+        return await send(a, b, b.command)
+
+    monkeypatch.setattr(sync, "post", retry)
+    assert (
+        await sync.retry_submission(
+            b.c, b.identity, a.s.node_id, a.channel, b.command["request_id"]
+        )
+    )["state"] == "confirmed"
+    assert await count(a, Message) == 1 and await count(b, Message) == 0
 
 
 async def test_http_rejects_spoofed_tls_duplicate_json_and_identity(human_channels):
-    from fastapi import FastAPI
-    from httpx import ASGITransport, AsyncClient
+    from anygarden.dependencies import get_admin_identity, get_current_identity
     from anygarden.federation.router import create_peer_app
     from anygarden.shared_channels.router import mount_local
-    from anygarden.dependencies import get_current_identity, get_admin_identity
-    a,b=human_channels
-    remote=create_peer_app(a.s,a.c)
-    async with AsyncClient(transport=ASGITransport(app=remote),base_url="https://test") as c:
-        r=await c.post("/api/v1/federation/channels/commands",json=b.command,headers={"X-Peer-Node":b.s.node_id})
-        assert r.status_code==401 and r.json()["code"]=="MTLS_REQUIRED"
-    app=FastAPI();mount_local(app,b.c)
-    app.dependency_overrides[get_current_identity]=lambda:b.identity
-    app.dependency_overrides[get_admin_identity]=lambda:b.identity
-    async with AsyncClient(transport=ASGITransport(app=app),base_url="http://test") as c:
-        r=await c.post("/api/v1/shared-channels/commands",content='{"protocol_version":1,"protocol_version":1}')
-        assert r.status_code==400
-        bad=copy.deepcopy(b.command);bad["actor"]["principal_id"]=uid()
-        assert (await c.post("/api/v1/shared-channels/commands",json=bad)).status_code==403
-        assert (await c.post("/api/v1/shared-channels/commands",json=b.command)).json()["state"]=="unconfirmed"
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    a, b = human_channels
+    remote = create_peer_app(a.s, a.c)
+    async with AsyncClient(
+        transport=ASGITransport(app=remote), base_url="https://test"
+    ) as c:
+        r = await c.post(
+            "/api/v1/federation/channels/commands",
+            json=b.command,
+            headers={"X-Peer-Node": b.s.node_id},
+        )
+        assert r.status_code == 401 and r.json()["code"] == "MTLS_REQUIRED"
+    app = FastAPI()
+    mount_local(app, b.c)
+    app.dependency_overrides[get_current_identity] = lambda: b.identity
+    app.dependency_overrides[get_admin_identity] = lambda: b.identity
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.post(
+            "/api/v1/shared-channels/commands",
+            content='{"protocol_version":1,"protocol_version":1}',
+        )
+        assert r.status_code == 400
+        bad = copy.deepcopy(b.command)
+        bad["actor"]["principal_id"] = uid()
+        assert (
+            await c.post("/api/v1/shared-channels/commands", json=bad)
+        ).status_code == 403
+        assert (
+            await c.post("/api/v1/shared-channels/commands", json=b.command)
+        ).json()["state"] == "unconfirmed"
 
 
 async def test_guard_applies_before_cached_receipt(channels):
-    a,b=channels;cmd=command(a,b);await send(a,b,cmd)
-    async def deny(db,envelope):raise ChannelError("ROLE_DENIED",403)
-    a.c.command_guards["message.send"]=deny
-    with pytest.raises(ChannelError,match="ROLE_DENIED"):await send(a,b,cmd)
+    a, b = channels
+    cmd = command(a, b)
+    await send(a, b, cmd)
+
+    async def deny(db, envelope):
+        raise ChannelError("ROLE_DENIED", 403)
+
+    a.c.command_guards["message.send"] = deny
+    with pytest.raises(ChannelError, match="ROLE_DENIED"):
+        await send(a, b, cmd)
+
+
+async def test_task_guard_mandatory_on_new_and_duplicate(channels):
+    from anygarden.shared_channels.schemas import CommandEffect
+
+    a, b = channels
+
+    async def policy(db, auth):
+        return True
+
+    a.s.local_policy = policy
+    cmd = command(a, b)
+    cmd["kind"] = "task.started"
+    cmd["payload"] = {
+        "delegation_id": uid(),
+        "expected_revision": 1,
+        "execution_id": uid(),
+    }
+
+    async def effect(db, envelope):
+        return CommandEffect(2, "running", "running", "in_progress")
+
+    with pytest.raises(ChannelError, match="COMMAND_GUARD_REQUIRED"):
+        await send(a, b, cmd, effect)
+
+    async def guard(db, envelope):
+        pass
+
+    a.c.command_guards["task.started"] = guard
+    receipt = await send(a, b, cmd, effect)
+    assert receipt["seq"] == 1
+    del a.c.command_guards["task.started"]
+    with pytest.raises(ChannelError, match="COMMAND_GUARD_REQUIRED"):
+        await send(a, b, cmd, effect)
+    assert await count(a, CommandReceipt) == 1
+
+
+async def test_local_authority_message_requires_publication_and_fresh_admin(
+    human_channels,
+):
+    from anygarden.db.models import User
+    from sqlalchemy import update
+
+    a, b = human_channels
+    cmd = command(a, b)
+    cmd["sender_node_id"] = a.s.node_id
+    cmd["actor"] = a.c.local_principal(a.identity)
+    async with a.s.sessions.begin() as db:
+        with pytest.raises(ChannelError, match="PUBLICATION_DENIED"):
+            await a.c.submit_local(db, cmd, identity=a.identity)
+    async with a.s.sessions.begin() as db:
+        await a.c.publication(
+            db,
+            actor_id=a.admin,
+            channel_id=a.channel,
+            principal=cmd["actor"],
+            active=True,
+        )
+    async with a.s.sessions.begin() as db:
+        receipt = await a.c.submit_local(db, cmd, identity=a.identity)
+    assert receipt["seq"] == 1 and await count(a, Message) == 1
+    async with a.s.sessions.begin() as db:
+        await db.execute(update(User).where(User.id == a.admin).values(is_admin=False))
+    async with a.s.sessions.begin() as db:
+        with pytest.raises(ChannelError, match="ADMIN_REQUIRED"):
+            await a.c.submit_local(db, cmd, identity=a.identity)
+
+
+async def test_wire_rejects_unapproved_data_and_mismatched_actor(channels):
+    a, b = channels
+    for extra in ("attachments", "metadata", "credentials", "runtime_home", "api_key"):
+        cmd = command(a, b)
+        cmd["payload"][extra] = "not-exported"
+        with pytest.raises(ChannelError, match="INVALID_SCHEMA"):
+            await send(a, b, cmd)
+    cmd = command(a, b)
+    cmd["protocol_version"] = 2
+    with pytest.raises(ChannelError, match="VERSION_UNSUPPORTED"):
+        await send(a, b, cmd)
+    assert await count(a, ChannelEvent) == 0
+
+
+async def test_each_node_can_author_a_different_channel(channels):
+    a, b = channels
+    await admit(b, a)
+    a.mirror = uid()
+    async with b.s.sessions.begin() as db:
+        await b.c.bind(
+            db,
+            actor_id=b.admin,
+            authority_node_id=b.s.node_id,
+            channel_id=b.channel,
+            local_room_id=b.channel,
+        )
+    async with a.s.sessions.begin() as db:
+        db.add(Room(id=a.mirror, name="reverse mirror"))
+        await db.flush()
+        await a.c.bind(
+            db,
+            actor_id=a.admin,
+            authority_node_id=b.s.node_id,
+            channel_id=b.channel,
+            local_room_id=a.mirror,
+        )
+    ab = command(a, b, "owned by A")
+    ba = command(b, a, "owned by B")
+    assert (await send(a, b, ab))["seq"] == (await send(b, a, ba))["seq"] == 1
+    assert (await receive(a, b, await events(a, b, ab)))["ack_seq"] == 1
+    assert (await receive(b, a, await events(b, a, ba)))["ack_seq"] == 1
+    assert await count(a, Message) == await count(b, Message) == 2
+    async with a.s.sessions() as db:
+        messages = list((await db.scalars(select(Message))).all())
+        assert {
+            m.extra_metadata["federation"]["authority_node_id"] for m in messages
+        } == {a.s.node_id, b.s.node_id}
+
+
+async def test_actor_removed_from_current_grant_cannot_reuse_receipt(channels):
+    from anygarden.federation.schemas import GrantReplace, Principal
+
+    from .test_federation_trust import invitation
+
+    a, b = channels
+    cmd = command(a, b)
+    await send(a, b, cmd)
+    scope = invitation(a, b).scopes[0]
+    scope.actors = [Principal(node_id=b.s.node_id, kind="agent", principal_id=uid())]
+    await a.s.replace_grant(
+        a.admin,
+        b.s.node_id,
+        a.channel,
+        GrantReplace(scope=scope, expected_grant_epoch=1),
+    )
+    with pytest.raises(PeerError):
+        await send(a, b, cmd)
+    cmd["grant_epoch"] = 2
+    with pytest.raises(PeerError, match="PRINCIPAL_DENIED"):
+        await send(a, b, cmd)
+    with pytest.raises(PeerError):
+        await events(a, b, cmd)
+    assert await count(a, Message) == 1
+
+
+def test_shared_migration_matches_models_and_round_trips(tmp_path):
+    from alembic import command as migrate
+    from anygarden.db.models import Base
+    from sqlalchemy import create_engine, inspect
+
+    from .test_migrations import _alembic_config
+
+    path = tmp_path / "shared-schema.db"
+    cfg = _alembic_config(str(path))
+    migrate.upgrade(cfg, "head")
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        inspector = inspect(engine)
+        tables = {
+            t.name: t
+            for t in Base.metadata.tables.values()
+            if t.name.startswith("shared_")
+        }
+        assert len(tables) == 10
+        for name, model in tables.items():
+            actual = {c["name"]: c for c in inspector.get_columns(name)}
+            assert set(actual) == set(model.columns.keys())
+            assert set(inspector.get_pk_constraint(name)["constrained_columns"]) == {
+                c.name for c in model.primary_key
+            }
+            assert {
+                tuple(f["constrained_columns"])
+                for f in inspector.get_foreign_keys(name)
+            } == {
+                tuple(c.parent.name for c in f.elements)
+                for f in model.foreign_key_constraints
+            }
+        migrate.downgrade(cfg, "064_peer_trust")
+        assert not any(
+            t.startswith("shared_") for t in inspect(engine).get_table_names()
+        )
+        migrate.upgrade(cfg, "head")
+        assert set(tables) <= set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+async def test_submission_status_and_caller_membership_are_fresh(human_channels):
+    from anygarden.auth.dependencies import Identity
+    from anygarden.auth.jwt import UserClaims
+    from anygarden.db.models import Participant
+    from fastapi import HTTPException
+
+    a, b = human_channels
+    # An ordinary local member can submit its exported identity, but removal
+    # must block cached status and retransmission as well as new requests.
+    async with b.s.sessions.begin() as db:
+        participant = Participant(
+            id=uid(),
+            room_id=b.mirror,
+            user_id=b.admin,
+            role="member",
+        )
+        db.add(participant)
+    # Keep the real DB admin for the consent approver; JWT requests no bypass.
+    identity = Identity(
+        "user", b.admin, UserClaims(b.admin, "test@example.test", False)
+    )
+    async with b.s.sessions.begin() as db:
+        result = await b.c.queue(db, b.command, identity=identity)
+    b.c = ChannelService(node_id=b.s.node_id, peers=b.s, sessions=b.s.sessions)
+    async with b.s.sessions.begin() as db:
+        assert (
+            await b.c.submission_status(
+                db,
+                identity=identity,
+                authority=a.s.node_id,
+                channel=a.channel,
+                request_id=b.command["request_id"],
+            )
+            == result
+        )
+    async with b.s.sessions.begin() as db:
+        await db.delete(await db.get(Participant, participant.id))
+    async with b.s.sessions.begin() as db:
+        with pytest.raises(HTTPException):
+            await b.c.queue(db, b.command, identity=identity)
+    async with b.s.sessions.begin() as db:
+        with pytest.raises(HTTPException):
+            await b.c.submission_status(
+                db,
+                identity=identity,
+                authority=a.s.node_id,
+                channel=a.channel,
+                request_id=b.command["request_id"],
+            )

@@ -49,7 +49,13 @@ def parse_json(raw: bytes | str) -> dict:
 
 def canonical(value: Any) -> str:
     def check(item):
-        if item is None or isinstance(item, (str, bool)):
+        if isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeError:
+                raise ChannelError("INVALID_SCHEMA", 400) from None
+            return
+        if item is None or isinstance(item, bool):
             return
         if type(item) is int and abs(item) <= 9007199254740991:
             return
@@ -108,6 +114,8 @@ def validate(kind: str, value: dict) -> dict:
         return value
     if kind == "event":
         receipt, request = value["receipt"], value["request"]
+        if request["actor"]["node_id"] != request["sender_node_id"]:
+            raise ChannelError("EVENT_INTEGRITY")
         for field in ("event_id", "authority_node_id", "channel_id", "seq"):
             if value[field] != receipt[field]:
                 raise ChannelError("EVENT_INTEGRITY")

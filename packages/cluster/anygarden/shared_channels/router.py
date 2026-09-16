@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
-from anygarden.dependencies import get_current_identity, get_admin_identity
+from anygarden.dependencies import get_admin_identity, get_current_identity
 from anygarden.federation.router import transport_identity
 from anygarden.federation.schemas import Principal
 from anygarden.shared_channels.schemas import ChannelError, parse_json
@@ -90,9 +90,7 @@ async def command(
     request: Request, s=Depends(service), tls=Depends(transport_identity)
 ):
     body = await read_body(request)
-    async with s.sessions.begin() as db:
-        result = await s.commit_command(db, body, tls=tls)
-    return result
+    return await s.submit(body, tls=tls)
 
 
 @peer_router.post("/replay")
@@ -190,6 +188,24 @@ async def snapshot(
             channel=str(channel),
             after_seq=after_seq,
             limit=limit,
+        )
+
+
+@local_router.get("/{authority}/{channel}/submissions/{request_id}")
+async def submission_status(
+    authority: UUID,
+    channel: UUID,
+    request_id: UUID,
+    s=Depends(service),
+    actor=Depends(get_current_identity),
+):
+    async with s.sessions.begin() as db:
+        return await s.submission_status(
+            db,
+            identity=actor,
+            authority=str(authority),
+            channel=str(channel),
+            request_id=str(request_id),
         )
 
 

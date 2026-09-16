@@ -1,16 +1,17 @@
 """Channel-lifetime receipts, ordered log, mirror inbox and unconfirmed submissions."""
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     ForeignKey,
     ForeignKeyConstraint,
-    JSON,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+
 from anygarden.db.models import Base
 
 
