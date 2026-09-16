@@ -216,7 +216,7 @@ class Model:
                 if p["expected_revision"] != record["revision"]:
                     return error("REVISION_CONFLICT")
                 previous = record["state"]
-                if previous in ("completed", "cancelled", "rejected"):
+                if previous in ("completed", "failed", "cancelled", "rejected"):
                     return error("TERMINAL")
                 if previous == "unknown" and kind != "task.cancel":
                     return error("RECONCILE_REQUIRED")
@@ -236,6 +236,8 @@ class Model:
                     ),
                 }
                 allowed, state = transitions[kind]
+                if kind == "task.result" and p["outcome"] == "failed":
+                    state = "failed"
                 if previous not in allowed:
                     return error("STATE_CONFLICT")
                 if kind == "task.accept":
@@ -268,9 +270,25 @@ class Model:
                 elif kind == "task.cancelled":
                     record["process_state"] = p["process_state"]
                 record.update(state=state, revision=record["revision"] + 1)
+            if state == "rejected":
+                for task_id, reserved_id in list(self.tasks.items()):
+                    if reserved_id == did:
+                        del self.tasks[task_id]
             self.delegations[did] = record
             revision = record["revision"]
             process_state = record["process_state"]
+        task_status = {
+            "message_committed": None,
+            "requested": "todo",
+            "accepted": "in_progress",
+            "running": "in_progress",
+            "completed": "done",
+            "failed": "failed",
+            "rejected": "todo",
+            "cancel_requested": "blocked",
+            "cancelled": "failed",
+            "unknown": "blocked",
+        }[state]
         seq = len(self.events) + 1
         event_id = str(uuid5(NAMESPACE_URL, canonical(list(key))))
         receipt = {
@@ -283,6 +301,7 @@ class Model:
             "revision": revision,
             "state": state,
             "process_state": process_state,
+            "task_status": task_status,
         }
         event = {
             "protocol_version": 1,
@@ -384,6 +403,12 @@ def check() -> None:
                 assert (
                     result["receipt"]["process_state"] == expected["process_state"]
                 ), case["name"]
+            if "task_status" in expected:
+                assert result["receipt"]["task_status"] == expected["task_status"], (
+                    case["name"]
+                )
+            if "reservations" in expected:
+                assert len(model.tasks) == expected["reservations"], case["name"]
             if "events" in expected:
                 assert len(model.events) == expected["events"], case["name"]
             if result["code"] != "COMMITTED":
