@@ -1,0 +1,793 @@
+[
+  {
+    "name": "add_remove_readd_tombstone",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED",
+        "cursor": 1
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000340",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": false,
+          "expected_revision": 1
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": false
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "COMMITTED",
+        "cursor": 2
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000341",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 2
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 2,
+        "expect": "COMMITTED",
+        "cursor": 3,
+        "participants": [
+          {
+            "role": "member",
+            "active": true,
+            "revision": 3
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "shared_message_control_sequence",
+    "steps": [
+      {
+        "op": "command",
+        "command": {
+          "protocol_version": 1,
+          "request_id": "00000000-0000-0000-0000-000000000064",
+          "sender_node_id": "00000000-0000-0000-0000-000000000001",
+          "authority_node_id": "00000000-0000-0000-0000-000000000001",
+          "channel_id": "00000000-0000-0000-0000-00000000000a",
+          "grant_epoch": 1,
+          "actor": {
+            "node_id": "00000000-0000-0000-0000-000000000001",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-00000000000b"
+          },
+          "kind": "message.send",
+          "payload": {
+            "message_id": "00000000-0000-0000-0000-000000000014",
+            "thread_root_id": null,
+            "text": "Explicitly shared task brief"
+          }
+        },
+        "expect": "COMMITTED"
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED",
+        "cursor": 1
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "COMMITTED",
+        "cursor": 2
+      }
+    ]
+  },
+  {
+    "name": "nonadmin_and_remote_admin",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": false,
+        "expect": "ADMIN_REQUIRED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000348",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "ADMIN_REQUIRED",
+        "publication_allowed": true
+      }
+    ]
+  },
+  {
+    "name": "authority_dedup_reauthorization",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "DUPLICATE",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": false,
+        "expect": "ADMIN_REQUIRED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "admin",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "ID_CONFLICT",
+        "publication_allowed": true
+      }
+    ]
+  },
+  {
+    "name": "authority_revision_cas",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000340",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": false,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "REVISION_CONFLICT",
+        "publication_allowed": true
+      }
+    ]
+  },
+  {
+    "name": "follower_dedup_reauthorization",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED",
+        "cursor": 1
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "DUPLICATE",
+        "cursor": 1
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "CHANNEL_DENIED",
+        "can_read": false,
+        "cursor": 1
+      }
+    ]
+  },
+  {
+    "name": "changed_event_bytes",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED"
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "EVENT_INTEGRITY",
+        "updates": {
+          "role": "admin"
+        },
+        "cursor": 1
+      }
+    ]
+  },
+  {
+    "name": "event_gap_then_replay",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000340",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": false,
+          "expected_revision": 1
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "EVENT_GAP",
+        "cursor": 0
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED",
+        "cursor": 1
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "COMMITTED",
+        "cursor": 2
+      }
+    ]
+  },
+  {
+    "name": "revision_regression_preserves_tombstone",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000340",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": false,
+          "expected_revision": 1
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED"
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "COMMITTED"
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000341",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 2
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 2,
+        "expect": "REVISION_CONFLICT",
+        "updates": {
+          "revision": 1
+        },
+        "cursor": 2,
+        "participants": [
+          {
+            "role": "member",
+            "active": false,
+            "revision": 2
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "spoofed_authority_or_actor",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "IDENTITY_MISMATCH",
+        "transport_node": "00000000-0000-0000-0000-00000000034d",
+        "cursor": 0
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "EVENT_INTEGRITY",
+        "updates": {
+          "actor/node_id": "00000000-0000-0000-0000-00000000034e"
+        },
+        "cursor": 0
+      }
+    ]
+  },
+  {
+    "name": "invalid_role_and_unknown_wire_fields",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "superuser",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "INVALID_SCHEMA",
+        "publication_allowed": true
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "INVALID_SCHEMA",
+        "updates": {
+          "grant_epoch": 99
+        },
+        "cursor": 0
+      }
+    ]
+  },
+  {
+    "name": "sequence_reuse",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 0,
+        "expect": "COMMITTED"
+      },
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-000000000340",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": false,
+          "expected_revision": 1
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "COMMITTED",
+        "publication_allowed": true
+      },
+      {
+        "op": "deliver",
+        "event_index": 1,
+        "expect": "EVENT_INTEGRITY",
+        "updates": {
+          "seq": 1
+        },
+        "cursor": 1
+      }
+    ]
+  },
+  {
+    "name": "unapproved_principal_publication",
+    "steps": [
+      {
+        "op": "change",
+        "change": {
+          "operation_id": "00000000-0000-0000-0000-00000000033f",
+          "principal": {
+            "node_id": "00000000-0000-0000-0000-000000000334",
+            "kind": "agent",
+            "principal_id": "00000000-0000-0000-0000-000000000335"
+          },
+          "role": "member",
+          "active": true,
+          "expected_revision": 0
+        },
+        "actor": {
+          "node_id": "00000000-0000-0000-0000-000000000001",
+          "kind": "human",
+          "principal_id": "00000000-0000-0000-0000-00000000032a"
+        },
+        "local_admin": true,
+        "expect": "PRINCIPAL_DENIED",
+        "publication_allowed": false
+      }
+    ]
+  }
+]
