@@ -17,6 +17,8 @@ runtime. Python 3.11+ is required. Repository dependency/lock files are unchange
   authority/channel/grant binding, selected text and task/execution references.
 - `receipt.schema.json`: authority commit receipt. `state` is delegation state;
   `process_state` is separate execution evidence, not an inferred task outcome.
+  `task_status` projects the existing Task enum (null for messages). Known failed
+  result and unknown execution are distinct; rejection releases the reservation.
 - `event.schema.json`: ordered committed command + receipt, with schema IDs
   resolved locally by `check.py` (never fetched over the network).
 - `scenarios.json`: complete input context, command vectors and expected codes;
@@ -37,7 +39,7 @@ channels continue under their own authority, exercised by the later QA harness.
 An `unknown` outcome blocks automatic execution/retry. This checker does not
 actually launch processes and therefore cannot prove absence of side effects.
 
-Fixture outcomes: 38 command scenarios / 115 decisions; 8 event scenarios /
+Fixture outcomes: 47 command scenarios / 164 decisions; 8 event scenarios /
 18 decisions. Additional invalid JSON cases reject duplicate keys, NaN, Infinity
 and float encodings. Command UTF-8 size is limited to 64 KiB by the model; each
 text field is at most 16,384 characters. Transport must enforce its own bounded

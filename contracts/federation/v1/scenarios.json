@@ -183,7 +183,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Explicit result"
+              "text": "Explicit result",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -322,7 +323,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Explicit result"
+              "text": "Explicit result",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -348,7 +350,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Explicit result"
+              "text": "Explicit result",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -749,7 +752,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 4,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Result observed after cancel request"
+              "text": "Result observed after cancel request",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -916,7 +920,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Explicit result"
+              "text": "Explicit result",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -1266,7 +1271,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 4,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "uncertain"
+              "text": "uncertain",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -1588,7 +1594,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000033",
-              "text": "wrong"
+              "text": "wrong",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -1725,7 +1732,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 2,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "stale"
+              "text": "stale",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -2544,7 +2552,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 3,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Explicit result"
+              "text": "Explicit result",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -3225,7 +3234,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 4,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Result observed after cancel request"
+              "text": "Result observed after cancel request",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -3282,7 +3292,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 4,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Result observed after cancel request"
+              "text": "Result observed after cancel request",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -3310,7 +3321,8 @@
               "delegation_id": "00000000-0000-0000-0000-00000000001e",
               "expected_revision": 4,
               "execution_id": "00000000-0000-0000-0000-000000000032",
-              "text": "Result observed after cancel request"
+              "text": "Result observed after cancel request",
+              "outcome": "succeeded"
             }
           },
           "transport_node": "00000000-0000-0000-0000-000000000002",
@@ -3318,6 +3330,1399 @@
             "code": "TERMINAL",
             "observations": 1,
             "events": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "known_failure_not_unknown",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "failed",
+            "process_state": "finished",
+            "task_status": "failed",
+            "events": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "failed_ack_lost",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "failed",
+            "process_state": "finished",
+            "task_status": "failed",
+            "events": 5
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "DUPLICATE",
+            "state": "failed",
+            "events": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "failed_id_reused_as_success",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "failed",
+            "process_state": "finished",
+            "task_status": "failed",
+            "events": 5
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "text": "Explicit result",
+              "outcome": "succeeded"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "ID_CONFLICT",
+            "events": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancel_before_failed_result",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000069",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.cancel",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "cancel_requested",
+            "process_state": "running",
+            "task_status": "blocked"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-00000000006a",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 4,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "CANCEL_PENDING",
+            "observations": 1,
+            "events": 5
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-00000000006b",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.cancelled",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 4,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "process_state": "stopped"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "cancelled",
+            "process_state": "stopped",
+            "events": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "failure_before_cancel",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "failed",
+            "process_state": "finished",
+            "task_status": "failed",
+            "events": 5
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-00000000006d",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.cancel",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 4
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "TERMINAL",
+            "events": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject_releases_for_explicit_new_request",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000077",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.reject",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "reason": "POLICY_DENIED"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "rejected",
+            "process_state": "not_started",
+            "task_status": "todo",
+            "reservations": 0
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000096",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-000000000097",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED",
+            "reservations": 1,
+            "state": "requested",
+            "task_status": "todo"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject_does_not_resume_old_delegation",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000077",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.reject",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "reason": "POLICY_DENIED"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "rejected",
+            "process_state": "not_started"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "TERMINAL",
+            "reservations": 0
+          }
+        }
+      ]
+    },
+    {
+      "name": "replayed_reject_preserves_new_reservation",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000077",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.reject",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "reason": "POLICY_DENIED"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "rejected",
+            "process_state": "not_started",
+            "task_status": "todo",
+            "reservations": 0
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000096",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-000000000097",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED",
+            "reservations": 1,
+            "state": "requested",
+            "task_status": "todo"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000077",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.reject",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "reason": "POLICY_DENIED"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "DUPLICATE",
+            "reservations": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "failed_cannot_be_overwritten_by_new_success",
+      "steps": [
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000064",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "message.send",
+            "payload": {
+              "message_id": "00000000-0000-0000-0000-000000000014",
+              "thread_root_id": null,
+              "text": "Explicitly shared task brief"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000065",
+            "sender_node_id": "00000000-0000-0000-0000-000000000001",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000001",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000b"
+            },
+            "kind": "task.request",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 0,
+              "task_id": "00000000-0000-0000-0000-000000000028",
+              "source_message_id": "00000000-0000-0000-0000-000000000014",
+              "executor": {
+                "node_id": "00000000-0000-0000-0000-000000000002",
+                "agent_id": "00000000-0000-0000-0000-00000000000c"
+              }
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000001",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000066",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.accept",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 1,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000067",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.started",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 2,
+              "execution_id": "00000000-0000-0000-0000-000000000032"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED"
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-000000000068",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 3,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "outcome": "failed",
+              "error_code": "ENGINE_ERROR"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "COMMITTED",
+            "state": "failed",
+            "process_state": "finished",
+            "task_status": "failed",
+            "events": 5
+          }
+        },
+        {
+          "command": {
+            "protocol_version": 1,
+            "request_id": "00000000-0000-0000-0000-0000000000aa",
+            "sender_node_id": "00000000-0000-0000-0000-000000000002",
+            "authority_node_id": "00000000-0000-0000-0000-000000000001",
+            "channel_id": "00000000-0000-0000-0000-00000000000a",
+            "grant_epoch": 1,
+            "actor": {
+              "node_id": "00000000-0000-0000-0000-000000000002",
+              "kind": "agent",
+              "principal_id": "00000000-0000-0000-0000-00000000000c"
+            },
+            "kind": "task.result",
+            "payload": {
+              "delegation_id": "00000000-0000-0000-0000-00000000001e",
+              "expected_revision": 4,
+              "execution_id": "00000000-0000-0000-0000-000000000032",
+              "text": "Explicit result",
+              "outcome": "succeeded"
+            }
+          },
+          "transport_node": "00000000-0000-0000-0000-000000000002",
+          "expect": {
+            "code": "TERMINAL",
+            "events": 5
           }
         }
       ]

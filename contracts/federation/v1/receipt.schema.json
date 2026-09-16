@@ -40,7 +40,8 @@
         "rejected",
         "cancel_requested",
         "cancelled",
-        "unknown"
+        "unknown",
+        "failed"
       ]
     },
     "process_state": {
@@ -51,6 +52,16 @@
         "running",
         "finished",
         "stopped"
+      ]
+    },
+    "task_status": {
+      "enum": [
+        null,
+        "todo",
+        "in_progress",
+        "blocked",
+        "done",
+        "failed"
       ]
     }
   },
@@ -63,7 +74,8 @@
     "seq",
     "revision",
     "state",
-    "process_state"
+    "process_state",
+    "task_status"
   ],
   "additionalProperties": false,
   "$schema": "https://json-schema.org/draft/2020-12/schema",

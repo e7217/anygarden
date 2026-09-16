@@ -117,7 +117,7 @@ Neither authority implies the other. Local channels have no federation export.
 
 Shared Task status keeps the existing `todo/in_progress/blocked/done/failed`
 vocabulary. The separate delegation record has `requested/accepted/running/
-cancel_requested/completed/rejected/cancelled/unknown`. The UI also distinguishes
+cancel_requested/completed/failed/rejected/cancelled/unknown`. The UI also distinguishes
 an **unconfirmed submission** from an authority-committed `requested` record.
 `requested` refers to an existing authority-owned source-linked Task and reserves one target agent at the authority; `accepted` commits its
 claim (`in_progress`), but cannot start until execution node durably observes
@@ -221,9 +221,10 @@ references, not arbitrary shell commands or caller-supplied local paths.
 |---|---|---|
 | task.request / permitted requester | absent → requested | expected revision 0; target exported; task reservable |
 | task.accept / selected executor | requested → accepted | fresh local consent and authority reservation; claim CAS |
-| task.reject / selected executor | requested → rejected | no process started |
+| task.reject / selected executor | requested → rejected | no process started; release reservation and assignee; Task stays todo |
 | task.started / selected executor | accepted → running | matching execution ID; durable start receipt |
-| task.result / selected executor | accepted or running → completed | same execution, revision, attempt; valid grant; completion CAS |
+| task.result succeeded / selected executor | accepted or running → completed | same execution, revision, attempt; valid grant; completion CAS |
+| task.result failed / selected executor | accepted or running → failed | known terminal failure; execution termination confirmed; closed error code |
 | task.cancel / original requester or channel admin | requested/accepted/running/unknown → cancel_requested | revoke new-start permission before sending cancel |
 | task.cancelled / selected executor | cancel_requested → cancelled | confirmed `not_started` or `stopped` process state |
 | task.unknown / selected executor | accepted/running/cancel_requested → unknown | cannot prove execution outcome; no automatic retry |
@@ -235,8 +236,37 @@ between start intent and child observation: `unknown`, not another process.
 Multiple claims compete in the authority transaction; one wins, losers get 409.
 Distinct request IDs cannot bypass delegation identity/revision/terminal guards.
 
-If result commits first, cancellation fails as terminal. If cancellation commits
-first, result fails `CANCEL_PENDING`; process confirmation must still arrive. Authenticated late results produce a bounded local observation receipt (execution ID + reason only), but never promote the task to completed or republish the result. This preserves evidence that side effects may already have happened. Process state is tracked independently from delegation state.
+`task.result` is a tagged union: `outcome=succeeded` carries selected result
+`text`; `outcome=failed` carries a closed `error_code` (`ENGINE_ERROR`,
+`TIMEOUT_STOPPED`, `UNSUPPORTED_RUNTIME`, `POLICY_DENIED`), without raw stderr or
+exception text. A failed outcome requires definite terminal execution evidence.
+A timeout with an unconfirmed process stop is `task.unknown`, not known failure.
+`process_state=finished` means a terminated invocation, not success; outcome and
+Task status express success or failure. Pre-start policy refusal uses task.reject;
+a failure discovered after an accepted invocation uses task.result failed only
+when no execution remains unresolved.
+
+Task projections (in the same authority transaction as the delegation):
+
+| Delegation | Existing Task status | Reservation / ownership |
+|---|---|---|
+| requested | todo | one reserved exported target |
+| accepted / running | in_progress | confirmed target owns claim |
+| completed | done | retain terminal owner and receipt |
+| failed | failed | retain terminal owner and closed reason |
+| cancel_requested / unknown | blocked | retain reservation/owner; no reassignment or automatic retry |
+| cancelled | failed | retain owner and cancellation reason |
+| rejected | todo | clear reservation/assignee; retain rejected delegation tombstone |
+
+After rejection only an explicit new request with a new delegation ID can reserve
+the task again. Replayed rejection returns the old receipt; it must not clear a
+new delegation's reservation. Old acceptance/result cannot reactivate a rejected
+delegation. A duplicate failed result returns its receipt; reusing its request ID
+as success is ID_CONFLICT. A distinct successful-result ID cannot overwrite a
+terminal failed delegation.
+
+If success or known failure commits first, cancellation fails as terminal. If cancellation commits
+first, either result outcome fails `CANCEL_PENDING`; process confirmation must still arrive. Authenticated late results produce a bounded local observation receipt (execution ID + reason only), but never promote the task to completed or republish the result. This preserves evidence that side effects may already have happened. Process state is tracked independently from delegation state.
 `cancel_requested` never means stopped. `unknown` never means success or permission
 to replay. A human may reconcile an unknown result or authorize a **new**, audited
 delegation after checking side effects; v1 has no automatic retry transition.
