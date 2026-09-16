@@ -97,6 +97,9 @@ async def register(
 
     await db.commit()
 
+    local_execution = getattr(request.app.state, "local_execution", None)
+    if local_execution is not None:
+        await local_execution.ensure_registered()
     return RegisterResponse(user_id=user.id, token=token)
 
 

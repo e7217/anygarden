@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Agent, Machine, MachineEngine
-from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.execution import ExecutionBus
 
 
 class NoSuitableMachineError(Exception):
@@ -16,7 +16,7 @@ class NoSuitableMachineError(Exception):
 async def select_machine_for(
     engine: str,
     db: AsyncSession,
-    machine_bus: MachineBus,
+    machine_bus: ExecutionBus,
     required_labels: dict | None = None,
 ) -> Machine:
     """Bin-pack: select online machine with fewest running agents that supports *engine*.

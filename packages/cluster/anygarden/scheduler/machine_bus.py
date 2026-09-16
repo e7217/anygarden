@@ -7,6 +7,8 @@ import json
 from typing import Any
 
 from fastapi import WebSocket
+
+from anygarden.scheduler.execution import LocalFrameReceiver
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -17,13 +19,27 @@ class MachineBus:
 
     def __init__(self) -> None:
         self._connections: dict[str, WebSocket] = {}
+        self._local: dict[str, LocalFrameReceiver] = {}
         self._lock = asyncio.Lock()
 
     async def register(self, machine_id: str, ws: WebSocket) -> None:
         """Register a machine daemon WebSocket (called from the handler)."""
         async with self._lock:
+            if machine_id in self._local:
+                raise ValueError("Local machine ownership cannot be replaced by a daemon")
             self._connections[machine_id] = ws
         logger.info("machine_bus.register", machine_id=machine_id)
+
+    async def register_local(self, machine_id: str, receiver: LocalFrameReceiver) -> None:
+        async with self._lock:
+            if machine_id in self._connections or machine_id in self._local:
+                raise ValueError("Machine already has an execution owner")
+            self._local[machine_id] = receiver
+
+    async def unregister_local(self, machine_id: str, receiver: LocalFrameReceiver) -> None:
+        async with self._lock:
+            if self._local.get(machine_id) is receiver:
+                del self._local[machine_id]
 
     async def unregister(self, machine_id: str) -> None:
         """Remove a machine daemon WebSocket on disconnect."""
@@ -51,12 +67,15 @@ class MachineBus:
 
     def is_connected(self, machine_id: str) -> bool:
         """Return ``True`` if the machine has an active WS connection."""
-        return machine_id in self._connections
+        return machine_id in self._connections or machine_id in self._local
 
     async def send(self, machine_id: str, frame: dict[str, Any]) -> bool:
         """Send a JSON frame to a machine daemon.  Returns ``True`` on success."""
         async with self._lock:
+            local = self._local.get(machine_id)
             ws = self._connections.get(machine_id)
+        if local is not None:
+            return await local.send(frame)
         if ws is None:
             return False
         try:
@@ -68,4 +87,4 @@ class MachineBus:
 
     def connected_ids(self) -> set[str]:
         """Return the set of currently connected machine IDs."""
-        return set(self._connections.keys())
+        return set(self._connections) | set(self._local)

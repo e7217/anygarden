@@ -322,3 +322,73 @@ def deprecated_server_main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+@dispatch.command(name="start")
+@click.option("--data-dir", type=click.Path(file_okay=False, path_type=Path),
+              default=lambda: Path.home() / ".anygarden", show_default="~/.anygarden")
+@click.option("--host", default=None)
+@click.option("--port", type=click.IntRange(1, 65535), default=None)
+@click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False), default=None)
+@click.option("--workers", type=click.IntRange(1), default=1, show_default=True)
+@click.option("--reload", is_flag=True, help="Not supported in integrated mode (fails explicitly).")
+def start_node(data_dir: Path, host: str | None, port: int | None,
+               config_path: str | None, workers: int, reload: bool) -> None:
+    """Run the API and owned local execution together, in the foreground."""
+    import os
+    if workers != 1 or os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
+        raise click.ClickException("Integrated mode supports exactly one worker; use --workers 1")
+    if reload:
+        raise click.ClickException("--reload is unsupported in integrated mode; stop then start the node")
+    if not _server_extra_installed():
+        raise click.ClickException('Install the node with: pip install "anygarden[server,agent]"')
+    try:
+        import anygarden_agent  # noqa: F401 — installed in the same execution environment
+        import uvicorn
+        from anygarden.app import create_app
+        from anygarden.config import AnygardenSettings
+    except ImportError as exc:
+        raise click.ClickException('Install the node with: pip install "anygarden[server,agent]"') from exc
+    data_dir = data_dir.absolute()
+    if data_dir.is_symlink():
+        raise click.ClickException("Node data directory must not be a symlink")
+    config_file = config_path or str(data_dir / "config.env")
+    config = AnygardenSettings(_env_file=config_file)
+    if "db_url" not in config.model_fields_set:
+        config.db_url = f"sqlite+aiosqlite:///{data_dir / 'anygarden.db'}"
+    if "room_files_dir" not in config.model_fields_set:
+        config.room_files_dir = data_dir / "room_files"
+    if "artifact_files_dir" not in config.model_fields_set:
+        config.artifact_files_dir = data_dir / "artifact_files"
+    config.local_node_data_dir = data_dir
+    if host is not None:
+        config.host = host
+    if port is not None:
+        config.port = port
+    _apply_runtime_env(config.host, config.port, config.db_url, config.log_level)
+    app = create_app(config)
+    server = uvicorn.Server(uvicorn.Config(
+        app, host=config.host, port=config.port, workers=1,
+        log_level=config.log_level.lower(), ws_ping_interval=60, ws_ping_timeout=600,
+    ))
+    def request_shutdown() -> None:
+        server.should_exit = True
+    app.state.node_shutdown_callback = request_shutdown
+    click.echo(f"Starting AnyGarden node in {data_dir}")
+    server.run()
+    if not server.started:
+        raise click.ClickException("Node did not start; see the startup error above")
+
+
+@dispatch.command(name="stop")
+@click.option("--data-dir", type=click.Path(file_okay=False, path_type=Path),
+              default=lambda: Path.home() / ".anygarden", show_default="~/.anygarden")
+@click.option("--timeout", type=click.FloatRange(min=0.1), default=30.0, show_default=True)
+def stop_local_node(data_dir: Path, timeout: float) -> None:
+    """Gracefully stop the current owner of this data directory."""
+    from anygarden.node.ownership import NodeOwnershipError, stop_node
+    try:
+        stop_node(data_dir, timeout=timeout)
+    except (NodeOwnershipError, OSError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo("AnyGarden node stopped; local process cleanup confirmed")

@@ -22,7 +22,7 @@ def runner() -> CliRunner:
 
 
 def test_dispatch_registers_all_subcommands() -> None:
-    assert set(cli.dispatch.commands) == {"server", "machine", "agent", "client"}
+    assert set(cli.dispatch.commands) == {"server", "machine", "agent", "client", "start", "stop"}
 
 
 def test_dispatch_help_lists_subcommands(runner: CliRunner) -> None:

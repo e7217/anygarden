@@ -297,7 +297,45 @@ async def _reset_openhands_agents_for_restart(db) -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Application startup / shutdown lifecycle."""
+    """Own local execution outside API startup, including partial failures."""
+    from anygarden.node.ownership import NodeOwner
+
+    owner = None
+    backend = None
+    engine_provided = getattr(app.state, "engine", None) is not None
+    if app.state.config.local_node_data_dir is not None:
+        if os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
+            raise RuntimeError("Integrated node mode supports exactly one API worker")
+        owner = NodeOwner(app.state.config.local_node_data_dir)
+        owner.acquire()  # Before schema/startup writes or any child process.
+        app.state.local_machine_id = owner.identity["machine_id"]
+        app.state.node_owner = owner
+    clean = False
+    try:
+        await _startup_server(app)
+        if owner is not None:
+            from anygarden.node.execution import LocalExecutionBackend
+
+            backend = LocalExecutionBackend(app, owner)
+            app.state.local_execution = backend
+            await backend.start()
+            owner.write_state("running")
+        yield
+    finally:
+        try:
+            if backend is not None:
+                await backend.close()
+            clean = True
+        finally:
+            try:
+                await _shutdown_server(app, engine_provided)
+            finally:
+                if owner is not None:
+                    owner.release(clean=clean)
+
+
+async def _startup_server(app: FastAPI) -> None:
+    """Initialize API state; teardown is handled even if startup raises."""
     config: AnygardenSettings = app.state.config
 
     # Ensure data directory exists
@@ -306,7 +344,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Persist JWT secret so tokens survive server restarts
-    anygarden_dir = Path.home() / ".anygarden"
+    anygarden_dir = config.local_node_data_dir or (Path.home() / ".anygarden")
     anygarden_dir.mkdir(parents=True, exist_ok=True)
     secret_file = anygarden_dir / "jwt_secret"
     if not config.jwt_secret:
@@ -352,6 +390,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # and stamp head — this covers both fresh dev databases and
         # pre-Alembic legacy DBs, bringing them under Alembic control so
         # subsequent migrations apply cleanly.
+        if config.local_node_data_dir is not None:
+            async with engine.connect() as conn:
+                try:
+                    result = await conn.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    )
+                    revisions = list(result.scalars())
+                except Exception:
+                    revisions = None  # Fresh/legacy classification stays in _ensure_schema_ready.
+            if revisions is not None and revisions != [_discover_head_revision()]:
+                raise RuntimeError(
+                    "Integrated node requires the current database schema. Back up the database "
+                    "and explicitly migrate it before using anygarden start."
+                )
         await _ensure_schema_ready(engine, config.db_url)
 
     # Initialize scheduler components (only if not already set by tests)
@@ -701,8 +753,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if hasattr(app.state.goal_scheduler, "start"):
         app.state.goal_scheduler.start()
 
-    yield
 
+async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
     # #197 — Tear down the gateway before the engine / session factory
     # go away. ``shutdown_gateway`` is safe to call even if bootstrap
     # never ran (no-op when app.state lacks the supervisor).
@@ -749,7 +801,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
 
-    if not engine_provided:
+    if not engine_provided and getattr(app.state, "engine", None) is not None:
         await app.state.engine.dispose()
 
 

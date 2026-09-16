@@ -1277,10 +1277,12 @@ class TestRotateToken:
             assert mode == 0o600
 
     async def test_handle_rotate_token_save_failure_keeps_old_token(
-        self, daemon: MachineDaemon
+        self, daemon: MachineDaemon, monkeypatch
     ) -> None:
         """If save_token fails, the in-memory token must NOT be updated."""
-        daemon._token_path = Path("/this/path/does/not/exist/machine.token")
+        def fail_save(*args, **kwargs):
+            raise PermissionError("test token storage is read-only")
+        monkeypatch.setattr("anygarden_machine.daemon.save_token", fail_save)
         daemon.machine_token = "original_token"
 
         rotate_data = {
