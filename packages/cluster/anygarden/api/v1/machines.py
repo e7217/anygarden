@@ -169,6 +169,7 @@ async def get_machine(
 async def update_machine(
     machine_id: str,
     body: MachineUpdate,
+    request: Request,
     # Guests are not account holders; machines are a registered-user
     # concern only.
     identity: Identity = Depends(forbid_guest),
@@ -176,7 +177,18 @@ async def update_machine(
 ):
     """Update machine settings (name, hostname, labels)."""
     machine = await _get_owned_machine(db, machine_id, identity)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    if (
+        machine_id == getattr(request.app.state, "local_machine_id", None)
+        and "labels" in changes
+    ):
+        labels = dict(changes["labels"] or {})
+        node_id = request.app.state.node_owner.identity["node_id"]
+        if labels.get("anygarden.local_node_id", node_id) != node_id:
+            raise HTTPException(status_code=409, detail="Local node identity cannot be changed")
+        labels["anygarden.local_node_id"] = node_id
+        changes["labels"] = labels
+    for field, value in changes.items():
         setattr(machine, field, value)
     await db.commit()
     await db.refresh(machine)
@@ -200,6 +212,10 @@ async def delete_machine(
     all agents (sends ``kill_agent`` to the daemon) before deletion.
     """
     machine = await _get_owned_machine(db, machine_id, identity)
+    if machine_id == getattr(request.app.state, "local_machine_id", None):
+        raise HTTPException(
+            status_code=409, detail="Local machine is managed by anygarden start/stop"
+        )
     machine_bus = request.app.state.machine_bus
     lifecycle = request.app.state.agent_lifecycle
 
@@ -283,6 +299,10 @@ async def regenerate_machine_token(
       and restart the daemon manually.
     """
     await _get_owned_machine(db, machine_id, identity)
+    if machine_id == getattr(request.app.state, "local_machine_id", None):
+        raise HTTPException(
+            status_code=409, detail="Local machine is managed by anygarden start/stop"
+        )
     machine_bus = request.app.state.machine_bus
 
     # Revoke existing tokens
@@ -362,6 +382,10 @@ async def update_machine_daemon(
     on re-register confirms success. Returns 409 if the machine is offline.
     """
     machine = await _get_owned_machine(db, machine_id, identity)
+    if machine_id == getattr(request.app.state, "local_machine_id", None):
+        raise HTTPException(
+            status_code=409, detail="Local machine is managed by anygarden start/stop"
+        )
 
     target_version = payload.target_version if payload else None
     if target_version is not None:

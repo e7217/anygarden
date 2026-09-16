@@ -153,10 +153,16 @@ class Spawner:
         agent_server_url: str = "",
         agent_dirs_root: Path | None = None,
         manifest_store: ManifestStore | None = None,
+        base_environment: dict[str, str] | None = None,
     ) -> None:
         self._agents: dict[str, RunningAgent] = {}
         self._on_stopped = on_stopped or self._default_on_stopped
         self._on_crashed = on_crashed or self._default_on_crashed
+        # Integrated execution supplies an explicit allowlist. None preserves
+        # the standalone daemon's legacy environment inheritance.
+        self._base_environment = (
+            dict(base_environment) if base_environment is not None else None
+        )
         # Per-agent directory root. Tests override this to tmp_path so
         # they don't pollute the real ~/.anygarden/agents/.
         self._agent_dirs_root = (
@@ -1014,7 +1020,11 @@ class Spawner:
         # a much smaller blast radius than third-party API keys, and
         # the existing agent bootstrap reads it from env via
         # ``load_token``.
-        env = os.environ.copy()
+        env = (
+            os.environ.copy()
+            if self._base_environment is None
+            else dict(self._base_environment)
+        )
         env["ANYGARDEN_TOKEN"] = msg.agent_token
 
         # Issue #277 — codex's streamable HTTP MCP form references the
@@ -1090,7 +1100,10 @@ class Spawner:
         runtime = msg.runtime or "python"
         if runtime == "typescript":
             agent_name = msg.name or f"agent-{agent_id[:8]}"
-            anygarden_agent_ts = shutil.which("anygarden-agent-ts")
+            anygarden_agent_ts = (
+                shutil.which("anygarden-agent-ts") if self._base_environment is None
+                else shutil.which("anygarden-agent-ts", path=env.get("PATH", os.defpath))
+            )
             if anygarden_agent_ts:
                 cmd = [
                     anygarden_agent_ts,
@@ -1129,7 +1142,10 @@ class Spawner:
                 )
         else:
             # Default Python runtime — unchanged from pre-#73 behaviour.
-            anygarden_agent = shutil.which("anygarden-agent")
+            anygarden_agent = (
+                shutil.which("anygarden-agent") if self._base_environment is None
+                else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
+            )
             if anygarden_agent:
                 cmd = [
                     anygarden_agent,

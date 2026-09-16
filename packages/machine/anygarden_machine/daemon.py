@@ -140,6 +140,7 @@ class MachineDaemon:
         agent_dirs_root: Path | None = None,
         workspace_registry_path: Path | None = None,
         workspace_signing_key_path: Path | None = None,
+        agent_environment: dict[str, str] | None = None,
     ) -> None:
         self.server_url = server_url
         self.machine_id = machine_id
@@ -147,6 +148,8 @@ class MachineDaemon:
         self.labels = labels or {}
         self._token_path = token_path
         self._draining = False
+        self._spawn_tasks: set[asyncio.Task] = set()
+        self._spawn_failed_unconfirmed = False
         self._ws: Any = None
         # #550 — set when a self-update succeeds; the run loop returns
         # instead of reconnecting so the process exits and systemd
@@ -165,6 +168,7 @@ class MachineDaemon:
             # reads (re-adopt) and writes (spawn/cleanup) stay consistent
             # within one process.
             manifest_store=self._manifest_store,
+            base_environment=agent_environment,
         )
         self._crash_budgets: dict[str, CrashBudget] = {}
         self._token_futures: dict[str, asyncio.Future[str]] = {}
@@ -575,6 +579,8 @@ class MachineDaemon:
 
     async def _reconcile_agent(self, agent_id: str) -> None:
         """Reconcile a single agent's actual state toward its desired state."""
+        if self._draining:
+            return
         manifest = self._manifest_store.load(agent_id)
         if manifest is None:
             return
@@ -652,7 +658,14 @@ class MachineDaemon:
             # anything. Done outside the lock so ``_send`` doesn't
             # serialize reconciles across agents.
             await self._report_actual_state()
-            asyncio.create_task(self._request_token_and_spawn(agent_id, manifest))
+            task = asyncio.create_task(self._request_token_and_spawn(agent_id, manifest))
+            self._spawn_tasks.add(task)
+            task.add_done_callback(self._spawn_task_done)
+
+    def _spawn_task_done(self, task: asyncio.Task) -> None:
+        self._spawn_tasks.discard(task)
+        if task.cancelled() or task.exception() is not None:
+            self._spawn_failed_unconfirmed = True
 
     async def _request_token_and_spawn(
         self,
@@ -660,6 +673,8 @@ class MachineDaemon:
         manifest: SyncDesiredStateFrame,
     ) -> None:
         """Request an agent token from the server, then spawn the agent."""
+        if self._draining:
+            return
         # Create a future for the token grant
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
@@ -749,7 +764,8 @@ class MachineDaemon:
         async with self._lock_for(agent_id):
             current = self._manifest_store.load(agent_id)
             if (
-                current is None
+                self._draining
+                or current is None
                 or current.desired_state != "running"
                 or current.generation != manifest.generation
             ):
@@ -851,7 +867,7 @@ class MachineDaemon:
         )
 
         manifest = self._manifest_store.load(agent_id)
-        if manifest is None or manifest.desired_state != "running":
+        if self._draining or manifest is None or manifest.desired_state != "running":
             await self._report_actual_state()
             return
 
@@ -1189,6 +1205,22 @@ class MachineDaemon:
             self._clear_transitional(aid)
 
     # ── Drain & rotate ─────────────────────────────────────────────────
+
+    async def close_local_execution(self) -> None:
+        """Fence new spawns, finish in-flight creation, then stop process trees."""
+        self._draining = True
+        for future in self._token_futures.values():
+            if not future.done():
+                future.cancel()
+        pending = list(self._spawn_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        from anygarden_machine.proc_kill import is_group_alive
+
+        groups = [agent.pid for agent in self._spawner._agents.values()]
+        await self._spawner.drain()
+        if self._spawn_failed_unconfirmed or any(is_group_alive(pid) for pid in groups):
+            raise RuntimeError("Local agent process cleanup could not be confirmed")
 
     async def _handle_drain(self) -> None:
         """Handle drain command: stop accepting new agents and kill existing ones."""

@@ -21,6 +21,9 @@ _UNDIALABLE_HOSTS = frozenset({"0.0.0.0", "::", ""})
 class AnygardenSettings(BaseSettings):
     """Configuration loaded from ``ANYGARDEN_*`` environment variables."""
 
+    # Opt-in integrated mode; legacy server startup remains unchanged.
+    local_node_data_dir: Path | None = None
+
     host: str = "127.0.0.1"
     port: int = 8000
     db_url: str = _DEFAULT_DB_URL

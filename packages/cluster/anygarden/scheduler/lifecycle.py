@@ -44,7 +44,7 @@ from anygarden.db.models import (
     WorkspaceAttachment,
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
-from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.scheduler.execution import ExecutionBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 logger = structlog.get_logger(__name__)
@@ -108,7 +108,7 @@ class AgentLifecycle:
     def __init__(
         self,
         db_factory,
-        machine_bus: MachineBus,
+        machine_bus: ExecutionBus,
         *,
         mcp_template_service=None,
         room_files_dir: Path | None = None,

@@ -69,10 +69,13 @@ async def _authenticate_machine(
 async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
     """WebSocket endpoint for machine daemon communication."""
     app = websocket.app
-    config: AnygardenSettings = app.state.config
     session_factory = app.state.session_factory
     machine_bus = app.state.machine_bus
-    lifecycle = app.state.agent_lifecycle
+
+    # The internal machine has no network owner, even if a token was minted.
+    if machine_id == getattr(app.state, "local_machine_id", None):
+        await websocket.close(code=4001, reason="Machine is owned by the local node")
+        return
 
     # ── Authentication ──
     raw_protocols = websocket.headers.get("sec-websocket-protocol", "")
@@ -98,124 +101,7 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
             except json.JSONDecodeError:
                 continue
 
-            frame_type = data.get("type")
-
-            if frame_type == "register":
-                await _handle_register(session_factory, machine_id, data)
-                # Place any orphaned agents (desired=running, no machine)
-                await _place_orphaned_agents(session_factory, lifecycle)
-
-            elif frame_type == "report_actual_state":
-                agents_data = data.get("agents", [])
-                await lifecycle.handle_report_actual_state(machine_id, agents_data)
-                # Send sync_batch for reconciliation after every report
-                await lifecycle.send_sync_batch(machine_id)
-
-            elif frame_type == "token_request":
-                agent_ids = data.get("agent_ids", [])
-                grants = await lifecycle.handle_token_request(machine_id, agent_ids)
-                for grant in grants:
-                    await machine_bus.send(machine_id, grant)
-
-            elif frame_type == "request_replacement":
-                agent_id = data.get("agent_id", "")
-                reason = data.get("reason", "")
-                generation = data.get("generation")
-                await lifecycle.handle_request_replacement(
-                    machine_id,
-                    agent_id,
-                    reason,
-                    generation=(generation if isinstance(generation, int) else None),
-                )
-
-            elif frame_type == "self_update_result":
-                # #550 — daemon reported self-update progress/outcome.
-                await _handle_self_update_result(session_factory, machine_id, data)
-
-            elif frame_type == "engine_check_result":
-                # #553 — daemon reported an engine's current vs latest version.
-                await _handle_engine_check_result(session_factory, machine_id, data)
-
-            elif frame_type == "engine_update_result":
-                # #553 — daemon reported engine update progress/outcome.
-                await _handle_engine_update_result(session_factory, machine_id, data)
-
-            elif frame_type == "workspace_attach_receipt":
-                from anygarden.workspaces.lifecycle import handle_attach_receipt
-
-                await handle_attach_receipt(
-                    session_factory,
-                    machine_id=machine_id,
-                    data=data,
-                    lifecycle=lifecycle,
-                )
-
-            elif frame_type == "workspace_revoke_receipt":
-                from anygarden.workspaces.lifecycle import handle_revoke_receipt
-
-                await handle_revoke_receipt(
-                    session_factory,
-                    machine_id=machine_id,
-                    data=data,
-                    lifecycle=lifecycle,
-                )
-
-            elif frame_type == "agent_memory_update":
-                # #237 — file → DB sync. Machine observed a change in
-                # ``memory/notes.md`` and shipped the full body. We
-                # overwrite the snapshot so the next spawn's
-                # materialize-from-DB picks up the new content.
-                agent_id = data.get("agent_id", "")
-                memory_md = data.get("memory_md", "")
-                if agent_id:
-                    async with session_factory() as db:
-                        from anygarden.db.models import Agent
-                        from sqlalchemy import update
-
-                        await db.execute(
-                            update(Agent)
-                            .where(Agent.id == agent_id)
-                            .values(memory_md=memory_md)
-                        )
-                        await db.commit()
-
-            elif frame_type == "room_artifact_produced":
-                # #290 Phase B — agent dropped a file under
-                # ``memory/outbox/`` and the daemon shipped it. Persist
-                # to disk + DB and broadcast ``room_artifact.added`` to
-                # live subscribers in every target room.
-                from anygarden.rooms.artifacts import handle_artifact_produced
-                from anygarden.ws.protocol import RoomArtifactAddedOut
-
-                async with session_factory() as db:
-                    inserted = await handle_artifact_produced(
-                        db,
-                        data,
-                        artifact_files_dir=config.artifact_files_dir,
-                    )
-                connection_manager = getattr(app.state, "connection_manager", None)
-                if connection_manager is not None:
-                    for row in inserted:
-                        out = RoomArtifactAddedOut(
-                            artifact={
-                                "id": row.id,
-                                "room_id": row.room_id,
-                                "produced_by_agent_id": row.produced_by_agent_id,
-                                "filename": row.filename,
-                                "sha256": row.sha256,
-                                "size_bytes": row.size_bytes,
-                                "mime": row.mime,
-                                "created_at": row.created_at.isoformat(),
-                            }
-                        )
-                        await connection_manager.broadcast(row.room_id, out)
-
-            else:
-                logger.warning(
-                    "machine_ws.unknown_frame",
-                    machine_id=machine_id,
-                    frame_type=frame_type,
-                )
+            await handle_machine_frame(app, machine_id, data)
 
     except WebSocketDisconnect:
         logger.info("machine_ws.disconnected", machine_id=machine_id)
@@ -237,6 +123,132 @@ async def ws_machine(websocket: WebSocket, machine_id: str) -> None:
                     )
                 )
                 await db.commit()
+
+
+async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> None:
+    """Process a frame from an already authenticated/owned machine transport."""
+    config: AnygardenSettings = app.state.config
+    session_factory = app.state.session_factory
+    machine_bus = app.state.machine_bus
+    lifecycle = app.state.agent_lifecycle
+    frame_type = data.get("type")
+
+    if frame_type == "register":
+        await _handle_register(session_factory, machine_id, data)
+        # Place any orphaned agents (desired=running, no machine)
+        await _place_orphaned_agents(session_factory, lifecycle)
+
+    elif frame_type == "report_actual_state":
+        agents_data = data.get("agents", [])
+        await lifecycle.handle_report_actual_state(machine_id, agents_data)
+        # Send sync_batch for reconciliation after every report
+        await lifecycle.send_sync_batch(machine_id)
+
+    elif frame_type == "token_request":
+        agent_ids = data.get("agent_ids", [])
+        grants = await lifecycle.handle_token_request(machine_id, agent_ids)
+        for grant in grants:
+            await machine_bus.send(machine_id, grant)
+
+    elif frame_type == "request_replacement":
+        agent_id = data.get("agent_id", "")
+        reason = data.get("reason", "")
+        generation = data.get("generation")
+        await lifecycle.handle_request_replacement(
+            machine_id,
+            agent_id,
+            reason,
+            generation=(generation if isinstance(generation, int) else None),
+        )
+
+    elif frame_type == "self_update_result":
+        # #550 — daemon reported self-update progress/outcome.
+        await _handle_self_update_result(session_factory, machine_id, data)
+
+    elif frame_type == "engine_check_result":
+        # #553 — daemon reported an engine's current vs latest version.
+        await _handle_engine_check_result(session_factory, machine_id, data)
+
+    elif frame_type == "engine_update_result":
+        # #553 — daemon reported engine update progress/outcome.
+        await _handle_engine_update_result(session_factory, machine_id, data)
+
+    elif frame_type == "workspace_attach_receipt":
+        from anygarden.workspaces.lifecycle import handle_attach_receipt
+
+        await handle_attach_receipt(
+            session_factory,
+            machine_id=machine_id,
+            data=data,
+            lifecycle=lifecycle,
+        )
+
+    elif frame_type == "workspace_revoke_receipt":
+        from anygarden.workspaces.lifecycle import handle_revoke_receipt
+
+        await handle_revoke_receipt(
+            session_factory,
+            machine_id=machine_id,
+            data=data,
+            lifecycle=lifecycle,
+        )
+
+    elif frame_type == "agent_memory_update":
+        # #237 — file → DB sync. Machine observed a change in
+        # ``memory/notes.md`` and shipped the full body. We
+        # overwrite the snapshot so the next spawn's
+        # materialize-from-DB picks up the new content.
+        agent_id = data.get("agent_id", "")
+        memory_md = data.get("memory_md", "")
+        if agent_id:
+            async with session_factory() as db:
+                from anygarden.db.models import Agent
+                from sqlalchemy import update
+
+                await db.execute(
+                    update(Agent)
+                    .where(Agent.id == agent_id)
+                    .values(memory_md=memory_md)
+                )
+                await db.commit()
+
+    elif frame_type == "room_artifact_produced":
+        # #290 Phase B — agent dropped a file under
+        # ``memory/outbox/`` and the daemon shipped it. Persist
+        # to disk + DB and broadcast ``room_artifact.added`` to
+        # live subscribers in every target room.
+        from anygarden.rooms.artifacts import handle_artifact_produced
+        from anygarden.ws.protocol import RoomArtifactAddedOut
+
+        async with session_factory() as db:
+            inserted = await handle_artifact_produced(
+                db,
+                data,
+                artifact_files_dir=config.artifact_files_dir,
+            )
+        connection_manager = getattr(app.state, "connection_manager", None)
+        if connection_manager is not None:
+            for row in inserted:
+                out = RoomArtifactAddedOut(
+                    artifact={
+                        "id": row.id,
+                        "room_id": row.room_id,
+                        "produced_by_agent_id": row.produced_by_agent_id,
+                        "filename": row.filename,
+                        "sha256": row.sha256,
+                        "size_bytes": row.size_bytes,
+                        "mime": row.mime,
+                        "created_at": row.created_at.isoformat(),
+                    }
+                )
+                await connection_manager.broadcast(row.room_id, out)
+
+    else:
+        logger.warning(
+            "machine_ws.unknown_frame",
+            machine_id=machine_id,
+            frame_type=frame_type,
+        )
 
 
 def _apply_system_info(machine: Machine, system_info: Any) -> None:
