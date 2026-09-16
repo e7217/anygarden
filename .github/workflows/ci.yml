@@ -24,6 +24,10 @@ jobs:
       - name: Show Python version
         run: python --version
 
+      # Test infrastructure only; this is not product federation E2E acceptance.
+      - name: Test federation fixture plumbing (Linux, no product E2E)
+        run: python3 -m unittest discover -s tests/federation_harness -v
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
         with:

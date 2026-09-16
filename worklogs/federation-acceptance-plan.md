@@ -30,6 +30,10 @@ peer is down, and concurrent duplicate delivery. Child environment is explicitly
 minimal, with no inherited provider credentials. Temporary databases are removed;
 there are no network calls. These results must be labelled `fixture_only`.
 
+Linux CI runs this exact command in the explicit
+`Test federation fixture plumbing (Linux, no product E2E)` step before workspace
+dependency installation. It does not rely on package pytest discovery.
+
 Files owned by QA: `tests/federation_harness/`, this plan. Architecture owns
 `docs/decisions/007-federated-node-contract.md` and `contracts/federation/v1/`.
 The fixture's internal commands must never be promoted into a production API.
