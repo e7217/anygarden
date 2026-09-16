@@ -565,8 +565,7 @@ def test_real_cli_sigint_exits_zero_after_confirmed_cleanup(tmp_path):
     log_path = tmp_path / "server.log"
     with log_path.open("w") as log:
         process = subprocess.Popen(
-            command
-            + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
+            command + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
             env=environment,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -708,3 +707,157 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
     finally:
         await spawner.drain()
         owner.release(clean=True)
+
+
+def test_peer_port_without_credentials_is_refused_before_startup(tmp_path):
+    """--peer-port is explicit opt-in and fails closed without credentials."""
+    from click.testing import CliRunner
+
+    from anygarden.cli import dispatch
+
+    result = CliRunner().invoke(
+        dispatch,
+        ["start", "--data-dir", str(tmp_path), "--peer-port", "8451"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code != 0
+    assert "requires peer credentials" in result.output
+
+
+def test_real_cli_peer_listener_lifecycle_with_stop(tmp_path):
+    """--peer-port composes the listener; stop closes it and exits 0."""
+    import os
+    import socket
+    import time
+    import urllib.request
+    from uuid import uuid4
+
+    from anygarden.federation.certificates import create_credentials
+
+    create_credentials(tmp_path / "peer", str(uuid4()))
+    with socket.socket() as api_reservation:
+        api_reservation.bind(("127.0.0.1", 0))
+        api_port = api_reservation.getsockname()[1]
+    with socket.socket() as peer_reservation:
+        peer_reservation.bind(("127.0.0.1", 0))
+        peer_port = peer_reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+    log_path = tmp_path / "server.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            command
+            + [
+                "start",
+                "--data-dir",
+                str(tmp_path),
+                "--port",
+                str(api_port),
+                "--peer-port",
+                str(peer_port),
+                "--peer-host",
+                "127.0.0.1",
+            ],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{api_port}/healthz", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("CLI startup timed out")
+            # The mTLS listener is actually accepting connections.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    with socket.create_connection(
+                        ("127.0.0.1", peer_port), timeout=0.5
+                    ):
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("peer listener never accepted connections")
+            stopped = subprocess.run(
+                command + ["stop", "--data-dir", str(tmp_path)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            assert stopped.returncode == 0, stopped.stdout + stopped.stderr
+            exited = process.wait(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    assert exited == 0, log_path.read_text()
+    with pytest.raises(OSError):
+        socket.create_connection(("127.0.0.1", peer_port), timeout=0.5)
+
+
+def test_invalid_credentials_with_peer_port_fail_startup(tmp_path):
+    """Requested listener + unusable credentials aborts boot, not silence."""
+    import os
+    import socket
+    import time
+    import urllib.request
+
+    peer_dir = tmp_path / "peer"
+    peer_dir.mkdir(parents=True)
+    (peer_dir / "peer-cert.pem").write_text("not a certificate")
+    (peer_dir / "peer-key.pem").write_text("not a key")
+    with socket.socket() as api_reservation:
+        api_reservation.bind(("127.0.0.1", 0))
+        api_port = api_reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+    log_path = tmp_path / "server.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            command
+            + [
+                "start",
+                "--data-dir",
+                str(tmp_path),
+                "--port",
+                str(api_port),
+                "--peer-port",
+                "8451",
+                "--peer-host",
+                "127.0.0.1",
+            ],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        exited = process.wait(timeout=30)
+    assert exited != 0
+    log = log_path.read_text()
+    assert "--peer-port was requested but peer services did not compose" in log
+    with pytest.raises(OSError):
+        # Health endpoint must not be serving either.
+        urllib.request.urlopen(f"http://127.0.0.1:{api_port}/healthz", timeout=0.5)
