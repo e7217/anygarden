@@ -23,7 +23,7 @@ import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug, Waypoints,
+  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug, Waypoints, Network,
   Package,
 } from 'lucide-react'
 import {
@@ -774,6 +774,19 @@ export default function Sidebar({
             >
               <Waypoints className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
               <span className="min-w-0 truncate">LLM Gateway</span>
+              <ExperimentalNavBadge />
+            </button>
+            <button
+              aria-label="Federation, experimental feature"
+              onClick={() => go('/admin/federation')}
+              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                location.pathname.startsWith('/admin/federation')
+                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
+                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+              }`}
+            >
+              <Network className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
+              <span className="min-w-0 truncate">Federation</span>
               <ExperimentalNavBadge />
             </button>
             <button
