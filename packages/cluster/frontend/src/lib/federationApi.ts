@@ -165,6 +165,36 @@ export interface SnapshotView {
   participants: ParticipantView[]
 }
 
+/** Metadata-only binding view (#593 task #34 / PR608). */
+export interface BindingView {
+  authority_node_id: string
+  channel_id: string
+  local_room_id: string
+  last_seq: number
+  applied_seq: number
+}
+
+/**
+ * One authority-confirmed delegation mirror (task #35 / PR607). state /
+ * process_state / task_status carry the wire vocabulary unchanged
+ * (requested, accepted, running, completed, failed, rejected,
+ * cancel_requested, cancelled, unknown).
+ */
+export interface DelegationStatusView {
+  authority_node_id: string
+  channel_id: string
+  delegation_id: string
+  task_id: string
+  source_message_id: string
+  requester: Principal
+  executor: { node_id: string; agent_id: string }
+  execution_id: string | null
+  revision: number
+  state: string
+  process_state: string
+  task_status: string
+}
+
 export type SubmissionState =
   | 'unconfirmed'
   | 'confirmed'
@@ -348,4 +378,12 @@ export async function syncChannel(scope: {
   actor: Principal
 }): Promise<unknown> {
   return post('/api/v1/shared-channels/sync', { protocol_version: 1, ...scope })
+}
+
+export async function listBindings(): Promise<BindingView[]> {
+  return request<BindingView[]>('/api/v1/shared-channels/bindings')
+}
+
+export async function listDelegations(roomId: string): Promise<DelegationStatusView[]> {
+  return request<DelegationStatusView[]>(`/api/v1/rooms/${roomId}/delegations`)
 }

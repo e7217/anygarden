@@ -218,3 +218,54 @@ describe('useFederation', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe('useFederation — task #35/#34 read surfaces', () => {
+  it('resolves the bound room via the bindings listing and polls its delegations', async () => {
+    const snapshot = {
+      authority_node_id: 'auth-1',
+      channel_id: 'chan-1',
+      applied_seq: 1,
+      messages: [],
+      participants: [],
+    }
+    const fetchMock = mockFetch((url) => {
+      if (url.includes('/node/')) return emptyNodes(url)
+      if (url.endsWith('/bindings')) {
+        return jsonResponse([
+          { authority_node_id: 'auth-1', channel_id: 'chan-1', local_room_id: 'room-9', last_seq: 3, applied_seq: 2 },
+        ])
+      }
+      if (url.includes('/rooms/room-9/delegations')) {
+        return jsonResponse([
+          {
+            authority_node_id: 'auth-1',
+            channel_id: 'chan-1',
+            delegation_id: 'd1',
+            task_id: 't1',
+            source_message_id: 'm1',
+            requester: { node_id: 'auth-1', kind: 'human', principal_id: 'u1' },
+            executor: { node_id: 'node-b', agent_id: 'agent-b' },
+            execution_id: 'x1',
+            revision: 3,
+            state: 'cancel_requested',
+            process_state: 'running',
+            task_status: 'blocked',
+          },
+        ])
+      }
+      if (url.includes('/shared-channels/auth-1/chan-1')) return jsonResponse(snapshot)
+      throw new Error('unexpected ' + url)
+    })
+    const { result } = renderHook(() => useFederation())
+    await waitFor(() => expect(result.current.nodesCapability).toBe('ready'))
+    act(() => {
+      result.current.setChannelRef({ authority: 'auth-1', channel: 'chan-1' })
+    })
+    await waitFor(() => expect(result.current.delegations).toHaveLength(1))
+    expect(result.current.delegations[0].state).toBe('cancel_requested')
+    expect(result.current.bindings).toHaveLength(1)
+    expect(
+      fetchMock.mock.calls.some(([u]) => String(u) === '/api/v1/rooms/room-9/delegations'),
+    ).toBe(true)
+  })
+})

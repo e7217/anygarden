@@ -22,9 +22,11 @@ function baseFederation(overrides: Partial<Federation> = {}): Federation {
     refreshNodes: vi.fn(),
     channelRef: null,
     setChannelRef: vi.fn(),
+    bindings: [],
     snapshot: null,
     snapshotError: null,
     roster: [],
+    delegations: [],
     submissions: [],
     actorPrincipal: null,
     busy: false,
@@ -240,5 +242,92 @@ describe('FederationLiveWorkspace', () => {
     )
     selectTab('2. Shared channel')
     expect(screen.getByText(/CHANNEL_DENIED/)).toBeInTheDocument()
+  })
+})
+
+describe('FederationLiveWorkspace — task #35 delegation states', () => {
+  it('renders the confirmed delegation vocabulary including cancel/unknown guidance', () => {
+    render(
+      <FederationLiveWorkspace
+        federation={baseFederation({
+          channelRef: { authority: 'auth-1', channel: 'chan-1', localRoomId: 'room-9' },
+          delegations: [
+            {
+              authority_node_id: 'auth-1',
+              channel_id: 'chan-1',
+              delegation_id: 'd1',
+              task_id: 't1',
+              source_message_id: 'm1',
+              requester: { node_id: 'auth-1', kind: 'human', principal_id: 'u1' },
+              executor: { node_id: 'b', agent_id: 'g1' },
+              execution_id: 'x1',
+              revision: 2,
+              state: 'running',
+              process_state: 'running',
+              task_status: 'in_progress',
+            },
+            {
+              authority_node_id: 'auth-1',
+              channel_id: 'chan-1',
+              delegation_id: 'd2',
+              task_id: 't2',
+              source_message_id: 'm2',
+              requester: { node_id: 'auth-1', kind: 'human', principal_id: 'u1' },
+              executor: { node_id: 'b', agent_id: 'g2' },
+              execution_id: null,
+              revision: 2,
+              state: 'unknown',
+              process_state: 'unknown',
+              task_status: 'blocked',
+            },
+          ],
+        })}
+      />,
+    )
+    fireEvent.mouseDown(screen.getByRole('tab', { name: '3. Task handoff' }), { button: 0, ctrlKey: false })
+    expect(screen.getByText('running')).toBeInTheDocument()
+    expect(screen.getByText('unknown')).toBeInTheDocument()
+    expect(screen.getByText(/automatic retry stays blocked/i)).toBeInTheDocument()
+    expect(
+      screen.queryByText(/fine-grained delegation state.*pending backend work/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('offers binding-based channel selection when the node exposes bindings', () => {
+    const setChannelRef = vi.fn()
+    render(
+      <FederationLiveWorkspace
+        federation={baseFederation({
+          bindings: [
+            {
+              authority_node_id: 'auth-1',
+              channel_id: 'chan-1',
+              local_room_id: 'room-9',
+              last_seq: 4,
+              applied_seq: 3,
+            },
+          ],
+          setChannelRef,
+        })}
+      />,
+    )
+    selectTab('2. Shared channel')
+    expect(screen.getByText(/bindings on this node/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /auth-1… \/ chan-1…/i }))
+    expect(setChannelRef).toHaveBeenCalledWith({
+      authority: 'auth-1',
+      channel: 'chan-1',
+      localRoomId: 'room-9',
+      senderNodeId: undefined,
+      grantEpoch: undefined,
+    })
+  })
+
+  it('keeps the manual-entry hint when the node lists no bindings', () => {
+    render(<FederationLiveWorkspace federation={baseFederation()} />)
+    selectTab('2. Shared channel')
+    expect(
+      screen.getByText(/this node lists no bindings/i),
+    ).toBeInTheDocument()
   })
 })

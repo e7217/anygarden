@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { ParticipantView } from '@/lib/federationApi'
+import type { BindingView, DelegationStatusView, ParticipantView } from '@/lib/federationApi'
 import { uuid } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
 
@@ -62,9 +62,10 @@ function principalLabel(participant: ParticipantView): string {
  * says so instead of inventing data:
  *
  * - sharing not wired on this node → banner, forms disabled (#34);
- * - delegation state detail (accepted vs running, cancel vs unknown) →
- *   submission receipts + task status only until #35 lands its read API;
- * - channel/command routing fields are manual until bindings listing ships.
+ * - delegation states are the authority's confirmed mirror projection,
+ *   polled through the bound local room (task #35);
+ * - channel selection uses the bindings listing when the node exposes it,
+ *   with manual entry as fallback (task #34).
  */
 export default function FederationLiveWorkspace({ federation }: { federation: Federation }) {
   const [tab, setTab] = useState('nodes')
@@ -75,9 +76,11 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
     nodesCapability,
     channelRef,
     setChannelRef,
+    bindings,
     snapshot,
     snapshotError,
     roster,
+    delegations,
     submissions,
     busy,
     actionError,
@@ -311,7 +314,10 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
         <TabsContent value="task" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
-            <TaskComposer federation={federation} messages={snapshot?.messages ?? []} />
+            <div className="space-y-4">
+              <DelegationList delegations={delegations} />
+              <TaskComposer federation={federation} messages={snapshot?.messages ?? []} />
+            </div>
             <Card>
               <CardHeader>
                 <CardTitle className="text-lead">Submissions</CardTitle>
@@ -351,13 +357,77 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
           <ErrorLine error={actionError} />
           <p className="mt-4 flex items-start gap-2 text-xs text-[var(--color-foreground-muted)]">
             <CircleDashed className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-            Remote accept / start / result arrive from the executor node over peer transport and
-            surface here as receipt updates. Fine-grained delegation state (accepted vs running,
-            cancel-requested vs unknown) needs the delegation read API and is pending backend work.
+            Remote accept / start / result arrive from the executor node over peer transport.
+            Delegation states above are the channel owner&apos;s confirmed projection, polled
+            through the bound local room.
           </p>
         </TabsContent>
       </Tabs>
     </div>
+  )
+}
+
+const delegationStateTone: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  requested: 'outline',
+  accepted: 'secondary',
+  running: 'default',
+  completed: 'default',
+  failed: 'destructive',
+  rejected: 'destructive',
+  cancel_requested: 'outline',
+  cancelled: 'destructive',
+  unknown: 'destructive',
+}
+
+/**
+ * Authority-confirmed delegation mirrors (task #35 endpoint), shown with the
+ * wire vocabulary untouched so the UI never re-derives transitions.
+ */
+function DelegationList({ delegations }: { delegations: DelegationStatusView[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>Delegations</CardTitle>
+            <CardDescription>
+              Authority-confirmed state for this channel, polled through the bound local room.
+            </CardDescription>
+          </div>
+          <Badge variant="outline">{delegations.length}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {delegations.length === 0 && (
+          <p className="text-sm text-[var(--color-foreground-muted)]">
+            No delegations for this channel.
+          </p>
+        )}
+        {delegations.map((delegation) => (
+          <div key={delegation.delegation_id} className="rounded-[var(--radius-md)] border p-4 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-mono text-xs">{delegation.delegation_id}</p>
+              <Badge variant={delegationStateTone[delegation.state] ?? 'outline'}>
+                {delegation.state}
+              </Badge>
+            </div>
+            <p className="mt-2 text-[var(--color-foreground-muted)]">
+              executor {delegation.executor.node_id.slice(0, 8)}… / {delegation.executor.agent_id.slice(0, 8)}…
+              {' · '}process {delegation.process_state.replace('_', ' ')}
+              {' · '}task {delegation.task_status.replace('_', ' ')}
+              {' · '}rev {delegation.revision}
+            </p>
+            {(delegation.state === 'cancel_requested' || delegation.state === 'unknown') && (
+              <p className="mt-2 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-2 text-xs">
+                {delegation.state === 'cancel_requested'
+                  ? 'Stop requested — execution may still be active until the executor confirms.'
+                  : 'Outcome unknown — the executor node must be checked before retrying. Automatic retry stays blocked.'}
+              </p>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -526,7 +596,7 @@ function InviteAcceptor({ federation }: { federation: Federation }) {
 }
 
 function ChannelSelector({ federation }: { federation: Federation }) {
-  const { channelRef, setChannelRef } = federation
+  const { channelRef, setChannelRef, bindings } = federation
   const [form, setForm] = useState({
     authority: channelRef?.authority ?? '',
     channel: channelRef?.channel ?? '',
@@ -540,8 +610,25 @@ function ChannelSelector({ federation }: { federation: Federation }) {
     setChannelRef({
       authority: form.authority.trim(),
       channel: form.channel.trim(),
+      localRoomId: form.localRoomId.trim() || undefined,
       senderNodeId: form.senderNodeId.trim() || undefined,
       grantEpoch: form.grantEpoch ? Number(form.grantEpoch) : undefined,
+    })
+  }
+
+  function selectBinding(binding: BindingView) {
+    setForm((current) => ({
+      ...current,
+      authority: binding.authority_node_id,
+      channel: binding.channel_id,
+      localRoomId: binding.local_room_id,
+    }))
+    setChannelRef({
+      authority: binding.authority_node_id,
+      channel: binding.channel_id,
+      localRoomId: binding.local_room_id,
+      senderNodeId: channelRef?.senderNodeId,
+      grantEpoch: channelRef?.grantEpoch,
     })
   }
 
@@ -552,8 +639,9 @@ function ChannelSelector({ federation }: { federation: Federation }) {
           <div>
             <CardTitle>Select shared channel</CardTitle>
             <CardDescription>
-              Channel discovery is pending backend work — enter the UUIDs you received from the
-              channel owner.
+              {bindings.length > 0
+                ? 'Pick a binding below, or enter UUIDs manually (follower command fields stay manual).'
+                : 'This node lists no bindings — enter the UUIDs you received from the channel owner.'}
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" disabled={federation.busy} onClick={() => void federation.sync()}>
@@ -594,6 +682,35 @@ function ChannelSelector({ federation }: { federation: Federation }) {
             Bind
           </Button>
         </div>
+        {bindings.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Bindings on this node</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {bindings.map((binding) => {
+                const active =
+                  binding.authority_node_id === federation.channelRef?.authority &&
+                  binding.channel_id === federation.channelRef?.channel
+                return (
+                  <button
+                    key={`${binding.authority_node_id}:${binding.channel_id}`}
+                    type="button"
+                    onClick={() => selectBinding(binding)}
+                    className={`flex items-center justify-between gap-2 rounded-[var(--radius-md)] border p-3 text-left text-sm transition-colors ${
+                      active ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)]' : 'hover:bg-black/5'
+                    }`}
+                  >
+                    <span className="min-w-0 truncate font-mono text-xs">
+                      {binding.authority_node_id.slice(0, 8)}… / {binding.channel_id.slice(0, 8)}…
+                    </span>
+                    <span className="shrink-0 text-xs text-[var(--color-foreground-muted)]">
+                      seq {binding.applied_seq}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-[var(--color-foreground-muted)]">
             {federation.channelRef
