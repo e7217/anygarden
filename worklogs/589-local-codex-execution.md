@@ -27,3 +27,12 @@ changed-file Ruff and whitespace checks passed. Existing suite emits deprecated
 WebSocket and unrelated mock-cleanup warnings. The initial full-suite attempt
 accidentally loaded an older installed cluster package; rerunning with all three
 source packages from this worktree resolved the protocol-field mismatch.
+
+Independent architecture review found a revocation race between scheduling
+`_collect` and writing its prompt. A new regression first failed on the original
+head with `(authorized=False, state=cancel_requested)` at the actual stdin write.
+The collector now rechecks authority/cancellation in the same coroutine
+immediately before writing, with no await between check and write. The regression
+observes **zero prompt writes** after revocation. Updated full agent suite:
+551 passed, including 29 execution tests. Original-head CI was 4/4 green;
+that success does not supersede the review finding or validate this new head.

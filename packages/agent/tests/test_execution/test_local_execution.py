@@ -512,3 +512,43 @@ async def test_cancel_during_exit_cleanup_preserves_reaping(
     finally:
         proceed.set()
         await m.close()
+
+
+async def test_revocation_at_collect_scheduling_never_writes_prompt(
+    tmp_path, executable, invocation, monkeypatch
+):
+    allowed = True
+    writes = []
+    original_spawn = asyncio.create_subprocess_exec
+    original_collect = CodexRuntime._collect
+    m = manager(tmp_path, executable, authorize=lambda _: allowed)
+
+    async def spy_spawn(*args, **kwargs):
+        proc = await original_spawn(*args, **kwargs)
+        if proc.stdin is not None:
+            original_write = proc.stdin.write
+
+            def write(data):
+                writes.append((allowed, m._store.get(invocation.execution_id).state))
+                return original_write(data)
+
+            proc.stdin.write = write
+        return proc
+
+    async def revoked_collect(self, *args, **kwargs):
+        nonlocal allowed
+        # This coroutine is scheduled after the parent run() last checks authority.
+        # revoke records cancel_requested, then yields before cancelling the parent.
+        allowed = False
+        await m.revoke(invocation.scope)
+        return await original_collect(self, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spy_spawn)
+    monkeypatch.setattr(CodexRuntime, "_collect", revoked_collect)
+    try:
+        await m.start(invocation)
+        await asyncio.gather(*list(m._tasks.values()))
+        assert writes == [], f"prompt delivered after revocation: {writes}"
+        assert m._store.get(invocation.execution_id).outcome in {"cancelled", "failed"}
+    finally:
+        await m.close()

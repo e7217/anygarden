@@ -214,7 +214,9 @@ class CodexRuntime:
                 if cancelled_at_spawn or not authorized():
                     raise asyncio.CancelledError
                 stream = asyncio.create_task(
-                    self._collect(proc, invocation, session_handle, output, emit)
+                    self._collect(
+                        proc, invocation, session_handle, output, emit, authorized
+                    )
                 )
                 deadline = (
                     asyncio.get_running_loop().time() + invocation.timeout_seconds
@@ -259,12 +261,18 @@ class CodexRuntime:
                 return RuntimeResult("unknown", "unknown", "termination_unconfirmed")
             return result
 
-    async def _collect(self, proc, invocation, session, output, emit) -> RuntimeResult:
+    async def _collect(
+        self, proc, invocation, session, output, emit, authorized
+    ) -> RuntimeResult:
         prompt = (
             f"{invocation.instructions}\n\n{invocation.prompt}"
             if invocation.instructions
             else invocation.prompt
         )
+        # This coroutine may have been scheduled before a revoke/cancel. Check
+        # immediately at the input delivery boundary, with no await before write.
+        if not authorized():
+            return RuntimeResult("failed", "stopped", "POLICY_DENIED")
         proc.stdin.write(prompt.encode())
         await proc.stdin.drain()
         proc.stdin.close()
