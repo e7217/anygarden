@@ -11,6 +11,7 @@ import AdminSkillsPage from '@/pages/AdminSkillsPage'
 import AdminSystemPage from '@/pages/AdminSystemPage'
 import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
 import AdminLLMGatewayPage from '@/pages/AdminLLMGatewayPage'
+import AdminFederationPage from '@/pages/AdminFederationPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
 import FederationPreviewPage from '@/pages/FederationPreviewPage'
@@ -85,6 +86,10 @@ export default function App() {
             <Route path="/admin/system" element={<AdminRoute><AdminSystemPage /></AdminRoute>} />
             <Route path="/admin/skills" element={<AdminRoute><AdminSkillsPage /></AdminRoute>} />
             <Route path="/admin/mcp-templates" element={<AdminRoute><AdminMCPTemplatesPage /></AdminRoute>} />
+            {/* #593 — federated collaboration admin. AdminRoute gates the
+                node/peer and shared-channel surfaces, which are all
+                admin-scoped on the backend. */}
+            <Route path="/admin/federation" element={<AdminRoute><AdminFederationPage /></AdminRoute>} />
             {/* #197 — LLM Gateway admin. Nested route: the shell owns the
                 secondary sidebar + Apply footer, each section is an
                 <Outlet/> child. The bare /admin/llm-gateway URL redirects

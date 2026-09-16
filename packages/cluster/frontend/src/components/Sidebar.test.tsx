@@ -172,7 +172,7 @@ function renderSidebar() {
 }
 
 describe('Sidebar — experimental admin nav badges (#346)', () => {
-  it('marks LLM Gateway and Topology as experimental entries', () => {
+  it('marks LLM Gateway, Federation and Topology as experimental entries', () => {
     authMockState.isAdmin = true
 
     renderSidebar()
@@ -180,10 +180,15 @@ describe('Sidebar — experimental admin nav badges (#346)', () => {
     expect(screen.getByRole('button', {
       name: 'LLM Gateway, experimental feature',
     })).toBeInTheDocument()
+    // #593 — federation admin entry joins the experimental group while the
+    // live wiring is landing (task #33/#34).
+    expect(screen.getByRole('button', {
+      name: 'Federation, experimental feature',
+    })).toBeInTheDocument()
     expect(screen.getByRole('button', {
       name: 'Topology, experimental feature',
     })).toBeInTheDocument()
-    expect(screen.getAllByText('Experimental')).toHaveLength(2)
+    expect(screen.getAllByText('Experimental')).toHaveLength(3)
   })
 })
 
