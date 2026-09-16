@@ -24,6 +24,14 @@ class AnygardenSettings(BaseSettings):
     # Opt-in integrated mode; legacy server startup remains unchanged.
     local_node_data_dir: Path | None = None
 
+    # #593 — where persisted peer-trust credentials live. When unset, the
+    # startup composer looks in ``{local_node_data_dir or ~/.anygarden}/peer``
+    # for ``peer-cert.pem``/``peer-key.pem`` written by the explicit
+    # ``federation.certificates.create_credentials`` setup step. Startup
+    # never creates, overwrites, or rotates these files; missing credentials
+    # simply leave node/shared-channel APIs mounted but disabled (503).
+    peer_credentials_dir: Path | None = None
+
     host: str = "127.0.0.1"
     port: int = 8000
     db_url: str = _DEFAULT_DB_URL
