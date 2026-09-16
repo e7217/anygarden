@@ -17,6 +17,21 @@ class ChannelError(RuntimeError):
         super().__init__(code)
 
 
+# Command kinds that narrow the peer action below the default. Shared by
+# ChannelService authorization and the #592 delegation reauthorization so the
+# two current-grant boundaries cannot drift apart.
+COMMAND_ACTIONS = {
+    "message.send": "message.send",
+    "task.request": "task.request",
+    "task.cancel": "task.cancel",
+}
+DEFAULT_COMMAND_ACTION = "task.execute"
+
+
+def command_action(kind: str) -> str:
+    return COMMAND_ACTIONS.get(kind, DEFAULT_COMMAND_ACTION)
+
+
 def _pairs(items):
     result = {}
     for key, value in items:
