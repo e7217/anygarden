@@ -231,3 +231,48 @@ describe('uuid helper', () => {
     }
   })
 })
+
+describe('task #35/#34 read surfaces', () => {
+  it('lists bindings at the admin-only metadata path', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse([
+        {
+          authority_node_id: 'a',
+          channel_id: 'c',
+          local_room_id: 'r1',
+          last_seq: 5,
+          applied_seq: 4,
+        },
+      ]),
+    )
+    const { listBindings } = await import('./federationApi')
+    const bindings = await listBindings()
+    expect(bindings[0].local_room_id).toBe('r1')
+    expect(lastCall().url).toBe('/api/v1/shared-channels/bindings')
+  })
+
+  it('reads delegation mirrors through the bound local room', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      jsonResponse([
+        {
+          authority_node_id: 'a',
+          channel_id: 'c',
+          delegation_id: 'd1',
+          task_id: 't1',
+          source_message_id: 'm1',
+          requester: { node_id: 'a', kind: 'human', principal_id: 'u1' },
+          executor: { node_id: 'b', agent_id: 'g1' },
+          execution_id: null,
+          revision: 2,
+          state: 'running',
+          process_state: 'running',
+          task_status: 'in_progress',
+        },
+      ]),
+    )
+    const { listDelegations } = await import('./federationApi')
+    const delegations = await listDelegations('r1')
+    expect(delegations[0].state).toBe('running')
+    expect(lastCall().url).toBe('/api/v1/rooms/r1/delegations')
+  })
+})

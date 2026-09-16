@@ -155,7 +155,9 @@ def guest_auth(client: AsyncClient, env, *, room_id: str) -> None:
 
 async def test_product_app_mounts_endpoint_at_documented_path(env, client):
     # Final-acceptance #43 regression: the rooms-router include chain must
-    # not double the prefix. The real URL answers 200; the doubled URL 404s.
+    # not double the prefix. The real URL answers 200; the doubled URL must
+    # never answer delegation JSON — without UI serving it 404s, with the SPA
+    # catch-all it serves index.html (text/html).
     auth(client, env, env["member"])
     r = await client.get(f"/api/v1/rooms/{env['room']}/delegations")
     assert r.status_code == 200
@@ -163,7 +165,14 @@ async def test_product_app_mounts_endpoint_at_documented_path(env, client):
         "accepted", "cancel_requested", "unknown",
     }
     doubled = await client.get(f"/api/v1/rooms/api/v1/rooms/{env['room']}/delegations")
-    assert doubled.status_code == 404
+    content_type = doubled.headers.get("content-type", "")
+    if "application/json" in content_type:
+        # Without UI serving the doubled path is a FastAPI 404 detail
+        # object — never a delegation array.
+        assert not isinstance(doubled.json(), list)
+    else:
+        # With the SPA catch-all it serves index.html.
+        assert content_type.startswith("text/html")
     sample = next(row for row in r.json() if row["state"] == "accepted")
     stored = env["rows"]["accepted"]
     assert sample["delegation_id"] == stored.delegation_id

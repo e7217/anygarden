@@ -17,7 +17,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAuth } from '@/hooks/useAuth'
 import {
   FederationApiError,
+  type BindingView,
   type CommandEnvelope,
+  type DelegationStatusView,
   type InviteBundleView,
   type InviteView,
   type ParticipantView,
@@ -31,6 +33,8 @@ import {
   createInvite,
   getSnapshot,
   getSubmission,
+  listBindings,
+  listDelegations,
   listInvites,
   listPeers,
   revokeGrant,
@@ -48,6 +52,8 @@ const POLL_MS = 5000
 export interface FederationChannelRef {
   authority: string
   channel: string
+  /** Bound local room — delegations are read through it (task #35). */
+  localRoomId?: string
   /** Follower-side command routing (until #34 exposes discovery). */
   senderNodeId?: string
   grantEpoch?: number
@@ -106,6 +112,7 @@ export function useFederation() {
   const [nodesError, setNodesError] = useState<FederationApiError | null>(null)
   const [nodesCapability, setNodesCapability] = useState<NodeCapability>('unknown')
   const [channelRef, setChannelRef] = useState<FederationChannelRef | null>(() => loadRef())
+  const [bindings, setBindings] = useState<BindingView[]>([])
   const [snapshot, setSnapshot] = useState<SnapshotView | null>(null)
   const [snapshotError, setSnapshotError] = useState<FederationApiError | null>(null)
   const [submissions, setSubmissions] = useState<Record<string, TrackedSubmission>>({})
@@ -122,6 +129,13 @@ export function useFederation() {
       setPeers(nextPeers)
       setNodesError(null)
       setNodesCapability('ready')
+      // Bindings listing landed with PR608; its absence (older node) simply
+      // keeps the manual-entry path, so a 404 here is not an error state.
+      try {
+        setBindings(await listBindings())
+      } catch {
+        setBindings([])
+      }
     } catch (error) {
       if (error instanceof FederationApiError) {
         setNodesError(error)
@@ -149,6 +163,25 @@ export function useFederation() {
       if (error instanceof FederationApiError) setSnapshotError(error)
     }
   }, [])
+
+  const [delegations, setDelegations] = useState<DelegationStatusView[]>([])
+
+  const refreshDelegations = useCallback(async (ref: FederationChannelRef | null) => {
+    const localRoomId =
+      ref?.localRoomId ??
+      bindings.find(
+        (binding) => binding.authority_node_id === ref?.authority && binding.channel_id === ref?.channel,
+      )?.local_room_id
+    if (!localRoomId) {
+      setDelegations([])
+      return
+    }
+    try {
+      setDelegations(await listDelegations(localRoomId))
+    } catch {
+      setDelegations([])
+    }
+  }, [bindings])
 
   const refreshSubmissions = useCallback(async (ref: FederationChannelRef | null) => {
     if (!ref) return
@@ -184,7 +217,8 @@ export function useFederation() {
     saveRef(channelRef)
     setSubmissions({})
     void refreshChannel(channelRef)
-  }, [channelRef, refreshChannel])
+    void refreshDelegations(channelRef)
+  }, [channelRef, refreshChannel, refreshDelegations])
 
   useEffect(() => {
     if (!isAdmin) return
@@ -192,12 +226,13 @@ export function useFederation() {
       if (document.visibilityState !== 'visible') return
       void refreshChannel(channelRef)
       void refreshSubmissions(channelRef)
+      void refreshDelegations(channelRef)
     }
     pollTimer.current = setInterval(tick, POLL_MS)
     return () => {
       if (pollTimer.current) clearInterval(pollTimer.current)
     }
-  }, [isAdmin, channelRef, refreshChannel, refreshSubmissions])
+  }, [isAdmin, channelRef, refreshChannel, refreshSubmissions, refreshDelegations])
 
   /** Actor principal derived from the logged-in admin session. */
   const actorPrincipal = useMemo<Principal | null>(() => {
@@ -280,6 +315,7 @@ export function useFederation() {
         setChannelRef({
           authority: binding.authority_node_id,
           channel: binding.channel_id,
+          localRoomId: binding.local_room_id,
           senderNodeId: channelRef?.senderNodeId,
           grantEpoch: channelRef?.grantEpoch,
         })
@@ -327,8 +363,9 @@ export function useFederation() {
         })
         await refreshChannel(channelRef)
         await refreshSubmissions(channelRef)
+        await refreshDelegations(channelRef)
       }),
-    [channelRef, actorPrincipal, refreshChannel, refreshSubmissions],
+    [channelRef, actorPrincipal, refreshChannel, refreshSubmissions, refreshDelegations],
   )
 
   function commandEnvelope(kind: string, payload: Record<string, unknown>): CommandEnvelope | null {
@@ -421,9 +458,11 @@ export function useFederation() {
     refreshNodes,
     channelRef,
     setChannelRef,
+    bindings,
     snapshot,
     snapshotError,
     roster,
+    delegations,
     submissions: Object.values(submissions).sort((a, b) => b.createdAt - a.createdAt),
     actorPrincipal,
     busy,
