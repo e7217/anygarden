@@ -47,7 +47,7 @@ The fixture's internal commands must never be promoted into a production API.
 | T01 #590 | Real loopback TLS invite/redeem; concurrent consumption; ACK loss; expired/reused/forged invite; wrong peer/version | Actual connection key possession; one local transaction winner; same authenticated request recovers receipt without restoring revoked grant; local acceptance differs from peer ACK; pending identity cannot read channels |
 | T02 #590/#593 | Unshared channel/agent, observer, removed member, archived room; search/autocomplete; failed revoke delivery and control-only replay | Immediate local revoke persists despite outbox failure; current pinned identity required for control; obsolete revoke epoch cannot restore access; control cannot read/write channels or grant/rotate/administer |
 | T03 #590 | Rotate pin with old socket open and old-key invite pending | Atomic pin/certificate-generation change; per-request current identity recheck rejects old connection and old-key bootstrap; no grace overlap; revoked grant remains revoked; certificate generation distinct from channel/local policy epochs |
-| C01 #591 | Text/thread/member sync in A-owned and B-owned channels | Same committed IDs/order/root linkage; authority verified per channel; local-only data absent |
+| C01 #591 | Text/thread/member sync in A-owned and B-owned channels | Same committed IDs/order/root linkage across command and participant.changed events in one channel seq; participant revision and remove tombstone survive restart and reject stale replay; display membership never grants execution rights; authority/admin/publication consent verified; local-only data absent |
 | C02 #591 | Drop ACK after durable receive, duplicate event, same ID/different body, reorder/gap | Same payload produces one visible event; changed payload rejected; cursor cannot skip missing committed event; receipt and UI count agree |
 | C03 #591 | Kill/restart sender and receiver, disconnect before and after durable receive | Persisted outbox replay; no fabricated ACK; recovery converges once; record exact crash boundaries |
 | C04 #591/#588 | Disconnect channel authority while peer stays up | Shared changes pending/unconfirmed, never locally granted; separate local task continues; no automatic authority promotion |
@@ -112,12 +112,10 @@ clear denominator. No synthetic fixture timing is an operational baseline.
 
 ## Canonical contract hookup (2026-09-16)
 
-Source: PR #596 exact `ac7667718f26a78e4a4b686011ee456ab074c9b5`.
-Initial `77807f9` was cherry-picked as `24181c4`; its result-state correction
-`7ff28be` was cherry-picked as `4a9a8f5`, both without modification. The subsequent ADR-only bootstrap/rotation/control
-clarification `ac76677` is also included unchanged; contract files remain identical
-to `7ff28be`. The seven
-contract/ADR files match that source exactly. PR #595 currently includes this
+Source: PR #596 exact `aa402f5a3fdf58d17f7377fd5103d8e75f8380b1`.
+Initial `77807f9`, result-state correction `7ff28be`, ADR clarification `ac76677`,
+and participant-control addition `aa402f5` are included by unchanged cherry-picks.
+All canonical contract/ADR files match that source exactly. PR #595 currently includes this
 unmerged dependency; it must not bypass the independent #596 review. After #596
 is merged, refresh the QA branch against main and confirm that only QA/CI changes
 remain in the PR diff. No target branch or PR has been merged by this work.
@@ -129,7 +127,8 @@ The latter installs the script's pinned jsonschema dependency if uncached. Missi
 contract files fail these steps rather than skipping or fetching another branch.
 
 Local results: six fixture tests passed; the unchanged checker passed 47 command
-scenarios / 164 decisions and 8 event scenarios / 18 decisions. The additional
+scenarios / 164 decisions, 8 event scenarios / 18 decisions, and 13 participant
+scenarios / 47 decisions. The additional
 fixture test transports the complete normal-completion command payloads, restarts
 the receiver, replays them, and compares stored JSON to the canonical source.
 It does not apply commands or establish authorization/execution correctness.
@@ -147,3 +146,10 @@ TLS, session migration and real runtime compatibility remain NOT RUN.
 ADR-only update: bootstrap, pin rotation and control-only revocation expand the
 product matrix to 17 NOT RUN rows. These requirements are not new fixture/model
 test coverage. No TLS or invite transaction was exercised by this preparation.
+
+Participant contract update: the existing CI reference-model command now also
+checks participant scenarios, including mixed command/participant channel seq.
+The canonical validator registers participant-event.schema.json for the event
+union. The QA fixture remains a data-preservation test, not a participant
+projection. Product DB mixed-sequence replay, tombstone durability, current
+admin/publication consent and unchanged grant enforcement remain NOT RUN in C01.
