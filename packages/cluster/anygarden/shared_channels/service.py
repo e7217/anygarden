@@ -32,6 +32,7 @@ from anygarden.shared_channels.schemas import (
     ChannelError,
     CommandEffect,
     canonical,
+    command_action,
     validate,
 )
 
@@ -108,13 +109,7 @@ class ChannelService:
 
     async def _authorize(self, db, tls, envelope, action=None):
         kind = envelope.get("kind", "channel.read")
-        action = action or (
-            {
-                "message.send": "message.send",
-                "task.request": "task.request",
-                "task.cancel": "task.cancel",
-            }.get(kind, "task.execute")
-        )
+        action = action or command_action(kind)
         if self.peers is None:
             raise ChannelError("PEERING_DISABLED", 503)
         return await self.peers.authorize(

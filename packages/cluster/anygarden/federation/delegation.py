@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.db.models import Message, Participant, Room, Task
 from anygarden.federation.schemas import Principal
 from anygarden.shared_channels.models import SharedMessage
-from anygarden.shared_channels.schemas import ChannelError, CommandEffect
+from anygarden.shared_channels.schemas import (
+    ChannelError,
+    CommandEffect,
+    command_action,
+)
 
 from .delegation_models import Delegation, DelegationObservation, DelegationReservation
 
@@ -122,12 +126,9 @@ class DelegationService:
 
             async def reauthorize(db, command):
                 # Same current-grant boundary as ChannelService authorization,
-                # through the public PeerService.authorize entry only.
-                action = {
-                    "message.send": "message.send",
-                    "task.request": "task.request",
-                    "task.cancel": "task.cancel",
-                }.get(command.get("kind"), "task.execute")
+                # through the public PeerService.authorize entry and the same
+                # shared kind→action mapping.
+                action = command_action(command.get("kind", "channel.read"))
                 if channel_service.peers is None:
                     raise ChannelError("PEERING_DISABLED", 503)
                 await channel_service.peers.authorize(
