@@ -162,6 +162,60 @@ revocation delivery, or local stop. Cancellation stays unconfirmed until proof.
 Results arriving under revoked grants are rejected; only bounded local audit
 receipts remain. Re-invitation requires a new grant, never revives old requests.
 
+### Bootstrap, certificate rotation and control-only authorization
+
+Before registration, an active, unexpired invite may authorize only `hello` and
+`redeem` from the exact node/certificate identity bound by the inviting admin.
+This is a separate bootstrap permission, not general peer trust. The TLS layer
+must prove possession of that certificate's key and bind it to the actual
+connection; a node ID, certificate blob or proxy header supplied by the caller
+is not evidence. Certificate-chain/hostname rules and explicit pin policy are
+applied by the transport, never replaced by accepting all certificates. Pending
+invite identities cannot list channels, enumerate participants, invoke management
+APIs or send normal federation commands. An expired/revoked/consumed invite grants
+no new authority; an authenticated same-request receipt replay is recovery only.
+
+Invite consumption uses a conditional single-use transition and stores the local
+acceptance, pin/grants and redemption receipt in one **local DB transaction**.
+Concurrent different consumers cannot both succeed. Store local acceptance and
+remote acknowledgement separately: no distributed transaction is implied across
+nodes. After ACK loss, the same authenticated node retries the same request ID
+and identical invite/body to recover the committed receipt; a changed body,
+identity or key is rejected. Recovery rechecks current revocation/expiry policy
+and cannot re-enable a grant. The UI/API must not infer the other node's acceptance
+from local commit, and dispatch requires the relevant current authorities.
+
+Explicit admin certificate rotation commits the new pin and a monotonically
+increased **certificate generation** atomically, then closes old connections.
+Each subsequent request, including control messages and receipt replay, must
+revalidate its verified connection certificate against the current pin/generation.
+An old socket is denied even if asynchronous closure has not finished. Old-key
+bootstrap invites are invalidated rather than providing a backdoor to the retired
+pin. Certificate generation, authority-issued channel grant epoch, and execution
+node local policy epoch are independent counters. Rotation neither restores a
+revoked relationship nor renews channel grants. No implicit old/new pin overlap
+is permitted in v1; a future grace-window policy would need an explicit contract.
+
+Relationship revocation atomically disables local channel access and records a
+control outbox event. Failed delivery cannot roll back that local decision.
+A **control-only permission** may still authorize authenticated `revoke` and its
+ACK, scoped to this peer relationship, its revocation epoch and event/receipt ID.
+This is not an authentication exception: the peer must still prove the currently
+pinned TLS identity; missing, forged or retired certificates remain rejected.
+It grants no channel reads/writes, task actions, participant discovery, grant
+creation, certificate rotation or general management API access. Control replay
+is idempotent; obsolete epochs cannot reverse newer revocation. If current peer
+identity cannot be authenticated, retain bounded pending delivery/failure status
+locally instead of weakening authentication to deliver the notice.
+
+#590 acceptance must include real loopback TLS identity extraction, pending-invite
+access denial, simultaneous consumption with one winner, ACK-loss receipt
+recovery, pin rotation while an old connection stays open, revoked-grant survival
+across rotation, immediate local revoke with failed outbox delivery, and negative
+tests proving control-only credentials cannot access ordinary channel routes.
+These checks are implementation requirements; the Phase 0 command model does not
+claim to execute TLS or invite/rotation transactions.
+
 ## Versioned wire contract and APIs (#590–592)
 
 Normative envelope and payload shapes: `contracts/federation/v1/envelope.schema.json`.
