@@ -532,6 +532,72 @@ async def fail_cleanup(*args):
                     process.wait(timeout=5)
 
 
+def test_real_cli_sigint_exits_zero_after_confirmed_cleanup(tmp_path):
+    """#594 QA finding: SIGINT after full graceful shutdown must not exit 1.
+
+    Uvicorn re-raises the captured SIGINT after capture_signals() restores
+    the default handler, so the KeyboardInterrupt surfaces in the CLI frame
+    once the lifespan already confirmed cleanup (drain complete, owner
+    released, state stopped). Letting it escape made click print "Aborted!"
+    and exit 1 — a supervisor would misread that as a crash to restart.
+    """
+    import os
+    import signal
+    import socket
+    import time
+    import urllib.request
+
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    environment = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("ANYGARDEN_") and k != "WEB_CONCURRENCY"
+    }
+    for key in (
+        "SKILL_STALE_INTERVAL_HOURS",
+        "ORPHAN_SWEEPER_INTERVAL_SEC",
+        "TURN_RECOVERY_INTERVAL_SEC",
+    ):
+        environment["ANYGARDEN_" + key] = "0"
+    command = [sys.executable, "-c", "from anygarden.cli import dispatch; dispatch()"]
+    log_path = tmp_path / "server.log"
+    with log_path.open("w") as log:
+        process = subprocess.Popen(
+            command
+            + ["start", "--data-dir", str(tmp_path), "--port", str(port)],
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                assert process.poll() is None, log_path.read_text()
+                try:
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/healthz", timeout=0.2
+                    ) as response:
+                        assert response.status == 200
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("CLI startup timed out")
+            process.send_signal(signal.SIGINT)
+            exited = process.wait(timeout=15)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+    log = log_path.read_text()
+    assert exited == 0, log
+    assert "drain_complete" in log
+    assert read_object(tmp_path / "node-owner.json")["state"] == "stopped"
+    assert "Aborted!" not in log
+
+
 def test_integrated_node_refuses_implicit_schema_upgrade(tmp_path):
     import sqlite3
 

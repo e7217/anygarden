@@ -375,7 +375,17 @@ def start_node(data_dir: Path, host: str | None, port: int | None,
         server.should_exit = True
     app.state.node_shutdown_callback = request_shutdown
     click.echo(f"Starting AnyGarden node in {data_dir}")
-    server.run()
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        # Uvicorn's capture_signals() restores the previous SIGINT handler
+        # and re-raises the captured signal AFTER graceful shutdown, so a
+        # clean Ctrl-C reaches this frame as KeyboardInterrupt once the
+        # lifespan already confirmed cleanup. Swallowing it here is safe:
+        # the checks below still fail the command when cleanup was NOT
+        # confirmed, and letting it escape would print "Aborted!" and exit
+        # 1, which a supervising process misreads as a crash to restart.
+        pass
     if not server.started:
         raise click.ClickException("Node did not start; see the startup error above")
     # Uvicorn logs lifespan failures instead of propagating them to run().
