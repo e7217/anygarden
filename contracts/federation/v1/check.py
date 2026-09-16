@@ -21,7 +21,12 @@ from referencing import Registry, Resource
 ROOT = Path(__file__).resolve().parent
 SCHEMAS = [
     json.loads((ROOT / name).read_text())
-    for name in ("envelope.schema.json", "receipt.schema.json", "event.schema.json")
+    for name in (
+        "envelope.schema.json",
+        "receipt.schema.json",
+        "event.schema.json",
+        "participant-event.schema.json",
+    )
 ]
 REGISTRY = Registry().with_resources(
     (schema["$id"], Resource.from_contents(schema)) for schema in SCHEMAS
@@ -328,6 +333,7 @@ class Follower:
         self.cursor = 0
         self.events = {}
         self.sequences = {}
+        self.participants = {}
 
     def apply(self, event: dict, transport_node: str, can_read: bool) -> str:
         if not VALIDATORS[2].is_valid(event):
@@ -339,16 +345,21 @@ class Follower:
             return "IDENTITY_MISMATCH"
         if event["channel_id"] != self.channel or not can_read:
             return "CHANNEL_DENIED"
-        request, receipt = event["request"], event["receipt"]
-        for key in ("authority_node_id", "channel_id"):
-            if event[key] != request[key] or event[key] != receipt[key]:
+        control = event.get("kind") == "participant.changed"
+        if control:
+            if event["actor"]["node_id"] != self.authority:
                 return "EVENT_INTEGRITY"
-        if (
-            event["event_id"] != receipt["event_id"]
-            or event["seq"] != receipt["seq"]
-            or request["request_id"] != receipt["request_id"]
-        ):
-            return "EVENT_INTEGRITY"
+        else:
+            request, receipt = event["request"], event["receipt"]
+            for key in ("authority_node_id", "channel_id"):
+                if event[key] != request[key] or event[key] != receipt[key]:
+                    return "EVENT_INTEGRITY"
+            if (
+                event["event_id"] != receipt["event_id"]
+                or event["seq"] != receipt["seq"]
+                or request["request_id"] != receipt["request_id"]
+            ):
+                return "EVENT_INTEGRITY"
         body = canonical(event)
         old = self.events.get(event["event_id"])
         if old is not None:
@@ -358,6 +369,15 @@ class Follower:
             return "EVENT_INTEGRITY"
         if seq != self.cursor + 1:
             return "EVENT_GAP"
+        if control:
+            principal = canonical(event["principal"])
+            previous = self.participants.get(principal)
+            revision = previous["revision"] if previous else 0
+            if event["revision"] != revision + 1:
+                return "REVISION_CONFLICT"
+            self.participants[principal] = {
+                key: event[key] for key in ("role", "active", "revision")
+            }
         self.events[event["event_id"]] = body
         self.sequences[seq] = event["event_id"]
         self.cursor = seq
@@ -450,6 +470,9 @@ def check() -> None:
             assert result == action["code"], (case["name"], result)
             assert follower.cursor == action["cursor"], case["name"]
             event_steps += 1
+    from participant_check import check_participants
+
+    check_participants(fixtures, Model, Follower, VALIDATORS[3], canonical)
     for raw in ('{"a":1,"a":2}', '{"x":NaN}', '{"x":Infinity}', '{"x":1.0}'):
         try:
             strict_load(raw)

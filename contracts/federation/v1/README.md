@@ -51,3 +51,14 @@ reaping, runtime CLI compatibility, browser UI or two-host/provider execution.
 Those belong to #588–594, with independent QA. Historical CLI 0.146.0 is only
 repository provenance; neither it nor the host's reported 0.154.0 is certified by
 these data-only protocol fixtures.
+
+Participant extension (v1 draft): `event.schema.json` is now a closed union of
+unchanged command/receipt events and `participant-event.schema.json` control
+events. `participant-scenarios.json` adds 13 cases / 47 decisions, checked by
+`participant_check.py` through the same command above. Participant changes share
+the channel sequence and dedup cursor. Tombstone revisions survive removal;
+replay cannot restore an old active membership. Roles describe this channel's
+participant projection, never local server administration or a peer grant.
+The local model's `local_admin` and `publication_allowed` flags represent trusted
+current policy decisions, not accepted wire fields. Product code must derive
+these from authenticated local policy and approved principal export/consent.
