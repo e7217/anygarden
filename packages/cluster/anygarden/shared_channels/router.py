@@ -128,6 +128,14 @@ async def binding(
     return result
 
 
+@local_router.get("/bindings")
+async def list_bindings(s=Depends(service), actor=Depends(get_admin_identity)):
+    """#593 — admin-only, metadata-only view of shared-channel bindings."""
+    async with s.sessions.begin() as db:
+        await s.require_local_admin(db, actor.id)
+        return await s.bindings(db)
+
+
 @local_router.put("/{channel_id}/publication")
 async def publication(
     channel_id: UUID,

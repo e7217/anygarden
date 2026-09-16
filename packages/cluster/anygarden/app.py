@@ -336,6 +336,60 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 app.state.node_shutdown_complete = clean
 
 
+def _compose_federation_services(app: FastAPI) -> None:
+    """Attach PeerService/ChannelService when persisted credentials exist.
+
+    #593 product-app wiring. Node identity is created only by the explicit
+    ``federation.certificates.create_credentials`` setup step — startup
+    never writes, overwrites, or rotates credential files, and never starts
+    the mTLS listener. When both ``peer-cert.pem`` and ``peer-key.pem`` are
+    present the PeerService is constructed from the certificate's node_id
+    and the app's session factory, and a ChannelService is attached unless
+    the caller already injected one via ``create_app(channel_service=...)``.
+    Absent credentials leave every node/shared-channel route mounted but
+    disabled (PEERING_DISABLED / SHARING_DISABLED 503); partial credential
+    sets log a warning and stay disabled rather than crashing boot.
+    """
+    config: AnygardenSettings = app.state.config
+    if getattr(app.state, "session_factory", None) is None:
+        return
+    anygarden_dir = config.local_node_data_dir or (Path.home() / ".anygarden")
+    peer_dir = config.peer_credentials_dir or (anygarden_dir / "peer")
+    cert_path = peer_dir / "peer-cert.pem"
+    key_path = peer_dir / "peer-key.pem"
+    cert_exists, key_exists = cert_path.exists(), key_path.exists()
+    if not cert_exists and not key_exists:
+        return
+    if not (cert_exists and key_exists):
+        import structlog
+
+        structlog.get_logger("federation").warning(
+            "peer_credentials.partial",
+            directory=str(peer_dir),
+            cert=cert_exists,
+            key=key_exists,
+        )
+        return
+    from anygarden.federation.certificates import inspect_certificate
+    from anygarden.federation.service import PeerService
+    from anygarden.shared_channels.service import ChannelService
+
+    identity = inspect_certificate(cert_path.read_text())
+    peers = PeerService(
+        node_id=identity.node_id,
+        cert_path=cert_path,
+        key_path=key_path,
+        sessions=app.state.session_factory,
+    )
+    app.state.peer_service = peers
+    if getattr(app.state, "channel_service", None) is None:
+        app.state.channel_service = ChannelService(
+            node_id=peers.node_id,
+            peers=peers,
+            sessions=peers.sessions,
+        )
+
+
 async def _startup_server(app: FastAPI) -> None:
     """Initialize API state; teardown is handled even if startup raises."""
     config: AnygardenSettings = app.state.config
@@ -407,6 +461,10 @@ async def _startup_server(app: FastAPI) -> None:
                     "and explicitly migrate it before using anygarden start."
                 )
         await _ensure_schema_ready(engine, config.db_url)
+
+    # #593 — compose federation services from persisted credentials. No-op
+    # (routes stay mounted but disabled, 503) when credentials are absent.
+    _compose_federation_services(app)
 
     # Initialize scheduler components (only if not already set by tests)
     if not getattr(app.state, "machine_bus", None):
@@ -1092,7 +1150,13 @@ def create_app(config: AnygardenSettings | None = None, *, channel_service=None)
     app.state.config = config
     app.include_router(ws_router)
     app.include_router(machine_ws_router)
+    from anygarden.federation.router import mount_admin
     from anygarden.shared_channels.router import mount_local
+
+    # Node admin routes are always mounted so operators get an explicit
+    # PEERING_DISABLED 503 instead of a bare 404; ``_startup_server`` attaches
+    # the real PeerService when persisted credentials exist.
+    mount_admin(app)
     mount_local(app, channel_service)
     app.include_router(rooms_router)
     app.include_router(messages_router)

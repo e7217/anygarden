@@ -290,7 +290,12 @@ async def resolve_access(
 
     if not allow_shared:
         from anygarden.shared_channels.models import ChannelStream
-        if await db.scalar(select(ChannelStream.local_room_id).where(ChannelStream.local_room_id == room_id)):
+
+        if await db.scalar(
+            select(ChannelStream.local_room_id).where(
+                ChannelStream.local_room_id == room_id
+            )
+        ):
             raise HTTPException(status_code=409, detail="Use the shared-channel API")
 
     if is_global_admin(identity):
@@ -413,6 +418,8 @@ async def accessible_room_ids(
     *,
     identity: Identity,
     scope: str = "rooms.collection",
+    channel_service=None,
+    include_shared: bool = False,
 ) -> frozenset[str]:
     """Return rooms whose read capability is currently available.
 
@@ -420,6 +427,19 @@ async def accessible_room_ids(
     their own Participant joins. It preserves the same guest binding, global
     admin bypass, private-membership semantics, and fail-closed identity
     handling as :func:`resolve_access`.
+
+    #593 — shared-channel rooms stay hidden from the global-admin bypass and
+    from guests (admin visibility is served by the shared-channel bindings
+    and snapshot APIs). For user/agent identities, callers that pass
+    ``include_shared=True`` together with a composed ``channel_service``
+    (metadata listings only — rooms collection and sub-rooms) list a bound
+    shared room while the shared visibility predicate passes: active roster
+    membership on the authority side, current unexpired grant actors on the
+    mirror side, re-evaluated per request in this transaction. Content
+    surfaces (saved messages, search) never pass ``include_shared`` —
+    message/thread content remains exclusive to the shared-channel snapshot
+    API (architecture criterion B-3). A ``None`` channel_service (sharing
+    disabled) keeps the pre-#593 full exclusion everywhere.
     """
 
     if is_global_admin(identity):
@@ -470,11 +490,35 @@ async def accessible_room_ids(
     if room_id is not None:
         stmt = stmt.where(Participant.room_id == room_id)
     rows = await db.scalars(stmt)
-    return await _without_shared(db, frozenset(rows.all()))
+    member_rooms = frozenset(rows.all())
+    if not include_shared or channel_service is None:
+        return await _without_shared(db, member_rooms)
+    from anygarden.shared_channels.models import ChannelStream
+    from anygarden.shared_channels.visibility import visible_shared_room_ids
+
+    shared_bound = frozenset(
+        (
+            await db.scalars(
+                select(ChannelStream.local_room_id).where(
+                    ChannelStream.local_room_id.in_(member_rooms)
+                )
+            )
+        ).all()
+    )
+    if not shared_bound:
+        return member_rooms
+    visible = await visible_shared_room_ids(
+        db,
+        identity=identity,
+        room_ids=shared_bound,
+        channel_service=channel_service,
+    )
+    return (member_rooms - shared_bound) | visible
 
 
 async def _without_shared(db, room_ids):
     from anygarden.shared_channels.models import ChannelStream
+
     shared = frozenset((await db.scalars(select(ChannelStream.local_room_id))).all())
     return room_ids - shared
 
@@ -592,7 +636,9 @@ async def require_capability(
     effective without reconnecting the client.
     """
 
-    access = await resolve_access(db, room_id=room_id, identity=identity, allow_shared=allow_shared)
+    access = await resolve_access(
+        db, room_id=room_id, identity=identity, allow_shared=allow_shared
+    )
 
     if access.is_archived and capability not in _ARCHIVED_ALLOWED_CAPABILITIES:
         require_active_room(access)
