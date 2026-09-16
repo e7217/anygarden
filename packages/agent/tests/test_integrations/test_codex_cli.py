@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from anygarden_agent.integrations.codex_cli import (
     CodexCliAdapter,
     _resolve_codex_cli_args,
@@ -217,7 +216,7 @@ class TestCallCodexSession:
         await adapter._call_codex("hi", "room1")
         assert seen["tid"] == "existing-tid"
 
-    async def test_resume_failure_retries_fresh(self, monkeypatch) -> None:
+    async def test_resume_failure_never_retries_fresh(self, monkeypatch) -> None:
         adapter = CodexCliAdapter()
         adapter._codex_path = "/usr/bin/codex"
         adapter._room_thread_ids["room1"] = "stale"
@@ -230,10 +229,12 @@ class TestCallCodexSession:
             return "fresh-reply", "new-tid", None, False
 
         monkeypatch.setattr(adapter, "_exec_once", fake_exec_once)
-        resp = await adapter._call_codex("hi", "room1")
-        assert resp == "fresh-reply"
-        assert calls == ["stale", None]  # tried resume, then fresh
-        assert adapter._room_thread_ids["room1"] == "new-tid"
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+        with pytest.raises(EngineError) as error:
+            await adapter._call_codex("hi", "room1")
+        assert error.value.transient is False
+        assert calls == ["stale"]
+        assert adapter._room_thread_ids["room1"] == "stale"
 
 
 class TestOnMessage:

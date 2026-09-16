@@ -19,8 +19,9 @@ Why a separate engine instead of replacing ``codex``:
 Session continuity uses codex's native ``resume``: the first turn in a
 room captures ``thread.started.thread_id`` from the JSONL stream and
 later turns pass it to ``codex exec resume <id>`` so conversation history
-is preserved by codex itself (no per-turn transcript rebuild). A resume
-against an expired/missing session is retried once as a fresh turn.
+is preserved by codex itself (no per-turn transcript rebuild). A failed resume
+is surfaced without a fresh retry: the CLI may already have performed tool
+effects before exiting.
 """
 
 from __future__ import annotations
@@ -40,6 +41,10 @@ from anygarden_agent.coordination.pending_context import (
     append_context_line,
     format_context_line,
 )
+from anygarden_agent.integrations._turn_timeout import (
+    resolve_supervisor_timeout,
+    resolve_turn_timeout,
+)
 from anygarden_agent.integrations.base import EngineAdapter, ShaTrackedInjector
 from anygarden_agent.integrations.engine_session_store import (
     load_sessions,
@@ -48,10 +53,6 @@ from anygarden_agent.integrations.engine_session_store import (
 from anygarden_agent.integrations.gemini_cli import (
     _subprocess_group_kwargs,
     _terminate_tree,
-)
-from anygarden_agent.integrations._turn_timeout import (
-    resolve_supervisor_timeout,
-    resolve_turn_timeout,
 )
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
@@ -248,7 +249,7 @@ class CodexCliAdapter(EngineAdapter):
             return response if response else None
         except EngineError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("codex_cli.turn_failed", room_id=room_id, error=str(exc))
             raise EngineError(
                 str(exc), transient=is_transient_error(str(exc))
@@ -259,18 +260,17 @@ class CodexCliAdapter(EngineAdapter):
 
         Returns the agent reply text (``-o`` last-message file, falling
         back to concatenated ``agent_message`` items) or ``None``. On a
-        resume against a vanished session the room's thread id is dropped
-        and the turn is retried once as a fresh session.
+        nonzero exit the outcome requires reconciliation; the same input is
+        never automatically retried in a fresh session.
         """
         thread_id = self._room_thread_ids.get(room_id)
         response, new_thread_id, usage, resume_failed = await self._exec_once(
             prompt, thread_id
         )
-        if resume_failed and thread_id is not None:
-            # Session expired/missing — drop it and retry fresh once.
-            logger.info("codex_cli.resume_failed_retry", room_id=room_id)
-            self._room_thread_ids.pop(room_id, None)
-            response, new_thread_id, usage, _ = await self._exec_once(prompt, None)
+        if resume_failed:
+            raise EngineError(
+                "codex-cli resume outcome requires reconciliation", transient=False
+            )
 
         if new_thread_id:
             self._room_thread_ids[room_id] = new_thread_id
@@ -312,11 +312,15 @@ class CodexCliAdapter(EngineAdapter):
                 **_subprocess_group_kwargs(),
             )
             try:
-                stdout, stderr = await asyncio.wait_for(
+                stdout, _stderr = await asyncio.wait_for(
                     proc.communicate(input=prompt.encode()),
                     timeout=_CODEX_CLI_TIMEOUT,
                 )
-            except asyncio.TimeoutError as exc:
+            except asyncio.CancelledError:
+                await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
+                await proc.wait()
+                raise
+            except TimeoutError as exc:
                 await asyncio.to_thread(_terminate_tree, proc.pid, 5.0)
                 await proc.wait()
                 logger.error("codex_cli.timeout", timeout=_CODEX_CLI_TIMEOUT)
@@ -328,31 +332,13 @@ class CodexCliAdapter(EngineAdapter):
             parsed_thread_id, jsonl_text, usage = self._parse_codex_jsonl(raw)
 
             if proc.returncode != 0:
-                stderr_snippet = stderr.decode(errors="replace")[:500]
-                # A resume against a vanished session fails non-zero; let
-                # the caller retry fresh rather than surfacing an error.
-                resume_failed = thread_id is not None
-                if not resume_failed:
-                    logger.error(
-                        "codex_cli.nonzero_exit",
-                        code=proc.returncode,
-                        stderr=stderr_snippet,
-                    )
-                    raise EngineError(
-                        f"codex-cli exited with code {proc.returncode}"
-                        + (f": {stderr_snippet}" if stderr_snippet.strip() else ""),
-                        transient=is_transient_error(stderr_snippet),
-                    )
-                # resume failed — surface stderr (warning) so an argument-
-                # shape bug (#498) isn't silently misread as an expired
-                # session, then let the caller retry fresh once.
-                logger.warning(
-                    "codex_cli.resume_nonzero",
-                    thread_id=thread_id,
-                    code=proc.returncode,
-                    stderr=stderr_snippet,
+                # A process can fail after a tool side effect with no reply text.
+                # Neither resume nor fresh execution is safe to retry automatically.
+                logger.error("codex_cli.nonzero_exit", code=proc.returncode)
+                raise EngineError(
+                    f"codex-cli exited with code {proc.returncode}; reconciliation required",
+                    transient=False,
                 )
-                return None, None, None, True
 
             # Prefer the ``-o`` file; fall back to JSONL agent_message.
             file_text = ""
