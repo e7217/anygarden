@@ -2356,3 +2356,7 @@ class VersionCheck(Base):
 # Register opt-in peer control-plane tables for create_all / Alembic metadata.
 # Federation never maps a remote principal onto a local User/Agent credential.
 from anygarden.federation import models as _federation_models  # noqa: E402,F401
+
+# Shared channel identities and durable synchronization state are explicit;
+# remote principal IDs never become local authentication credentials.
+from anygarden.shared_channels import models as _shared_channel_models  # noqa: E402,F401

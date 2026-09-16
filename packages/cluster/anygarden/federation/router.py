@@ -271,10 +271,13 @@ def mount_admin(app: FastAPI, peer_service: PeerService | None = None):
     app.add_exception_handler(RequestValidationError, validation)
 
 
-def create_peer_app(peer_service: PeerService) -> FastAPI:
+def create_peer_app(peer_service: PeerService, channel_service=None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.peer_service = peer_service
     app.include_router(remote_router)
+    if channel_service is not None:
+        from anygarden.shared_channels.router import mount_peer
+        mount_peer(app, channel_service)
     app.add_exception_handler(PeerError, error_handler)
     app.add_exception_handler(RequestValidationError, validation_handler)
 

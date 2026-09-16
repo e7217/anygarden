@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:anygarden:federation:v1:event",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "authority_node_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "channel_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "request": {
+          "$ref": "urn:anygarden:federation:v1:command"
+        },
+        "receipt": {
+          "$ref": "urn:anygarden:federation:v1:receipt"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "event_id",
+        "authority_node_id",
+        "channel_id",
+        "seq",
+        "request",
+        "receipt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "$ref": "urn:anygarden:federation:v1:participant-event"
+    }
+  ]
+}

@@ -30,6 +30,10 @@ async def append_message(
     server-side injections (e.g. task assignment, #266) can pass
     ``None`` to denote a system-origin message.
     """
+    from anygarden.shared_channels.models import ChannelStream
+    from anygarden.shared_channels.schemas import ChannelError
+    if await db.scalar(select(ChannelStream.local_room_id).where(ChannelStream.local_room_id == room_id)):
+        raise ChannelError("SHARED_CHANNEL_API_REQUIRED")
     for attempt in range(_MAX_SEQ_RETRIES):
         # Compute next seq for this room
         result = await db.execute(

@@ -100,8 +100,9 @@ async def post(service, endpoint, pem: str, path: str, payload: dict) -> dict:
 class PeerListener:
     """Opt-in separate listener. It mounts only federation control endpoints."""
 
-    def __init__(self, service, host="127.0.0.1", port=0):
+    def __init__(self, service, host="127.0.0.1", port=0, *, channel_service=None):
         self.service, self.host, self.port = service, host, port
+        self.channel_service = channel_service
         self.server = self.task = None
         self.context = None
 
@@ -147,7 +148,7 @@ class PeerListener:
                 super().connection_lost(exc)
 
         config = uvicorn.Config(
-            create_peer_app(service),
+            create_peer_app(service, self.channel_service),
             host=self.host,
             port=self.port,
             http=PinnedProtocol,
