@@ -109,6 +109,32 @@ async def _grant_allows(
     )
 
 
+def make_local_policy(node_id: str):
+    """Entry-gate predicate for the authority transport layer (task #56).
+
+    Layering (dev01/dev03 ruling): this transport gate (current inbound grant)
+    -> the delegation guards' dedup-before roster/role re-check -> the B node's
+    ExecutorBridge permits as the runtime fence. grant_epoch is already matched
+    by ``PeerService.authorize`` before this runs; the predicate only adds a
+    deny (called last, read-only session, never on the receipt reauthorize
+    path). Absence keeps the deny-by-default; installing it never widens
+    access.
+    """
+
+    async def local_policy(db: AsyncSession, auth) -> bool:
+        return await _grant_allows(
+            db,
+            node_id,
+            str(auth.channel_id),
+            {
+                "node_id": str(auth.principal.node_id),
+                "agent_id": str(auth.principal.principal_id),
+            },
+        )
+
+    return local_policy
+
+
 def install_product_delegation(channel_service) -> DelegationService:
     """Install the product delegation coordinator on a composed service.
 

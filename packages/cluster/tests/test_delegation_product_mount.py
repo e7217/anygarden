@@ -374,3 +374,146 @@ async def test_remote_executor_grant_path_and_revocation(mounted):
     async with a.s.sessions.begin() as db:
         with pytest.raises(PeerError):
             await a.c.submit(request(), tls=b.s.identity)
+
+
+# --------------------------------------------------------------------------
+# task #56 — transport-layer local_policy (deny-by-default entry gate)
+
+
+async def test_local_policy_allows_listed_and_denies_unlisted_or_revoked(mounted):
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from anygarden.federation.delegation_wiring import make_local_policy
+    from anygarden.federation.errors import PeerError
+    from anygarden.federation.models import PeerGrant
+    from anygarden.federation.schemas import Principal
+
+    a, b = mounted
+    # Production wiring installs this via make_local_policy(node_id); the
+    # pair harness builds its PeerService bare, so mirror that step here.
+    a.s.local_policy = make_local_policy(a.s.node_id)
+    agent_pid = uid()
+    agent_node = b.s.node_id
+    principal = Principal(
+        node_id=UUID(agent_node), kind="agent", principal_id=UUID(agent_pid)
+    )
+
+    def auth(channel_id):
+        return SimpleNamespace(channel_id=channel_id, principal=principal)
+
+    # Unlisted agent: the installed policy denies (returns False), and the
+    # peer layer rejects the actor before the policy is even consulted.
+    async with a.s.sessions() as db:
+        assert not await a.delegation.executor_allowed(
+            db, a.channel, {"node_id": agent_node, "agent_id": agent_pid}
+        )
+        assert not await a.s.local_policy(db, auth(a.channel))
+        with pytest.raises(PeerError):
+            await a.s.authorize(
+                db,
+                b.s.identity,
+                sender_node_id=agent_node,
+                authority_node_id=a.s.node_id,
+                channel_id=a.channel,
+                principal=principal,
+                action="task.execute",
+                grant_epoch=1,
+            )
+    # List the agent in the inbound grant (actors + task.execute): allowed.
+    async with a.s.sessions.begin() as db:
+        grant = await db.get(
+            PeerGrant,
+            (agent_node, a.s.node_id, a.channel),
+            populate_existing=True,
+        )
+        grant.actors = list(grant.actors or []) + [
+            {"node_id": agent_node, "kind": "agent", "principal_id": agent_pid}
+        ]
+        if "task.execute" not in (grant.capabilities or []):
+            grant.capabilities = list(grant.capabilities or []) + ["task.execute"]
+    async with a.s.sessions() as db:
+        assert await a.s.local_policy(db, auth(a.channel))
+        assert await a.delegation.executor_allowed(
+            db, a.channel, {"node_id": agent_node, "agent_id": agent_pid}
+        )
+        await a.s.authorize(
+            db,
+            b.s.identity,
+            sender_node_id=agent_node,
+            authority_node_id=a.s.node_id,
+            channel_id=a.channel,
+            principal=principal,
+            action="task.execute",
+            grant_epoch=1,
+        )
+    # Revoked grant: deny again (predicate False branch).
+    from sqlalchemy import update
+
+    async with a.s.sessions.begin() as db:
+        await db.execute(
+            update(PeerGrant)
+            .where(
+                PeerGrant.peer_node_id == agent_node,
+                PeerGrant.authority_node_id == a.s.node_id,
+                PeerGrant.channel_id == a.channel,
+            )
+            .values(active=False)
+        )
+    async with a.s.sessions() as db:
+        assert not await a.delegation.executor_allowed(
+            db, a.channel, {"node_id": agent_node, "agent_id": agent_pid}
+        )
+        assert not await a.s.local_policy(db, auth(a.channel))
+        with pytest.raises(PeerError):
+            await a.s.authorize(
+                db,
+                b.s.identity,
+                sender_node_id=agent_node,
+                authority_node_id=a.s.node_id,
+                channel_id=a.channel,
+                principal=principal,
+                action="task.execute",
+                grant_epoch=1,
+            )
+
+
+async def test_local_policy_absence_keeps_deny(channels):
+    """Without the callback, task.execute stays denied (pre-#56 behavior).
+
+    The peer checks (trust, grant actors, capabilities) pass first; the
+    missing local_policy is the layer that denies.
+    """
+    from uuid import UUID
+
+    from anygarden.federation.errors import PeerError
+    from anygarden.federation.models import PeerGrant
+    from anygarden.federation.schemas import Principal
+
+    a, b = channels
+    assert a.s.local_policy is None
+    principal = Principal(
+        node_id=UUID(b.s.node_id), kind="agent", principal_id=UUID(b.actor)
+    )
+    async with a.s.sessions.begin() as db:
+        grant = await db.get(
+            PeerGrant,
+            (b.s.node_id, a.s.node_id, a.channel),
+            populate_existing=True,
+        )
+        grant.actors = list(grant.actors or []) + [principal.model_dump(mode="json")]
+        if "task.execute" not in (grant.capabilities or []):
+            grant.capabilities = list(grant.capabilities or []) + ["task.execute"]
+    async with a.s.sessions.begin() as db:
+        with pytest.raises(PeerError) as excinfo:
+            await a.s.authorize(
+                db,
+                b.s.identity,
+                sender_node_id=b.s.node_id,
+                authority_node_id=a.s.node_id,
+                channel_id=a.channel,
+                principal=principal,
+                action="task.execute",
+                grant_epoch=1,
+            )
+    assert excinfo.value.code == "LOCAL_POLICY_DENIED"
