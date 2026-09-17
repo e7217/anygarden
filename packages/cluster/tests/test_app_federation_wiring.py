@@ -521,3 +521,81 @@ async def test_compose_installs_local_policy(wiring):
     assert callable(app.state.peer_service.local_policy)
 
 
+# --------------------------------------------------------------------------
+# task #66 — delegation pickup sweeper lifecycle wiring
+
+
+async def test_delegation_sweeper_interval_zero_disables(tmp_path):
+    from anygarden.config import AnygardenSettings
+
+    db_path = tmp_path / "sweep0.db"
+    engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = build_session_factory(engine)
+    config = AnygardenSettings(
+        db_url=f"sqlite+aiosqlite:///{db_path}",
+        jwt_secret="synthetic-local-test-secret-not-a-real-credential",
+        peer_credentials_dir=tmp_path / "peer",
+    )
+    create_credentials(tmp_path / "peer", str(uuid4()))
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    import os
+
+    os.environ["ANYGARDEN_DELEGATION_SWEEPER_INTERVAL_SEC"] = "0"
+    try:
+        async with app.router.lifespan_context(app):
+            assert app.state.delegation_service is not None
+            assert getattr(app.state, "delegation_sweeper_task", None) is None
+    finally:
+        os.environ.pop("ANYGARDEN_DELEGATION_SWEEPER_INTERVAL_SEC", None)
+        await engine.dispose()
+
+
+async def test_delegation_sweeper_starts_and_cancels_with_lifespan(tmp_path):
+    from anygarden.config import AnygardenSettings
+
+    db_path = tmp_path / "sweep1.db"
+    engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = build_session_factory(engine)
+    config = AnygardenSettings(
+        db_url=f"sqlite+aiosqlite:///{db_path}",
+        jwt_secret="synthetic-local-test-secret-not-a-real-credential",
+        peer_credentials_dir=tmp_path / "peer",
+    )
+    create_credentials(tmp_path / "peer", str(uuid4()))
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    async with app.router.lifespan_context(app):
+        task = getattr(app.state, "delegation_sweeper_task", None)
+        assert task is not None
+        assert not task.done()
+    assert task.done()
+    assert app.state.delegation_sweeper_task is task
+
+
+async def test_delegation_sweeper_absent_without_composition(tmp_path):
+    from anygarden.config import AnygardenSettings
+
+    db_path = tmp_path / "sweep2.db"
+    engine = build_engine(f"sqlite+aiosqlite:///{db_path}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = build_session_factory(engine)
+    config = AnygardenSettings(
+        db_url=f"sqlite+aiosqlite:///{db_path}",
+        jwt_secret="synthetic-local-test-secret-not-a-real-credential",
+        # No peer_credentials_dir contents: composition stays disabled.
+    )
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    async with app.router.lifespan_context(app):
+        assert app.state.peer_service is None
+        assert getattr(app.state, "delegation_sweeper_task", None) is None
+    await engine.dispose()
