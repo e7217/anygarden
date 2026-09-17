@@ -169,3 +169,21 @@ full migration chain `063 → 064_peer_trust → 065_shared_channels →
 
 Remaining explicit gaps: app-level mounting and two-node acceptance are #594
 scope. No test in these modules invokes an external provider or an external node.
+
+## Pickup-timeout sweep (authority side)
+
+`await delegation.sweep_pickup_timeouts(channel_service, actor=..., now=...,
+timeout=...)` finalizes `requested` delegations whose `created_at` passed the
+pickup window: it emits one `task.cancel` per delegation under the given
+channel-admin actor (the authority's own admin principal — a real local
+Participant with admin/owner role; the cancel path permits admins besides the
+requester), so the authority log, Task state (`blocked`), reservation and
+follower mirrors all converge through the normal event path. The timeout
+reason is kept in the local audit table (`PICKUP_TIMEOUT`, execution left
+NULL — nothing ever ran). Deterministic request ids make re-runs idempotent;
+rows the guard refuses are skipped and audited with the refusal code, never
+force-finalized. Terminal `cancelled` still requires the executor's stop
+confirmation per contract, so timed-out requests rest at `cancel_requested`.
+The node scheduler should call this periodically with an explicit admin
+actor; migration `067` adds the `created_at` basis (legacy rows are stamped
+with the migration time).

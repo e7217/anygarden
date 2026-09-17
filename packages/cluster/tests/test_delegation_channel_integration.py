@@ -6,6 +6,7 @@ source ID mapping and task projections. This is not real network/node acceptance
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from anygarden.federation.delegation import (
     LateResultAfterCancel,
 )
 from anygarden.federation.delegation_models import (
+    Delegation,
     DelegationMirror,
     DelegationObservation,
 )
@@ -366,3 +368,103 @@ async def test_guard_tolerates_stale_or_fabricated_shadow_rows(product):
     async with p.a.s.sessions() as db:
         with pytest.raises(DelegationError, match="PRINCIPAL_DENIED"):
             await service.authorize_command(db, envelope)
+
+
+async def test_sweeper_finalizes_pickup_timeouts_with_mirror_convergence(product):
+
+    from anygarden.db.models import Participant as P
+    from anygarden.federation.delegation_wiring import install_product_delegation
+
+    p = product
+    receipt = await p.send(p.cmd("task.request"))
+    assert receipt["state"] == "requested"
+
+    # Swap in the product wiring and authorize the authority's own admin as
+    # the sweep actor (channel-admin cancel path).
+    for registry in (p.a.c.command_guards, p.a.c.submitters, p.a.c.effects):
+        for kind in list(registry):
+            if kind.startswith("task."):
+                del registry[kind]
+    service = install_product_delegation(p.a.c)
+    admin_actor = {"node_id": p.a.s.node_id, "kind": "human", "principal_id": p.a.admin}
+    async with p.a.s.sessions.begin() as db:
+        db.add(P(room_id=p.a.channel, user_id=p.a.admin, role="admin"))
+
+    # Not yet expired: nothing happens.
+    fresh = await service.sweep_pickup_timeouts(
+        p.a.c, actor=admin_actor, now=datetime.now(UTC), timeout=timedelta(hours=1)
+    )
+    assert fresh == {"finalized": [], "skipped": []}
+
+    # Backdate the request beyond the pickup window.
+    async with p.a.s.sessions.begin() as db:
+        record = await db.get(Delegation, p.did)
+        record.created_at = datetime.now(UTC) - timedelta(hours=2)
+
+    result = await service.sweep_pickup_timeouts(
+        p.a.c, actor=admin_actor, now=datetime.now(UTC), timeout=timedelta(hours=1)
+    )
+    assert [row["delegation_id"] for row in result["finalized"]] == [p.did]
+    assert result["skipped"] == []
+
+    async with p.a.s.sessions() as db:
+        record = await db.get(Delegation, p.did)
+        assert record.state == "cancel_requested"
+        assert (await db.get(Task, p.task)).status == "blocked"
+        observations = (
+            await db.scalars(
+                select(DelegationObservation).where(
+                    DelegationObservation.reason == "PICKUP_TIMEOUT"
+                )
+            )
+        ).all()
+        assert len(observations) == 1
+        assert observations[0].execution_id is None
+
+    # Idempotent: the state moved on, so a second pass has no candidates.
+    again = await service.sweep_pickup_timeouts(
+        p.a.c, actor=admin_actor, now=datetime.now(UTC), timeout=timedelta(hours=1)
+    )
+    assert again == {"finalized": [], "skipped": []}
+
+    # Follower mirrors converge through the normal event path.
+    await p.replay()
+    async with p.b.s.sessions() as db:
+        mirror = await db.get(DelegationMirror, (p.a.s.node_id, p.a.channel, p.did))
+        assert mirror.state == "cancel_requested"
+
+
+async def test_sweeper_skips_and_audits_when_guard_refuses(product):
+
+    from anygarden.federation.delegation_wiring import install_product_delegation
+
+    p = product
+    await p.send(p.cmd("task.request"))
+    async with p.a.s.sessions.begin() as db:
+        record = await db.get(Delegation, p.did)
+        record.created_at = datetime.now(UTC) - timedelta(hours=2)
+
+    for registry in (p.a.c.command_guards, p.a.c.submitters, p.a.c.effects):
+        for kind in list(registry):
+            if kind.startswith("task."):
+                del registry[kind]
+    service = install_product_delegation(p.a.c)
+    # No admin Participant in the channel room: the guard must refuse, and
+    # the sweeper must skip (never force-finalize) with an audited reason.
+    admin_actor = {"node_id": p.a.s.node_id, "kind": "human", "principal_id": p.a.admin}
+    result = await service.sweep_pickup_timeouts(
+        p.a.c, actor=admin_actor, now=datetime.now(UTC), timeout=timedelta(hours=1)
+    )
+    assert result["finalized"] == []
+    assert [row["code"] for row in result["skipped"]] == ["PRINCIPAL_DENIED"]
+    async with p.a.s.sessions() as db:
+        record = await db.get(Delegation, p.did)
+        assert record.state == "requested"
+        observations = (
+            await db.scalars(
+                select(DelegationObservation).where(
+                    DelegationObservation.reason == "PRINCIPAL_DENIED"
+                )
+            )
+        ).all()
+        assert len(observations) == 1

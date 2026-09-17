@@ -8,8 +8,8 @@ message or starts a process. IDs resolve through an explicit local mirror map.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
-from uuid import NAMESPACE_URL, uuid5
+from datetime import UTC, datetime, timedelta
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import delete, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,6 +55,10 @@ class LateResultAfterCancel(DelegationError):
 
 
 PrincipalResolver = Callable[[AsyncSession, str, dict], Awaitable[str | None]]
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class DelegationService:
@@ -465,6 +469,103 @@ class DelegationService:
         db.add(DelegationReservation(task_id=p["task_id"], delegation_id=record.id))
         await db.flush()
         return CommandEffect(1, "requested", "not_started", "todo")
+
+    async def sweep_pickup_timeouts(
+        self, channel_service, *, actor: dict, now: datetime, timeout: timedelta
+    ) -> dict:
+        """Finalize pickup-timeout delegations as channel-admin cancels (#58).
+
+        For every ``requested`` delegation older than ``timeout`` on this
+        authority, emit one ``task.cancel`` through the channel log under the
+        given admin actor — follower mirrors converge through the normal
+        event path — and record ``PICKUP_TIMEOUT`` in the local audit table.
+        Each candidate runs in its own transaction with a deterministic
+        request id, so re-running the sweep is idempotent. Rows the guard
+        refuses (e.g. the admin lost room membership) are skipped and
+        reported with the refusal code; they are never force-finalized.
+        Terminal ``cancelled`` still requires the executor's stop
+        confirmation per contract; timed-out requests rest at
+        ``cancel_requested`` (Task ``blocked``).
+        """
+        cutoff = now - timeout
+        results: dict[str, list] = {"finalized": [], "skipped": []}
+        async with channel_service.sessions() as db:
+            candidates = (
+                await db.execute(
+                    select(Delegation.id, Delegation.channel_id).where(
+                        Delegation.authority_node_id == self.authority_node_id,
+                        Delegation.state == "requested",
+                        Delegation.created_at <= cutoff,
+                    )
+                )
+            ).all()
+        for delegation_id, channel_id in candidates:
+            request_id = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"pickup-timeout:{self.authority_node_id}:"
+                    f"{channel_id}:{delegation_id}",
+                )
+            )
+            async with channel_service.sessions.begin() as db:
+                record = await db.get(Delegation, delegation_id, populate_existing=True)
+                if (
+                    record is None
+                    or record.state != "requested"
+                    or _utc(record.created_at) > cutoff
+                ):
+                    continue  # raced with a live accept/cancel between passes
+                envelope = {
+                    "protocol_version": 1,
+                    "request_id": request_id,
+                    "sender_node_id": self.authority_node_id,
+                    "authority_node_id": self.authority_node_id,
+                    "channel_id": channel_id,
+                    "grant_epoch": 1,
+                    "actor": actor,
+                    "kind": "task.cancel",
+                    "payload": {
+                        "delegation_id": delegation_id,
+                        "expected_revision": record.revision,
+                    },
+                }
+                try:
+                    # Authority-internal action: the channel log and the Task /
+                    # delegation effect commit together, exactly like any
+                    # other command; the stable request id dedups re-runs.
+                    await channel_service._commit_authorized(
+                        db, envelope, self.apply_effect
+                    )
+                except ChannelError as error:
+                    await db.rollback()
+                    async with channel_service.sessions.begin() as audit:
+                        audit.add(
+                            DelegationObservation(
+                                id=str(uuid4()),
+                                delegation_id=delegation_id,
+                                request_id=request_id,
+                                execution_id=None,
+                                reason=error.code[:32],
+                            )
+                        )
+                    results["skipped"].append(
+                        {"delegation_id": delegation_id, "code": error.code}
+                    )
+                    continue
+                db.add(
+                    DelegationObservation(
+                        id=str(uuid4()),
+                        delegation_id=delegation_id,
+                        request_id=request_id,
+                        execution_id=None,
+                        reason="PICKUP_TIMEOUT",
+                    )
+                )
+                await db.flush()
+                results["finalized"].append(
+                    {"delegation_id": delegation_id, "channel_id": channel_id}
+                )
+        return results
 
     async def record_late_result(
         self, db: AsyncSession, envelope: dict, *, reauthorize: Callable
