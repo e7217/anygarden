@@ -132,3 +132,27 @@ schema upgrades. Engine interaction in these tests is fake/provider-free.
 Existing cluster and machine suites cover preserved legacy paths. Two-node
 federation, TLS, remote delegation and live provider success remain separate
 issues, not claimed by this local-node change.
+
+## Federation (peer) listener — opt-in
+
+Starting the node with `--peer-port N [--peer-host H]` additionally runs the
+mTLS federation listener (default bind `0.0.0.0` when the port is given).
+Without the option no listener runs — the default boot is unchanged.
+
+Requirements and behavior (PR609/PR615 fail-closed contract):
+
+- Peer credentials must already exist under `<data-dir>/peer/` as
+  `peer-cert.pem` + `peer-key.pem`. Startup never generates or rotates them;
+  create them explicitly (see the two-node runbook). Requesting `--peer-port`
+  without both files refuses the start before any boot work.
+- Unusable credential pairs (corrupt, expired, mismatched) abort startup with
+  `--peer-port was requested but peer services did not compose` instead of
+  running silently disabled.
+- The listener starts only after the app lifespan composed the peer/channel
+  services, and stops before the local execution backend closes — both
+  `anygarden stop` and SIGINT/SIGTERM close the port and exit 0 after
+  confirmed cleanup (PR605 exit-code contract).
+- `task.execute` actions from remote peers additionally pass a local policy
+  gate (PR615): the current inbound grant must be active, unexpired, carry
+  `task.execute`, and list the authenticated remote agent among its actors.
+  The gate is deny-by-default and only ever adds rejections.

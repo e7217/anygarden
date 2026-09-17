@@ -1,0 +1,49 @@
+# AnyGarden integrated node — systemd template unit (task #57).
+#
+# One instance per node data directory:
+#   systemctl enable --now anygarden-node@alpha
+# runs `anygarden start` with DATA_DIR=/var/lib/anygarden/alpha.
+#
+# Prerequisites (see docs/runbook/federation-two-node.md):
+#   * wheel installed with both extras: pip install 'anygarden[server,agent]'
+#   * peer credentials created explicitly under <data>/peer/ before enabling
+#     --peer-port (startup never generates or rotates them; PR609 fail-closed)
+#
+# Exit-code contract (PR605): a clean SIGINT/SIGTERM shutdown exits 0, so
+# Restart=on-failure does NOT resurrect a deliberately stopped node. A failed
+# startup or unconfirmed cleanup exits nonzero and IS restarted.
+
+[Unit]
+Description=AnyGarden integrated node (%i)
+Wants=network-online.target
+After=network-online.target
+# Crash-loop guard: a node whose cleanup was unconfirmed exits nonzero on
+# every start; cap restarts so recovery stays a deliberate operator action.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=anygarden
+Group=anygarden
+Environment=WEB_CONCURRENCY=1
+# Integrated mode owns its data directory exclusively (ownership lock);
+# one instance per directory is enforced by the node itself as well.
+# NOTE: --peer-port is fixed per instance. Two instances on one host need
+# different ports (and different data directories); the default below suits
+# the one-node-per-host layout used by the verified deployments.
+ExecStart=/usr/local/bin/anygarden start --data-dir /var/lib/anygarden/%i --peer-port 8451
+ExecStop=/bin/kill -INT $MAINPID
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=5
+
+# Hardening: the node needs its data directory and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/anygarden/%i
+
+[Install]
+WantedBy=multi-user.target
