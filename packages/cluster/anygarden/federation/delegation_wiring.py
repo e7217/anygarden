@@ -85,10 +85,16 @@ async def _remote_participant_id(
     )
 
 
-async def _grant_allows(db: AsyncSession, channel_id: str, executor: dict) -> bool:
+async def _grant_allows(
+    db: AsyncSession, node_id: str, channel_id: str, executor: dict
+) -> bool:
+    # On the authority (this node, ``node_id``), an inbound grant from a
+    # remote executor node E is stored as (peer_node_id=E,
+    # authority_node_id=<this node>, channel) — the executor's node never
+    # occupies the authority slot (task #53 P1 correction).
     grant = await db.get(
         PeerGrant,
-        (executor["node_id"], executor["node_id"], channel_id),
+        (executor["node_id"], node_id, channel_id),
         populate_existing=True,
     )
     if grant is None or not grant.active or grant.expires_at <= now():
@@ -121,7 +127,7 @@ def install_product_delegation(channel_service) -> DelegationService:
 
     async def executor_allowed(db, channel_id, executor):
         if executor["node_id"] != node_id:
-            return await _grant_allows(db, channel_id, executor)
+            return await _grant_allows(db, node_id, channel_id, executor)
         # Local executor: real agent participant row + active roster entry.
         participant_ok = await _local_participant_id(
             db, channel_id, "agent", executor["agent_id"]
