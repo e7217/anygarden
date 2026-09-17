@@ -2,7 +2,18 @@
 
 from __future__ import annotations
 
-from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from anygarden.db.models import Base
@@ -21,6 +32,9 @@ class Delegation(Base):
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"))
     source_message_id: Mapped[str] = mapped_column(String(36))
     requester: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     executor_node_id: Mapped[str] = mapped_column(String(36))
     executor_agent_id: Mapped[str] = mapped_column(String(36))
     executor_participant_id: Mapped[str] = mapped_column(String(36))
@@ -52,7 +66,7 @@ class DelegationObservation(Base):
         ForeignKey("federation_delegations.id", ondelete="CASCADE")
     )
     request_id: Mapped[str] = mapped_column(String(36))
-    execution_id: Mapped[str] = mapped_column(String(36))
+    execution_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     reason: Mapped[str] = mapped_column(String(32))
 
 

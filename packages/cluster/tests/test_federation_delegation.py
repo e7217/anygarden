@@ -687,9 +687,9 @@ async def test_migration_upgrade_downgrade_matches_only_owned_tables(h):
 
     path = (
         ROOT
-        / "packages/cluster/anygarden/db/migrations/versions/066_remote_delegation.py"
+        / "packages/cluster/anygarden/db/migrations/versions/067_delegation_pickup_timeout.py"
     )
-    spec = importlib.util.spec_from_file_location("delegation_migration", path)
+    spec = importlib.util.spec_from_file_location("delegation_sweep_migration", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
     names = {
