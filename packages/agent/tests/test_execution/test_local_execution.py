@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import psutil
 import pytest
+
 from anygarden_agent.runtime.execution import (
     CodexRuntime,
     ExecutionConflict,
@@ -552,3 +553,51 @@ async def test_revocation_at_collect_scheduling_never_writes_prompt(
         assert m._store.get(invocation.execution_id).outcome in {"cancelled", "failed"}
     finally:
         await m.close()
+
+
+def test_contracts_engine_membership_and_provider_rules(tmp_path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "runtime-home"
+    workspace.mkdir()
+    home.mkdir()
+    base = {
+        "execution_node_id": "node-a",
+        "agent_id": "agent-1",
+        "authority_node_id": "node-a",
+        "channel_id": "room",
+        "thread_root_id": None,
+        "workspace_binding_id": "managed-workspace",
+        "workspace_epoch": 1,
+        "policy_epoch": 1,
+    }
+
+    def make(engine, engine_version="1.0.0", provider=None, model=None):
+        return Invocation(
+            "execution-x",
+            SessionScope(**base, engine=engine, engine_version=engine_version),
+            "success",
+            workspace,
+            home,
+            timeout_seconds=2,
+            model=model,
+            provider=provider,
+        )
+
+    # Membership is central; each adapter owns version authority.
+    make("codex-cli").validate()
+    make("pi-cli", provider="zai", model="glm-5.3-flash").validate()
+    with pytest.raises(ValueError, match="unsupported runtime"):
+        make("claude-cli").validate()
+
+    # pi-cli never falls back to an ambient default provider.
+    with pytest.raises(ValueError, match="explicit provider"):
+        make("pi-cli").validate()
+
+    # Provider must be a plain identifier when set.
+    with pytest.raises(ValueError, match="plain identifier"):
+        make("codex-cli", provider="zai --print").validate()
+
+    # The provider choice is bound into the invocation fingerprint.
+    assert make("pi-cli", provider="zai").fingerprint != make(
+        "pi-cli", provider="other"
+    ).fingerprint
