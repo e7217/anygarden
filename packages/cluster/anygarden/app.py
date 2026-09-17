@@ -302,6 +302,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     owner = None
     backend = None
+    listener = None
     engine_provided = getattr(app.state, "engine", None) is not None
     if app.state.config.local_node_data_dir is not None:
         if os.environ.get("WEB_CONCURRENCY", "1") not in ("", "1"):
@@ -321,12 +322,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.local_execution = backend
             await backend.start()
             owner.write_state("running")
+        if app.state.config.peer_listen_port is not None:
+            # #594 real-machine tier — opt-in federation listener. Fails the
+            # startup when services did not compose (missing/invalid peer
+            # credentials): an explicitly requested listener must not silently
+            # run disabled. Never started without the explicit option (#591).
+            if app.state.peer_service is None:
+                raise RuntimeError(
+                    "--peer-port was requested but peer services did not compose; "
+                    "check the peer credential files under the node data directory"
+                )
+            from anygarden.federation.transport import PeerListener
+
+            listener = PeerListener(
+                app.state.peer_service,
+                host=app.state.config.peer_listen_host or "0.0.0.0",
+                port=app.state.config.peer_listen_port,
+                channel_service=app.state.channel_service,
+            )
+            await listener.start()
+            app.state.peer_listener = listener
         yield
     finally:
         try:
             try:
-                if backend is not None:
-                    await backend.close()
+                try:
+                    if listener is not None:
+                        await listener.stop()
+                finally:
+                    if backend is not None:
+                        await backend.close()
             finally:
                 await _shutdown_server(app, engine_provided)
             clean = True

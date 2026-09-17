@@ -74,3 +74,23 @@ bodies. Local JWT surface only.
 - Provider-free: real SQLite + real generated credentials, loopback app only;
   no external nodes, providers, deployment, or production systems.
 - Cluster regression before Phase B commit: 1,703 passed / 1 deselected.
+
+## Opt-in peer listener startup (task #48, #594 real-machine tier)
+
+`anygarden start --peer-port N [--peer-host H]` (default host `0.0.0.0` when the
+port is given; settings: `peer_listen_port`/`peer_listen_host`) composes the
+federation mTLS listener into the product startup:
+
+- **Explicit opt-in only**: without `--peer-port` nothing listens (#591 design
+  preserved — every existing default boot is unchanged).
+- **Fail-closed**: requesting the port without credential files refuses the
+  start before any boot work ("requires peer credentials"); invalid credential
+  pairs (PR609 disable path) abort startup instead of silently running a
+  disabled listener.
+- **Lifecycle-integrated**: the listener starts only after the app lifespan
+  composed `peer_service`/`channel_service`, and stops before the local
+  execution backend closes during shutdown — `anygarden stop` and SIGINT both
+  close the port and exit 0 after confirmed cleanup.
+- The listener mounts only federation control endpoints
+  (`/api/v1/federation/*`) over mutual TLS with the pinned node certificate;
+  trust anchors refresh live on invite/revocation via `trust_changed`.

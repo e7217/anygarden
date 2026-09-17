@@ -32,6 +32,13 @@ class AnygardenSettings(BaseSettings):
     # simply leave node/shared-channel APIs mounted but disabled (503).
     peer_credentials_dir: Path | None = None
 
+    # #594 real-machine tier — opt-in mTLS federation listener for the
+    # integrated node. Never started implicitly: only ``anygarden start
+    # --peer-port`` (or the equivalent env/config) composes it, and only
+    # when peer credentials composed successfully (fail-closed otherwise).
+    peer_listen_port: int | None = None
+    peer_listen_host: str | None = None
+
     host: str = "127.0.0.1"
     port: int = 8000
     db_url: str = _DEFAULT_DB_URL
