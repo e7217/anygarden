@@ -292,3 +292,77 @@ async def test_wire_source_cannot_be_replaced_by_local_message_id(product):
         task = await db.get(Task, p.task)
     with pytest.raises(DelegationError, match="SOURCE_DENIED"):
         await p.send(p.cmd("task.request", source_message_id=task.source_message_id))
+
+
+async def test_guard_tolerates_stale_or_fabricated_shadow_rows(product):
+    """Regression (a), migrated per the #51/#52 contract.
+
+    The product resolver must never let a Participant row alone authorize a
+    remote principal: an active roster entry is required. This exercises the
+    delegation-guard boundary directly — a stale shadow (roster deactivated
+    while bypassing the projection choke point) and a fabricated shadow (row
+    inserted with no roster at all) both fail closed with PRINCIPAL_DENIED.
+    """
+    p = product
+    from anygarden.federation.delegation_wiring import install_product_delegation
+    from anygarden.shared_channels.models import SharedParticipant
+    from anygarden.shared_channels.shadow import shadow_participant_id
+
+    # Swap the test-double wiring for the product wiring, exactly as
+    # create_app composes it.
+    for registry in (p.a.c.command_guards, p.a.c.submitters, p.a.c.effects):
+        for kind in list(registry):
+            if kind.startswith("task."):
+                del registry[kind]
+    service = install_product_delegation(p.a.c)
+    actor = {"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor}
+
+    # Seed the roster (and its shadow) through the real choke point.
+    async with p.a.s.sessions.begin() as db:
+        await p.a.c.publication(
+            db, actor_id=p.a.admin, channel_id=p.a.channel, principal=actor, active=True
+        )
+    async with p.a.s.sessions.begin() as db:
+        await p.a.c.change_participant(
+            db,
+            actor_id=p.a.admin,
+            channel_id=p.a.channel,
+            operation_id=uid(),
+            expected_revision=0,
+            principal=actor,
+            role="member",
+            active=True,
+        )
+
+    # Sanity: with an active roster the guard resolves the remote actor.
+    async with p.a.s.sessions() as db:
+        participant = await service.authorize_command(db, p.cmd("task.request"))
+        assert participant is not None
+        assert participant.role == "member"
+
+    # Stale shadow: deactivate the roster row directly, bypassing the
+    # projection that would also demote the shadow row.
+    async with p.a.s.sessions.begin() as db:
+        roster = await db.get(
+            SharedParticipant,
+            (p.a.s.node_id, p.a.channel, p.b.s.node_id, "agent", p.b.actor),
+            populate_existing=True,
+        )
+        roster.active = False
+    async with p.a.s.sessions() as db:
+        with pytest.raises(DelegationError, match="PRINCIPAL_DENIED"):
+            await service.authorize_command(db, p.cmd("task.accept", 1))
+
+    # Fabricated shadow: a hand-inserted NULL/NULL row for a principal that
+    # was never on the roster authorizes nothing either.
+    forged_pid = uid()
+    forged_id = shadow_participant_id(
+        p.a.s.node_id, p.a.channel, p.b.s.node_id, "agent", forged_pid
+    )
+    async with p.a.s.sessions.begin() as db:
+        db.add(Participant(id=forged_id, room_id=p.a.channel, role="member"))
+    envelope = p.cmd("task.request")
+    envelope["actor"]["principal_id"] = forged_pid
+    async with p.a.s.sessions() as db:
+        with pytest.raises(DelegationError, match="PRINCIPAL_DENIED"):
+            await service.authorize_command(db, envelope)
