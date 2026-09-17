@@ -396,6 +396,7 @@ def _compose_federation_services(app: FastAPI) -> None:
         )
         return
     from anygarden.federation.certificates import inspect_certificate
+    from anygarden.federation.delegation_wiring import make_local_policy
     from anygarden.federation.service import PeerService
     from anygarden.shared_channels.service import ChannelService
 
@@ -406,6 +407,7 @@ def _compose_federation_services(app: FastAPI) -> None:
             cert_path=cert_path,
             key_path=key_path,
             sessions=app.state.session_factory,
+            local_policy=make_local_policy(identity.node_id),
         )
     except Exception as exc:
         # P4 (task #40 review): an unreadable/expired/mismatched credential
