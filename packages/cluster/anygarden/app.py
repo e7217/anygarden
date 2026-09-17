@@ -435,7 +435,9 @@ def _compose_federation_services(app: FastAPI) -> None:
         # create_app(channel_service=...) injections stay untouched.
         from anygarden.federation.delegation_wiring import install_product_delegation
 
-        install_product_delegation(app.state.channel_service)
+        app.state.delegation_service = install_product_delegation(
+            app.state.channel_service
+        )
 
 
 async def _startup_server(app: FastAPI) -> None:
@@ -843,6 +845,36 @@ async def _startup_server(app: FastAPI) -> None:
             name="span_reaper",
         )
 
+    # #66 — delegation pickup sweeper. Finalizes ``requested`` delegations
+    # whose executor never accepted within the pickup window, as channel-admin
+    # cancels (dev01's #58 sweeper). Requires the federation composition
+    # (peer credentials); disabled when
+    # ``ANYGARDEN_DELEGATION_SWEEPER_INTERVAL_SEC=0`` or when a test double
+    # has already populated ``app.state.delegation_sweeper_task``.
+    delegation_task = getattr(app.state, "delegation_sweeper_task", None)
+    if (
+        delegation_task is None
+        and getattr(app.state, "delegation_service", None) is not None
+        and getattr(app.state, "channel_service", None) is not None
+    ):
+        try:
+            delegation_interval = float(
+                os.environ.get("ANYGARDEN_DELEGATION_SWEEPER_INTERVAL_SEC", "60")
+            )
+        except ValueError:
+            delegation_interval = 60.0
+        try:
+            pickup_timeout = float(
+                os.environ.get("ANYGARDEN_DELEGATION_PICKUP_TIMEOUT_SEC", "3600")
+            )
+        except ValueError:
+            pickup_timeout = 3600.0
+        if delegation_interval > 0:
+            app.state.delegation_sweeper_task = asyncio.create_task(
+                _run_delegation_sweeper(app, delegation_interval, pickup_timeout),
+                name="delegation_sweeper",
+            )
+
     # #302 — autonomous responsibility (Goal) scheduler. Single
     # in-process polling loop; multi-replica coordination lands in
     # Phase 3 with PostgreSQL advisory locks. Tests may pre-set
@@ -879,6 +911,7 @@ async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
         "orphan_sweeper_task",
         "turn_recovery_task",
         "span_reaper_task",
+        "delegation_sweeper_task",
     ):
         task: asyncio.Task | None = getattr(app.state, attr, None)
         if task is not None and not task.done():
@@ -994,6 +1027,60 @@ async def _reconcile_agents_by_state(app: FastAPI) -> None:
                 agents_by_state.labels(state=state).set(count)
     except Exception:  # noqa: BLE001 — metric refresh must not break the loop
         pass
+
+
+async def _run_delegation_sweeper(
+    app: FastAPI, interval_seconds: float, pickup_timeout_seconds: float
+) -> None:
+    """Periodically finalize pickup-timeout delegations (task #66, #54).
+
+    Delegates to ``DelegationService.sweep_pickup_timeouts`` with the node's
+    earliest admin as the channel-admin actor; one bad sweep must not kill
+    the loop, and the node admin must exist before anything runs.
+    """
+    import structlog
+    from datetime import UTC, datetime, timedelta
+
+    from anygarden.db.models import User
+
+    log = structlog.get_logger("delegation_sweeper")
+
+    await asyncio.sleep(min(15.0, interval_seconds))
+    while True:
+        try:
+            service = getattr(app.state, "delegation_service", None)
+            channel_service = getattr(app.state, "channel_service", None)
+            if service is not None and channel_service is not None:
+                async with channel_service.sessions() as db:
+                    admin_id = await db.scalar(
+                        select(User.id)
+                        .where(User.is_admin.is_(True))
+                        .order_by(User.created_at)
+                        .limit(1)
+                    )
+                if admin_id is not None:
+                    actor = {
+                        "node_id": channel_service.node_id,
+                        "kind": "human",
+                        "principal_id": admin_id,
+                    }
+                    result = await service.sweep_pickup_timeouts(
+                        channel_service,
+                        actor=actor,
+                        now=datetime.now(UTC),
+                        timeout=timedelta(seconds=pickup_timeout_seconds),
+                    )
+                    if result.get("finalized") or result.get("skipped"):
+                        log.info(
+                            "delegation_sweeper.swept",
+                            finalized=len(result.get("finalized", [])),
+                            skipped=len(result.get("skipped", [])),
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            log.warning("delegation_sweeper.error", error=str(exc))
+        await asyncio.sleep(interval_seconds)
 
 
 async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
@@ -1188,7 +1275,9 @@ async def _run_span_reaper(
             return
 
 
-def create_app(config: AnygardenSettings | None = None, *, channel_service=None) -> FastAPI:
+def create_app(
+    config: AnygardenSettings | None = None, *, channel_service=None
+) -> FastAPI:
     """Build and return the configured FastAPI application."""
     if config is None:
         config = AnygardenSettings()
