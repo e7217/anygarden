@@ -94,3 +94,34 @@ federation mTLS listener into the product startup:
 - The listener mounts only federation control endpoints
   (`/api/v1/federation/*`) over mutual TLS with the pinned node certificate;
   trust anchors refresh live on invite/revocation via `trust_changed`.
+
+## Product delegation wiring (task #51)
+
+The composed ChannelService now carries the product delegation coordinator
+(`federation/delegation_wiring.install_product_delegation`): guards,
+submitters and projections installed together on every node — each checks
+`authority_node_id` itself, so authority and mirror roles route correctly.
+Explicit `create_app(channel_service=...)` injections are left untouched.
+This resolves the real-machine E2E limitation where `task.request` surfaced
+as `REMOTE_REJECTED` (the client mapping of the unguarded service's
+fail-closed 503).
+
+**Shadow participants** (`shared_channels/shadow.py`, architect GO task #52):
+remote shared-channel principals get authority-side execution-role markers —
+local `Participant` rows with **both** `user_id` and `agent_id` NULL (never
+one alone; NULL matches no identity predicate, so no local credential,
+visibility, or membership path can ever resolve them), with deterministic
+`uuid5` ids over a dedicated namespace (distinct from the delegation
+execution-id namespace). The single roster projection choke point
+(`project_participant`) keeps shadows in lockstep: additions mirror the
+roster role, removals/tombstones demote below the fenced roles
+(member/admin/owner) immediately — post-revocation replays are rejected
+before dedup, independently of peer grants. Shadow rows never appear in any
+rooms-API output (filtered from room-detail participants).
+
+**Resolver/policy**: `resolve_principal` maps local user/agent principals
+through their real Participant rows and remote principals through active
+roster + shadow; `executor_allowed` requires, for remote executors, the
+current inbound grant (active, unexpired, `task.execute` capability, agent
+listed among actors) and, for local executors, a valid-role agent
+Participant row plus an active roster entry — re-evaluated per command.

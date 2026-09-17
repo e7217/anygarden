@@ -499,6 +499,11 @@ async def get_room(
 
     participant_outs: list[ParticipantOut] = []
     for p in room.participants:
+        # Shadow rows (task #51) represent remote shared-channel principals:
+        # both ids NULL means no local identity, and they must never surface
+        # in any rooms-API output (architect condition 4).
+        if p.user_id is None and p.agent_id is None:
+            continue
         display_name = ""
         kind = "user"
         is_anonymous = False
