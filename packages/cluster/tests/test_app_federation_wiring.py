@@ -506,3 +506,18 @@ async def test_invalid_credentials_warn_and_stay_disabled(wiring):
     _compose_federation_services(app)
     assert app.state.peer_service is None
     assert app.state.channel_service is None
+
+
+async def test_compose_installs_local_policy(wiring):
+    engine, factory, config, peer_dir = wiring
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    create_credentials(peer_dir, str(uuid4()))
+    app = create_app(config)
+    app.state.engine = engine
+    app.state.session_factory = factory
+    _compose_federation_services(app)
+    assert app.state.peer_service.local_policy is not None
+    assert callable(app.state.peer_service.local_policy)
+
+
