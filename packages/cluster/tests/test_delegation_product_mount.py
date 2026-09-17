@@ -380,9 +380,7 @@ async def test_remote_executor_grant_path_and_revocation(mounted):
 # task #56 — transport-layer local_policy (deny-by-default entry gate)
 
 
-async def test_local_policy_allows_listed_and_denies_unlisted_or_revoked(
-    mounted, pair
-):
+async def test_local_policy_allows_listed_and_denies_unlisted_or_revoked(mounted):
     from types import SimpleNamespace
     from uuid import UUID
 
@@ -486,10 +484,11 @@ async def test_local_policy_absence_keeps_deny(channels):
     The peer checks (trust, grant actors, capabilities) pass first; the
     missing local_policy is the layer that denies.
     """
+    from uuid import UUID
+
     from anygarden.federation.errors import PeerError
     from anygarden.federation.models import PeerGrant
     from anygarden.federation.schemas import Principal
-    from uuid import UUID
 
     a, b = channels
     assert a.s.local_policy is None
