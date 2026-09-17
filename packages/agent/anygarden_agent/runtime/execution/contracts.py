@@ -17,6 +17,9 @@ FAILURE_CODES = frozenset(
 )
 
 
+SUPPORTED_ENGINES = frozenset({"codex-cli", "pi-cli"})
+
+
 @dataclass(frozen=True)
 class SessionScope:
     execution_node_id: str
@@ -44,6 +47,10 @@ class Invocation:
     runtime_home: Path
     instructions: str = ""
     model: str | None = None
+    # Explicit provider selection for multi-provider runtimes (pi --provider).
+    # Must be set for engines that would otherwise fall back to an ambient
+    # default provider — never let a runtime pick one implicitly.
+    provider: str | None = None
     reasoning_effort: str | None = None
     permission_level: str = "restricted"
     timeout_seconds: float = 600
@@ -54,8 +61,18 @@ class Invocation:
     def validate(self) -> None:
         if not self.execution_id or not self.prompt:
             raise ValueError("execution_id and prompt are required")
-        if self.scope.engine != "codex-cli" or self.scope.engine_version != "0.154.0":
-            raise ValueError("unsupported runtime/version")
+        # Engine membership is central; version authority belongs to each
+        # adapter, which must fail closed on versions it has not verified.
+        if self.scope.engine not in SUPPORTED_ENGINES:
+            raise ValueError("unsupported runtime")
+        if self.scope.engine == "pi-cli" and not self.provider:
+            # pi without an explicit provider would use the machine's ambient
+            # default (the exact path of the 2026-09-17 incident).
+            raise ValueError("pi-cli requires an explicit provider")
+        if self.provider is not None and (
+            not self.provider.isidentifier() or len(self.provider) > 64
+        ):
+            raise ValueError("provider must be a plain identifier")
         if self.permission_level not in {"restricted", "standard"}:
             raise ValueError("unsupported permission level")
         if self.external_workspace:
