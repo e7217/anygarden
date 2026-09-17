@@ -12,19 +12,40 @@ in task #50/#54, provider-free).
   (the mTLS federation listener; deployments typically pin 8451/tcp on both).
   The listener mounts only `/api/v1/federation/*` plus the shared-channel peer
   routes over mutual TLS with pinned node certificates.
-- **Network isolation discipline**: create *dedicated* bridges/segments for
-  the node path; never modify existing bridges — past changes severed the
-  runner connectivity itself. Internet access is not required.
+- **Network isolation discipline (verified pattern)**: keep nodes on the
+  **existing LAN bridge** and enforce isolation with **node-local nftables** —
+  allow only the peer mTLS range (8443–8451/tcp) from the peer node and
+  management SSH; block internet and the wider LAN. Do **not** full-reload
+  host firewall/bridge configuration: check which services depend on it
+  before the change and verify connectivity after (a prior full reload
+  severed agent/runner connectivity itself). A *dedicated* bridge pair is an
+  advanced option, not the default. Internet access is not required.
 - Deployment access (e.g. iac-manager SSH) and a built wheel
   (`uv build --package anygarden`); nodes may be offline during deployment.
 
 ## Node bring-up
 
-1. Create the data directory and place credentials explicitly — startup never
+1. Deploy the wheel offline and create the service user **before** placing
+   credentials — the systemd unit runs as `anygarden`, and credentials created
+   by root would be unreadable to it:
+
+   ```sh
+   # on the operator host
+   uv build --package anygarden
+   scp dist/anygarden-*.whl node:/tmp/wheels/
+   # on the node (root)
+   useradd --system --home /var/lib/anygarden/alpha --shell /usr/sbin/nologin anygarden
+   mkdir -p /var/lib/anygarden/alpha /opt/wheels
+   mv /tmp/wheels/*.whl /opt/wheels/
+   pip install --no-index --find-links /opt/wheels 'anygarden[server,agent]'
+   chown -R anygarden:anygarden /var/lib/anygarden/alpha
+   ```
+
+2. Create credentials explicitly **as the service user** — startup never
    generates or rotates them:
 
    ```sh
-   python - <<'PY'
+   sudo -u anygarden python - <<'PY'
    from pathlib import Path
    from anygarden.federation.certificates import create_credentials
    create_credentials(Path("/var/lib/anygarden/alpha/peer"), "<node-uuid>")
@@ -34,7 +55,7 @@ in task #50/#54, provider-free).
    Missing or unusable pairs fail closed: `--peer-port` refuses the start, and
    an unusable pair aborts startup (PR609).
 
-2. Start the node (manual foreground, or via the systemd template in
+3. Start the node (manual foreground, or via the systemd template in
    `deploy/systemd/anygarden-node@.service`):
 
    ```sh

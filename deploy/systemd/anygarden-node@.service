@@ -17,6 +17,10 @@
 Description=AnyGarden integrated node (%i)
 Wants=network-online.target
 After=network-online.target
+# Crash-loop guard: a node whose cleanup was unconfirmed exits nonzero on
+# every start; cap restarts so recovery stays a deliberate operator action.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=exec
@@ -25,6 +29,9 @@ Group=anygarden
 Environment=WEB_CONCURRENCY=1
 # Integrated mode owns its data directory exclusively (ownership lock);
 # one instance per directory is enforced by the node itself as well.
+# NOTE: --peer-port is fixed per instance. Two instances on one host need
+# different ports (and different data directories); the default below suits
+# the one-node-per-host layout used by the verified deployments.
 ExecStart=/usr/local/bin/anygarden start --data-dir /var/lib/anygarden/%i --peer-port 8451
 ExecStop=/bin/kill -INT $MAINPID
 TimeoutStopSec=90

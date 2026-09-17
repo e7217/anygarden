@@ -35,6 +35,16 @@ def test_unit_restarts_only_on_failure_and_allows_graceful_drain():
     assert "RestartSec=5" in unit
     assert "TimeoutStopSec=90" in unit
     assert "Restart=always" not in unit
+    # Crash-loop guard (infra review): failed cleanup must not restart forever.
+    assert "StartLimitIntervalSec" in unit
+    assert "StartLimitBurst" in unit
+
+
+def test_unit_warns_about_fixed_peer_port_per_host():
+    unit = _unit()
+    # Two instances on one host need different ports/directories; the
+    # operator-facing warning must make that visible (infra review).
+    assert "Two instances on one host need" in unit
 
 
 def test_unit_documents_the_credential_prerequisite():
