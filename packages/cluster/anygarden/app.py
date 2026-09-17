@@ -427,6 +427,13 @@ def _compose_federation_services(app: FastAPI) -> None:
             peers=peers,
             sessions=peers.sessions,
         )
+        # task #51 — product delegation coordinator: guards/submitters/
+        # projections ride on the composed channel service (all roles on
+        # every node; each checks authority_node_id itself). Explicit
+        # create_app(channel_service=...) injections stay untouched.
+        from anygarden.federation.delegation_wiring import install_product_delegation
+
+        install_product_delegation(app.state.channel_service)
 
 
 async def _startup_server(app: FastAPI) -> None:

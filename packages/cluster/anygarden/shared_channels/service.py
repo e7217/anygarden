@@ -622,6 +622,12 @@ class ChannelService:
             event["revision"],
         )
         await db.flush()
+        from anygarden.shared_channels.shadow import sync_shadow
+
+        # Single choke point: every roster transition (authority operation or
+        # mirror replay) keeps the authority-side execution-role shadow in
+        # lockstep. Removal demotes below the fenced roles immediately.
+        await sync_shadow(db, self.node_id, stream, event)
 
     async def local_access(self, db, *, identity, authority, channel, write=False):
         from anygarden.rooms.authorization import Capability, require_capability
