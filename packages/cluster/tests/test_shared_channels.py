@@ -789,3 +789,25 @@ async def test_submission_status_and_caller_membership_are_fresh(human_channels)
                 channel=a.channel,
                 request_id=b.command["request_id"],
             )
+
+
+async def test_local_room_binds_to_a_single_stream(channels):
+    """A local room can mirror exactly one shared stream (task #59).
+
+    The unique constraint on ChannelStream.local_room_id is the DB-level
+    contract: one room, one authority stream. Binding the same room to a
+    second channel must fail rather than silently diverge mirror seqs.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    a, b = channels
+    second_channel = uid()
+    async with b.s.sessions.begin() as db:
+        with pytest.raises(IntegrityError):
+            await b.c.bind(
+                db,
+                actor_id=b.admin,
+                authority_node_id=a.s.node_id,
+                channel_id=second_channel,
+                local_room_id=b.mirror,
+            )
