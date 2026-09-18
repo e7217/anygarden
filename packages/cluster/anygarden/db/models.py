@@ -316,6 +316,12 @@ class Agent(Base):
     unavailable_detail: Mapped[Optional[dict]] = mapped_column(
         JSON, nullable=True, default=None
     )
+    # #625 (D-2) — paired with ``unavailable_code == quota_exhausted``:
+    # the bounded reset instant for the quota window. NULL means "blocked
+    # with no known bound"; a successful engine call clears the block.
+    unavailable_until: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
     unavailable_since: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )

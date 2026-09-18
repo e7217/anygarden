@@ -210,6 +210,9 @@ class UnavailableReasonOut(BaseModel):
     message: str
     detail: Optional[dict] = None
     since: Optional[datetime] = None
+    # #625 (D-2) — promised reset instant for the quota window; None means
+    # blocked without a known bound. First-class for orchestrators.
+    until: Optional[datetime] = None
 
 
 class AgentOut(BaseModel):
@@ -280,13 +283,19 @@ def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
     # #516 — derive the admin-facing unavailability reason from the stored
     # code/detail (the human message is never persisted).
     if agent.unavailable_code:
+        detail = dict(agent.unavailable_detail or {})
+        if agent.unavailable_until is not None:
+            detail.setdefault(
+                "until", agent.unavailable_until.isoformat()
+            )
         out.unavailable_reason = UnavailableReasonOut(
             code=agent.unavailable_code,
             message=render_unavailable_message(
-                agent.unavailable_code, agent.unavailable_detail, audience="admin"
+                agent.unavailable_code, detail, audience="admin"
             ),
             detail=agent.unavailable_detail,
             since=agent.unavailable_since,
+            until=agent.unavailable_until,
         )
     return out
 

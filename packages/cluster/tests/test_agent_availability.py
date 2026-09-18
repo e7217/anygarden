@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from anygarden.agent_availability import (
+    QUOTA_EXHAUSTED,
     CRASHED,
     ENGINE_MISMATCH,
     NO_MACHINE_FOR_ENGINE,
@@ -29,6 +30,7 @@ def test_all_codes_are_registered() -> None:
         ENGINE_MISMATCH,
         CRASHED,
         NO_ROOM,
+        QUOTA_EXHAUSTED,
     }
 
 

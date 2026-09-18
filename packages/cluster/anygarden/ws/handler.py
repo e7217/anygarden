@@ -2121,6 +2121,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             await _persist_lifecycle_event(
                                 db, agent_id=identity.id, frame=frame_in
                             )
+                            # #625 (D-2) — quota availability as a first-class
+                            # state: a quota-classified engine failure blocks
+                            # routing with the promised reset instant; any
+                            # successful engine call proves the quota recovered
+                            # and clears the block. Never overrides the other
+                            # not-running codes.
+                            await _apply_quota_availability(
+                                db, agent_id=identity.id, frame=frame_in
+                            )
                             await db.commit()
                         # #420 — mirror the event into the OTEL span tree.
                         _apply_lifecycle_to_trace(
@@ -2187,3 +2196,48 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         await manager.unsubscribe(participant.id)
         if guest_gauge_incremented:
             guest_active.dec()
+
+
+async def _apply_quota_availability(
+    db: AsyncSession, *, agent_id: str, frame: LifecycleFrame
+) -> None:
+    """Maintain the quota-exhausted availability state (#625, D-2).
+
+    Caller commits. Only the quota code is ever written here: the
+    not-running family (crash, spawn, drift) stays owned by the lifecycle
+    scheduler.
+    """
+    from anygarden.agent_availability import (
+        classify_quota_error,
+        clear_quota_block,
+        mark_quota_exhausted,
+    )
+    from anygarden.db.models import Agent
+
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        return
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    if frame.event == "engine_call_finished" and frame.outcome == "ok":
+        if clear_quota_block(agent):
+            structlog.get_logger(__name__).info(
+                "quota_block_cleared", agent_id=agent_id
+            )
+        return
+    if frame.event in {"engine_call_finished", "handler_finished"} and (
+        frame.outcome == "failed" and classify_quota_error(frame.error)
+    ):
+        # Don't overwrite the scheduler's not-running reasons.
+        from anygarden.agent_availability import QUOTA_EXHAUSTED
+
+        if agent.unavailable_code in (None, QUOTA_EXHAUSTED):
+            mark_quota_exhausted(agent, frame.error, now=now)
+            structlog.get_logger(__name__).warning(
+                "quota_block_marked",
+                agent_id=agent_id,
+                until=agent.unavailable_until.isoformat()
+                if agent.unavailable_until
+                else None,
+            )
