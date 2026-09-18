@@ -135,11 +135,15 @@ async def product(pair):
         grant = await db.get(
             PeerGrant, (b.s.node_id, a.s.node_id, channel), populate_existing=True
         )
+        principal = {
+            "node_id": executor["node_id"],
+            "kind": "agent",
+            "principal_id": executor["agent_id"],
+        }
         return (
-            executor == {"node_id": b.s.node_id, "agent_id": b.actor}
-            and grant is not None
+            grant is not None
             and grant.active
-            and actor in grant.actors
+            and principal in (grant.actors or [])
             and "task.execute" in grant.capabilities
         )
 
@@ -552,3 +556,129 @@ async def test_delegate_auto_selection_issues_request_through_router(product):
     )
     assert receipt["state"] == "requested"
     assert receipt.get("selected_executor") is None  # explicit: no auto pick
+
+
+async def _add_second_executor(p):
+    """Grant-list + roster a second remote executor (node-c) for reassign."""
+    from anygarden.federation.models import PeerGrant
+    from anygarden.shared_channels.models import SharedParticipant
+
+    c_agent, c_node = uid(), uid()
+    principal = {"node_id": c_node, "kind": "agent", "principal_id": c_agent}
+    async with p.a.s.sessions.begin() as db:
+        grant = await db.get(
+            PeerGrant, (p.b.s.node_id, p.a.s.node_id, p.a.channel), populate_existing=True
+        )
+        grant.actors = list(grant.actors or []) + [principal]
+        db.add(
+            SharedParticipant(
+                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+                node_id=c_node, kind="agent", principal_id=c_agent,
+                role="member", active=True, revision=1,
+            )
+        )
+    async with p.a.s.sessions.begin() as db:
+        db.add(
+            SharedParticipant(
+                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+                node_id=p.b.s.node_id, kind="agent", principal_id=p.b.actor,
+                role="member", active=True, revision=1,
+            )
+        )
+    return principal
+
+
+async def test_reassign_moves_rejected_delegation_to_alternative(product):
+    p = product
+    alternate = await _add_second_executor(product)
+    # The fixture resolver only maps the b actor; teach it the alternate
+    # executor (the product wiring would give it a shadow participant).
+    alt_participant = uid()
+    base_resolve = p.service.resolve_principal
+
+    async def resolve_with_alt(db, channel, principal):
+        if (
+            channel == p.a.channel
+            and principal == {"node_id": alternate["node_id"], "kind": "agent",
+                              "principal_id": alternate["principal_id"]}
+        ):
+            return alt_participant
+        return await base_resolve(db, channel, principal)
+
+    p.service.resolve_principal = resolve_with_alt
+    async with p.a.s.sessions.begin() as db:
+        db.add(Participant(id=alt_participant, room_id=p.a.channel, role="member"))
+    await p.send(p.cmd("task.request"))
+    # Executor declines honestly (D-3 suppression outcome).
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    async with p.a.s.sessions() as db:
+        task = await db.get(Task, p.task)
+        assert task.status == "todo"  # rejection released it
+
+    receipt = await p.service.reassign(
+        p.a.c,
+        delegation_id=p.did,
+        requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+        tls=p.b.s.identity,
+    )
+    assert receipt["state"] == "requested"
+    assert receipt["transitioned_from"] == p.did
+    assert receipt["selected_executor"] == {
+        "node_id": alternate["node_id"], "agent_id": alternate["principal_id"],
+    }
+    async with p.a.s.sessions() as db:
+        observations = (
+            await db.scalars(
+                select(DelegationObservation).where(
+                    DelegationObservation.delegation_id == p.did,
+                    DelegationObservation.reason == "TRANSITIONED",
+                )
+            )
+        ).all()
+        assert len(observations) == 1
+
+
+async def test_reassign_without_alternative_is_structured(product):
+    p = product
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    with pytest.raises(DelegationError, match="NO_ALTERNATIVE_EXECUTOR"):
+        await p.service.reassign(
+            p.a.c,
+            delegation_id=p.did,
+            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            tls=p.b.s.identity,
+        )
+    async with p.a.s.sessions() as db:
+        observations = (
+            await db.scalars(
+                select(DelegationObservation).where(
+                    DelegationObservation.delegation_id == p.did,
+                    DelegationObservation.reason == "NO_ALTERNATIVE",
+                )
+            )
+        ).all()
+        assert len(observations) == 1
+
+
+async def test_reassign_requires_rejected_state(product):
+    p = product
+    await p.send(p.cmd("task.request"))
+    with pytest.raises(DelegationError, match="STATE_CONFLICT"):
+        await p.service.reassign(
+            p.a.c,
+            delegation_id=p.did,
+            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            tls=p.b.s.identity,
+        )
+
+
+async def test_reassign_is_original_requester_self_service(product):
+    p = product
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    stranger = {"node_id": uid(), "kind": "agent", "principal_id": uid()}
+    with pytest.raises(DelegationError, match="REQUESTER_MISMATCH"):
+        await p.service.reassign(
+            p.a.c, delegation_id=p.did, requester=stranger, tls=p.b.s.identity
+        )

@@ -629,9 +629,17 @@ class DelegationService:
     # ── D-3 (#626): role/fit auto-selection with availability filters ──
 
     async def select_executor(
-        self, db: AsyncSession, *, channel_id: str, now: datetime | None = None
+        self,
+        db: AsyncSession,
+        *,
+        channel_id: str,
+        now: datetime | None = None,
+        exclude: frozenset[tuple[str, str]] = frozenset(),
     ) -> dict | None:
         """Deterministically pick an executor from the active roster.
+
+        ``exclude`` drops ``(node_id, agent_id)`` pairs — used by reassignment
+        (D-4b) to route around the executor that just failed.
 
         Candidates are active agent participants with a fenced role. Each
         must clear the current grant boundary (``executor_allowed``); local
@@ -658,6 +666,8 @@ class DelegationService:
         scored: list[tuple[int, str, dict]] = []
         for entry in sorted(roster, key=lambda e: (e.node_id, e.principal_id)):
             executor = {"node_id": entry.node_id, "agent_id": entry.principal_id}
+            if (entry.node_id, entry.principal_id) in exclude:
+                continue
             if not await self.executor_allowed(db, channel_id, executor):
                 continue
             if entry.node_id == self.authority_node_id:
@@ -696,6 +706,7 @@ class DelegationService:
         tls,
         executor: dict | None = None,
         now: datetime | None = None,
+        exclude: frozenset[tuple[str, str]] = frozenset(),
     ) -> dict:
         """Product entry: select (unless explicit) then issue task.request.
 
@@ -707,7 +718,9 @@ class DelegationService:
         chosen = executor
         if chosen is None:
             async with channel_service.sessions() as db:
-                chosen = await self.select_executor(db, channel_id=channel_id, now=now)
+                chosen = await self.select_executor(
+                    db, channel_id=channel_id, now=now, exclude=exclude
+                )
         if chosen is None:
             raise DelegationError("NO_ELIGIBLE_EXECUTOR")
         async with channel_service.sessions() as db:
@@ -736,4 +749,87 @@ class DelegationService:
         receipt = await self.submit(channel_service, envelope, tls=tls)
         receipt = dict(receipt)
         receipt["selected_executor"] = chosen if executor is None else None
+        return receipt
+
+    async def reassign(
+        self,
+        channel_service,
+        *,
+        delegation_id: str,
+        requester: dict,
+        tls,
+        exclude: frozenset[tuple[str, str]] | None = None,
+        now: datetime | None = None,
+    ) -> dict:
+        """Re-delegate a rejected delegation to an alternative executor (D-4b).
+
+        Only ``rejected`` delegations qualify: rejection already returned the
+        Task to ``todo`` and released the reservation, so the new request is
+        an ordinary transactional command — receipts, duplicate prevention
+        and audit inherit untouched. The failing executor is excluded by
+        default; callers may add more. A ``TRANSITIONED`` observation links
+        the old delegation to the new one. No alternative → structured
+        ``NO_ALTERNATIVE_EXECUTOR`` after an auditable observation.
+        """
+        async with channel_service.sessions() as db:
+            record = await db.get(Delegation, delegation_id)
+            if (
+                record is None
+                or record.authority_node_id != self.authority_node_id
+            ):
+                raise DelegationError("DELEGATION_MISSING")
+            if record.state != "rejected":
+                raise DelegationError("STATE_CONFLICT")
+            # D-4b P3: reassignment is original-requester self-service —
+            # cancel control and the new delegation stay with whoever asked.
+            if record.requester != requester:
+                raise DelegationError("REQUESTER_MISMATCH")
+            task = await db.get(Task, record.task_id)
+            if task is None or task.status != "todo":
+                raise DelegationError("STATE_CONFLICT")
+            channel_id = record.channel_id
+            failed = frozenset({(record.executor_node_id, record.executor_agent_id)})
+        excluded = failed | (exclude or frozenset())
+        try:
+            receipt = await self.delegate(
+                channel_service,
+                channel_id=channel_id,
+                task_id=record.task_id,
+                source_message_id=record.source_message_id,
+                requester=requester,
+                tls=tls,
+                exclude=excluded,
+                now=now,
+            )
+        except DelegationError as error:
+            if error.code != "NO_ELIGIBLE_EXECUTOR":
+                raise
+            # Structured alert (D-4b ③): every alternative is exhausted.
+            async with channel_service.sessions.begin() as db:
+                db.add(
+                    DelegationObservation(
+                        id=str(uuid4()),
+                        delegation_id=delegation_id,
+                        request_id=str(
+                            uuid5(NAMESPACE_URL, f"no-alternative:{delegation_id}")
+                        ),
+                        execution_id=None,
+                        reason="NO_ALTERNATIVE",
+                    )
+                )
+            raise DelegationError("NO_ALTERNATIVE_EXECUTOR") from error
+        async with channel_service.sessions.begin() as db:
+            db.add(
+                DelegationObservation(
+                    id=str(uuid4()),
+                    delegation_id=delegation_id,
+                    request_id=str(
+                        uuid5(NAMESPACE_URL, f"transitioned:{delegation_id}")
+                    ),
+                    execution_id=None,
+                    reason="TRANSITIONED",
+                )
+            )
+        receipt = dict(receipt)
+        receipt["transitioned_from"] = delegation_id
         return receipt

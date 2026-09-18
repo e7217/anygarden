@@ -212,3 +212,23 @@ executor records a `declined` binding (never launchable — `launch` requires
 `accepted`) and emits `task.reject UNAVAILABLE` through the same outbox
 (idempotent request id). When the agent recovers, a later `prepare` flips
 the binding to `prepared` and accepts honestly.
+
+## Quota reassignment (D-4b, #627)
+
+`await delegation.reassign(channel_service, delegation_id=..., requester=...,
+tls=...)` moves a **rejected** delegation to an alternative executor.
+Rejection is the only qualifying state: it has already returned the Task to
+``todo`` and released the reservation, so the new request is an ordinary
+transactional command — receipts, duplicate prevention and audit inherit
+untouched. The failing executor is excluded by default (callers may pass
+more). Success records a ``TRANSITIONED`` observation linking old→new and
+returns the new receipt (with ``transitioned_from``/``selected_executor``).
+When every alternative is exhausted the call raises the structured
+``NO_ALTERNATIVE_EXECUTOR`` after recording a ``NO_ALTERNATIVE``
+observation — the hook point for escalation notifications.
+
+Combined with D-3, the failover chain is: same-node model swap (D-4a,
+adapter configuration) → cross-node reassignment (here) → structured alert.
+A blocked executor converts its delegation to ``rejected`` itself through
+the D-3 voluntary-suppression decline, which is what makes reassignment
+contract-clean.
