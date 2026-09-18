@@ -58,7 +58,7 @@ VALIDATORS = [
     for name in ("envelope.schema.json", "receipt.schema.json")
 ]
 # Distinct test-only tables: these do not represent product #590/#591 models.
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import MetaData
 
@@ -756,3 +756,57 @@ async def test_invalid_ack_cannot_authorize_launch(h, setup_bridge, field, value
     assert runtime.calls == 0
     # The proper ACK for the same request can still be recovered.
     assert (await bridge.deliver(outbox, h.commit))["state"] == "accepted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,until,pause",
+    [
+        ("quota_exhausted", datetime.now(UTC) + timedelta(hours=1), None),
+        ("quota_exhausted", None, None),
+        (None, None, "budget"),
+    ],
+)
+async def test_prepare_declines_when_self_suppressed(h, tmp_path, code, until, pause):
+    """D-3 voluntary suppression: no binding, honest task.reject UNAVAILABLE."""
+    from anygarden.db.models import Agent as AgentRow
+
+    async with h.sessions.begin() as db:
+        db.add(
+            AgentRow(
+                id=h.agent,
+                name="suppressed",
+                engine="pi-cli",
+                unavailable_code=code,
+                unavailable_until=until,
+                pause_reason=pause,
+            )
+        )
+    runtime = ControlledRuntime()
+
+    def permits(fence):
+        return fence.generation == 7 and fence.lease_token == "lease"
+
+    bridge = ExecutorBridge(
+        h.sessions, tmp_path / "runtime", runtime,
+        node_id=h.node, permits=permits, reauthorize=h.auth,
+    )
+    try:
+        scope = SessionScope(h.node, h.agent, h.authority, h.channel, None, "workspace", 1, 1)
+        invocation = Invocation(h.execution, scope, "prompt", tmp_path, tmp_path)
+        await h.commit(h.command("task.request", 0))
+        outbox = await bridge.prepare(
+            h.delegation, invocation, generation=7, lease_token="lease", grant_epoch=1
+        )
+        async with h.sessions() as db:
+            binding_row = await db.get(ExecutorBinding, h.delegation)
+            assert binding_row is not None and binding_row.local_state == "declined"
+            row = await db.get(DelegationOutbox, outbox)
+            assert row.command["kind"] == "task.reject"
+            assert row.command["payload"]["reason"] == "UNAVAILABLE"
+            assert row.command["payload"]["expected_revision"] == 1
+        receipt = await bridge.deliver(outbox, h.commit)
+        assert receipt["state"] == "rejected"
+        assert runtime.calls == 0
+    finally:
+        await bridge.close()

@@ -13,6 +13,7 @@ import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -231,15 +232,25 @@ class ExecutorBridge:
                     scope=asdict(invocation.scope),
                     revision=requested_revision,
                     authority_state="requested",
-                    local_state="prepared",
+                    # D-3: a suppressed executor records a declined intent —
+                    # binding-anchored outbox stays intact, no launch ever
+                    # happens from this state, and recovery can accept later.
+                    local_state=(
+                        "declined" if await self._self_suppressed(invocation) else "prepared"
+                    ),
                 )
                 # Auth BEFORE the first insert as well as BEFORE duplicate lookup result.
                 await self.reauthorize(db, binding)
-                if not self.permits(self._fence(binding)):
+                if (
+                    binding.local_state == "prepared"
+                    and not self.permits(self._fence(binding))
+                ):
                     raise DelegationError("LOCAL_FENCE_DENIED")
                 self._install(binding)
                 db.add(binding)
                 await db.flush()
+                if binding.local_state == "declined":
+                    return await self._enqueue_decline(db, binding)
                 return await self._enqueue(db, binding, "task.accept")
             binding = await self._binding(db, delegation_id)
             if (
@@ -249,6 +260,16 @@ class ExecutorBridge:
                 or binding.grant_epoch != grant_epoch
             ):
                 raise DelegationError("BINDING_CONFLICT")
+            if binding.local_state == "declined":
+                # Still suppressed -> the same decline (idempotent request id);
+                # recovered -> flip to prepared and accept honestly.
+                if await self._self_suppressed(invocation):
+                    return await self._enqueue_decline(db, binding)
+                binding.local_state = "prepared"
+                if not self.permits(self._fence(binding)):
+                    raise DelegationError("LOCAL_FENCE_DENIED")
+                await db.flush()
+                return await self._enqueue(db, binding, "task.accept")
             row = await db.scalar(
                 select(DelegationOutbox).where(
                     DelegationOutbox.delegation_id == delegation_id,
@@ -286,6 +307,7 @@ class ExecutorBridge:
             raise DelegationError("INVALID_RECEIPT")
         expected_state = {
             "task.accept": "accepted",
+            "task.reject": "rejected",
             "task.started": "running",
             "task.result": "completed"
             if command["payload"].get("outcome") == "succeeded"
@@ -295,6 +317,7 @@ class ExecutorBridge:
         }[command["kind"]]
         expected_process = {
             "accepted": "unknown",
+            "rejected": "not_started",
             "running": "running",
             "completed": "finished",
             "failed": "finished",
@@ -521,3 +544,83 @@ class ExecutorBridge:
         if not self._closed:
             self._closed = True
             await self.manager.close()
+
+    async def _self_suppressed(self, invocation) -> bool:
+        """D-3 voluntary suppression: decline work this node cannot run.
+
+        The authority's selection already avoids known-blocked agents, but
+        availability is freshest here: quota windows, budget pauses and
+        hard-stop ceilings are checked at accept time so the delegation
+        fails honestly (task.reject UNAVAILABLE) instead of stalling.
+        """
+        from anygarden.agent_availability import routing_blocked
+        from anygarden.budgets.ledger import evaluate_invocation_block
+        from anygarden.db.models import Agent as AgentRow
+
+        async with self.sessions() as db:
+            agent = await db.get(AgentRow, invocation.scope.agent_id)
+            if agent is not None and (
+                routing_blocked(agent, now=datetime.now(UTC))
+                or agent.pause_reason == "budget"
+            ):
+                return True
+        block = await evaluate_invocation_block(
+            self.sessions,
+            agent_id=invocation.scope.agent_id,
+            room_id=invocation.scope.channel_id,
+        )
+        return block is not None
+
+    async def _enqueue_decline(self, db, binding) -> str:
+        """Emit task.reject UNAVAILABLE for a suppressed executor (D-3).
+
+        Binding-anchored like every outbox command; the uuid5 request id
+        makes repeated prepares idempotent. The reject payload deliberately
+        carries no execution_id (closed wire schema).
+        """
+        pending = await db.scalar(
+            select(DelegationOutbox.id).where(
+                DelegationOutbox.delegation_id == binding.delegation_id,
+                DelegationOutbox.command["kind"].as_string() == "task.reject",
+                DelegationOutbox.state == "pending",
+            )
+        )
+        if pending is not None:
+            return pending
+        request_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"delegation:{binding.delegation_id}:{binding.revision}:task.reject:UNAVAILABLE",
+            )
+        )
+        command = {
+            "protocol_version": 1,
+            "request_id": request_id,
+            "sender_node_id": self.node_id,
+            "authority_node_id": binding.authority_node_id,
+            "channel_id": binding.channel_id,
+            "grant_epoch": binding.grant_epoch,
+            "actor": {
+                "node_id": self.node_id,
+                "kind": "agent",
+                "principal_id": binding.agent_id,
+            },
+            "kind": "task.reject",
+            "payload": {
+                "delegation_id": binding.delegation_id,
+                "expected_revision": binding.revision,
+                "reason": "UNAVAILABLE",
+            },
+        }
+        validate("command", command)
+        db.add(
+            DelegationOutbox(
+                id=request_id,
+                delegation_id=binding.delegation_id,
+                command=command,
+                canonical_body=canonical(command),
+                state="pending",
+            )
+        )
+        await db.flush()
+        return request_id
