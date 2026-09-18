@@ -780,6 +780,10 @@ class DelegationService:
                 raise DelegationError("DELEGATION_MISSING")
             if record.state != "rejected":
                 raise DelegationError("STATE_CONFLICT")
+            # D-4b P3: reassignment is original-requester self-service —
+            # cancel control and the new delegation stay with whoever asked.
+            if record.requester != requester:
+                raise DelegationError("REQUESTER_MISMATCH")
             task = await db.get(Task, record.task_id)
             if task is None or task.status != "todo":
                 raise DelegationError("STATE_CONFLICT")

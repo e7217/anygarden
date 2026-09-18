@@ -671,3 +671,14 @@ async def test_reassign_requires_rejected_state(product):
             requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
             tls=p.b.s.identity,
         )
+
+
+async def test_reassign_is_original_requester_self_service(product):
+    p = product
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    stranger = {"node_id": uid(), "kind": "agent", "principal_id": uid()}
+    with pytest.raises(DelegationError, match="REQUESTER_MISMATCH"):
+        await p.service.reassign(
+            p.a.c, delegation_id=p.did, requester=stranger, tls=p.b.s.identity
+        )
