@@ -11,6 +11,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select, update
+
 from anygarden.db.models import Participant, Room, Task
 from anygarden.federation.delegation import (
     DelegationError,
@@ -21,6 +23,7 @@ from anygarden.federation.delegation_models import (
     Delegation,
     DelegationMirror,
     DelegationObservation,
+    RecoveryAction,
 )
 from anygarden.federation.delegation_projection import install_projections
 from anygarden.federation.errors import PeerError
@@ -34,7 +37,6 @@ from anygarden.shared_channels.models import (
 )
 from anygarden.shared_channels.schemas import ChannelError
 from anygarden.shared_channels.service import ChannelService
-from sqlalchemy import func, select, update
 
 from . import test_federation_trust as trust
 from .test_federation_trust import endpoint, invitation
@@ -87,8 +89,8 @@ async def product(pair):
     actor = {"node_id": b.s.node_id, "kind": "agent", "principal_id": b.actor}
     did, execution, task, source, participant = [uid() for _ in range(5)]
 
-    def cmd(kind, revision=0, **payload):
-        p = {"delegation_id": did, "expected_revision": revision}
+    def cmd(kind, revision=0, delegation_id=None, **payload):
+        p = {"delegation_id": delegation_id or did, "expected_revision": revision}
         if kind == "task.request":
             p.update(
                 task_id=task,
@@ -812,3 +814,142 @@ async def test_failover_quota_exhausted_marks_and_reassigns(product):
     receipt = result["receipt"]
     assert receipt["transitioned_from"] == p.did
     assert receipt["selected_executor"] != failed_executor
+
+
+async def test_reassign_cycle_defense_excludes_all_prior_executors(product):
+    p = product
+    alternate = await _add_second_executor(product)
+    alt_participant = uid()
+    base_resolve = p.service.resolve_principal
+
+    async def resolve_with_alt(db, channel, principal):
+        if (
+            channel == p.a.channel
+            and principal == {"node_id": alternate["node_id"], "kind": "agent",
+                              "principal_id": alternate["principal_id"]}
+        ):
+            return alt_participant
+        return await base_resolve(db, channel, principal)
+
+    p.service.resolve_principal = resolve_with_alt
+    async with p.a.s.sessions.begin() as db:
+        db.add(Participant(id=alt_participant, room_id=p.a.channel, role="member"))
+
+    requester = {"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor}
+    # First assignment: b executor; b declines.
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    first = await p.service.reassign(
+        p.a.c, delegation_id=p.did, requester=requester, tls=p.b.s.identity
+    )
+    assert first["selected_executor"]["node_id"] == alternate["node_id"]
+    # The new delegation id is not directly in the receipt; find it by executor.
+    async with p.a.s.sessions() as db:
+        successor = (
+            await db.scalars(
+                select(Delegation).where(
+                    Delegation.authority_node_id == p.a.s.node_id,
+                    Delegation.channel_id == p.a.channel,
+                    Delegation.task_id == p.task,
+                    Delegation.executor_node_id == alternate["node_id"],
+                )
+            )
+        ).one()
+    reject = p.cmd("task.reject", 1, reason="UNAVAILABLE",
+                   delegation_id=successor.id)
+    reject["actor"] = {
+        "node_id": alternate["node_id"], "kind": "agent",
+        "principal_id": alternate["principal_id"],
+    }
+    reject["sender_node_id"] = alternate["node_id"]
+    async with p.a.s.sessions.begin() as db:
+        await p.a.c._commit_authorized(db, reject)
+    # Cycle defense: reassigning the successor must exclude BOTH prior
+    # executors (b and the alternate) — nobody left -> structured failure,
+    # never a ping-pong back to b.
+    with pytest.raises(DelegationError, match="NO_ALTERNATIVE_EXECUTOR"):
+        await p.service.reassign(
+            p.a.c, delegation_id=successor.id, requester=requester, tls=p.b.s.identity
+        )
+    async with p.a.s.sessions() as db:
+        escalations = (
+            await db.scalars(
+                select(RecoveryAction).where(RecoveryAction.type == "ESCALATION")
+            )
+        ).all()
+        assert len(escalations) == 1
+        assert escalations[0].payload["reason"] == "NO_ALTERNATIVE_EXECUTOR"
+        assert len(escalations[0].payload["excluded"]) == 2
+
+
+async def test_reassign_emits_owner_return_action(product):
+    p = product
+    alternate = await _add_second_executor(product)
+    alt_participant = uid()
+    base_resolve = p.service.resolve_principal
+
+    async def resolve_with_alt(db, channel, principal):
+        if (
+            channel == p.a.channel
+            and principal == {"node_id": alternate["node_id"], "kind": "agent",
+                              "principal_id": alternate["principal_id"]}
+        ):
+            return alt_participant
+        return await base_resolve(db, channel, principal)
+
+    p.service.resolve_principal = resolve_with_alt
+    async with p.a.s.sessions.begin() as db:
+        db.add(Participant(id=alt_participant, room_id=p.a.channel, role="member"))
+    await p.send(p.cmd("task.request"))
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    requester = {"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor}
+    await p.service.reassign(
+        p.a.c, delegation_id=p.did, requester=requester, tls=p.b.s.identity
+    )
+    async with p.a.s.sessions() as db:
+        actions = (
+            await db.scalars(
+                select(RecoveryAction).where(RecoveryAction.type == "OWNER_RETURN")
+            )
+        ).all()
+        assert len(actions) == 1
+        assert actions[0].target == requester
+        assert actions[0].payload["selected_executor"]["node_id"] == alternate["node_id"]
+        assert actions[0].state == "pending"
+
+
+async def test_chain_health_reports_eligible_and_blocked(product):
+    from datetime import timedelta
+
+    from anygarden.agent_availability import QUOTA_EXHAUSTED
+    from anygarden.db.models import Agent as AgentRow
+    from anygarden.federation.models import PeerGrant
+    from anygarden.shared_channels.models import SharedParticipant
+
+    p = product
+    await _add_second_executor(product)
+    blocked_id = uid()
+    async with p.a.s.sessions.begin() as db:
+        grant = await db.get(
+            PeerGrant, (p.b.s.node_id, p.a.s.node_id, p.a.channel), populate_existing=True
+        )
+        grant.actors = list(grant.actors or []) + [
+            {"node_id": p.a.s.node_id, "kind": "agent", "principal_id": blocked_id}
+        ]
+        db.add(AgentRow(id=blocked_id, name="blocked", engine="pi-cli",
+                        unavailable_code=QUOTA_EXHAUSTED,
+                        unavailable_until=datetime.now(UTC) + timedelta(hours=1)))
+        db.add(
+            SharedParticipant(
+                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+                node_id=p.a.s.node_id, kind="agent", principal_id=blocked_id,
+                role="member", active=True, revision=1,
+            )
+        )
+    async with p.a.s.sessions() as db:
+        health = await p.service.chain_health(db, channel_id=p.a.channel)
+    assert health["healthy"] is True
+    eligible_nodes = {e["node_id"] for e in health["eligible_executors"]}
+    assert p.b.s.node_id in eligible_nodes
+    blocked = {b["agent_id"]: b["reason"] for b in health["blocked_executors"]}
+    assert blocked.get(blocked_id) == QUOTA_EXHAUSTED

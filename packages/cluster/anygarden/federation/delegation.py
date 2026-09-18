@@ -23,7 +23,12 @@ from anygarden.shared_channels.schemas import (
     command_action,
 )
 
-from .delegation_models import Delegation, DelegationObservation, DelegationReservation
+from .delegation_models import (
+    Delegation,
+    DelegationObservation,
+    DelegationReservation,
+    RecoveryAction,
+)
 
 TASK_STATUS = {
     "requested": "todo",
@@ -788,8 +793,21 @@ class DelegationService:
             if task is None or task.status != "todo":
                 raise DelegationError("STATE_CONFLICT")
             channel_id = record.channel_id
-            failed = frozenset({(record.executor_node_id, record.executor_agent_id)})
-        excluded = failed | (exclude or frozenset())
+            # D-5 cycle defense: exclude EVERY executor this task ever had,
+            # not just the one that just failed — A→B→A ping-pong and long
+            # cycles across reassignments are structurally impossible then.
+            prior = (
+                await db.execute(
+                    select(
+                        Delegation.executor_node_id, Delegation.executor_agent_id
+                    ).where(
+                        Delegation.authority_node_id == self.authority_node_id,
+                        Delegation.channel_id == channel_id,
+                        Delegation.task_id == record.task_id,
+                    )
+                )
+            ).all()
+            excluded = frozenset(prior) | (exclude or frozenset())
         try:
             receipt = await self.delegate(
                 channel_service,
@@ -817,6 +835,23 @@ class DelegationService:
                         reason="NO_ALTERNATIVE",
                     )
                 )
+            # D-5 escalation: every alternative (and every prior executor)
+            # is exhausted — a human must look at this task.
+            async with channel_service.sessions.begin() as db:
+                db.add(
+                    RecoveryAction(
+                        id=str(uuid4()),
+                        type="ESCALATION",
+                        authority_node_id=self.authority_node_id,
+                        channel_id=channel_id,
+                        delegation_id=delegation_id,
+                        task_id=record.task_id,
+                        target=dict(requester),
+                        payload={"reason": "NO_ALTERNATIVE_EXECUTOR",
+                                 "excluded": sorted(f"{n}:{a}" for n, a in excluded)},
+                        state="pending",
+                    )
+                )
             raise DelegationError("NO_ALTERNATIVE_EXECUTOR") from error
         async with channel_service.sessions.begin() as db:
             db.add(
@@ -830,6 +865,80 @@ class DelegationService:
                     reason="TRANSITIONED",
                 )
             )
+            # D-5 owner-return: the original requester is told where the
+            # work went (a notification consumer drains these actions).
+            db.add(
+                RecoveryAction(
+                    id=str(uuid4()),
+                    type="OWNER_RETURN",
+                    authority_node_id=self.authority_node_id,
+                    channel_id=channel_id,
+                    delegation_id=delegation_id,
+                    task_id=record.task_id,
+                    target=dict(requester),
+                    payload={
+                        "new_request_id": receipt["request_id"],
+                        "selected_executor": receipt.get("selected_executor"),
+                    },
+                    state="pending",
+                )
+            )
         receipt = dict(receipt)
         receipt["transitioned_from"] = delegation_id
         return receipt
+
+    async def chain_health(
+        self, db: AsyncSession, *, channel_id: str, now: datetime | None = None
+    ) -> dict:
+        """Org-chain health snapshot for a channel (D-5, #628).
+
+        Prerequisite check for multi-home extension: who could take work
+        right now, who is blocked, and how much transition traffic the
+        chain has produced. Read-only.
+        """
+        from anygarden.agent_availability import routing_blocked
+        from anygarden.db.models import Agent as AgentRow
+        from anygarden.shared_channels.models import SharedParticipant
+
+        moment = now or datetime.now(UTC)
+        roster = (
+            await db.scalars(
+                select(SharedParticipant).where(
+                    SharedParticipant.authority_node_id == self.authority_node_id,
+                    SharedParticipant.channel_id == channel_id,
+                    SharedParticipant.kind == "agent",
+                    SharedParticipant.active.is_(True),
+                )
+            )
+        ).all()
+        eligible: list[dict] = []
+        blocked: list[dict] = []
+        for entry in sorted(roster, key=lambda e: (e.node_id, e.principal_id)):
+            executor = {"node_id": entry.node_id, "agent_id": entry.principal_id}
+            reason = None
+            if not await self.executor_allowed(db, channel_id, executor):
+                reason = "grant"
+            elif entry.node_id == self.authority_node_id:
+                agent = await db.get(AgentRow, entry.principal_id)
+                if agent is None:
+                    reason = "missing_agent_row"
+                elif routing_blocked(agent, now=moment):
+                    reason = agent.unavailable_code or "unavailable"
+                elif agent.pause_reason == "budget":
+                    reason = "budget_pause"
+            if reason is None:
+                eligible.append(executor)
+            else:
+                blocked.append({**executor, "reason": reason})
+        transitions = await db.scalar(
+            select(func.count())
+            .select_from(DelegationObservation)
+            .where(DelegationObservation.reason == "TRANSITIONED")
+        )
+        return {
+            "channel_id": channel_id,
+            "eligible_executors": eligible,
+            "blocked_executors": blocked,
+            "transitioned_total": int(transitions or 0),
+            "healthy": bool(eligible),
+        }

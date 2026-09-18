@@ -409,6 +409,7 @@ def _compose_federation_services(app: FastAPI) -> None:
             sessions=app.state.session_factory,
             local_policy=make_local_policy(identity.node_id),
         )
+        app.state.federation_node_id = identity.node_id
     except Exception as exc:
         # P4 (task #40 review): an unreadable/expired/mismatched credential
         # pair must not crash boot — same fail-closed posture as partial or
