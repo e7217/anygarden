@@ -7,7 +7,7 @@ from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Base, Room, User
+from anygarden.db.models import Base, Message, Room, User
 from httpx import ASGITransport, AsyncClient
 
 
@@ -105,4 +105,77 @@ async def test_reaction_requires_membership(react_env):
 
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+
+
+async def test_reminder_wake_respects_room_policy(react_env):
+    """D-1 condition 3: reminder wake frames honor the room's policy —
+    rooms without ``reminder`` in wake_triggers never emit the frame,
+    and emitted frames carry the reminder stamp for agent classification."""
+    from types import SimpleNamespace
+
+    from anygarden.messages.service import broadcast_reminder_wake
+    from anygarden.db.models import Room
+
+    env = react_env
+    app, config = env["app"], env["config"]
+    member_token = _token(config, env["member"], "m@x.test")
+
+    class RecordingManager:
+        def __init__(self):
+            self.frames = []
+
+        async def broadcast(self, room_id, frame):
+            self.frames.append(frame)
+
+    manager = RecordingManager()
+    app.state.connection_manager = manager
+
+    # Opt the room into reminder wakes and emit one.
+    async with env["factory"].begin() as db:
+        await db.execute(
+            update(Room)
+            .where(Room.id == env["room"])
+            .values(wake_triggers=["reminder"])
+        )
+    async with env["factory"]() as db:
+        published = await broadcast_reminder_wake(
+            db,
+            env["room"],
+            text="정기 리마인더",
+            manager=manager,
+        )
+    assert published is True
+    assert len(manager.frames) == 1
+    frame = manager.frames[0]
+    payload = frame.model_dump_json()
+    import json as _json
+
+    assert _json.loads(payload)["metadata"]["wake_trigger"] == "reminder"
+
+    # Opt out: the emitter must not publish (condition 3).
+    async with env["factory"].begin() as db:
+        await db.execute(
+            update(Room).where(Room.id == env["room"]).values(wake_triggers=["mention"])
+        )
+    manager.frames.clear()
+    async with env["factory"]() as db:
+        published = await broadcast_reminder_wake(
+            db,
+            env["room"],
+            text="정기 리마인더 2",
+            manager=manager,
+        )
+    assert published is False
+    assert manager.frames == []
+    # The reminder message itself is not persisted for opted-out rooms —
+    # emitting would silently inject content nobody agreed to wake for.
+    async with env["factory"]() as db:
+        count = len(
+            (
+                await db.execute(
+                    select(Message).where(Message.content == "정기 리마인더 2")
+                )
+            ).all()
+        )
+    assert count == 0

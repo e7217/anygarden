@@ -110,6 +110,7 @@ async def _write_message(
         identity=identity,
         capability=Capability.MESSAGE_SEND,
     )
+    room_wake_triggers = list(getattr(access.room, "wake_triggers", None) or [])
     metadata = dict(body.metadata) if body.metadata else {}
     try:
         metadata = await canonicalize_shared_file_references(
@@ -133,6 +134,16 @@ async def _write_message(
         ]
     if mentions:
         metadata["mentions"] = mentions
+
+    # D-1 (#624) — server-stamped wake classification. "mention" when the
+    # message addresses someone; "message" only when the room opted in to
+    # plain-message wakes; otherwise NO stamp — the frame still delivers to
+    # humans/agents, but agents fall back to the legacy judgment chain
+    # (backward compatibility, architect condition 4).
+    if mentions:
+        metadata["wake_trigger"] = "mention"
+    elif room_wake_triggers and "message" in room_wake_triggers:
+        metadata["wake_trigger"] = "message"
 
     message = await append_message(
         db,

@@ -28,11 +28,7 @@ def _clean_reference_field(value: str) -> str:
 
 
 def _xml_escape_text(value: str) -> str:
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
@@ -72,9 +68,7 @@ def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
         if path in seen:
             continue
         seen.add(path)
-        lines.append(
-            f"- {_xml_escape_text(name)}: {_xml_escape_text(path)}"
-        )
+        lines.append(f"- {_xml_escape_text(name)}: {_xml_escape_text(path)}")
 
     if not lines:
         return ""
@@ -307,9 +301,7 @@ def compose_memory_suffix(
         return ""
 
     memory_block = (
-        compose_memory_block(memory_md, ephemeral)
-        if (memory_md or ephemeral)
-        else ""
+        compose_memory_block(memory_md, ephemeral) if (memory_md or ephemeral) else ""
     )
     return memory_block + shared_block
 
@@ -559,7 +551,11 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     def _targets_me(m: dict[str, Any]) -> bool:
         if m.get("type") == "legacy":
             name = m.get("name")
-            return bool(agent_key) and isinstance(name, str) and name.casefold() == agent_key
+            return (
+                bool(agent_key)
+                and isinstance(name, str)
+                and name.casefold() == agent_key
+            )
         if m.get("type") == "user":
             # ID-based mention from the frontend autocomplete — the
             # ``id`` is a ``participant_id``, which is exactly what
@@ -628,8 +624,7 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         my_agent_id = getattr(client, "_agent_id", None)
         if rep_id and my_agent_id:
             return (
-                MessagePolicy.RESPOND if my_agent_id == rep_id
-                else MessagePolicy.SKIP
+                MessagePolicy.RESPOND if my_agent_id == rep_id else MessagePolicy.SKIP
             )
         return MessagePolicy.RESPOND
 
@@ -666,6 +661,22 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if mentioned_me:
         return MessagePolicy.RESPOND
 
+    # D-1 (#624) — server-stamped wake classification. The server computed
+    # this stamp from the room's ``wake_triggers`` policy and its own
+    # mention/grant computation (architect GO, task #74 conditions ①③):
+    # "reminder"/"message" stamps are explicit wake instructions, so they
+    # short-circuit the strategy tail (a reminder wake must not be silenced
+    # by round_robin/orchestrator SKIPs). "mention"-stamped frames fall
+    # through to the legacy mention rules (rule 5's not-for-us SKIP keeps
+    # working), and unstamped frames take the legacy chain unchanged
+    # (backward compatibility, condition ④). Reaction events never carry
+    # this stamp — they are structurally excluded from wake paths.
+    wake_trigger = metadata.get("wake_trigger")
+    if wake_trigger in ("reminder", "message") and not metadata.get("ingest_only"):
+        # Defense in depth: the server never stamps ingest_only frames, but
+        # the passive-ingest contract wins if they ever coexist.
+        return MessagePolicy.RESPOND
+
     # 4a. Strategy-forced RESPOND (#233). The server has already
     # singled this agent out as the rightful speaker for this frame
     # — either by pinning us as the room's orchestrator (O1 path)
@@ -689,18 +700,12 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if strategy == "orchestrator":
         orc_map = getattr(client, "_orchestrator_agent_id", None)
         orc_for_room_4a = (
-            orc_map.get(room_id)
-            if isinstance(orc_map, dict) and room_id
-            else None
+            orc_map.get(room_id) if isinstance(orc_map, dict) and room_id else None
         )
         my_agent_id = getattr(client, "_agent_id", None)
         # O1: I am this room's orchestrator → RESPOND. Hoisted from
         # the strategy dispatcher below so it beats ``ingest_only``.
-        if (
-            orc_for_room_4a
-            and my_agent_id
-            and orc_for_room_4a == my_agent_id
-        ):
+        if orc_for_room_4a and my_agent_id and orc_for_room_4a == my_agent_id:
             return MessagePolicy.RESPOND
     if strategy in ("round_robin", "orchestrator"):
         # next_speaker stamp points at me → RESPOND. Hoisted so a
@@ -762,9 +767,7 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         # this branch means neither condition fired.
         orc_map = getattr(client, "_orchestrator_agent_id", None)
         orc_for_room = (
-            orc_map.get(room_id)
-            if isinstance(orc_map, dict) and room_id
-            else None
+            orc_map.get(room_id) if isinstance(orc_map, dict) and room_id else None
         )
 
         # Graceful fallback — strategy is 'orchestrator' but nobody is
