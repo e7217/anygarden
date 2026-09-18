@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
+from anygarden.db.models import Message as MessageRow
+from anygarden.db.models import MessageReaction, Participant
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.messages.references import (
     InvalidSharedFileReference,
@@ -56,6 +62,23 @@ class MessageOut(BaseModel):
 class MessageCreate(BaseModel):
     content: str = Field(min_length=1)
     metadata: Optional[dict[str, Any]] = None
+
+
+class ReactionCreate(BaseModel):
+    emoji: str = Field(min_length=1, max_length=32)
+
+
+def _reaction_frame(message_id: str, participant_id: str, emoji: str, action: str):
+    """Receipt event, deliberately NOT a message frame: reaction events are
+    structurally excluded from agent wake paths (D-1 attention norm)."""
+    return {
+        "type": "reaction",
+        "room_id": None,
+        "message_id": message_id,
+        "participant_id": participant_id,
+        "emoji": emoji,
+        "action": action,
+    }
 
 
 async def _read_access(
@@ -125,6 +148,114 @@ async def _write_message(
     if manager is not None:
         await manager.broadcast(room_id, message_to_frame(message))
     return message
+
+
+async def _reaction_target(
+    db: AsyncSession, *, room_id: str, message_id: str, identity: Identity
+):
+    """Shared preconditions for reaction endpoints: read capability, the
+    caller's participant row in this room (guests and identity-less callers
+    are excluded — receipts are participant-scoped), and the message must
+    exist in this room."""
+    await _read_access(db, room_id=room_id, identity=identity)
+    if identity.kind not in {"user", "agent"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only users and agents can react",
+        )
+    column = Participant.user_id if identity.kind == "user" else Participant.agent_id
+    participant_id = await db.scalar(
+        select(Participant.id).where(
+            Participant.room_id == room_id,
+            column == identity.id,
+        )
+    )
+    if participant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not a member of this room",
+        )
+    message = await db.get(MessageRow, message_id)
+    if message is None or message.room_id != room_id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return participant_id
+
+
+@router.post(
+    "/{room_id}/messages/{message_id}/reactions",
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_reaction(
+    room_id: str,
+    message_id: str,
+    body: ReactionCreate,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Emoji receipt (D-1). Broadcasts a reaction event — never a message
+    frame — so reacting does not wake channel agents."""
+    participant_id = await _reaction_target(
+        db, room_id=room_id, message_id=message_id, identity=identity
+    )
+    reaction = MessageReaction(
+        id=str(uuid4()),
+        message_id=message_id,
+        participant_id=participant_id,
+        emoji=body.emoji,
+    )
+    db.add(reaction)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Reaction already exists",
+        ) from None
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        await manager.broadcast(
+            room_id,
+            _reaction_frame(message_id, participant_id, body.emoji, "added"),
+        )
+    return {
+        "message_id": message_id,
+        "participant_id": participant_id,
+        "emoji": body.emoji,
+    }
+
+
+@router.delete(
+    "/{room_id}/messages/{message_id}/reactions/{emoji}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def remove_reaction(
+    room_id: str,
+    message_id: str,
+    emoji: str,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    participant_id = await _reaction_target(
+        db, room_id=room_id, message_id=message_id, identity=identity
+    )
+    result = await db.execute(
+        sa_delete(MessageReaction).where(
+            MessageReaction.message_id == message_id,
+            MessageReaction.participant_id == participant_id,
+            MessageReaction.emoji == emoji,
+        )
+    )
+    await db.commit()
+    if result.rowcount:
+        manager = getattr(request.app.state, "connection_manager", None)
+        if manager is not None:
+            await manager.broadcast(
+                room_id,
+                _reaction_frame(message_id, participant_id, emoji, "removed"),
+            )
 
 
 @router.get("/{room_id}/messages", response_model=list[MessageOut])
