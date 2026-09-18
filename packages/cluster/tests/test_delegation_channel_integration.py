@@ -468,3 +468,87 @@ async def test_sweeper_skips_and_audits_when_guard_refuses(product):
             )
         ).all()
         assert len(observations) == 1
+
+
+async def test_auto_selection_skips_blocked_and_picks_least_loaded(product):
+    from datetime import timedelta
+
+    from anygarden.agent_availability import QUOTA_EXHAUSTED
+    from anygarden.db.models import Agent as AgentRow
+    from anygarden.federation.delegation_models import Delegation
+    from anygarden.shared_channels.models import SharedParticipant
+
+    p = product
+    # Two extra remote-agent roster entries: one quota-lookalike is remote
+    # (authority can't see remote quota), so use a LOCAL second agent to
+    # prove the D-2 filter; the b-actor stays the eligible one.
+    async with p.a.s.sessions.begin() as db:
+        # The fixture seeds the participant + grant but not the roster;
+        # selection is roster-driven, so add the b actor's roster entry.
+        db.add(SharedParticipant(
+            authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+            node_id=p.b.s.node_id, kind="agent", principal_id=p.b.actor,
+            role="member", active=True, revision=1,
+        ))
+        db.add(AgentRow(id="local-blocked", name="blocked", engine="pi-cli",
+                        unavailable_code=QUOTA_EXHAUSTED,
+                        unavailable_until=datetime.now(UTC) + timedelta(hours=1)))
+        db.add(AgentRow(id="local-free", name="free", engine="pi-cli"))
+        for pid in ("local-blocked", "local-free"):
+            db.add(SharedParticipant(
+                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+                node_id=p.a.s.node_id, kind="agent", principal_id=pid,
+                role="member", active=True, revision=1,
+            ))
+    service = p.service
+    async with p.a.s.sessions() as db:
+        chosen = await service.select_executor(db, channel_id=p.a.channel)
+    # Only the b actor is grant-listed -> selected.
+    assert chosen == {"node_id": p.b.s.node_id, "agent_id": p.b.actor}
+
+    # Least-loaded tie-break: fabricate an active delegation for the b actor
+    # (reuse the fixture's real task/source/participant to satisfy FKs).
+    async with p.a.s.sessions.begin() as db:
+        db.add(Delegation(
+            id=uid(), authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
+            task_id=p.task, source_message_id=p.source,
+            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            executor_node_id=p.b.s.node_id, executor_agent_id=p.b.actor,
+            executor_participant_id=p.participant,
+            state="running", revision=2, process_state="running",
+        ))
+    async with p.a.s.sessions() as db:
+        again = await service.select_executor(db, channel_id=p.a.channel)
+    assert again == {"node_id": p.b.s.node_id, "agent_id": p.b.actor}  # still only eligible
+
+
+async def test_auto_selection_no_eligible_executor_is_explicit(product):
+    p = product
+    async with p.a.s.sessions.begin() as db:
+        await db.execute(
+            update(Participant).where(Participant.id == p.participant).values(role="observer")
+        )
+    service = p.service
+    async with p.a.s.sessions() as db:
+        assert await service.select_executor(db, channel_id=p.a.channel) is None
+    with pytest.raises(DelegationError, match="NO_ELIGIBLE_EXECUTOR"):
+        await service.delegate(
+            p.a.c, channel_id=p.a.channel, task_id=uid(), source_message_id=uid(),
+            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            tls=p.b.s.identity,
+        )
+
+
+async def test_delegate_auto_selection_issues_request_through_router(product):
+    p = product
+    # Delegate the fixture's existing task through an explicit executor to
+    # prove the entry path end-to-end (a second auto request for the same
+    # task would fail CLAIM_CONFLICT by design).
+    receipt = await p.service.delegate(
+        p.a.c, channel_id=p.a.channel, task_id=p.task, source_message_id=p.source,
+        requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+        tls=p.b.s.identity,
+        executor={"node_id": p.b.s.node_id, "agent_id": p.b.actor},
+    )
+    assert receipt["state"] == "requested"
+    assert receipt.get("selected_executor") is None  # explicit: no auto pick

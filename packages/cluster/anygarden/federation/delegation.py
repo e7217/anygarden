@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from sqlalchemy import delete, exists, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Message, Participant, Room, Task
@@ -625,3 +625,115 @@ class DelegationService:
         )
         await db.flush()
         return True
+
+    # ── D-3 (#626): role/fit auto-selection with availability filters ──
+
+    async def select_executor(
+        self, db: AsyncSession, *, channel_id: str, now: datetime | None = None
+    ) -> dict | None:
+        """Deterministically pick an executor from the active roster.
+
+        Candidates are active agent participants with a fenced role. Each
+        must clear the current grant boundary (``executor_allowed``); local
+        agents additionally clear the D-2 availability predicate and a
+        budget pause. The tie-break prefers the fewest active delegations,
+        then participant order — stable and auditable. Returns ``None``
+        when nobody qualifies (callers must fail explicitly, no fallback).
+        """
+        from anygarden.agent_availability import routing_blocked
+        from anygarden.db.models import Agent as AgentRow
+        from anygarden.shared_channels.models import SharedParticipant
+
+        moment = now or datetime.now(UTC)
+        roster = (
+            await db.scalars(
+                select(SharedParticipant).where(
+                    SharedParticipant.authority_node_id == self.authority_node_id,
+                    SharedParticipant.channel_id == channel_id,
+                    SharedParticipant.kind == "agent",
+                    SharedParticipant.active.is_(True),
+                )
+            )
+        ).all()
+        scored: list[tuple[int, str, dict]] = []
+        for entry in sorted(roster, key=lambda e: (e.node_id, e.principal_id)):
+            executor = {"node_id": entry.node_id, "agent_id": entry.principal_id}
+            if not await self.executor_allowed(db, channel_id, executor):
+                continue
+            if entry.node_id == self.authority_node_id:
+                agent = await db.get(AgentRow, entry.principal_id)
+                if (
+                    agent is None
+                    or routing_blocked(agent, now=moment)
+                    or agent.pause_reason == "budget"
+                ):
+                    continue
+            active = await db.scalar(
+                select(func.count())
+                .select_from(Delegation)
+                .where(
+                    Delegation.authority_node_id == self.authority_node_id,
+                    Delegation.channel_id == channel_id,
+                    Delegation.executor_node_id == entry.node_id,
+                    Delegation.executor_agent_id == entry.principal_id,
+                    Delegation.state.in_(("requested", "accepted", "running")),
+                )
+            )
+            scored.append((int(active or 0), f"{entry.node_id}:{entry.principal_id}", executor))
+        if not scored:
+            return None
+        scored.sort(key=lambda item: (item[0], item[1]))
+        return scored[0][2]
+
+    async def delegate(
+        self,
+        channel_service,
+        *,
+        channel_id: str,
+        task_id: str,
+        source_message_id: str,
+        requester: dict,
+        tls,
+        executor: dict | None = None,
+        now: datetime | None = None,
+    ) -> dict:
+        """Product entry: select (unless explicit) then issue task.request.
+
+        The wire contract is unchanged — auto-selection only fills the
+        executor field before the existing transactional command path.
+        """
+        from anygarden.federation.models import PeerGrant
+
+        chosen = executor
+        if chosen is None:
+            async with channel_service.sessions() as db:
+                chosen = await self.select_executor(db, channel_id=channel_id, now=now)
+        if chosen is None:
+            raise DelegationError("NO_ELIGIBLE_EXECUTOR")
+        async with channel_service.sessions() as db:
+            grant = await db.get(
+                PeerGrant,
+                (requester["node_id"], self.authority_node_id, channel_id),
+            )
+            grant_epoch = grant.epoch if grant is not None else 1
+        envelope = {
+            "protocol_version": 1,
+            "request_id": str(uuid4()),
+            "sender_node_id": requester["node_id"],
+            "authority_node_id": self.authority_node_id,
+            "channel_id": channel_id,
+            "grant_epoch": grant_epoch,
+            "actor": requester,
+            "kind": "task.request",
+            "payload": {
+                "delegation_id": str(uuid4()),
+                "expected_revision": 0,
+                "task_id": task_id,
+                "source_message_id": source_message_id,
+                "executor": chosen,
+            },
+        }
+        receipt = await self.submit(channel_service, envelope, tls=tls)
+        receipt = dict(receipt)
+        receipt["selected_executor"] = chosen if executor is None else None
+        return receipt

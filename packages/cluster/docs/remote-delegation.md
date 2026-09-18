@@ -187,3 +187,28 @@ confirmation per contract, so timed-out requests rest at `cancel_requested`.
 The node scheduler should call this periodically with an explicit admin
 actor; migration `067` adds the `created_at` basis (legacy rows are stamped
 with the migration time).
+
+## Auto-selection and voluntary suppression (D-3, #626)
+
+`await delegation.select_executor(db, channel_id=..., now=...)` picks an
+executor deterministically from the **active roster**: agent participants
+with a fenced role, filtered by the current grant boundary
+(``executor_allowed``); local agents additionally clear the D-2
+availability predicate (`routing_blocked`, budget pause). The tie-break
+prefers the fewest active delegations, then participant order — stable and
+auditable. No candidates → ``None``; callers fail explicitly
+(`NO_ELIGIBLE_EXECUTOR`), never a fallback pick.
+
+`await delegation.delegate(channel_service, ..., executor=None)` is the
+product entry: it selects (unless an explicit executor is given), fills the
+executor field, and issues the ordinary `task.request` through the
+transactional coordinator — the wire contract, receipts and audit paths are
+unchanged; the response carries `selected_executor` when auto-picked.
+
+Executor-side **voluntary suppression** is the second line of defense:
+`ExecutorBridge.prepare` checks its own availability (quota window / budget
+pause) and hard-stop budget ceilings before creating intent. A suppressed
+executor records a `declined` binding (never launchable — `launch` requires
+`accepted`) and emits `task.reject UNAVAILABLE` through the same outbox
+(idempotent request id). When the agent recovers, a later `prepare` flips
+the binding to `prepared` and accepts honestly.
