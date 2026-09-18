@@ -124,6 +124,15 @@ class Room(Base):
         default="mentioned_only",
         server_default=sa_text("'mentioned_only'"),
     )
+    # D-1 (#624) — which wake triggers reach channel-participating agents:
+    # subset of {"message", "mention", "reminder"}. Default keeps the
+    # historical behavior (mention/reminder wake, plain messages ingest).
+    wake_triggers: Mapped[list] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: ["mention", "reminder"],
+        server_default=sa_text('\'["mention", "reminder"]\''),
+    )
     # Issue #159 Phase A — the agent that drives handoffs when
     # ``speaker_strategy='orchestrator'``. Kept separate from
     # ``representative_agent_id`` (cross-room query role) so the two
@@ -907,6 +916,40 @@ class Message(Base):
     room: Mapped["Room"] = relationship("Room", back_populates="messages")
     participant: Mapped[Optional["Participant"]] = relationship(
         "Participant", back_populates="messages"
+    )
+
+
+class MessageReaction(Base):
+    """Emoji receipt on a message (D-1, issue #624).
+
+    Reactions are low-cost receipts: they broadcast as reaction events and
+    are structurally excluded from agent wake paths — the attention norm is
+    enforced server-side. One reaction per (message, participant, emoji).
+    """
+
+    __tablename__ = "message_reactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    message_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    participant_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("participants.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    emoji: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "participant_id",
+            "emoji",
+            name="uq_message_participant_emoji",
+        ),
     )
 
 
@@ -2358,6 +2401,7 @@ class VersionCheck(Base):
     error: Mapped[Optional[str]] = mapped_column(
         String(255), nullable=True, default=None
     )
+
 
 # Register opt-in federation tables after Base and local Task are defined.
 # Mirrors do not grant a remote principal local User/Agent credentials.

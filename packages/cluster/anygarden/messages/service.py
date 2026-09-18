@@ -6,14 +6,22 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import AgentTurnTask, Message, Participant, Room, User
-from anygarden.db.repository import append_message as _repo_append, replay_since_seq
+from anygarden.db.models import (
+    AgentTurn,
+    AgentTurnTask,
+    Message,
+    Participant,
+    Room,
+    User,
+)
+from anygarden.db.repository import append_message as _repo_append
+from anygarden.db.repository import replay_since_seq
 
 if TYPE_CHECKING:
-    from anygarden.db.models import Room, Task
+    from anygarden.db.models import Task
     from anygarden.ws.manager import ConnectionManager
 
 
@@ -264,8 +272,8 @@ async def inject_task_assignment_message(
         "1. **시작 직후**: "
         f'`mark_task_status(task_id="{task.id}", status="in_progress")` '
         "를 호출하여 작업 착수를 기록.\n"
-        "2. **응답 완료 시**: 같은 도구로 `status=\"done\"` 을 호출. "
-        "차단되면 `status=\"blocked\"` + 이유 설명.\n"
+        '2. **응답 완료 시**: 같은 도구로 `status="done"` 을 호출. '
+        '차단되면 `status="blocked"` + 이유 설명.\n'
         "\n"
         "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다."
     )
@@ -333,10 +341,28 @@ async def inject_task_assignment_message(
         from anygarden.messages.serialization import message_to_frame
 
         frame = message_to_frame(msg)
+        # D-1 (#624) attention norm — in-flight suppression: when the
+        # assignee agent already has an in-flight turn, skip the live ping.
+        # The synthetic message row persists, so the agent receives it via
+        # replay_since_seq on its next sync instead of a mid-turn interrupt.
+        assignee_busy = await db.scalar(
+            select(func.count())
+            .select_from(AgentTurn)
+            .where(
+                AgentTurn.agent_id == assignee_agent_id,
+                AgentTurn.state.in_(("pending", "running")),
+                AgentTurn.request_id != turn.request_id,
+            )
+        )
+        assignee_suppressed = bool(assignee_busy)
         if hasattr(manager, "broadcast_tailored"):
             await manager.broadcast_tailored(
                 room.id,
-                lambda pid: None if durable_delivery and pid == assignee_pid else frame,
+                lambda pid: (
+                    None
+                    if (durable_delivery or assignee_suppressed) and pid == assignee_pid
+                    else frame
+                ),
             )
         else:
             await manager.broadcast(room.id, frame)
@@ -382,8 +408,10 @@ async def _admin_user_ids(db: AsyncSession) -> set[str]:
     profile 2차 view fanout. Recomputed per call: the cohort is small
     in practice and admin flag changes are rare."""
     rows = (
-        await db.execute(select(User.id).where(User.is_admin.is_(True)))
-    ).scalars().all()
+        (await db.execute(select(User.id).where(User.is_admin.is_(True))))
+        .scalars()
+        .all()
+    )
     return set(rows)
 
 
@@ -414,3 +442,46 @@ async def fanout_task_event(
     user_ids = await _admin_user_ids(db)
     if user_ids:
         await manager.push_to_users(user_ids, frame)
+
+
+async def broadcast_reminder_wake(
+    db: AsyncSession,
+    room_id: str,
+    *,
+    text: str,
+    manager=None,
+    participant_id: str | None = None,
+) -> bool:
+    """Emit a reminder-stamped wake frame into *room_id* (D-1, task #74).
+
+    The frame is published only when the room's ``wake_triggers`` policy
+    includes ``reminder`` — rooms that opted out never see reminder wakes
+    (architect condition 3). The persisted message carries
+    ``metadata.wake_trigger = "reminder"`` so agent-side ``decide_policy``
+    classifies it as a wake rather than falling back to the legacy chain.
+    Returns whether a frame was published.
+    """
+    from anygarden.db.models import Room
+    from anygarden.messages.serialization import message_to_frame
+
+    room = await db.get(Room, room_id)
+    if room is None:
+        return False
+    triggers = list(getattr(room, "wake_triggers", None) or [])
+    if "reminder" not in triggers:
+        return False
+    metadata = {
+        "wake_trigger": "reminder",
+        "system_origin": "reminder",
+    }
+    msg = await append_message(
+        db,
+        room_id,
+        participant_id,
+        text,
+        metadata,
+    )
+    await db.commit()
+    if manager is not None:
+        await manager.broadcast(room_id, message_to_frame(msg))
+    return True

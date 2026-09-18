@@ -1090,3 +1090,82 @@ class TestThreadReplyPolicy:
             },
         }
         assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+
+class TestWakeTriggerStampD1:
+    """D-1 (#624) — server-stamped wake_trigger classification.
+
+    The stamp is server authority (computed from the room's
+    ``wake_triggers`` policy): ``reminder``/``message`` stamps wake the
+    agent even when the legacy strategy tail would skip, ``mention``
+    stamps fall through to the legacy mention rules, and unstamped
+    frames take the legacy chain unchanged (condition ④ equivalence).
+    """
+
+    def test_reminder_stamp_responds_despite_strategy_skip(self):
+        # round_robin + unaddressed root message: the legacy tail skips.
+        client = _make_client(
+            speaker_strategy={"room-1": "round_robin"},
+        )
+        msg = {
+            "participant_id": "other-pid",
+            "content": "정기 점검 알림입니다",
+            "room_id": "room-1",
+            "metadata": {"wake_trigger": "reminder"},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_message_stamp_opts_in_plain_messages(self):
+        client = _make_client()
+        msg = {
+            "participant_id": "other-pid",
+            "content": "plain room message",
+            "metadata": {"wake_trigger": "message"},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_mention_stamp_not_for_us_still_skips(self):
+        client = _make_client()
+        msg = {
+            "participant_id": "other-pid",
+            "content": "<@user:other-pid-2> 이건 다른 에이전트 건이에요",
+            "metadata": {
+                "wake_trigger": "mention",
+                "mentions": [
+                    {"type": "user", "id": "other-pid-2"},
+                ],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_unstamped_frame_takes_legacy_chain(self):
+        # Unaddressed root message without a stamp on a mentioned_only
+        # room: human sender → RESPOND via legacy rule 6 — identical to
+        # the pre-D-1 judgment (condition ④).
+        client = _make_client()
+        msg = {
+            "participant_id": "other-pid",
+            "content": "plain legacy message",
+            "metadata": {},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_ingest_only_beats_message_stamp(self):
+        # The server never stamps ingest_only frames; if a stamp and the
+        # flag ever coexist, the passive-ingest contract wins.
+        client = _make_client()
+        msg = {
+            "participant_id": "other-pid",
+            "content": "context broadcast",
+            "metadata": {"wake_trigger": "message", "ingest_only": True},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_own_message_with_stamp_still_skips(self):
+        client = _make_client()
+        msg = {
+            "participant_id": "my-pid-123",
+            "content": "my own reminder echo",
+            "metadata": {"wake_trigger": "reminder"},
+        }
+        assert decide_policy(msg, client) is MessagePolicy.SKIP

@@ -883,6 +883,10 @@ class RoomUpdate(BaseModel):
     # touch" following the context_window pattern above.
     speaker_strategy: str | None = None
     orchestrator_agent_id: str | None = None
+    # D-1 (#624) — which wake triggers reach channel-participating agents.
+    # ``None`` means "don't touch". Subset of _VALID_WAKE_TRIGGERS;
+    # empty lists are rejected (a room no one wakes is a misconfiguration).
+    wake_triggers: list[str] | None = None
     # #237 — ephemeral toggle. ``None`` means "don't touch" following the
     # context_window pattern above.
     ephemeral: bool | None = None
@@ -895,6 +899,15 @@ class RoomUpdate(BaseModel):
 _VALID_SPEAKER_STRATEGIES: frozenset[str] = frozenset(
     {"mentioned_only", "round_robin", "orchestrator"}
 )
+
+# D-1 (#624) — wake trigger names accepted in ``RoomUpdate.wake_triggers``.
+# ``message`` is opt-in per room; ``mention`` and ``reminder`` are the
+# documented defaults. Kept next to the speaker strategies so both wake/
+# attention policy surfaces stay legible in one place.
+_VALID_WAKE_TRIGGERS: frozenset[str] = frozenset(
+    {"message", "mention", "reminder"}
+)
+_DEFAULT_WAKE_TRIGGERS: list[str] = ["mention", "reminder"]
 
 
 async def _archive_descendants(
@@ -1028,6 +1041,16 @@ async def update_room(
                     + ", ".join(sorted(_VALID_SPEAKER_STRATEGIES))
                 ),
             )
+    if body.wake_triggers is not None:
+        unknown = set(body.wake_triggers) - _VALID_WAKE_TRIGGERS
+        if unknown or not body.wake_triggers:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid wake_triggers — expected a non-empty subset of "
+                    + ", ".join(sorted(_VALID_WAKE_TRIGGERS))
+                ),
+            )
 
     # Validate orchestrator agent membership up front — matches the
     # ``set_representative`` contract so an admin can't point
@@ -1054,6 +1077,8 @@ async def update_room(
         room.context_window_enabled = body.context_window_enabled
     if body.speaker_strategy is not None:
         room.speaker_strategy = body.speaker_strategy
+    if body.wake_triggers is not None:
+        room.wake_triggers = list(dict.fromkeys(body.wake_triggers))
     if body.orchestrator_agent_id is not None:
         room.orchestrator_agent_id = body.orchestrator_agent_id
     if body.ephemeral is not None:

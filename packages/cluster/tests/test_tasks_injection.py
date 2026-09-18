@@ -9,6 +9,7 @@ through its existing mention path — see plan §3.2 decision 1.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import func, select
 
 from anygarden.db.models import Agent, Participant, Room, Task, User
 from anygarden.messages.service import inject_task_assignment_message
@@ -62,9 +63,7 @@ async def test_inject_creates_message_with_mention_and_metadata(db):
     assert task.title in msg.content
     # Metadata: parsed mention list + task_assignment payload.
     assert msg.extra_metadata is not None
-    assert msg.extra_metadata["mentions"] == [
-        {"type": "user", "id": assignee.id}
-    ]
+    assert msg.extra_metadata["mentions"] == [{"type": "user", "id": assignee.id}]
     ta = msg.extra_metadata["task_assignment"]
     assert ta["task_id"] == task.id
     assert ta["assignee_pid"] == assignee.id
@@ -277,3 +276,75 @@ async def test_inject_reassigned_event_is_propagated(db):
     )
     assert msg.extra_metadata is not None
     assert msg.extra_metadata["task_assignment"]["event"] == "reassigned"
+
+
+class _TailoredRecorder:
+    """Records which subscriber pids received a non-None frame."""
+
+    def __init__(self, pids):
+        self.pids = list(pids)
+        self.sent = {}
+        self.calls = 0
+
+    async def broadcast_tailored(self, room_id, make_frame):
+        self.calls += 1
+        for pid in self.pids:
+            frame = make_frame(pid)
+            if frame is not None:
+                self.sent[pid] = frame
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inflight_exists,expect_ping",
+    [(True, False), (False, True)],
+    ids=["suppressed-when-inflight", "delivered-when-idle"],
+)
+async def test_inflight_turn_suppresses_assignment_ping(
+    db, inflight_exists, expect_ping
+):
+    """D-1 condition ⑤ — when the assignee agent already has an in-flight
+    turn, the synthetic-mention ping is skipped (the persisted row reaches
+    the agent via replay). When no other turn is in flight, the ping is
+    delivered normally."""
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4 as _uuid4
+
+    from anygarden.db.models import AgentTurn
+
+    room, creator, assignee = await _seed_room_with_assignee(db)
+    task = Task(
+        room_id=room.id,
+        title="suppression probe",
+        status="todo",
+        assignee_participant_id=assignee.id,
+    )
+    db.add(task)
+    await db.flush()
+
+    # The assignee's agent is not in "running" desired state, so the fresh
+    # assignment turn lands as "cancelled" (durable_delivery False) — this
+    # isolates the second in-flight turn as the only suppression source.
+    if inflight_exists:
+        db.add(
+            AgentTurn(
+                request_id=str(_uuid4()),
+                idempotency_key=str(_uuid4()),
+                room_id=room.id,
+                target_participant_id=assignee.id,
+                agent_id=assignee.agent_id,
+                state="running",
+            )
+        )
+        await db.flush()
+
+    manager = _TailoredRecorder([assignee.id])
+    await inject_task_assignment_message(
+        db,
+        room=room,
+        task=task,
+        sender_participant_id=creator.id,
+        manager=manager,
+    )
+    assert manager.calls == 1
+    assert (assignee.id in manager.sent) is expect_ping
