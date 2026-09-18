@@ -173,3 +173,62 @@ def install_product_delegation(channel_service) -> DelegationService:
     service.install_submitters(channel_service)
     install_projections(channel_service)
     return service
+
+
+async def failover_quota_exhausted(
+    delegation_service: DelegationService,
+    channel_service,
+    *,
+    delegation_id: str,
+    requester: dict,
+    tls,
+    failed_executor: dict,
+    now=None,
+) -> dict:
+    """D-4a orchestration (task #80): quota exhaustion → failover sequence.
+
+    1. Mark the failed **local** executor agent quota-blocked (D-2 state) so
+       routing skips it immediately; remote executors are already marked by
+       their own node's rejection path.
+    2. Re-delegate through ``DelegationService.reassign`` (D-4b) with the
+       failed executor excluded — receipts, duplicate prevention and audit
+       are inherited from the transactional command path.
+    3. ``NO_ALTERNATIVE_EXECUTOR`` propagates to the caller for structured
+       notification escalation (room notice / operator alert); the audit
+       observation is already recorded by reassign.
+
+    Same-node alternative-model retries (attempt ① in the task plan) are the
+    executor runtime's own model-fallback decision at invocation time; this
+    orchestration handles the delegation-layer sequencing.
+    """
+    from anygarden.agent_availability import mark_quota_exhausted
+    from anygarden.db.models import Agent as AgentRow
+    from anygarden.federation.delegation import DelegationError
+
+    if failed_executor.get("node_id") == channel_service.node_id:
+        async with channel_service.sessions() as db:
+            agent = await db.get(AgentRow, failed_executor["agent_id"])
+            if agent is not None:
+                mark_quota_exhausted(
+                    agent, "quota exhausted during delegation", now=now
+                )
+    try:
+        receipt = await delegation_service.reassign(
+            channel_service,
+            delegation_id=delegation_id,
+            requester=requester,
+            tls=tls,
+            exclude=frozenset(
+                {(failed_executor["node_id"], failed_executor["agent_id"])}
+            ),
+            now=now,
+        )
+    except DelegationError as exc:
+        if exc.code == "NO_ALTERNATIVE_EXECUTOR":
+            return {
+                "status": "no_alternative",
+                "code": exc.code,
+                "delegation_id": delegation_id,
+            }
+        raise
+    return {"status": "reassigned", "receipt": receipt}

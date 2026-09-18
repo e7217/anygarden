@@ -11,8 +11,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select, update
-
 from anygarden.db.models import Participant, Room, Task
 from anygarden.federation.delegation import (
     DelegationError,
@@ -36,6 +34,7 @@ from anygarden.shared_channels.models import (
 )
 from anygarden.shared_channels.schemas import ChannelError
 from anygarden.shared_channels.service import ChannelService
+from sqlalchemy import func, select, update
 
 from . import test_federation_trust as trust
 from .test_federation_trust import endpoint, invitation
@@ -489,21 +488,41 @@ async def test_auto_selection_skips_blocked_and_picks_least_loaded(product):
     async with p.a.s.sessions.begin() as db:
         # The fixture seeds the participant + grant but not the roster;
         # selection is roster-driven, so add the b actor's roster entry.
-        db.add(SharedParticipant(
-            authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
-            node_id=p.b.s.node_id, kind="agent", principal_id=p.b.actor,
-            role="member", active=True, revision=1,
-        ))
-        db.add(AgentRow(id="local-blocked", name="blocked", engine="pi-cli",
-                        unavailable_code=QUOTA_EXHAUSTED,
-                        unavailable_until=datetime.now(UTC) + timedelta(hours=1)))
+        db.add(
+            SharedParticipant(
+                authority_node_id=p.a.s.node_id,
+                channel_id=p.a.channel,
+                node_id=p.b.s.node_id,
+                kind="agent",
+                principal_id=p.b.actor,
+                role="member",
+                active=True,
+                revision=1,
+            )
+        )
+        db.add(
+            AgentRow(
+                id="local-blocked",
+                name="blocked",
+                engine="pi-cli",
+                unavailable_code=QUOTA_EXHAUSTED,
+                unavailable_until=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
         db.add(AgentRow(id="local-free", name="free", engine="pi-cli"))
         for pid in ("local-blocked", "local-free"):
-            db.add(SharedParticipant(
-                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
-                node_id=p.a.s.node_id, kind="agent", principal_id=pid,
-                role="member", active=True, revision=1,
-            ))
+            db.add(
+                SharedParticipant(
+                    authority_node_id=p.a.s.node_id,
+                    channel_id=p.a.channel,
+                    node_id=p.a.s.node_id,
+                    kind="agent",
+                    principal_id=pid,
+                    role="member",
+                    active=True,
+                    revision=1,
+                )
+            )
     service = p.service
     async with p.a.s.sessions() as db:
         chosen = await service.select_executor(db, channel_id=p.a.channel)
@@ -513,32 +532,56 @@ async def test_auto_selection_skips_blocked_and_picks_least_loaded(product):
     # Least-loaded tie-break: fabricate an active delegation for the b actor
     # (reuse the fixture's real task/source/participant to satisfy FKs).
     async with p.a.s.sessions.begin() as db:
-        db.add(Delegation(
-            id=uid(), authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
-            task_id=p.task, source_message_id=p.source,
-            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
-            executor_node_id=p.b.s.node_id, executor_agent_id=p.b.actor,
-            executor_participant_id=p.participant,
-            state="running", revision=2, process_state="running",
-        ))
+        db.add(
+            Delegation(
+                id=uid(),
+                authority_node_id=p.a.s.node_id,
+                channel_id=p.a.channel,
+                task_id=p.task,
+                source_message_id=p.source,
+                requester={
+                    "node_id": p.b.s.node_id,
+                    "kind": "agent",
+                    "principal_id": p.b.actor,
+                },
+                executor_node_id=p.b.s.node_id,
+                executor_agent_id=p.b.actor,
+                executor_participant_id=p.participant,
+                state="running",
+                revision=2,
+                process_state="running",
+            )
+        )
     async with p.a.s.sessions() as db:
         again = await service.select_executor(db, channel_id=p.a.channel)
-    assert again == {"node_id": p.b.s.node_id, "agent_id": p.b.actor}  # still only eligible
+    assert again == {
+        "node_id": p.b.s.node_id,
+        "agent_id": p.b.actor,
+    }  # still only eligible
 
 
 async def test_auto_selection_no_eligible_executor_is_explicit(product):
     p = product
     async with p.a.s.sessions.begin() as db:
         await db.execute(
-            update(Participant).where(Participant.id == p.participant).values(role="observer")
+            update(Participant)
+            .where(Participant.id == p.participant)
+            .values(role="observer")
         )
     service = p.service
     async with p.a.s.sessions() as db:
         assert await service.select_executor(db, channel_id=p.a.channel) is None
     with pytest.raises(DelegationError, match="NO_ELIGIBLE_EXECUTOR"):
         await service.delegate(
-            p.a.c, channel_id=p.a.channel, task_id=uid(), source_message_id=uid(),
-            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            p.a.c,
+            channel_id=p.a.channel,
+            task_id=uid(),
+            source_message_id=uid(),
+            requester={
+                "node_id": p.b.s.node_id,
+                "kind": "agent",
+                "principal_id": p.b.actor,
+            },
             tls=p.b.s.identity,
         )
 
@@ -549,8 +592,15 @@ async def test_delegate_auto_selection_issues_request_through_router(product):
     # prove the entry path end-to-end (a second auto request for the same
     # task would fail CLAIM_CONFLICT by design).
     receipt = await p.service.delegate(
-        p.a.c, channel_id=p.a.channel, task_id=p.task, source_message_id=p.source,
-        requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+        p.a.c,
+        channel_id=p.a.channel,
+        task_id=p.task,
+        source_message_id=p.source,
+        requester={
+            "node_id": p.b.s.node_id,
+            "kind": "agent",
+            "principal_id": p.b.actor,
+        },
         tls=p.b.s.identity,
         executor={"node_id": p.b.s.node_id, "agent_id": p.b.actor},
     )
@@ -567,22 +617,34 @@ async def _add_second_executor(p):
     principal = {"node_id": c_node, "kind": "agent", "principal_id": c_agent}
     async with p.a.s.sessions.begin() as db:
         grant = await db.get(
-            PeerGrant, (p.b.s.node_id, p.a.s.node_id, p.a.channel), populate_existing=True
+            PeerGrant,
+            (p.b.s.node_id, p.a.s.node_id, p.a.channel),
+            populate_existing=True,
         )
         grant.actors = list(grant.actors or []) + [principal]
         db.add(
             SharedParticipant(
-                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
-                node_id=c_node, kind="agent", principal_id=c_agent,
-                role="member", active=True, revision=1,
+                authority_node_id=p.a.s.node_id,
+                channel_id=p.a.channel,
+                node_id=c_node,
+                kind="agent",
+                principal_id=c_agent,
+                role="member",
+                active=True,
+                revision=1,
             )
         )
     async with p.a.s.sessions.begin() as db:
         db.add(
             SharedParticipant(
-                authority_node_id=p.a.s.node_id, channel_id=p.a.channel,
-                node_id=p.b.s.node_id, kind="agent", principal_id=p.b.actor,
-                role="member", active=True, revision=1,
+                authority_node_id=p.a.s.node_id,
+                channel_id=p.a.channel,
+                node_id=p.b.s.node_id,
+                kind="agent",
+                principal_id=p.b.actor,
+                role="member",
+                active=True,
+                revision=1,
             )
         )
     return principal
@@ -597,11 +659,11 @@ async def test_reassign_moves_rejected_delegation_to_alternative(product):
     base_resolve = p.service.resolve_principal
 
     async def resolve_with_alt(db, channel, principal):
-        if (
-            channel == p.a.channel
-            and principal == {"node_id": alternate["node_id"], "kind": "agent",
-                              "principal_id": alternate["principal_id"]}
-        ):
+        if channel == p.a.channel and principal == {
+            "node_id": alternate["node_id"],
+            "kind": "agent",
+            "principal_id": alternate["principal_id"],
+        }:
             return alt_participant
         return await base_resolve(db, channel, principal)
 
@@ -618,13 +680,18 @@ async def test_reassign_moves_rejected_delegation_to_alternative(product):
     receipt = await p.service.reassign(
         p.a.c,
         delegation_id=p.did,
-        requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+        requester={
+            "node_id": p.b.s.node_id,
+            "kind": "agent",
+            "principal_id": p.b.actor,
+        },
         tls=p.b.s.identity,
     )
     assert receipt["state"] == "requested"
     assert receipt["transitioned_from"] == p.did
     assert receipt["selected_executor"] == {
-        "node_id": alternate["node_id"], "agent_id": alternate["principal_id"],
+        "node_id": alternate["node_id"],
+        "agent_id": alternate["principal_id"],
     }
     async with p.a.s.sessions() as db:
         observations = (
@@ -646,7 +713,11 @@ async def test_reassign_without_alternative_is_structured(product):
         await p.service.reassign(
             p.a.c,
             delegation_id=p.did,
-            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            requester={
+                "node_id": p.b.s.node_id,
+                "kind": "agent",
+                "principal_id": p.b.actor,
+            },
             tls=p.b.s.identity,
         )
     async with p.a.s.sessions() as db:
@@ -668,7 +739,11 @@ async def test_reassign_requires_rejected_state(product):
         await p.service.reassign(
             p.a.c,
             delegation_id=p.did,
-            requester={"node_id": p.b.s.node_id, "kind": "agent", "principal_id": p.b.actor},
+            requester={
+                "node_id": p.b.s.node_id,
+                "kind": "agent",
+                "principal_id": p.b.actor,
+            },
             tls=p.b.s.identity,
         )
 
@@ -682,3 +757,58 @@ async def test_reassign_is_original_requester_self_service(product):
         await p.service.reassign(
             p.a.c, delegation_id=p.did, requester=stranger, tls=p.b.s.identity
         )
+
+
+async def test_failover_quota_exhausted_marks_and_reassigns(product):
+    """D-4a orchestration (task #80): quota exhaustion marks the failed
+    executor, reassigns through the D-4b command path with the failed
+    executor excluded, and inherits receipts/audit."""
+    from anygarden.agent_availability import mark_quota_exhausted
+    from anygarden.db.models import Agent as AgentRow
+    from anygarden.federation.delegation_wiring import failover_quota_exhausted
+
+    p = product
+    alternate = await _add_second_executor(product)
+    alt_participant = uid()
+    base_resolve = p.service.resolve_principal
+
+    async def resolve_with_alt(db, channel, principal):
+        if channel == p.a.channel and principal == {
+            "node_id": alternate["node_id"],
+            "kind": "agent",
+            "principal_id": alternate["principal_id"],
+        }:
+            return alt_participant
+        return await base_resolve(db, channel, principal)
+
+    p.service.resolve_principal = resolve_with_alt
+    async with p.a.s.sessions.begin() as db:
+        db.add(Participant(id=alt_participant, room_id=p.a.channel, role="member"))
+
+    failed_executor = {"node_id": p.b.s.node_id, "agent_id": p.b.actor}
+    await p.send(p.cmd("task.request"))
+    # Executor declines honestly with quota exhaustion (D-3 suppression
+    # outcome): rejection returns the Task to todo and the D-2 block is
+    # stamped on the agent row.
+    await p.send(p.cmd("task.reject", 1, reason="UNAVAILABLE"))
+    async with p.a.s.sessions.begin() as db:
+        agent_row = await db.get(AgentRow, p.b.actor)
+        if agent_row is not None:
+            mark_quota_exhausted(agent_row, "quota exhausted", now=datetime.now(UTC))
+
+    result = await failover_quota_exhausted(
+        p.service,
+        p.a.c,
+        delegation_id=p.did,
+        requester={
+            "node_id": p.b.s.node_id,
+            "kind": "agent",
+            "principal_id": p.b.actor,
+        },
+        tls=p.b.s.identity,
+        failed_executor=failed_executor,
+    )
+    assert result["status"] == "reassigned"
+    receipt = result["receipt"]
+    assert receipt["transitioned_from"] == p.did
+    assert receipt["selected_executor"] != failed_executor
