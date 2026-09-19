@@ -1296,6 +1296,30 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
 
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
+                # D-6 (#629): validate + stamp interaction payloads on the
+                # agent WS path too — same closed schema as REST, no bypass.
+                from anygarden.interactions import (
+                    InteractionSchemaError,
+                    is_interaction_send,
+                    process_send,
+                )
+
+                if is_interaction_send(metadata):
+                    async with session_factory() as inter_db:
+                        try:
+                            metadata = await process_send(
+                                inter_db,
+                                metadata,
+                                thread_root_id=frame_in.thread_root_id,
+                                sender_participant_id=participant.id,
+                            )
+                        except (InteractionSchemaError, LookupError) as exc:
+                            await websocket.send_text(
+                                ErrorOut(
+                                    detail=getattr(exc, "detail", str(exc))
+                                ).model_dump_json()
+                            )
+                            continue
                 async with session_factory() as ref_db:
                     try:
                         metadata = await canonicalize_shared_file_references(
@@ -1808,6 +1832,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             ErrorOut(detail=str(exc.detail)).model_dump_json()
                         )
                         continue
+                    resolution_payload = (metadata or {}).get("interaction_resolution")
+                    if resolution_payload is not None:
+                        from anygarden.interactions import record_resolution
+
+                        await record_resolution(
+                            db,
+                            interaction_id=resolution_payload["interaction_id"],
+                            room_id=room_id,
+                            request_message_id=frame_in.thread_root_id,
+                            resolution_message_id=msg.id,
+                        )
                     if (
                         completion_decision is not None
                         and completion_decision.outcome == "accept"

@@ -2411,3 +2411,21 @@ from anygarden.federation import models as _federation_models  # noqa: E402,F401
 # Shared channel identities and durable synchronization state are explicit;
 # remote principal IDs never become local authentication credentials.
 from anygarden.shared_channels import models as _shared_channel_models  # noqa: E402,F401
+
+
+class InteractionResolution(Base):
+    """Once-only registry for resolved interactions (D-6, #629).
+
+    The primary key makes a second resolution of the same interaction a
+    conflict (architect condition 1); the row links the resolution back to
+    the request message for audit.
+    """
+
+    __tablename__ = "interaction_resolutions"
+    interaction_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    request_message_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    resolution_message_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    resolved_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)

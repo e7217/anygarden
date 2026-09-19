@@ -104,11 +104,19 @@ async def _write_message(
     body: MessageCreate,
     thread_root_id: str | None = None,
 ):
+    # D-6 (#629): interactions are local-first — the only shared-room send
+    # exemption. They stay ordinary room messages (never channel commands),
+    # so they survive a missing home node while channel-wide writes remain
+    # blocked per #591.
+    from anygarden.interactions import InteractionSchemaError, is_interaction_send
+
+    allow_shared = is_interaction_send(body.metadata)
     access = await require_capability(
         db,
         room_id=room_id,
         identity=identity,
         capability=Capability.MESSAGE_SEND,
+        allow_shared=allow_shared,
     )
     room_wake_triggers = list(getattr(access.room, "wake_triggers", None) or [])
     metadata = dict(body.metadata) if body.metadata else {}
@@ -145,6 +153,25 @@ async def _write_message(
     elif room_wake_triggers and "message" in room_wake_triggers:
         metadata["wake_trigger"] = "message"
 
+    if allow_shared or any(k in metadata for k in ("interaction", "interaction_resolution")):
+        from anygarden.interactions import LookupError as _Lookup  # noqa: F401
+        from anygarden.interactions import process_send
+
+        try:
+            metadata = await process_send(
+                db,
+                metadata,
+                thread_root_id=thread_root_id,
+                sender_participant_id=(
+                    access.participant.id if access.participant else None
+                ),
+            )
+        except (InteractionSchemaError, LookupError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=getattr(exc, "detail", str(exc)),
+            ) from exc
+
     message = await append_message(
         db,
         room_id=room_id,
@@ -153,6 +180,17 @@ async def _write_message(
         metadata=metadata or None,
         thread_root_id=thread_root_id,
     )
+    resolution = (metadata or {}).get("interaction_resolution")
+    if resolution is not None:
+        from anygarden.interactions import record_resolution
+
+        await record_resolution(
+            db,
+            interaction_id=resolution["interaction_id"],
+            room_id=room_id,
+            request_message_id=thread_root_id,
+            resolution_message_id=message.id,
+        )
     await db.commit()
 
     manager = getattr(request.app.state, "connection_manager", None)
