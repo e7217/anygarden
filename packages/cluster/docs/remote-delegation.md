@@ -246,7 +246,7 @@ frame's explicit field, wake stamps only decide who wakes). A resolution
 must reply in the request's thread; the server derives the requester from
 the thread root, routes the answer back (`next_speaker`), and enforces
 **once-only** through the `interaction_resolutions` registry (a second
-resolution is a conflict, archit条件 1). The federation wire contract is
+resolution is a conflict, architect condition 1). The federation wire contract is
 untouched — interactions are product-internal (architect condition 3).
 
 **No-home fallback**: interactions are the only shared-room send
