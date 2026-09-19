@@ -2128,7 +2128,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             # and clears the block. Never overrides the other
                             # not-running codes.
                             await _apply_quota_availability(
-                                db, agent_id=identity.id, frame=frame_in
+                                db,
+                                agent_id=identity.id,
+                                frame=frame_in,
+                                node_id=getattr(
+                                    websocket.app.state, "federation_node_id", None
+                                ),
                             )
                             await db.commit()
                         # #420 — mirror the event into the OTEL span tree.
@@ -2199,7 +2204,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
 
 async def _apply_quota_availability(
-    db: AsyncSession, *, agent_id: str, frame: LifecycleFrame
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    frame: LifecycleFrame,
+    node_id: str | None = None,
 ) -> None:
     """Maintain the quota-exhausted availability state (#625, D-2).
 
@@ -2234,6 +2243,29 @@ async def _apply_quota_availability(
 
         if agent.unavailable_code in (None, QUOTA_EXHAUSTED):
             mark_quota_exhausted(agent, frame.error, now=now)
+            # D-5 (#628): a typed budget alert for notification consumers
+            # (federated apps only — the action is federation-scoped).
+            from anygarden.federation.delegation_models import RecoveryAction
+
+            if node_id is not None:
+                db.add(
+                    RecoveryAction(
+                        id=str(uuid4()),
+                        type="BUDGET_ALERT",
+                        authority_node_id=node_id or "unfederated",
+                        channel_id=frame.room_id,
+                        delegation_id=None,
+                        task_id=None,
+                        target={"kind": "agent", "agent_id": agent_id},
+                        payload={
+                            "until": agent.unavailable_until.isoformat()
+                            if agent.unavailable_until
+                            else None,
+                            "engine": frame.engine,
+                        },
+                        state="pending",
+                    )
+                )
             structlog.get_logger(__name__).warning(
                 "quota_block_marked",
                 agent_id=agent_id,

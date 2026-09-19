@@ -8,6 +8,7 @@ from sqlalchemy import (
     JSON,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -116,3 +117,36 @@ class DelegationMirror(Base):
     state: Mapped[str] = mapped_column(String(32))
     process_state: Mapped[str] = mapped_column(String(32))
     task_status: Mapped[str] = mapped_column(String(32))
+
+
+class RecoveryAction(Base):
+    """Typed recovery outcome for a delegation (D-5, #628).
+
+    Paperclip-pattern adoption: budget alerts, escalations and
+    owner-return notices become first-class objects a notification
+    consumer can drain, instead of log lines. Rows are facts — delivery
+    state is the consumer's concern.
+    """
+
+    __tablename__ = "federation_recovery_actions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    type: Mapped[str] = mapped_column(String(32))
+    authority_node_id: Mapped[str] = mapped_column(String(36))
+    channel_id: Mapped[str] = mapped_column(String(36))
+    delegation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("federation_delegations.id", ondelete="CASCADE"), nullable=True
+    )
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    target: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        Index(
+            "ix_recovery_actions_pending",
+            "authority_node_id",
+            "state",
+        ),
+    )
