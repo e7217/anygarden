@@ -279,6 +279,38 @@ class TestWebSocketKeepalive:
         )
 
 
+class TestWebSocketUrlScheme:
+    """The integrated node (``anygarden start``) spawns agents with an
+    ``http://`` ``--server`` base while the legacy daemon passes ``ws://``.
+    ``websockets`` rejects an http URI outright, so an unconverted base left
+    every agent retrying forever without ever joining a room."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("server", "expected"),
+        [
+            ("http://127.0.0.1:8001", "ws://127.0.0.1:8001/ws/rooms/room-1"),
+            ("https://example.com/anygarden", "wss://example.com/anygarden/ws/rooms/room-1"),
+            ("ws://127.0.0.1:8001", "ws://127.0.0.1:8001/ws/rooms/room-1"),
+            ("wss://example.com", "wss://example.com/ws/rooms/room-1"),
+        ],
+    )
+    async def test_room_loop_connects_with_ws_scheme(self, server, expected) -> None:
+        client = ChatClient(server, token="t")
+        client._running = False
+        client._generation = None
+        captured: list[str] = []
+
+        def fake_ws_connect(url, *args, **kwargs):
+            captured.append(url)
+            raise RuntimeError("stop-loop")
+
+        with patch("anygarden_agent.client.ws_connect", side_effect=fake_ws_connect):
+            await client._room_loop("room-1")
+
+        assert captured == [expected]
+
+
 class TestIsTaskInitContent:
     """Issue #67 — ``_is_task_init_content`` identifies task boundaries
     that should reset the agent-only turn counter."""

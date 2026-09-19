@@ -924,7 +924,13 @@ class ChatClient:
             terminal_close = False
             try:
                 since = self._last_seq.get(room_id, 0)
-                ws_url = f"{self._server_url}/ws/rooms/{room_id}"
+                # The integrated node passes an ``http(s)://`` base (the
+                # legacy daemon passes ``ws(s)://``); websockets rejects
+                # http URIs, so map the scheme here.
+                ws_base = self._server_url
+                if ws_base.startswith(("http://", "https://")):
+                    ws_base = "ws" + ws_base[len("http"):]
+                ws_url = f"{ws_base}/ws/rooms/{room_id}"
                 query: list[str] = []
                 if since > 0:
                     query.append(f"since_seq={since}")
