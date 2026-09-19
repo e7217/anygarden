@@ -232,3 +232,24 @@ adapter configuration) → cross-node reassignment (here) → structured alert.
 A blocked executor converts its delegation to ``rejected`` itself through
 the D-3 voluntary-suppression decline, which is what makes reassignment
 contract-clean.
+
+## Structured interactions and the no-home fallback (D-6, #629)
+
+Four typed human-intervention points — `question`, `confirmation`,
+`checklist`, `judgment` — travel as **closed message metadata**
+(`metadata.interaction` / `metadata.interaction_resolution`), validated on
+both send paths (REST + agent WS; no bypass). Routing composes with the
+D-1 stamps: an untargeted request is absorbed by every agent
+(`ingest_only`) for humans to answer; a targeted request names its
+answerer explicitly (`next_speaker_participant_id` — "who answers" is the
+frame's explicit field, wake stamps only decide who wakes). A resolution
+must reply in the request's thread; the server derives the requester from
+the thread root, routes the answer back (`next_speaker`), and enforces
+**once-only** through the `interaction_resolutions` registry (a second
+resolution is a conflict, architect condition 1). The federation wire contract is
+untouched — interactions are product-internal (architect condition 3).
+
+**No-home fallback**: interactions are the only shared-room send
+exemption — they are ordinary room messages, never channel commands, so
+an agent and its local humans keep working when the channel's authority
+(home) node is unreachable; channel-wide writes remain blocked per #591.
