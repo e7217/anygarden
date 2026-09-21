@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 from typing import Any
 
 import click
@@ -127,7 +128,14 @@ async def _run_agent(
     ping_timeout = resolve_ping_timeout(resolve_turn_timeout(engine_key))
 
     client = ChatClient(
-        server, token=token, agent_name=name, ping_timeout=ping_timeout
+        server,
+        token=token,
+        agent_name=name,
+        ping_timeout=ping_timeout,
+        # The machine materializer preserves agent-created files directly
+        # under the agent root, so cursors written here survive a respawn
+        # and the reconnect replays whatever arrived while we were down.
+        state_dir=Path.cwd(),
     )
 
     # Build kwargs for the integration function based on engine

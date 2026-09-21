@@ -8,6 +8,7 @@ import json
 import os
 import random
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 import httpx
@@ -19,6 +20,7 @@ from anygarden_agent.integrations.cycle_guard import hash_content
 from anygarden_agent.observability import metrics
 from anygarden_agent.protocol.frames import LifecycleFrame, SendFrame
 from anygarden_agent.protocol.versioning import build_subprotocols
+from anygarden_agent.room_cursor_store import load_cursors, save_cursors
 
 logger = structlog.get_logger(__name__)
 
@@ -123,6 +125,7 @@ class ChatClient:
         *,
         max_reconnect_delay: float = 60.0,
         ping_timeout: float = 600.0,
+        state_dir: Path | None = None,
     ) -> None:
         self._server_url = server_url.rstrip("/")
         self._token = token
@@ -140,8 +143,19 @@ class ChatClient:
         except ValueError:
             self._generation = None
 
-        # room_id -> last seen sequence number
-        self._last_seq: dict[str, int] = {}
+        # Where the room cursors are persisted. The agent CLI passes its
+        # working directory (the machine-materialized agent dir, which
+        # survives respawn); callers that leave it unset — the plain text
+        # client, tests — keep the cursors in memory only.
+        self._state_dir = state_dir
+        # room_id -> last seen sequence number. Restored from
+        # ``state_dir`` so a respawn reconnects with ``since_seq`` where
+        # it left off and the server replays what arrived while it was
+        # down (before this, every respawn asked for ``since_seq=0``,
+        # which replays nothing).
+        self._last_seq: dict[str, int] = (
+            load_cursors(state_dir) if state_dir is not None else {}
+        )
         # Issue #445 Wave 0 — bounded per-room set of already-dispatched
         # message seqs. ``since_seq`` recovery on reconnect can replay a
         # frame that was already delivered live (the server may resend
@@ -298,6 +312,18 @@ class ChatClient:
         self._last_seq.setdefault(room_id, 0)
         task = asyncio.create_task(self._room_loop(room_id))
         self._tasks[room_id] = task
+
+    def _note_seq(self, room_id: str, seq: int) -> None:
+        """Advance this room's cursor and persist it for the next process.
+
+        Monotonic: a replayed frame carrying an older seq never rewinds
+        the cursor, so the next reconnect still asks for the newest gap.
+        """
+        if not isinstance(seq, int) or seq <= self._last_seq.get(room_id, 0):
+            return
+        self._last_seq[room_id] = seq
+        if self._state_dir is not None:
+            save_cursors(self._state_dir, self._last_seq)
 
     async def send(
         self,
@@ -658,8 +684,7 @@ class ChatClient:
             self._record_recent_message(room_id, data)
 
             seq = data.get("seq", 0)
-            if seq > self._last_seq.get(room_id, 0):
-                self._last_seq[room_id] = seq
+            self._note_seq(room_id, seq)
 
             # Hard filter: skip messages sent by our own participant.
             sender = data.get("participant_id")
