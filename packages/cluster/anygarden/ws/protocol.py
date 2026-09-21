@@ -331,6 +331,18 @@ class RoomSettingsChangedOut(BaseModel):
     # #237 — ephemeral mode toggle. None means "not part of this PATCH"
     # so other setting fields aren't implicitly reset on receivers.
     ephemeral: Optional[bool] = None
+    # #644 — full participant snapshot, emitted whenever a membership
+    # change or an ``Agent.name`` / ``Agent.description`` edit changes
+    # what a roster line renders. Pre-#644 the roster shipped only in
+    # the welcome frame, so a connected agent's cache went stale the
+    # moment anyone joined, left, or rewrote their introduction.
+    #
+    # A *snapshot* rather than a delta: the receiver replaces its cache
+    # wholesale, which is idempotent and needs no merge logic on the
+    # SDK side. ``None`` keeps the established "not part of this
+    # change" semantics so a settings-only PATCH doesn't wipe a
+    # receiver's roster.
+    participants: Optional[list[ParticipantBrief]] = None
 
 
 class ErrorOut(BaseModel):
