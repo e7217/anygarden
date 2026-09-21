@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +18,44 @@ from anygarden_agent.coordination.pending_context import (
 )
 from anygarden_agent.integrations.cycle_guard import is_cycle_detected
 from anygarden_agent.observability import metrics
+
+# How old a replayed message may be and still wake this agent. Operators
+# can widen or tighten it with ``ANYGARDEN_AGENT_CATCHUP_MAX_AGE``
+# (seconds); ``0`` disables the guard and answers every replayed wake.
+STALE_CATCHUP_SECONDS = 3600.0
+
+
+def _catchup_max_age() -> float:
+    raw = os.environ.get("ANYGARDEN_AGENT_CATCHUP_MAX_AGE")
+    if raw is None:
+        return STALE_CATCHUP_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return STALE_CATCHUP_SECONDS
+
+
+def _is_stale_catchup(msg: dict[str, Any]) -> bool:
+    """True when this frame is a replay old enough that replying to it
+    would be noise rather than work.
+
+    Frames without a usable ``created_at`` keep the pre-guard behaviour
+    (never stale), so an older server or a synthetic frame is unaffected.
+    """
+    max_age = _catchup_max_age()
+    if max_age <= 0:
+        return False
+    raw = msg.get("created_at")
+    if not isinstance(raw, str) or not raw:
+        return False
+    try:
+        created = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - created).total_seconds() > max_age
+
 
 if TYPE_CHECKING:
     from anygarden_agent.client import ChatClient
@@ -527,6 +567,16 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     #    belt-and-suspenders here too.
     if sender and sender in client._my_participant_ids:
         return MessagePolicy.SKIP
+
+    # 1b. Catch-up guard. A durable room cursor
+    # (``room_cursor_store``) makes the server replay everything that
+    # arrived while this agent was down, which is what we want for
+    # context — but answering an hours-old request as if it were live
+    # produces a burst of stale replies on restart. Anything older than
+    # ``STALE_CATCHUP_SECONDS`` is absorbed instead. Live traffic is
+    # never this old, so this only ever fires on replay.
+    if _is_stale_catchup(msg):
+        return MessagePolicy.INGEST_ONLY
 
     agent_name = client._agent_name
     raw_mentions = metadata.get("mentions") or []
