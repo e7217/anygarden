@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, Base, Participant, Project, Room
+from anygarden.db.models import Agent, Base, Participant, Project, Room, Task
 from anygarden.ws.handler import _apply_orchestrator_fallback_nominate
 
 
@@ -294,3 +294,78 @@ async def test_fallback_noop_when_only_orchestrator_in_room(config):
             assert "next_speaker_participant_id" not in metadata
     finally:
         await engine.dispose()
+
+
+async def _add_task(session_factory, *, room_id: str, assignee_pid: str, status: str):
+    async with session_factory() as db:
+        db.add(
+            Task(
+                room_id=room_id,
+                title="구현",
+                status=status,
+                assignee_participant_id=assignee_pid,
+            )
+        )
+        await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_fallback_noop_while_a_worker_task_is_open(fallback_env):
+    """An open task assignment already woke its assignee, so the room is
+    not stalled — the orchestrator's follow-up status message must not
+    nominate a second, unassigned agent."""
+    sf = fallback_env["session_factory"]
+    room = fallback_env["room"]
+    orc_agent = fallback_env["orc_agent"]
+    worker1_part = fallback_env["worker1_part"]
+
+    await _add_task(
+        sf, room_id=room.id, assignee_pid=worker1_part.id, status="todo"
+    )
+
+    metadata: dict = {"mentions": [], "_nonce": "n1", "ingest_only": True}
+    async with sf() as db:
+        result = await _apply_orchestrator_fallback_nominate(
+            db,
+            room_id=room.id,
+            content="worker1에게 구현 태스크를 배정했습니다.",
+            metadata=metadata,
+            orchestrator_agent_id=orc_agent.id,
+            sender_agent_id=orc_agent.id,
+            current_speaker_index=0,
+        )
+
+        assert result is None
+        assert "next_speaker_participant_id" not in metadata
+
+
+@pytest.mark.asyncio
+async def test_fallback_nominates_when_every_task_is_terminal(fallback_env):
+    """A finished task leaves nobody working, so the anti-stall net stays
+    armed."""
+    sf = fallback_env["session_factory"]
+    room = fallback_env["room"]
+    orc_agent = fallback_env["orc_agent"]
+    worker1_part = fallback_env["worker1_part"]
+    worker2_part = fallback_env["worker2_part"]
+
+    await _add_task(
+        sf, room_id=room.id, assignee_pid=worker1_part.id, status="done"
+    )
+
+    metadata: dict = {"mentions": [], "_nonce": "n1"}
+    async with sf() as db:
+        result = await _apply_orchestrator_fallback_nominate(
+            db,
+            room_id=room.id,
+            content="다음 단계를 진행합시다.",
+            metadata=metadata,
+            orchestrator_agent_id=orc_agent.id,
+            sender_agent_id=orc_agent.id,
+            current_speaker_index=0,
+        )
+
+        assert result is not None
+        _new_index, next_pid = result
+        assert next_pid == worker2_part.id
+        assert metadata["next_speaker_participant_id"] == worker2_part.id
