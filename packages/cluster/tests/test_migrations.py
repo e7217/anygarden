@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -482,7 +482,7 @@ class TestMigrations:
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
                 # is still present after upgrading through to head.
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -542,7 +542,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -589,7 +589,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -656,7 +656,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -837,7 +837,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -939,7 +939,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -979,7 +979,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             sync_engine.dispose()
         finally:
             try:
@@ -1013,7 +1013,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "071_interaction_resolutions"
+            assert head == "072_drop_agent_collaboration_mode"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1115,7 +1115,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "071_interaction_resolutions"
+                assert version == "072_drop_agent_collaboration_mode"
             sync_engine.dispose()
         finally:
             try:

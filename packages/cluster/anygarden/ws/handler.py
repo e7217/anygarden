@@ -942,11 +942,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # frame so the SDK can inject it into the engine's system prompt.
     # None for user/guest connections.
     agent_memory_md: str | None = None
-    # Issue #279 — the welcomed agent's own collaboration policy.
-    # Default ``solo`` is the safe pre-#279 value; it stays ``solo``
-    # for user/guest welcomes since they don't run an LLM that would
-    # consume a peer-mention hint.
-    agent_collaboration_mode: str = "solo"
     # Issue #159 Phase A — speaker strategy fields cached from the
     # Room row so the SDK can dispatch in ``decide_policy``. Defaults
     # here reproduce the pre-#159 behaviour for welcome flows that
@@ -968,23 +963,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             # round-trip. ``scalar_one_or_none`` guards the (unlikely)
             # case where the agent row was deleted between auth and
             # welcome.
-            #
-            # Issue #279 — pull ``collaboration_mode`` in the same
-            # round-trip so the SDK can decide whether to append the
-            # peer-mention hint when composing the LLM system prompt.
             opt_out_row = (
                 await db.execute(
                     select(
                         Agent.context_window_opt_out,
                         Agent.memory_md,
-                        Agent.collaboration_mode,
                     ).where(Agent.id == identity.id)
                 )
             ).first()
             if opt_out_row is not None:
                 agent_opt_out = bool(opt_out_row[0])
                 agent_memory_md = opt_out_row[1]
-                agent_collaboration_mode = opt_out_row[2] or "solo"
         connected_pids = await manager.connected_participant_ids()
         connected_room_ids = {
             pid_to_room[pid] for pid in pid_to_room if pid in connected_pids
@@ -1043,7 +1032,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         participants=participants_brief,
         ephemeral=bool(room_ephemeral),
         memory_md=agent_memory_md,
-        my_collaboration_mode=agent_collaboration_mode,
     )
     # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
     # try/except (which starts at the ``try:`` on the Subscribe block

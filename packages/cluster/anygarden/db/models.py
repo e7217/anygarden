@@ -449,16 +449,6 @@ class Agent(Base):
     description: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None
     )
-    # Issue #279 — per-agent collaboration policy. ``solo`` (default)
-    # preserves pre-#279 behaviour: the agent answers within its own
-    # turn. ``collaborative`` triggers a server-supplied hint suffix in
-    # the LLM system prompt instructing the agent to peer-mention
-    # teammates and synthesize their replies. Stored as a small string
-    # rather than an enum type so cross-DB (sqlite/postgres) batch
-    # migrations stay simple.
-    collaboration_mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="solo", server_default=sa_text("'solo'")
-    )
     # Issue #455 (reliability Wave 2a) — why this agent is currently
     # arrested. NULL is the normal "not paused for a special reason"
     # state, which is what every pre-#455 row loads as (the column is

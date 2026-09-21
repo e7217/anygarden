@@ -253,7 +253,7 @@ def _stub_client(
     """Build a ``ChatClient`` stub with the attributes
     ``compose_memory_suffix`` reads (``_memory_md``, ``_room_ephemeral``)
     plus the ``compose_roster_suffix`` method that
-    ``compose_session_context_suffix`` calls when the roster gate is on.
+    ``compose_session_context_suffix`` calls for the roster block.
     """
     client = MagicMock()
     client._memory_md = memory_md
@@ -269,34 +269,23 @@ class TestComposeSessionContextSuffix:
         """Adapters that haven't wired a ``ChatClient`` see an empty
         suffix — preserves the pre-#293 source-compatible no-op when
         the client is absent."""
-        out = compose_session_context_suffix(
-            None, "r1", include_roster=True, with_collaborative_hint=True
-        )
+        out = compose_session_context_suffix(None, "r1")
         assert out == ""
 
     def test_empty_when_no_signals(self) -> None:
-        """Solo agent in a room without ephemeral / shared-context /
-        memory.md — the suffix is empty and adapters preserve the
-        pre-#237 prompt byte-for-byte."""
+        """Agent alone in a room without ephemeral / shared-context /
+        memory.md and an empty roster — the suffix is empty and
+        adapters preserve the pre-#237 prompt byte-for-byte."""
         client = _stub_client()
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=False, with_collaborative_hint=False
-        )
+        out = compose_session_context_suffix(client, "r1")
         assert out == ""
-        # Roster gate off: helper must not even ask the client.
-        client.compose_roster_suffix.assert_not_called()
 
-    def test_memory_only_when_roster_gate_off(self) -> None:
-        """Memory should fire even with the roster gate off — the
-        gate only controls roster, not memory."""
+    def test_memory_survives_an_empty_roster(self) -> None:
+        """An empty roster (agent alone in the room) must not suppress
+        the memory block — they are independent signals."""
         client = _stub_client(memory_md="# Personal memory\nfoo")
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=False, with_collaborative_hint=False
-        )
-        # Memory block content surfaced
+        out = compose_session_context_suffix(client, "r1")
         assert "Personal memory" in out
-        # Roster suppressed by the gate
-        client.compose_roster_suffix.assert_not_called()
 
     def test_shared_context_reads_from_agent_root_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -308,37 +297,19 @@ class TestComposeSessionContextSuffix:
         monkeypatch.chdir(agent_root)
 
         client = _stub_client()
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=False, with_collaborative_hint=False
-        )
+        out = compose_session_context_suffix(client, "r1")
 
         assert "note.md" in out
         assert "room file content" in out
 
-    def test_roster_with_collaborative_hint(self) -> None:
-        """Collaborative agent path: roster appears, hint flag is
-        forwarded to ``compose_roster_suffix``."""
+    def test_roster_is_unconditional(self) -> None:
+        """#644 — every agent gets the roster. The per-adapter gates
+        (collaboration_mode, and orchestrator status on claude_code)
+        are gone, so the helper asks the client on every turn."""
         client = _stub_client(roster="- alice (id: ...)")
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=True, with_collaborative_hint=True
-        )
+        out = compose_session_context_suffix(client, "r1")
         assert "alice" in out
-        client.compose_roster_suffix.assert_called_once_with(
-            "r1", with_collaborative_hint=True
-        )
-
-    def test_roster_without_collaborative_hint_for_orchestrator(self) -> None:
-        """Orchestrator path (claude_code only): roster appears
-        without the peer-mention usage hint — handoff_to MCP is the
-        designated routing channel."""
-        client = _stub_client(roster="- bob (id: ...)")
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=True, with_collaborative_hint=False
-        )
-        assert "bob" in out
-        client.compose_roster_suffix.assert_called_once_with(
-            "r1", with_collaborative_hint=False
-        )
+        client.compose_roster_suffix.assert_called_once_with("r1")
 
     def test_memory_then_roster_order(self) -> None:
         """When both are present, memory comes first. This is the
@@ -347,9 +318,7 @@ class TestComposeSessionContextSuffix:
             memory_md="MEMORY_BLOCK_MARKER",
             roster="ROSTER_BLOCK_MARKER",
         )
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=True, with_collaborative_hint=True
-        )
+        out = compose_session_context_suffix(client, "r1")
         assert "MEMORY_BLOCK_MARKER" in out
         assert "ROSTER_BLOCK_MARKER" in out
         assert out.index("MEMORY_BLOCK_MARKER") < out.index("ROSTER_BLOCK_MARKER")
@@ -360,9 +329,7 @@ class TestComposeSessionContextSuffix:
         bake a leading or trailing newline that would accumulate
         blank lines on either side."""
         client = _stub_client(roster="- alice (id: ...)")
-        out = compose_session_context_suffix(
-            client, "r1", include_roster=True, with_collaborative_hint=True
-        )
+        out = compose_session_context_suffix(client, "r1")
         assert out
         assert not out.startswith("\n")
         assert not out.endswith("\n")

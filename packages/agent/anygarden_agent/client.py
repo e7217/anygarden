@@ -255,17 +255,6 @@ class ChatClient:
         # so the adapter's iteration stays safe.
         self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
 
-        # Issue #279 — per-room collaboration mode for *this* agent,
-        # cached from welcome frames (server reads
-        # ``agents.collaboration_mode`` and stamps it as
-        # ``my_collaboration_mode``). ``solo`` (default) preserves
-        # pre-#279 behaviour; ``collaborative`` makes
-        # ``compose_roster_suffix`` append a peer-mention usage hint
-        # so the LLM delegates and synthesizes peer replies. Per-room
-        # rather than agent-level so future "force solo in this DM"
-        # overrides can land here without a schema change.
-        self._collaboration_mode_by_room: dict[str, str] = {}
-
         # Issue #157 Phase B — per-room ring buffer of recent message
         # fingerprints (sender, hash). Feeds ``cycle_guard`` in
         # ``decide_policy``: when the same (sender, hash) pair has
@@ -546,21 +535,9 @@ class ChatClient:
             if isinstance(entry, dict) and entry.get("id")
         }
 
-    def is_collaborative(self, room_id: str) -> bool:
-        """Issue #279 — has the server marked this agent ``collaborative``
-        in *room_id*? Returns False for unknown rooms (legacy welcome,
-        pre-#279 servers) so the default behaviour stays solo.
-        """
-        return self._collaboration_mode_by_room.get(room_id) == "collaborative"
-
-    def compose_roster_suffix(
-        self,
-        room_id: str,
-        *,
-        with_collaborative_hint: bool = False,
-    ) -> str:
+    def compose_roster_suffix(self, room_id: str) -> str:
         """Compose the participants roster appended to the LLM prompt
-        (#221 → #279 → #288).
+        (#221 → #288 → #644).
 
         Each line lists a peer as ``- {name} (id: {uuid}, kind: ...)``
         with the ``description`` (#271) appended after an em-dash
@@ -577,18 +554,21 @@ class ChatClient:
         mention. Splitting *display name* from the *id-as-data* lets
         the model address peers by name in prose and only assemble a
         routing token when intentionally calling one (handoff_to MCP
-        tool, or — for collaborative agents — the explicit
-        ``<@user:PARTICIPANT_ID>`` placeholder pattern guidance below).
+        tool, or the explicit ``<@user:PARTICIPANT_ID>`` placeholder
+        pattern in the usage paragraph below).
 
         Self is excluded — an orchestrator handing off to itself would
         be a no-op cycle. Returns an empty string when the roster
         cache is absent (pre-#221 server) or contains only self,
         letting the caller skip the ``system_prompt`` rewrite entirely.
 
-        ``with_collaborative_hint`` (#279) appends a usage paragraph
-        teaching the agent how — and when — to construct a routing
-        token. ``solo`` agents never see the hint, preserving pre-#279
-        prompt bytes exactly.
+        #644 — the usage paragraph is unconditional. It used to be
+        gated on ``agents.collaboration_mode``, but that gate never
+        restrained anything: the server's peer-mention budget ignores
+        the column, so a "solo" agent that produced a routing token
+        still woke its peer. All the gate achieved was withholding the
+        *guidance* — including the part telling the model not to
+        peer-ask over trivia — from the agents most likely to need it.
         """
         roster = self._participants_by_room.get(room_id) or {}
         if not roster:
@@ -615,28 +595,27 @@ class ChatClient:
             "when merely listing, recommending, or describing peers.\n"
             + "\n".join(lines)
         )
-        if with_collaborative_hint:
-            # Issue #279 follow-up (#283 / #288): synthesis is opt-in,
-            # and the routing-token-vs-display-name split is enforced
-            # explicitly so the model doesn't copy live tokens out of
-            # the roster header into prose. The two paragraphs below
-            # carry both rules; any future copy edit that drops either
-            # half is caught by the regression assertions in
-            # ``test_claude_code.py``.
-            suffix += (
-                "\n\nWhen you need a peer to actively answer, build the "
-                "routing token by substituting that peer's id from the "
-                "list above into <@user:PARTICIPANT_ID>. The peer's "
-                "reply reaches the user directly — you only need to "
-                "synthesize if the user explicitly asks (e.g. "
-                "\"정리해줘\") or peer answers conflict.\n\n"
-                "For recommendations, comparisons, status reports, or "
-                "any descriptive reference to a peer, use only the "
-                "display name. Never put a routing token in prose that "
-                "merely mentions or lists peers — that token wakes the "
-                "peer for an unwanted reply. Don't peer-ask for trivial "
-                "greetings or meta questions — answer those yourself."
-            )
+        # #283 / #288: synthesis is opt-in, and the
+        # routing-token-vs-display-name split is spelled out so the
+        # model doesn't copy live tokens out of the roster header into
+        # prose. The two paragraphs below carry both rules plus the
+        # don't-peer-ask-over-trivia brake; any future copy edit that
+        # drops one is caught by the regression assertions in
+        # ``test_claude_code.py``.
+        suffix += (
+            "\n\nWhen you need a peer to actively answer, build the "
+            "routing token by substituting that peer's id from the "
+            "list above into <@user:PARTICIPANT_ID>. The peer's "
+            "reply reaches the user directly — you only need to "
+            "synthesize if the user explicitly asks (e.g. "
+            "\"정리해줘\") or peer answers conflict.\n\n"
+            "For recommendations, comparisons, status reports, or "
+            "any descriptive reference to a peer, use only the "
+            "display name. Never put a routing token in prose that "
+            "merely mentions or lists peers — that token wakes the "
+            "peer for an unwanted reply. Don't peer-ask for trivial "
+            "greetings or meta questions — answer those yourself."
+        )
         return suffix
 
     def _record_recent_message(
@@ -922,12 +901,6 @@ class ChatClient:
             # helper caches an empty dict so adapter iteration stays
             # safe.
             self._cache_roster(room_id, data.get("participants"))
-            # Issue #279 — cache this agent's collaboration policy
-            # for the room. Default ``solo`` covers pre-#279 servers
-            # that omit the field and user/guest welcome frames.
-            self._collaboration_mode_by_room[room_id] = (
-                data.get("my_collaboration_mode") or "solo"
-            )
             # The server may include rooms that were added while we
             # were disconnected. Join any we don't already have.
             for pending in data.get("pending_rooms") or []:
