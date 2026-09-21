@@ -115,3 +115,65 @@ async def test_killed_child_is_reported_after_its_output_flooded_the_pipe() -> N
 
     assert rec.stopped == []
     assert [(a, code) for a, code, _ in rec.crashed] == [("a1", -9)]
+
+
+@pytest.mark.asyncio
+async def test_agent_stdio_is_persisted_to_the_log_file(tmp_path) -> None:
+    """Agent logs were invisible: the pipes were consumed and dropped, so
+    diagnosing an agent meant re-running it by hand in the foreground."""
+    log_path = tmp_path / "agent.log"
+    proc = await _spawn(
+        "import sys\n"
+        "sys.stdout.write('ws.connected room-1\\n'); sys.stdout.flush()\n"
+        "sys.stderr.write('Traceback: boom\\n'); sys.stderr.flush()\n"
+    )
+    rec = _Recorder()
+
+    await asyncio.wait_for(
+        watch_process("a1", proc, rec.on_stopped, rec.on_crashed, log_path=log_path),
+        timeout=15,
+    )
+
+    written = log_path.read_text()
+    assert "ws.connected room-1" in written
+    assert "Traceback: boom" in written
+
+
+@pytest.mark.asyncio
+async def test_log_file_is_capped_by_rotation(tmp_path, monkeypatch) -> None:
+    """A chatty agent must not fill the disk: the live file stays bounded
+    and at most one previous generation is kept."""
+    monkeypatch.setattr("anygarden_machine.supervisor.AGENT_LOG_MAX_BYTES", 16 * 1024)
+    log_path = tmp_path / "agent.log"
+    proc = await _spawn(
+        "import sys\n"
+        f"sys.stdout.write('z' * {256 * 1024})\n"
+        "sys.stdout.flush()\n"
+    )
+    rec = _Recorder()
+
+    await asyncio.wait_for(
+        watch_process("a1", proc, rec.on_stopped, rec.on_crashed, log_path=log_path),
+        timeout=15,
+    )
+
+    rotated = log_path.with_name(log_path.name + ".1")
+    assert rotated.exists()
+    assert log_path.stat().st_size <= 16 * 1024
+    assert rotated.stat().st_size <= 16 * 1024 + 65536
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["agent.log", "agent.log.1"]
+
+
+@pytest.mark.asyncio
+async def test_unwritable_log_path_does_not_disturb_the_agent(tmp_path) -> None:
+    """Logging is best-effort — a bad path must not break supervision."""
+    log_path = tmp_path / "missing-dir" / "agent.log"
+    proc = await _spawn("import sys; sys.stdout.write('alive\\n')")
+    rec = _Recorder()
+
+    await asyncio.wait_for(
+        watch_process("a1", proc, rec.on_stopped, rec.on_crashed, log_path=log_path),
+        timeout=15,
+    )
+
+    assert rec.stopped == [("a1", 0)]
