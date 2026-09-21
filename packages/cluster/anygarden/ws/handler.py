@@ -38,6 +38,7 @@ from anygarden.messages.references import (
     InvalidSharedFileReference,
     canonicalize_shared_file_references,
 )
+from anygarden.tasks_status import TERMINAL_STATUSES
 from anygarden.observability.metrics import (
     agent_turns_total,
     engine_call_duration_ms,
@@ -689,6 +690,12 @@ async def _apply_orchestrator_fallback_nominate(
        ``type=legacy`` entry. An addressable mention means the
        moderator did address someone and the agent-side rule 3 will
        route normally — no fallback needed.
+    6. No non-terminal task in this room is assigned to a
+       participant other than the orchestrator. Such a task already
+       woke its assignee through the synthetic ``[TASK]`` mention,
+       so the room is working, not stalled; nominating on top of it
+       wakes an agent nobody asked for. The pickup timeout fails an
+       unclaimed task, so this cannot disarm the net indefinitely.
 
     On success the helper:
 
@@ -721,6 +728,29 @@ async def _apply_orchestrator_fallback_nominate(
     for m in mentions:
         if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
             return None
+
+    # An open task assignment already woke its assignee (the synthetic
+    # ``[TASK]`` mention), so the room is working rather than stalled and
+    # the safety net must stay quiet — otherwise the orchestrator's
+    # "delegated it, standing by" status message drags an extra agent in.
+    # Bounded by the pickup timeout, which fails a task nobody claims, so
+    # a forgotten row cannot disarm the net forever.
+    orchestrator_participants = select(Participant.id).where(
+        Participant.room_id == room_id,
+        Participant.agent_id == orchestrator_agent_id,
+    )
+    open_task = (
+        await db.execute(
+            select(Task.id)
+            .where(Task.room_id == room_id)
+            .where(Task.status.not_in(TERMINAL_STATUSES))
+            .where(Task.assignee_participant_id.is_not(None))
+            .where(Task.assignee_participant_id.not_in(orchestrator_participants))
+            .limit(1)
+        )
+    ).first()
+    if open_task is not None:
+        return None
 
     # Round-robin among non-orchestrator agent participants. Stable
     # order mirrors ``_compute_round_robin_next`` (joined_at, id) so
