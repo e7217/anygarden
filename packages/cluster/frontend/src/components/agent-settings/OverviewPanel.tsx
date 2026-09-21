@@ -425,7 +425,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             disabled={descriptionSaving}
             maxLength={200}
             rows={2}
-            placeholder="Short introduction shown to other agents and users"
+            placeholder="e.g. Implementation worker. Carries out assigned build tasks."
             aria-label="Agent description"
             data-testid="overview-description-input"
             className="flex w-full resize-none rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60"
@@ -434,6 +434,22 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             <span>Visible to other agents (LLM roster) and users (mention popover, participants list).</span>
             <span data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
           </div>
+          {/* #644 — every agent now receives the room roster, so this
+              line is what teammates' models read when deciding whom to
+              ask. An empty one leaves them a bare name to guess from,
+              which is a misrouting risk rather than an error — hence
+              caution orange (DESIGN.md §2: warning is heads-up, danger
+              is destructive) and no icon, keeping it quieter than the
+              error row below. */}
+          {descriptionDraft.trim() === '' ? (
+            <div
+              className="text-[11px] text-[var(--color-warning)]"
+              data-testid="overview-description-empty-hint"
+            >
+              Teammates see only this agent&apos;s name until you write one —
+              their model has no basis for deciding what to ask it.
+            </div>
+          ) : null}
           {descriptionError ? (
             <div
               className="flex items-center gap-1 text-xs text-[var(--color-warning)]"
