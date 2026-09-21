@@ -1262,3 +1262,48 @@ class TestSessionStorePreservation:
 
         assert not stray_gemini.exists()
         assert not stray_claude.exists()
+
+
+class TestKillWithLingeringPipes:
+    """``asyncio`` resolves ``Process.wait()`` only once every pipe
+    reaches EOF, so a pipe still held open after the process is gone
+    blocks the wait indefinitely. ``kill`` used to await it unbounded,
+    which hung the whole node shutdown: on 2026-09-21 ``anygarden stop``
+    timed out mid-drain, three agents were left running, and the node
+    had to be SIGKILLed and recovered by hand."""
+
+    async def test_kill_returns_when_the_process_wait_never_resolves(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        never = asyncio.Event()
+
+        async def hanging_wait():
+            await never.wait()
+            return 0
+
+        mock_proc = MagicMock()
+        mock_proc.pid = 42
+        mock_proc.returncode = None
+        mock_proc.stderr = None
+        mock_proc.stdout = None
+        mock_proc.stdin = AsyncMock()
+        mock_proc.wait = hanging_wait
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            await spawner.spawn(spawn_msg)
+
+        with patch("anygarden_machine.spawner.terminate_tree"):
+            result = await asyncio.wait_for(
+                spawner.kill("agent-test-001"), timeout=20
+            )
+
+        # terminate_tree already reaped the group, so the agent is gone
+        # whether or not the pipes ever hit EOF.
+        assert result["success"] is True
+        assert "agent-test-001" not in spawner._agents

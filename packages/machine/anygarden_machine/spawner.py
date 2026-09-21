@@ -32,6 +32,8 @@ from anygarden_machine.supervisor import watch_process
 log = structlog.get_logger()
 
 KILL_TIMEOUT = 10  # seconds to wait after SIGTERM before SIGKILL
+# Upper bound on draining a reaped process's asyncio state machine.
+PROC_WAIT_TIMEOUT = 10
 
 # #451 — re-adopt safety knobs.
 #   ADOPT_POLL_INTERVAL: how often the poll-based watcher probes a
@@ -1342,11 +1344,24 @@ class Spawner:
         await asyncio.to_thread(terminate_tree, agent.pid, timeout=KILL_TIMEOUT)
         if proc is not None:
             try:
-                # Drain the asyncio.subprocess state machine; the process
-                # is already dead by now, so this returns immediately.
-                await proc.wait()
+                # Drain the asyncio.subprocess state machine. ``wait()``
+                # resolves only once *every* pipe reaches EOF, which is not
+                # guaranteed just because the process is dead — anything
+                # still holding the inherited stdio keeps it pending. Bound
+                # it: ``terminate_tree`` already reaped the group, so on
+                # timeout the agent is gone regardless and blocking here
+                # would stall the caller (``drain`` kills agents one by one,
+                # so a single stuck wait hangs the whole node shutdown).
+                await asyncio.wait_for(proc.wait(), timeout=PROC_WAIT_TIMEOUT)
             except ProcessLookupError:
                 pass
+            except asyncio.TimeoutError:
+                log.warning(
+                    "agent_wait_timeout",
+                    agent_id=agent_id,
+                    pid=agent.pid,
+                    timeout=PROC_WAIT_TIMEOUT,
+                )
         log.info("agent_terminated", agent_id=agent_id)
 
         self._cleanup(agent_id)
