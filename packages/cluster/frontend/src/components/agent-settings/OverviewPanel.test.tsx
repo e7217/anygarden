@@ -249,6 +249,28 @@ describe('OverviewPanel', () => {
       expect(updateAgent).not.toHaveBeenCalled()
     })
 
+    // #644 — the roster now reaches every agent, so a missing
+    // introduction silently degrades teammates' routing decisions.
+    // Surface that at the point of editing rather than leaving it to
+    // be discovered through bad handoffs.
+    it('warns while the description is empty', () => {
+      setup({ agent: makeAgent({ description: null }) })
+      expect(
+        screen.getByTestId('overview-description-empty-hint'),
+      ).toBeInTheDocument()
+    })
+
+    it('drops the warning once an introduction is typed', () => {
+      setup({ agent: makeAgent({ description: null }) })
+      const input = screen.getByTestId(
+        'overview-description-input',
+      ) as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'Reviews React UIs' } })
+      expect(
+        screen.queryByTestId('overview-description-empty-hint'),
+      ).not.toBeInTheDocument()
+    })
+
     it('updates the live counter as the admin types', () => {
       setup()
       const input = screen.getByTestId(

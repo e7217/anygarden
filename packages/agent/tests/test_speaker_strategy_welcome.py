@@ -210,3 +210,133 @@ class TestRoomSettingsChangedFrame:
         # speaker_strategy untouched; only orchestrator_agent_id rolls forward.
         assert client._speaker_strategy["room-a"] == "orchestrator"
         assert client._orchestrator_agent_id["room-a"] == "A2"
+
+
+class TestRosterRefreshFrame:
+    """Issue #644 — ``room_settings_changed`` also carries a full
+    participant snapshot so a membership change or a ``description``
+    edit reaches connected agents.
+
+    Pre-#644 the roster was welcome-only: an agent that stayed
+    connected kept rendering a roster frozen at connect time, so it
+    could neither see a newcomer nor stop addressing someone who had
+    left, and an updated introduction — the LLM's only basis for
+    picking whom to ask — was ignored entirely.
+    """
+
+    def _make_client(self) -> ChatClient:
+        return ChatClient("ws://x", token="t")
+
+    async def _seed(self, client: ChatClient) -> None:
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "welcome",
+                "participant_id": "p-self",
+                "speaker_strategy": "orchestrator",
+                "participants": [
+                    {"id": "p-self", "display_name": "me", "kind": "agent"},
+                    {
+                        "id": "p-old",
+                        "display_name": "old-bot",
+                        "kind": "agent",
+                        "description": "이전 소개문",
+                    },
+                ],
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_frame_replaces_roster_snapshot(self) -> None:
+        client = self._make_client()
+        await self._seed(client)
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "room_settings_changed",
+                "room_id": "room-a",
+                "participants": [
+                    {"id": "p-self", "display_name": "me", "kind": "agent"},
+                    {
+                        "id": "p-new",
+                        "display_name": "new-bot",
+                        "kind": "agent",
+                        "description": "새 소개문",
+                    },
+                ],
+            },
+        )
+        roster = client._participants_by_room["room-a"]
+        # Wholesale replacement, not a merge: the departed peer is gone
+        # and the newcomer is present.
+        assert set(roster) == {"p-self", "p-new"}
+        assert roster["p-new"]["description"] == "새 소개문"
+
+    @pytest.mark.asyncio
+    async def test_refreshed_roster_reaches_the_prompt(self) -> None:
+        """The cache is only useful if the rendered suffix follows it —
+        this is the behaviour the whole change exists for."""
+        client = self._make_client()
+        await self._seed(client)
+        client._my_participant_ids.add("p-self")
+        assert "old-bot" in client.compose_roster_suffix("room-a")
+
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "room_settings_changed",
+                "room_id": "room-a",
+                "participants": [
+                    {"id": "p-self", "display_name": "me", "kind": "agent"},
+                    {
+                        "id": "p-new",
+                        "display_name": "new-bot",
+                        "kind": "agent",
+                        "description": "새 소개문",
+                    },
+                ],
+            },
+        )
+        suffix = client.compose_roster_suffix("room-a")
+        assert "new-bot" in suffix
+        assert "새 소개문" in suffix
+        assert "old-bot" not in suffix
+
+    @pytest.mark.asyncio
+    async def test_settings_only_frame_preserves_roster(self) -> None:
+        """A settings PATCH omits ``participants``; that must not be
+        read as "the room emptied" — same "None = not touched" rule
+        the other fields follow."""
+        client = self._make_client()
+        await self._seed(client)
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "room_settings_changed",
+                "room_id": "room-a",
+                "speaker_strategy": "mentioned_only",
+            },
+        )
+        assert set(client._participants_by_room["room-a"]) == {"p-self", "p-old"}
+        assert client._speaker_strategy["room-a"] == "mentioned_only"
+
+    @pytest.mark.asyncio
+    async def test_malformed_entries_are_skipped(self) -> None:
+        """Mirrors the welcome-path guard: entries without an ``id``
+        (or that aren't dicts at all) must not land in the cache and
+        must not abort the refresh for the well-formed ones."""
+        client = self._make_client()
+        await self._seed(client)
+        await client._process_frame(
+            "room-a",
+            {
+                "type": "room_settings_changed",
+                "room_id": "room-a",
+                "participants": [
+                    "not-a-dict",
+                    {"display_name": "no-id"},
+                    {"id": "p-ok", "display_name": "ok-bot", "kind": "agent"},
+                ],
+            },
+        )
+        assert set(client._participants_by_room["room-a"]) == {"p-ok"}

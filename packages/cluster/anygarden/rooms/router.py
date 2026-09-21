@@ -53,6 +53,7 @@ from anygarden.rooms.authorization import (
 )
 from anygarden.rooms.file_storage import FileTooLargeError
 from anygarden.rooms.membership import add_user_to_room, ensure_agent_in_room
+from anygarden.rooms.roster import broadcast_roster
 from anygarden.rooms.service import (
     archive_child_rooms,
     create_sub_room,
@@ -678,6 +679,12 @@ async def add_participant(
             role=body.role,
         )
 
+    # #644 — both branches above notify the *newcomer* (JoinRoomOut /
+    # RoomMembershipChangedOut). The agents already seated in the room
+    # get nothing, so their LLM roster silently omits whoever just
+    # joined. One snapshot to the room fixes both branches at once.
+    await broadcast_roster(manager, db, room_id=room_id)
+
     return participant
 
 
@@ -869,6 +876,12 @@ async def remove_participant(
         )
         for pid in other_pids:
             await manager.send_to(pid, frame)
+
+    # 10. #644 — the frame above tells *users* their sidebar changed;
+    #     it says nothing to the agents still in the room, whose LLM
+    #     roster now lists someone who left. Push the refreshed
+    #     snapshot so the next turn's prompt is accurate.
+    await broadcast_roster(manager, db, room_id=room_id)
 
     return None
 

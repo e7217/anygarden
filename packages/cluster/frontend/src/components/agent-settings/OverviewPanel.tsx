@@ -78,8 +78,6 @@ interface Props {
       permission_level_set?: boolean
       description?: string | null
       description_set?: boolean
-      collaboration_mode?: 'solo' | 'collaborative'
-      collaboration_mode_set?: boolean
     },
   ) => Promise<Agent>
   /** Issue #217 — populate the Model / Reasoning dropdowns. Optional
@@ -316,26 +314,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
     setConfigSaving(false)
   }
 
-  // #279 — collaboration mode is a small enum: ``solo`` | ``collaborative``.
-  // onChange commits immediately (same pattern as model/reasoning).
-  // The ``*_set`` flag protects the value from being clobbered by an
-  // unrelated PATCH that happens to carry ``collaboration_mode: undefined``.
-  const handleCollaborationChange = async (raw: string) => {
-    if (raw !== 'solo' && raw !== 'collaborative') return
-    if ((agent.collaboration_mode ?? 'solo') === raw) return
-    setConfigSaving(true)
-    setConfigError(null)
-    try {
-      await updateAgent(agent.id, {
-        collaboration_mode: raw,
-        collaboration_mode_set: true,
-      })
-    } catch (e) {
-      setConfigError(e instanceof Error ? e.message : String(e))
-    }
-    setConfigSaving(false)
-  }
-
   const handleCopyId = async () => {
     try {
       await navigator.clipboard.writeText(agent.id)
@@ -425,7 +403,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             disabled={descriptionSaving}
             maxLength={200}
             rows={2}
-            placeholder="Short introduction shown to other agents and users"
+            placeholder="e.g. Implementation worker. Carries out assigned build tasks."
             aria-label="Agent description"
             data-testid="overview-description-input"
             className="flex w-full resize-none rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60"
@@ -434,6 +412,22 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             <span>Visible to other agents (LLM roster) and users (mention popover, participants list).</span>
             <span data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
           </div>
+          {/* #644 — every agent now receives the room roster, so this
+              line is what teammates' models read when deciding whom to
+              ask. An empty one leaves them a bare name to guess from,
+              which is a misrouting risk rather than an error — hence
+              caution orange (DESIGN.md §2: warning is heads-up, danger
+              is destructive) and no icon, keeping it quieter than the
+              error row below. */}
+          {descriptionDraft.trim() === '' ? (
+            <div
+              className="text-[11px] text-[var(--color-warning)]"
+              data-testid="overview-description-empty-hint"
+            >
+              Teammates see only this agent&apos;s name until you write one —
+              their model has no basis for deciding what to ask it.
+            </div>
+          ) : null}
           {descriptionError ? (
             <div
               className="flex items-center gap-1 text-xs text-[var(--color-warning)]"
@@ -648,33 +642,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
               호스트 정보·명령 접근 가능. 신중히 사용하세요.
             </p>
           ) : null}
-        </dd>
-
-        {/* #279 — Collaboration policy. ``solo`` (default) keeps the
-            agent answering within its own turn; ``collaborative``
-            tells the agent to peer-mention teammates and synthesize
-            their replies. The hint paragraph is appended to the LLM
-            system prompt by the agent SDK on the next welcome / turn,
-            so the toggle takes effect without a respawn. */}
-        <dt className="text-[var(--color-foreground-muted)]">Collaboration</dt>
-        <dd>
-          <select
-            value={agent.collaboration_mode ?? 'solo'}
-            onChange={e => void handleCollaborationChange(e.target.value)}
-            disabled={configSaving}
-            aria-label="Agent collaboration mode"
-            data-testid="overview-collaboration-select"
-            className={SELECT_CSS}
-          >
-            <option value="solo">Solo — answer within own turn</option>
-            <option value="collaborative">
-              Collaborative — peer-mention teammates and synthesize
-            </option>
-          </select>
-          <div className="mt-1 text-[11px] text-[var(--color-foreground-subtle)]">
-            Recommend keeping at most one or two collaborative agents per room
-            so they don't peer-ping each other in a loop.
-          </div>
         </dd>
 
         <dt className="text-[var(--color-foreground-muted)]">State</dt>

@@ -2,9 +2,11 @@
 
 #538은 identity 헤더를 ``_system_prompt``에 넣었으나 codex_cli가 이를 읽지
 않아 codex에 미도달했다. #540은 ``ShaTrackedInjector``에 system 블록을 추가하고
-codex 어댑터가 이를 (is_collaborative 무관) 주입하도록 한다. system 블록은 첫
-턴에 1회 방출되고, 변경 없으면 이후 턴에서 억제된다(codex resume가 히스토리에
-보존하므로 재-paste 방지).
+codex 어댑터가 이를 무조건 주입하도록 한다 — 당시에는 로스터가
+``collaboration_mode``로 게이팅되던 것과 대비되는 선택이었고, #644가 그 게이트를
+없애면서 두 블록 모두 무조건 주입으로 통일됐다. system 블록은 첫 턴에 1회
+방출되고, 변경 없으면 이후 턴에서 억제된다(codex resume가 히스토리에 보존하므로
+재-paste 방지).
 """
 
 from __future__ import annotations

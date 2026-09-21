@@ -1,10 +1,16 @@
 # ruff: noqa: F811
-"""Integration tests for the per-agent collaboration_mode safety net (#279).
+"""Integration tests for the peer-mention safety net (#279 / #644).
 
 Covers the WS-handler wiring of ``peer_depth``, ``kind``, and the
 ``PeerHandoffBudget`` cap. The orchestration helpers themselves are
 unit-tested in ``test_orchestration.py``; this file exercises the
 end-to-end stamping and strip behaviour through the real handler.
+
+#644 removed ``agents.collaboration_mode``. These tests are the
+evidence that the removal was safe to make: the cap never consulted
+that column, so it behaves identically without it. A "solo" agent was
+never prevented from waking a peer — only the budget below ever
+stopped one.
 
 The ``F811`` ignore covers the pytest-fixture import idiom — pytest
 recognises a fixture either by import or by parameter name, and ruff
@@ -31,85 +37,6 @@ from anygarden.db.models import (
 from tests.test_ws_handler import ws_env as ws_env  # noqa: F401
 
 
-class TestCollaborationModeWelcome:
-    """Issue #279 §2 — welcome frame surfaces ``my_collaboration_mode``
-    so the agent SDK can decide whether to append the peer-mention
-    usage hint to the LLM system prompt."""
-
-    @pytest.mark.asyncio
-    async def test_welcome_default_collaboration_mode_is_solo(
-        self, ws_env
-    ) -> None:
-        """Pre-#279 agents and freshly-created agents default to
-        ``solo``; the welcome must reflect that explicitly so the SDK
-        cache doesn't carry a stale value across reconnects."""
-        app = ws_env["app"]
-        sf = ws_env["session_factory"]
-        room = ws_env["room"]
-
-        async with sf() as db:
-            agent = Agent(
-                name="solo-bot", engine="codex", actual_state="running"
-            )
-            db.add(agent)
-            await db.flush()
-            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
-            agent_token_plain = generate_token()
-            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
-            db.add(AgentToken(
-                agent_id=agent.id,
-                token_hash=token_hash,
-                lookup_hint=lookup_hint,
-            ))
-            await db.commit()
-
-        with TestClient(app) as client:
-            with client.websocket_connect(
-                f"/ws/rooms/{room.id}",
-                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
-            ) as ws:
-                welcome = json.loads(ws.receive_text())
-                assert welcome["type"] == "welcome"
-                assert welcome.get("my_collaboration_mode") == "solo"
-
-    @pytest.mark.asyncio
-    async def test_welcome_collaborative_agent_surfaces_mode(
-        self, ws_env
-    ) -> None:
-        """Agents flipped to ``collaborative`` see the new mode in
-        their welcome frame on the next connect."""
-        app = ws_env["app"]
-        sf = ws_env["session_factory"]
-        room = ws_env["room"]
-
-        async with sf() as db:
-            agent = Agent(
-                name="collab-bot",
-                engine="codex",
-                actual_state="running",
-                collaboration_mode="collaborative",
-            )
-            db.add(agent)
-            await db.flush()
-            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
-            agent_token_plain = generate_token()
-            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
-            db.add(AgentToken(
-                agent_id=agent.id,
-                token_hash=token_hash,
-                lookup_hint=lookup_hint,
-            ))
-            await db.commit()
-
-        with TestClient(app) as client:
-            with client.websocket_connect(
-                f"/ws/rooms/{room.id}",
-                subprotocols=["anygarden.v1", f"bearer.{agent_token_plain}"],
-            ) as ws:
-                welcome = json.loads(ws.receive_text())
-                assert welcome.get("my_collaboration_mode") == "collaborative"
-
-
 class TestPeerMentionStamping:
     """Issue #279 §3 — broadcast metadata must carry ``peer_depth``
     and ``kind`` whenever an agent message contains a mention pointing
@@ -132,7 +59,6 @@ class TestPeerMentionStamping:
                 name="sender",
                 engine="codex",
                 actual_state="running",
-                collaboration_mode="collaborative",
             )
             peer = Agent(name="peer", engine="codex", actual_state="running")
             db.add_all([sender, peer])
@@ -194,7 +120,6 @@ class TestPeerMentionStamping:
                 name="sender",
                 engine="codex",
                 actual_state="running",
-                collaboration_mode="collaborative",
             )
             peer = Agent(name="peer", engine="codex", actual_state="running")
             db.add_all([sender, peer])
@@ -261,7 +186,6 @@ class TestPeerMentionStamping:
                 name="sender",
                 engine="codex",
                 actual_state="running",
-                collaboration_mode="collaborative",
             )
             peer = Agent(name="peer", engine="codex", actual_state="running")
             db.add_all([sender, peer])

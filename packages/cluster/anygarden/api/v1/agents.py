@@ -30,6 +30,7 @@ from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
+from anygarden.rooms.roster import broadcast_roster_for_agent
 from anygarden.scheduler.gateway_secrets import openhands_model_id_for_gateway
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
 
@@ -108,14 +109,6 @@ class AgentCreate(BaseModel):
     # Capped at 200 chars to keep the per-turn token cost predictable
     # when the agent runtime appends it inline to every system prompt.
     description: Optional[str] = Field(default=None, max_length=200)
-    # Issue #279 — collaboration policy. ``solo`` (default) preserves
-    # pre-#279 behaviour. ``collaborative`` makes the agent SDK append a
-    # peer-mention usage hint to the LLM system prompt so the agent
-    # delegates via mentions and synthesizes peer replies. Validated by
-    # the field pattern.
-    collaboration_mode: str = Field(
-        default="solo", pattern="^(solo|collaborative)$"
-    )
 
 
 class AgentUpdate(BaseModel):
@@ -189,13 +182,6 @@ class AgentUpdate(BaseModel):
     # ``AgentCreate``.
     description: Optional[str] = Field(default=None, max_length=200)
     description_set: bool = False
-    # Issue #279 — collaboration policy toggle. Same ``_set`` flag
-    # pattern so a PATCH that only renames the agent doesn't silently
-    # reset the mode back to ``solo``.
-    collaboration_mode: Optional[str] = Field(
-        default=None, pattern="^(solo|collaborative)$"
-    )
-    collaboration_mode_set: bool = False
 
 
 class UnavailableReasonOut(BaseModel):
@@ -267,9 +253,6 @@ class AgentOut(BaseModel):
     # that have never set one; otherwise capped at 200 chars and
     # surfaced through the WS welcome frame to peers and the LLM roster.
     description: Optional[str] = None
-    # Issue #279 — collaboration policy surfaced so the admin UI can
-    # render a toggle without a second query.
-    collaboration_mode: str = "solo"
     model_config = {"from_attributes": True, "protected_namespaces": ()}
 
 
@@ -383,7 +366,6 @@ async def create_agent(
         restart_policy=body.restart_policy,
         runtime=body.runtime,
         description=body.description,
-        collaboration_mode=body.collaboration_mode,
     )
     db.add(agent)
     await db.flush()
@@ -458,9 +440,16 @@ async def update_agent(
     # "mutate → generation bump → respawn" semantics.
     runtime_changed = False
     peer_metadata_changed = False
+    # #644 — set by edits to a field the participant roster *renders*
+    # (``name`` → ``display_name``, ``description``). Those lines live
+    # in every peer's cached roster across every shared room, so they
+    # need an explicit push; avatar edits don't qualify because
+    # ``ParticipantBrief`` doesn't carry them.
+    roster_changed = False
     if body.name is not None:
         agent.name = body.name
         runtime_changed = True
+        roster_changed = True
     if body.agents_md_set:
         # Explicit opt-in flag is needed to distinguish "omit the
         # field" (no change) from "set the field to null" (clear
@@ -530,21 +519,19 @@ async def update_agent(
         runtime_changed = True
     if body.description_set:
         # #271 — public-facing introduction. The agent itself never
-        # consumes this field at runtime; only *peers* see it via the
-        # WS welcome frame's ``ParticipantBrief.description``. Restarting
-        # this agent's subprocess would do nothing for that propagation,
-        # so it's treated as peer metadata. Peers pick up the new value
-        # on their next welcome (room join, reconnect, or new spawn).
+        # consumes this field at runtime; only *peers* see it via
+        # ``ParticipantBrief.description``. Restarting this agent's
+        # subprocess would do nothing for that propagation, so it's
+        # treated as peer metadata.
+        #
+        # #644 — peers used to pick this up only on their next welcome,
+        # which meant an edited introduction was ignored for as long as
+        # they stayed connected. Since the introduction is the LLM's
+        # only basis for deciding whom to ask, a stale one misroutes
+        # work; ``roster_changed`` now pushes it immediately.
         agent.description = body.description
         peer_metadata_changed = True
-    if body.collaboration_mode_set and body.collaboration_mode is not None:
-        # #279 — the agent SDK reads this on every welcome frame and
-        # uses it to decide whether to append the peer-mention hint to
-        # the LLM system prompt. Treated as peer metadata: peers see
-        # the new value on their next welcome (a reconnect or new
-        # message turn rebuilds the system prompt), no respawn needed.
-        agent.collaboration_mode = body.collaboration_mode
-        peer_metadata_changed = True
+        roster_changed = True
 
     if runtime_changed or peer_metadata_changed:
         await db.commit()
@@ -556,6 +543,14 @@ async def update_agent(
     if runtime_changed:
         lifecycle = request.app.state.agent_lifecycle
         await lifecycle.bump_generation(agent_id)
+
+    # #644 — push the refreshed roster to every room this agent shares
+    # with peers. Done after the commit so the snapshot reads the new
+    # values, and after ``bump_generation`` so a restart-triggering
+    # edit doesn't race its own broadcast.
+    if roster_changed:
+        manager = getattr(request.app.state, "connection_manager", None)
+        await broadcast_roster_for_agent(manager, db, agent_id=agent_id)
 
     return _agent_to_out(agent, request.app.state.machine_bus)
 

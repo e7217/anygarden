@@ -431,25 +431,21 @@ class ClaudeCodeAdapter(EngineAdapter):
                 # flag, which the CLI treats as "trust the bypass
                 # permission_mode" — already in force above.
 
-        # Issue #237 / #279 / #293 — append the centralised memory
-        # + roster suffix. The roster gate fires either for the
-        # orchestrator (handoff_to MCP path, no peer-mention hint)
-        # or for a collaborative agent (mention-based delegation,
-        # hint included). Done AFTER the base ``system_prompt`` so
-        # AGENTS.md-derived personality still drives behaviour and
-        # the suffix acts as an override at the end.
+        # Issue #237 / #293 / #644 — append the centralised memory +
+        # roster suffix. Done AFTER the base ``system_prompt`` so
+        # AGENTS.md-derived personality still drives behaviour and the
+        # suffix acts as an override at the end.
+        #
+        # #644 — the roster used to be gated on ``is_orchestrator or
+        # is_collab``; both halves are gone. ``is_orchestrator`` still
+        # decides whether the handoff_to MCP server is exposed above,
+        # which is a real authority boundary — but knowing who else is
+        # in the room never was one.
         from anygarden_agent.integrations.base import (
             compose_session_context_suffix,
         )
 
-        client = self._client
-        is_collab = client is not None and client.is_collaborative(room_id)
-        suffix = compose_session_context_suffix(
-            client,
-            room_id,
-            include_roster=is_orchestrator or is_collab,
-            with_collaborative_hint=is_collab,
-        )
+        suffix = compose_session_context_suffix(self._client, room_id)
         if suffix:
             existing = kwargs.get("system_prompt")
             kwargs["system_prompt"] = (

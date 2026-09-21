@@ -311,12 +311,7 @@ class OpenHandsAdapter(EngineAdapter):
             metadata if isinstance(metadata, dict) else None,
             sender_participant_id=msg.get("participant_id"),
         )
-        suffix = compose_session_context_suffix(
-            self._client,
-            room_id,
-            include_roster=True,
-            with_collaborative_hint=True,
-        )
+        suffix = compose_session_context_suffix(self._client, room_id)
         if suffix:
             # Order: context first, then user content — same as the
             # CLI adapters' prepend pattern (#293).

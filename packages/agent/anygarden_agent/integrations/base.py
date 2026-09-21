@@ -349,25 +349,30 @@ def compose_memory_suffix(
 def compose_session_context_suffix(
     client: "ChatClient | None",
     room_id: str | None,
-    *,
-    include_roster: bool,
-    with_collaborative_hint: bool,
 ) -> str:
     """Combine memory + roster into a single session-context suffix.
 
     Issue #293 — three CLI engines (claude_code, codex, gemini_cli) all
     inject the same two contextual blocks ahead of the user's turn:
     the memory / shared-context block (#237 / #246 / #255) and the
-    optional room roster (#221 / #279 / #288). Each adapter previously
-    inlined the same compose-and-concat block; this helper centralises
-    the assembly so a future block (a fourth context layer) lands in
-    one file.
+    room roster (#221 / #288). Each adapter previously inlined the same
+    compose-and-concat block; this helper centralises the assembly so a
+    future block (a fourth context layer) lands in one file.
 
     Order is **memory then roster**, matching the natural reading
     order ("here's the working set, then here's the team"). All three
     adapters now produce this order; pre-#293 codex inlined them in
     the reverse order as an artifact of the prepend implementation,
     which #293 normalises.
+
+    #644 — the roster is unconditional. It used to be gated per
+    adapter on ``agents.collaboration_mode`` (and, for claude_code,
+    additionally on being the room's orchestrator), which left each
+    engine with a different answer to "does this agent know who else is
+    here". openhands ignored the gate outright, so the roster was
+    already shipping unconditionally on one engine. Knowing the team is
+    now the baseline; the server's peer-mention budget — which never
+    consulted the column — remains the actual cap on peer traffic.
 
     Parameters
     ----------
@@ -377,17 +382,6 @@ def compose_session_context_suffix(
     room_id:
         The active room. Required to pick the room-specific ephemeral
         flag and roster.
-    include_roster:
-        Whether the agent should know the team this turn. Caller
-        decides — ``claude_code`` activates this when the agent is the
-        room's orchestrator (handoff_to MCP path) **or** when the
-        agent's collaboration mode is collaborative; ``codex`` and
-        ``gemini_cli`` activate this only when collaborative.
-    with_collaborative_hint:
-        Whether the roster body should append the peer-mention usage
-        hint (#288). Forwarded to ``client.compose_roster_suffix``;
-        ``True`` for collaborative agents, ``False`` for the
-        orchestrator-only handoff path.
 
     Returns
     -------
@@ -402,10 +396,8 @@ def compose_session_context_suffix(
     if memory:
         parts.append(memory)
 
-    if include_roster and client is not None and room_id is not None:
-        roster = client.compose_roster_suffix(
-            room_id, with_collaborative_hint=with_collaborative_hint
-        )
+    if client is not None and room_id is not None:
+        roster = client.compose_roster_suffix(room_id)
         if roster:
             parts.append(roster)
 

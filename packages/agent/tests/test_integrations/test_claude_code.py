@@ -537,23 +537,27 @@ class TestOrchestratorRosterPrompt:
         assert "<@user:user-pid>" not in prompt
 
     @pytest.mark.asyncio
-    async def test_non_orchestrator_prompt_unchanged(
+    async def test_prompt_unchanged_when_roster_is_empty(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        """Worker agents don't get roster stamping — their prompt
-        remains verbatim from construction. This keeps the roster
-        strictly scoped to the agent that can actually use it."""
+        """An agent alone in a room has nobody to be told about, so the
+        suffix is empty and the prompt stays verbatim.
+
+        #644 — this is now the *only* path to an unstamped prompt.
+        Being a worker rather than the orchestrator no longer withholds
+        the roster."""
         from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Worker")
         client._agent_id = "agent-beta"
+        client._my_participant_ids = {"worker-pid"}
         client._orchestrator_agent_id["room-a"] = "agent-alpha"
         client._participants_by_room["room-a"] = {
-            "other-pid": {
-                "id": "other-pid",
-                "display_name": "other",
+            "worker-pid": {
+                "id": "worker-pid",
+                "display_name": "Worker",
                 "kind": "agent",
-                "agent_id": "agent-alpha",
+                "agent_id": "agent-beta",
             },
         }
 
@@ -708,22 +712,21 @@ class TestOrchestratorRosterPrompt:
         assert "\n" not in desc_in_line
 
     @pytest.mark.asyncio
-    async def test_collaborative_non_orchestrator_gets_roster_with_hint(
+    async def test_non_orchestrator_gets_roster_with_hint(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        """Issue #279 — a collaborative agent that is *not* the room's
-        orchestrator still receives the roster, plus a peer-mention
-        usage hint paragraph that solo agents never see."""
+        """#644 — an agent that is *not* the room's orchestrator
+        receives the roster and the peer-mention usage hint. The hint
+        carries the brake ("don't peer-ask over trivia") as well as the
+        how-to, so withholding it from some agents was backwards."""
         from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Buddy")
         client._agent_id = "agent-buddy"
         client._my_participant_ids = {"buddy-pid"}
-        # Note: orchestrator points at a *different* agent — Buddy is
-        # collaborative but not the orchestrator. Pre-#279 Buddy
-        # received nothing; #279 makes Buddy receive the roster + hint.
+        # Orchestrator points at a *different* agent — Buddy is a
+        # plain worker. Pre-#644 that meant no roster at all.
         client._orchestrator_agent_id["room-a"] = "agent-other"
-        client._collaboration_mode_by_room["room-a"] = "collaborative"
         client._participants_by_room["room-a"] = {
             "buddy-pid": {
                 "id": "buddy-pid",
@@ -752,7 +755,7 @@ class TestOrchestratorRosterPrompt:
         assert "id: buddy-pid" not in prompt
         # No raw token for the peer in the prompt.
         assert "<@user:peer-pid>" not in prompt
-        # The collaborative hint paragraph must be present. Both
+        # The peer-mention hint paragraph must be present. Both
         # halves of the rewritten guidance are asserted so a future
         # copy edit that drops either half fails loudly.
         assert "build the routing token" in prompt
@@ -773,51 +776,19 @@ class TestOrchestratorRosterPrompt:
         assert "synthesize a final answer" not in prompt
 
     @pytest.mark.asyncio
-    async def test_solo_non_orchestrator_prompt_unchanged(
+    async def test_orchestrator_keeps_handoff_mcp_alongside_roster(
         self, fake_sdk: list[dict[str, Any]]
     ) -> None:
-        """Issue #279 — solo agents that aren't the orchestrator must
-        receive the prompt byte-for-byte identical to pre-#279, with
-        no roster and no collaborative hint."""
-        from anygarden_agent.client import ChatClient
-
-        client = ChatClient("ws://localhost:8000", token="t", agent_name="Solo")
-        client._agent_id = "agent-solo"
-        client._orchestrator_agent_id["room-a"] = "agent-other"
-        # collaboration_mode default ("solo") — explicit for clarity.
-        client._collaboration_mode_by_room["room-a"] = "solo"
-        client._participants_by_room["room-a"] = {
-            "peer-pid": {
-                "id": "peer-pid",
-                "display_name": "peer",
-                "kind": "agent",
-                "agent_id": "agent-peer",
-            },
-        }
-
-        adapter = ClaudeCodeAdapter(
-            system_prompt="You are Solo.", client=client
-        )
-        await adapter.start()
-        await adapter.on_message({"content": "hi", "room_id": "room-a"})
-
-        opts = fake_sdk[-1]["options"].kwargs
-        assert opts.get("system_prompt") == "You are Solo."
-
-    @pytest.mark.asyncio
-    async def test_orchestrator_collaborative_combination_attaches_hint(
-        self, fake_sdk: list[dict[str, Any]]
-    ) -> None:
-        """Issue #279 — when an agent is both the orchestrator and
-        collaborative, the roster + collaborative hint must coexist
-        with the handoff_to MCP wiring (mcp_servers stays populated)."""
+        """The orchestrator gets the roster + hint like everyone else,
+        and still gets the handoff_to MCP server. #644 removed the
+        roster gate but left orchestrator status governing MCP
+        exposure — that one is a real authority boundary."""
         from anygarden_agent.client import ChatClient
 
         client = ChatClient("ws://localhost:8000", token="t", agent_name="Orc")
         client._agent_id = "agent-alpha"
         client._my_participant_ids = {"orc-pid"}
         client._orchestrator_agent_id["room-a"] = "agent-alpha"
-        client._collaboration_mode_by_room["room-a"] = "collaborative"
         client._participants_by_room["room-a"] = {
             "peer-pid": {
                 "id": "peer-pid",
@@ -836,9 +807,9 @@ class TestOrchestratorRosterPrompt:
         # #288 — peer id appears as data, not a routing token.
         assert "id: peer-pid" in prompt
         assert "<@user:peer-pid>" not in prompt
-        # Collaborative hint phrasing reflects #283 + #288.
+        # Hint phrasing reflects #283 + #288.
         assert "build the routing token" in prompt
-        # Orchestrator wiring must remain — collaborative is additive.
+        # Orchestrator wiring must remain — the roster is additive.
         assert "mcp_servers" in opts
 
 
@@ -865,7 +836,6 @@ class TestRosterRoutingVsReference:
         client._agent_id = "agent-alpha"
         client._my_participant_ids = {"orc-pid"}
         client._orchestrator_agent_id["room-a"] = "agent-alpha"
-        client._collaboration_mode_by_room["room-a"] = "collaborative"
         client._participants_by_room["room-a"] = {
             "claude2-pid": {
                 "id": "claude2-pid",

@@ -219,12 +219,15 @@ class CodexCliAdapter(EngineAdapter):
         from anygarden_agent.integrations.base import compose_memory_suffix
 
         memory_suffix = compose_memory_suffix(self._client, room_id)
-        roster_suffix = ""
+        # #644 — roster is unconditional (was gated on
+        # ``is_collaborative``). Kept separate from ``memory_suffix``
+        # rather than folded into ``compose_session_context_suffix``
+        # because codex sha-tracks each block independently so an
+        # unchanged one isn't re-pasted into the accumulating thread.
         client = self._client
-        if client is not None and client.is_collaborative(room_id):
-            roster_suffix = client.compose_roster_suffix(
-                room_id, with_collaborative_hint=True
-            )
+        roster_suffix = (
+            client.compose_roster_suffix(room_id) if client is not None else ""
+        )
         prefix = self._injector.apply(
             room_id,
             # #540 — codex exec has no system-prompt channel, so seed the
