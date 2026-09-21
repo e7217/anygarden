@@ -1935,3 +1935,34 @@ class TestAgentCausalLink:
                 )
             )).scalars().all()
             assert rows == []
+
+
+class TestWelcomeRoomSeq:
+    """A reconnecting agent needs a baseline to ask ``since_seq`` from.
+    Without one it connects at 0, the server replays nothing, and every
+    message sent while the agent was down is lost."""
+
+    @pytest.mark.asyncio
+    async def test_welcome_reports_the_rooms_current_seq(self, ws_env) -> None:
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                first = json.loads(ws.receive_text())
+                assert first["last_seq"] == 0
+
+                ws.send_text(json.dumps({"type": "send", "content": "msg1"}))
+                assert json.loads(ws.receive_text())["seq"] == 1
+
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["last_seq"] == 1
