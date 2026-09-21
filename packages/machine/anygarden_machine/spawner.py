@@ -1286,9 +1286,18 @@ class Spawner:
         except OSError as exc:
             log.warning("runtime_record_failed", agent_id=agent_id, error=str(exc))
 
-        # Start background watcher
+        # Start background watcher. It drains the agent's pipes and, when
+        # the agent has a materialized directory, persists that output to
+        # ``agent.log`` beside it — otherwise the agent's own logs are
+        # unreachable and diagnosing one means re-running it by hand.
         agent.watch_task = asyncio.create_task(
-            watch_process(agent_id, proc, self._handle_stopped, self._handle_crashed)
+            watch_process(
+                agent_id,
+                proc,
+                self._handle_stopped,
+                self._handle_crashed,
+                log_path=(agent_root / "agent.log") if agent_root else None,
+            )
         )
 
         log.info("agent_spawned", agent_id=agent_id, pid=proc.pid, engine=msg.engine)

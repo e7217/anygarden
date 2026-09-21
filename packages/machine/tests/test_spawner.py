@@ -349,6 +349,37 @@ class TestSpawn:
             spawner._agent_dirs_root / spawn_msg.agent_id / "workspace"
         ).exists()
 
+    async def test_spawn_points_the_watcher_at_the_agent_log_file(
+        self, spawner: Spawner, spawn_msg: SpawnManifest
+    ) -> None:
+        """Agent stdio is only readable if the watcher persists it, and it
+        belongs next to the agent's own directory."""
+        captured: dict[str, object] = {}
+
+        async def capture_watch(*args, **kwargs):
+            captured["log_path"] = kwargs.get("log_path")
+
+        async def fake_exec(*args, **kwargs):
+            return _mock_proc()
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=fake_exec,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ), patch(
+            "anygarden_machine.spawner.watch_process",
+            side_effect=capture_watch,
+        ):
+            result = await spawner.spawn(spawn_msg)
+            await asyncio.sleep(0)
+
+        assert result.success is True
+        assert captured["log_path"] == (
+            spawner._agent_dirs_root / spawn_msg.agent_id / "agent.log"
+        )
+
     async def test_spawn_falls_back_to_uvx(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """When anygarden-agent is not in PATH, spawner should use uvx."""
         mock_proc = MagicMock()
