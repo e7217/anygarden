@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import structlog
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +19,7 @@ from anygarden.db.models import (
     Agent,
     AgentTurn,
     AgentTurnTask,
+    Message,
     Participant,
     Room,
     Task,
@@ -1077,9 +1078,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 room_ephemeral,
             ) = row
         participants_brief = await _build_participants_brief(db, room_id=room_id)
+        room_last_seq = (
+            await db.execute(
+                select(func.max(Message.seq)).where(Message.room_id == room_id)
+            )
+        ).scalar() or 0
 
     welcome = WelcomeOut(
         participant_id=participant.id,
+        last_seq=room_last_seq,
         pending_rooms=pending_rooms,
         # Issue #61 — tell the agent SDK which agent identity this
         # connection is bound to so it can gate ``room_query``

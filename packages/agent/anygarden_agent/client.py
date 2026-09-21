@@ -325,6 +325,24 @@ class ChatClient:
         if self._state_dir is not None:
             save_cursors(self._state_dir, self._last_seq)
 
+    def _seed_cursor(self, room_id: str, last_seq: int) -> None:
+        """Adopt the room's head seq as this room's starting point.
+
+        Only for a room we have no cursor for: a cold agent would
+        otherwise reconnect at 0 forever, and the server replays nothing
+        at 0, so anything sent while it was down would stay undelivered.
+        A cursor we already hold is deliberately behind the head — that
+        gap is exactly what the next reconnect asks to be replayed — so
+        it is never overwritten.
+        """
+        if not isinstance(last_seq, int) or last_seq <= 0:
+            return
+        if self._last_seq.get(room_id, 0) > 0:
+            return
+        self._last_seq[room_id] = last_seq
+        if self._state_dir is not None:
+            save_cursors(self._state_dir, self._last_seq)
+
     async def send(
         self,
         room_id: str,
@@ -845,6 +863,8 @@ class ChatClient:
             aid = data.get("agent_id")
             if aid:
                 self._agent_id = aid
+            # Seed this room's replay baseline when we don't have one.
+            self._seed_cursor(room_id, data.get("last_seq", 0))
             # Issue #148 Part 3 — refresh the opt-out cache on every
             # welcome. Absent field (older servers, non-agent sessions)
             # leaves the default False in place, which preserves the

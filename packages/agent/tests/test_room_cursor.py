@@ -123,3 +123,35 @@ class TestStaleCatchupGuard:
         msg = self._mention_msg(_iso(6 * 3600))
         msg["participant_id"] = "my-pid-123"
         assert decide_policy(msg, _make_client()) is MessagePolicy.SKIP
+
+
+class TestWelcomeSeedsTheCursor:
+    """A cold agent has no cursor for a room, so nothing would be
+    replayed after its first restart. Seeding from the welcome frame
+    gives the next reconnect a baseline to ask from."""
+
+    def _welcome(self, last_seq: int) -> dict:
+        return {"type": "welcome", "participant_id": "my-pid-123", "last_seq": last_seq}
+
+    def test_welcome_seeds_a_missing_cursor(self, tmp_path: Path) -> None:
+        client = ChatClient(
+            "ws://localhost:8000", token="t", agent_name="bot", state_dir=tmp_path
+        )
+
+        client._seed_cursor("room-1", 12)
+
+        assert client._last_seq["room-1"] == 12
+        assert load_cursors(tmp_path)["room-1"] == 12
+
+    def test_welcome_never_overwrites_a_persisted_cursor(self, tmp_path: Path) -> None:
+        """The persisted cursor is behind the room head precisely because
+        messages arrived while the agent was down — that gap is what the
+        next reconnect must replay."""
+        save_cursors(tmp_path, {"room-1": 5})
+        client = ChatClient(
+            "ws://localhost:8000", token="t", agent_name="bot", state_dir=tmp_path
+        )
+
+        client._seed_cursor("room-1", 12)
+
+        assert client._last_seq["room-1"] == 5

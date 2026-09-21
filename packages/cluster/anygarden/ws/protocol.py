@@ -289,6 +289,12 @@ class WelcomeOut(BaseModel):
     # Trust-model signal (see plan §3.2 decision 3). Default False
     # keeps existing welcome frames unchanged for non-ephemeral rooms.
     ephemeral: bool = False
+    # The room's current head ``seq`` at welcome time. An agent with no
+    # persisted cursor for this room seeds one from it, so its *next*
+    # reconnect can ask ``since_seq`` for the gap instead of starting at
+    # 0 (which replays nothing and loses everything sent while it was
+    # down). 0 on an empty room; pre-existing clients ignore the field.
+    last_seq: int = 0
     # Issue #237 — the per-agent long-term memory snapshot (markdown).
     # Populated from ``agents.memory_md`` when the WS session belongs to
     # an agent; None for user/guest connections or agents with empty
