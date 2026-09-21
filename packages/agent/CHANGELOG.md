@@ -3,6 +3,22 @@
 
 ## Unreleased
 
+### ⚠ Breaking changes
+
+- `ChatClient.is_collaborative()` is removed and
+  `compose_roster_suffix(room_id)` no longer takes `with_collaborative_hint` —
+  the roster and its peer-mention hint are now unconditional. Withholding the
+  hint also withheld its brakes (the "don't peer-ask over trivia" guidance
+  ships in the same paragraph), and only one of the four engine adapters
+  implemented the gate as designed. `compose_session_context_suffix()` drops
+  its `include_roster` / `with_collaborative_hint` parameters to match.
+
+### Fixed
+
+- The cached room roster now refreshes from `room_settings_changed` instead of
+  only at `welcome`, so membership changes and edited peer descriptions reach a
+  connected agent without a reconnect.
+
 ## v0.8.0 (2026-05-22)
 
 ### ⚠ Breaking changes — full anygarden rebrand

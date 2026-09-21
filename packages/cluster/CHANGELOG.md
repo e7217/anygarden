@@ -3,7 +3,31 @@
 
 ## Unreleased
 
+### ⚠ Breaking changes
+
+- Removed `agents.collaboration_mode` (migration `072`). The column read as a
+  control over whether an agent could call its peers, but the peer-mention
+  safety net never consulted it — a `solo` agent that emitted a routing token
+  still woke the peer. Every agent now receives the room roster and the
+  peer-mention usage hint; `MAX_PEER_DEPTH` and the per-turn handoff budget
+  remain the actual cap. The `collaboration_mode` field is gone from
+  `POST`/`PUT /api/v1/agents`, from `AgentOut`, from the WS welcome frame
+  (`my_collaboration_mode`), and from the agent settings UI. Agents previously
+  set to `solo` now see their teammates. The downgrade restores the column with
+  its `solo` default; per-row values are not recoverable and no longer select
+  any behaviour.
+
 ### Added
+
+- The room participant roster now propagates at runtime. Adding or removing a
+  participant, and editing an agent's `name` or `description`, broadcast a
+  `room_settings_changed` frame carrying a full `participants` snapshot, so
+  connected agents no longer run on a roster frozen at connect time. Previously
+  a newcomer stayed invisible, a departed peer lingered, and an edited
+  introduction — the LLM's only basis for choosing whom to ask — was ignored
+  until the agent reconnected.
+- The agent settings UI now shows a concrete example in the description field
+  and flags an empty one, since that line is what teammates' models read.
 
 - Selected `/api/v1/machines` and `/api/v1/tasks` failures now expose stable,
   top-level `code` and `message` fields. This is additive in 0.18.x: existing
