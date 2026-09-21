@@ -525,6 +525,27 @@ class ChatClient:
 
     # ── Internal ─────────────────────────────────────────────────────
 
+    def _cache_roster(
+        self, room_id: str, entries: list[dict[str, Any]] | None
+    ) -> None:
+        """Replace the cached participant roster for *room_id* (#221 / #644).
+
+        Shared by the two frames that carry a roster — ``welcome`` at
+        connect time and ``room_settings_changed`` on every later
+        change — so both apply the same well-formedness guard: an entry
+        must be a dict with a truthy ``id`` to be addressable, and a
+        malformed one is dropped rather than aborting the refresh for
+        its well-formed neighbours.
+
+        ``None`` (pre-#221 server omitting the field) caches an empty
+        dict so adapter iteration never raises.
+        """
+        self._participants_by_room[room_id] = {
+            entry["id"]: entry
+            for entry in (entries or [])
+            if isinstance(entry, dict) and entry.get("id")
+        }
+
     def is_collaborative(self, room_id: str) -> bool:
         """Issue #279 — has the server marked this agent ``collaborative``
         in *room_id*? Returns False for unknown rooms (legacy welcome,
@@ -897,14 +918,10 @@ class ChatClient:
                 "next_speaker_participant_id"
             )
             # Issue #221 — stash the participants roster the server
-            # stamped on this welcome. Absent on pre-#221 servers; use
-            # an empty dict so adapter iteration stays safe.
-            roster_list = data.get("participants") or []
-            self._participants_by_room[room_id] = {
-                entry["id"]: entry
-                for entry in roster_list
-                if isinstance(entry, dict) and entry.get("id")
-            }
+            # stamped on this welcome. Absent on pre-#221 servers; the
+            # helper caches an empty dict so adapter iteration stays
+            # safe.
+            self._cache_roster(room_id, data.get("participants"))
             # Issue #279 — cache this agent's collaboration policy
             # for the room. Default ``solo`` covers pre-#279 servers
             # that omit the field and user/guest welcome frames.
@@ -938,6 +955,16 @@ class ChatClient:
             new_ephemeral = data.get("ephemeral")
             if new_ephemeral is not None:
                 self._room_ephemeral[target_room] = bool(new_ephemeral)
+            # #644 — the server re-sends the whole participant roster
+            # whenever membership or a rendered field (peer name,
+            # description) changes. Replace wholesale rather than
+            # merging: the snapshot is authoritative, and a merge
+            # would keep peers who have left. ``None`` follows the
+            # same "not touched by this change" rule as the fields
+            # above, so a settings-only PATCH never empties the cache.
+            new_participants = data.get("participants")
+            if new_participants is not None:
+                self._cache_roster(target_room, new_participants)
             logger.info(
                 "ws.room_settings_changed",
                 room_id=target_room,
@@ -945,6 +972,11 @@ class ChatClient:
                 orchestrator_agent_id=new_orc,
                 context_window_enabled=data.get("context_window_enabled"),
                 ephemeral=new_ephemeral,
+                participants=(
+                    len(self._participants_by_room.get(target_room, {}))
+                    if new_participants is not None
+                    else None
+                ),
             )
         elif msg_type == "join_room":
             new_room = data.get("room_id")
