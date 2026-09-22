@@ -491,7 +491,7 @@ async def _write_lifecycle_usage_row(
     capture_content span gate). Best-effort — swallows DB errors inside
     ``_write_usage_row`` so a hiccup can't break the WS receive loop.
     """
-    from anygarden.llm_gateway.reverse_proxy import _write_usage_row
+    from anygarden.usage import write_usage_row as _write_usage_row
 
     await _write_usage_row(
         session_factory,

@@ -69,57 +69,12 @@ def get_supervisor(request: Request) -> Any:
 
 
 # ── Usage logging ─────────────────────────────────────────────────────
+#
+# Moved to the engine-neutral :mod:`anygarden.usage` module (#655): the
+# measured usage stream outlives the gateway, and the gateway-free CLI
+# path (WS handler) writes through the same writer.
 
-
-async def _write_usage_row(
-    session_factory: Any,
-    *,
-    identity_kind: str,
-    identity_id: str,
-    agent_id: str | None,
-    model_name: str,
-    prompt_tokens: int | None,
-    completion_tokens: int | None,
-    duration_ms: int,
-    status_code: int,
-    error: str | None = None,
-    room_id: str | None = None,
-    cost_usd: float | None = None,
-) -> None:
-    """Persist one usage row. Called from a FastAPI BackgroundTask.
-
-    Swallows exceptions so a DB hiccup can't poison the caller — the
-    proxy has already responded by the time this runs. ``room_id`` is
-    filled from the tracing correlation (#420) when the call could be
-    tied to a single in-flight request; it stays ``None`` otherwise.
-
-    #461 (Wave 2d) — ``cost_usd`` is the per-request USD cost. The
-    reverse-proxy path has no provider-cost signal and leaves it ``None``;
-    the gateway-free CLI-engine path (WS handler, ``engine_call_finished``
-    frame) passes claude-code's SDK-self-reported cost. Reused by both
-    call sites so the row shape stays in one place.
-    """
-    try:
-        async with session_factory() as db:
-            db.add(
-                UsageLedger(
-                    identity_kind=identity_kind,
-                    identity_id=identity_id,
-                    agent_id=agent_id,
-                    room_id=room_id,
-                    model_name=model_name or "",
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    cost_usd=cost_usd,
-                    duration_ms=duration_ms,
-                    status_code=status_code,
-                    error=error,
-                )
-            )
-            await db.commit()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("llm_gateway.usage_write_failed", error=str(exc))
-
+from anygarden.usage import write_usage_row as _write_usage_row  # noqa: E402
 
 def _parse_sse_chunk_for_usage(buffer: bytes) -> Any | None:
     """Extract a :class:`ParsedUsage` from any complete SSE event in the buffer.
