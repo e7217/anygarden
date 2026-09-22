@@ -1,9 +1,16 @@
 ---
 id: 4
 title: Embed LiteLLM proxy as a subprocess inside anygarden-server
-status: accepted
+status: superseded by [008 — two-engine Runtime contract](./008-two-engine-runtime-contract.md) (#652); retirement sequenced by #655 (ledger) and #656–#659 (removal)
 date: 2026-04-20
 ---
+
+> **Superseded (2026-09-22, [#652](https://github.com/e7217/anygarden/issues/652)).**
+> The embedded LiteLLM gateway is being retired. Engines now share a single
+> Runtime contract and configure endpoints directly per CLI — see
+> [ADR-008](./008-two-engine-runtime-contract.md). The text below is kept for
+> historical context. The air-gapped relay this ADR provided is deliberately
+> **not** declared unnecessary — that remains an open user decision.
 
 # 4. Embedded LiteLLM Gateway
 

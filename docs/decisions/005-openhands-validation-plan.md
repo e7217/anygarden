@@ -1,6 +1,13 @@
 # 005 — OpenHands engine validation plan (#355 Phase 5)
 
-> Status: **plan** (results pending — see "Recording results" below)
+> Status: **superseded (2026-09-22)** — see [008 — two-engine Runtime
+> contract](./008-two-engine-runtime-contract.md) and
+> [#652](https://github.com/e7217/anygarden/issues/652). Phase 5 never ran:
+> the "Recording results" section below stayed an empty template. The
+> premise this plan validated — OpenHands replacing the CLI adapters — was
+> reversed by #652 on other grounds (dependency weight, maintenance
+> history, and the codex/pi Runtime contract that delivers the wanted
+> boundaries without an SDK). OpenHands removal is tracked by #656–#659.
 > Date: 2026-05-09
 > Issue: #355
 

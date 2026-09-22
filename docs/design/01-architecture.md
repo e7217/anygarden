@@ -146,7 +146,7 @@ graph TB
 2. **Machine은 N개**. 같은 머신에 여럿 올려도 되고, 여러 VPS에 분산해도 된다. 서버는 호스트 구분을 모른다.
 3. **MCP 화살표는 점선**. 서버 박스를 관통하지 않는다는 점이 시각적으로 중요하다. MCP는 각 에이전트 엔진이 자체 처리한다.
 4. **TS SDK는 Phase 2**. Phase 1에서는 Python SDK만 구현한다 (OpenHands/Deep Agents 필수 지원을 위해).
-5. **LLM 경로는 두 가지**. 기본은 에이전트가 업스트림을 직접 호출(점선). `ANYGARDEN_LLM_GATEWAY_ENABLED=true` + 매니페스트 설정 시 `/api/v1/llm/*` 역프록시를 경유해 내장 LiteLLM subprocess 를 타고 나감(실선). 자세한 설계는 [§12 LLM Gateway](12-llm-gateway.md), [ADR-004](../decisions/004-embedded-litellm-gateway.md) 참조.
+5. **LLM 경로는 두 가지**. 기본은 에이전트가 업스트림을 직접 호출(점선). `ANYGARDEN_LLM_GATEWAY_ENABLED=true` + 매니페스트 설정 시 `/api/v1/llm/*` 역프록시를 경유해 내장 LiteLLM subprocess 를 타고 나감(실선). ⚠️ **#652 로 게이트웨이 은퇴가 결정됐다** — 대체 방식(엔진 CLI 직접 endpoint 설정)은 [ADR-008](../decisions/008-two-engine-runtime-contract.md), 전환 일정은 #655–#660. 이 절과 [§12](12-llm-gateway.md)는 제거 전 참고용으로 유지된다.
 
 ---
 
