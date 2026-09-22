@@ -31,7 +31,7 @@ import {
  * template to an agent without leaving the page.
  */
 
-const SUPPORTED_ENGINES = ['codex-cli'] as const
+const SUPPORTED_ENGINES = SUPPORTED_ENGINE_IDS
 type EngineId = typeof SUPPORTED_ENGINES[number]
 
 interface Template {
