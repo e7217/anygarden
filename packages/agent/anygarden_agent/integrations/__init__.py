@@ -22,6 +22,7 @@ __all__ = [
 
 # Lazy-load mapping: engine name -> module path
 ENGINES: dict[str, str] = {
+    "pi-cli": "anygarden_agent.integrations.pi_cli",
     "claude-code": "anygarden_agent.integrations.claude_code",
     # #496 — codex-cli: ``codex exec`` subprocess engine, decoupled from the
     # codex-python SDK's bundled binary version (#506 removed the SDK codex).
@@ -32,6 +33,7 @@ ENGINES: dict[str, str] = {
 
 # Engine name -> adapter class name
 _ADAPTER_CLASSES: dict[str, str] = {
+    "pi-cli": "PiCliAdapter",
     "claude-code": "ClaudeCodeAdapter",
     "codex-cli": "CodexCliAdapter",
     "gemini-cli": "GeminiCliAdapter",

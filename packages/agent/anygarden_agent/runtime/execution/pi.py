@@ -21,11 +21,15 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
+from contextvars import ContextVar
 from pathlib import Path
 
 from .codex import ProcessTree
 from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .contracts import Capabilities, Invocation, RuntimeResult
+
+_MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -191,17 +195,23 @@ class PiRuntime:
             except OSError:
                 return RuntimeResult("failed", "not_started", "ENGINE_ERROR")
             tree = ProcessTree(proc.pid)
+            measured: dict[str, int] = {}
             stream: asyncio.Task | None = None
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
                 if cancelled_at_spawn or not authorized():
                     raise asyncio.CancelledError
-                stream = asyncio.create_task(
-                    self._collect(
-                        proc, invocation, session_handle, output, emit, authorized
-                    )
-                )
+                async def collect():
+                    token = _MEASURED_USAGE.set(measured)
+                    try:
+                        return await self._collect(
+                            proc, invocation, session_handle, output, emit, authorized
+                        )
+                    finally:
+                        _MEASURED_USAGE.reset(token)
+
+                stream = asyncio.create_task(collect())
                 deadline = (
                     asyncio.get_running_loop().time() + invocation.timeout_seconds
                 )
@@ -238,8 +248,8 @@ class PiRuntime:
                     confirmed = await cleanup_task
                     result = RuntimeResult("cancelled", "stopped", "cancelled")
             if not confirmed:
-                return RuntimeResult("unknown", "unknown", "termination_unconfirmed")
-            return result
+                return RuntimeResult("unknown", "unknown", "termination_unconfirmed", usage=dict(measured) or None)
+            return replace(result, usage=dict(measured) or result.usage)
 
     async def _collect(
         self, proc, invocation, session, output, emit, authorized
@@ -256,7 +266,8 @@ class PiRuntime:
         proc.stdin.close()
         texts: list[str] = []
         text_size = 0
-        usage = None
+        measured = _MEASURED_USAGE.get()
+        usage = measured if measured is not None else {}
         session_handle = session
         failed = False
         settled = False
@@ -276,27 +287,14 @@ class PiRuntime:
                 message = event.get("message")
                 if not isinstance(message, dict):
                     continue
-                raw_usage = message.get("usage")
-                if isinstance(raw_usage, dict):
-                    # Multi-tool turns emit one usage block per assistant
-                    # message: SUM them (P1, architect fixture 2026-09-22) —
-                    # overwriting kept only the last (20,3) instead of the
-                    # (30,5) total across (10,2)+(20,3) calls.
-                    part = {
-                        "input_tokens": int(raw_usage.get("input") or 0),
-                        "output_tokens": int(raw_usage.get("output") or 0),
-                    }
-                    if usage is None:
-                        usage = part
-                    else:
-                        usage = {
-                            "input_tokens": usage["input_tokens"]
-                            + part["input_tokens"],
-                            "output_tokens": usage["output_tokens"]
-                            + part["output_tokens"],
-                        }
                 if message.get("role") != "assistant":
                     continue
+                raw_usage = message.get("usage")
+                if isinstance(raw_usage, dict):
+                    for source, target in (("input", "input_tokens"), ("output", "output_tokens")):
+                        value = raw_usage.get(source)
+                        if type(value) is int and value >= 0:
+                            usage[target] = usage.get(target, 0) + value
                 content = message.get("content")
                 if isinstance(content, list):
                     for block in content:

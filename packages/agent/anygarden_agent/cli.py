@@ -26,6 +26,7 @@ _ENGINE_CHOICES = sorted(set(ENGINES) | {"pi-cli"})
 # ``_turn_timeout`` defaults know, else the agent crashes at spawn when
 # ``resolve_turn_timeout`` raises (#500). Regression-tested in test_cli.
 _ENGINE_TIMEOUT_KEY: dict[str, str] = {
+    "pi-cli": "pi",
     "claude-code": "claude",
     # codex-cli uses the "codex" turn-timeout profile (_ENGINE_DEFAULTS["codex"]);
     # #506 removed the SDK "codex" engine but the timeout key stays for codex-cli.
@@ -160,17 +161,13 @@ async def _run_agent(
         execution_launch=execution_launch,
     )
 
-    # Build kwargs for the integration function based on engine
-    await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)
-    if execution_launch is not None and execution_launch.endpoint is not None and not client.execution_launch_ready:
-        await client.close()
-        raise click.ClickException("Direct endpoints require the common execution bridge; legacy engine fallback refused")
-
-    for room_id in rooms:
-        await client.join_room(room_id)
-
-    click.echo(f"Agent '{name}' running with engine={engine}, rooms={rooms}")
     try:
+        await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)
+        if execution_launch is not None and execution_launch.endpoint is not None and not client.execution_launch_ready:
+            raise click.ClickException("Direct endpoints require the common execution bridge; legacy engine fallback refused")
+        for room_id in rooms:
+            await client.join_room(room_id)
+        click.echo(f"Agent '{name}' running with engine={engine}, rooms={rooms}")
         await client.run()
     finally:
         await client.close()
@@ -237,13 +234,11 @@ async def _setup_engine(
                 "model": model,
             },
         )
-    elif engine == "codex-cli":
-        # #496 — codex exec subprocess engine (SDK 버전 결합 없이 codex 바이너리 직접 호출)
-        from anygarden_agent.integrations.codex_cli import integrate_with_codex_cli
+    elif engine in {"codex-cli", "pi-cli"}:
+        from anygarden_agent.integrations.room_execution import integrate_with_room_execution
 
-        await integrate_with_codex_cli(
-            client,
-            model=model,  # None → codex_cli 기본 모델(gpt-5.6-terra) 사용
+        await integrate_with_room_execution(
+            client, engine=engine, model=model,
             system_prompt=_with_identity(
                 name, system_prompt or "You are a helpful coding assistant."
             ),

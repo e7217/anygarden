@@ -511,6 +511,10 @@ class ChatClient:
             except Exception:
                 pass
         self._connections.clear()
+        adapter = getattr(self, "_execution_adapter", None)
+        if adapter is not None:
+            await adapter.stop()
+            self._execution_adapter = None
         self._tasks.clear()
         if self._http:
             await self._http.aclose()

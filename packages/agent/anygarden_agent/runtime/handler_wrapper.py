@@ -145,9 +145,10 @@ class EngineError(Exception):
     call sites are unchanged and default to ``transient=False``.
     """
 
-    def __init__(self, *args: Any, transient: bool = False) -> None:
+    def __init__(self, *args: Any, transient: bool = False, turn: EngineTurn | None = None) -> None:
         super().__init__(*args)
         self.transient = transient
+        self.turn = turn
 
 
 class EngineTimeoutError(EngineError):
@@ -157,6 +158,14 @@ class EngineTimeoutError(EngineError):
     timeouts are indistinguishable from the supervisor's own
     ``wait_for`` timeout in the event log.
     """
+
+
+class EngineCancelledError(asyncio.CancelledError):
+    """Cancellation with measured usage after confirmed runtime cleanup."""
+
+    def __init__(self, turn: EngineTurn):
+        super().__init__()
+        self.turn = turn
 
 
 @dataclass
@@ -417,11 +426,16 @@ class RoomHandlerSupervisor:
                 outcome = "timeout"
                 error = f"engine exceeded {self._timeout}s"
             except EngineTimeoutError as exc:
+                if exc.turn is not None:
+                    model, input_tokens, output_tokens, cost_usd = (
+                        exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
+                    )
                 # #422 — adapter-level timeout (e.g. codex turn timeout).
                 outcome = "timeout"
                 error = _truncate(str(exc))
                 transient = bool(getattr(exc, "transient", False))
-            except asyncio.CancelledError:
+            except asyncio.CancelledError as exc:
+                turn = getattr(exc, "turn", None)
                 # User cancellation — never retried/queued. Close the spans
                 # and re-raise immediately.
                 outcome = "cancelled"
@@ -433,6 +447,10 @@ class RoomHandlerSupervisor:
                     outcome=outcome,
                     duration_ms=engine_dur,
                     engine=self._engine,
+                    model=turn.model if turn else None,
+                    input_tokens=turn.input_tokens if turn else None,
+                    output_tokens=turn.output_tokens if turn else None,
+                    cost_usd=turn.cost_usd if turn else None,
                 )
                 total = int((time.monotonic() - started) * 1000)
                 await self._client.sendLifecycle(
@@ -444,6 +462,10 @@ class RoomHandlerSupervisor:
                 )
                 raise
             except EngineError as exc:
+                if exc.turn is not None:
+                    model, input_tokens, output_tokens, cost_usd = (
+                        exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
+                    )
                 # #422/#457 — classified adapter failure; ``transient``
                 # gates the opt-in retry below.
                 outcome = "failed"

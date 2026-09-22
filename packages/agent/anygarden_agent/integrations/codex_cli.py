@@ -229,7 +229,7 @@ class CodexCliAdapter(EngineAdapter):
             client.compose_roster_suffix(room_id) if client is not None else ""
         )
         prefix = self._injector.apply(
-            room_id,
+            self._context_scope(msg),
             # #540 — codex exec has no system-prompt channel, so seed the
             # system prompt (identity + base instructions) into turn content.
             # Unconditional (unlike roster): a solo agent still must know who
@@ -257,6 +257,9 @@ class CodexCliAdapter(EngineAdapter):
             raise EngineError(
                 str(exc), transient=is_transient_error(str(exc))
             ) from exc
+
+    def _context_scope(self, msg):
+        return msg.get("room_id", "_default")
 
     async def _call_codex(self, prompt: str, room_id: str) -> str | None:
         """Run one ``codex exec`` turn (resume when a session exists).
@@ -481,9 +484,14 @@ async def integrate_with_codex_cli(
     adapter._client = client
     await adapter.start()
 
-    engine_timeout = resolve_supervisor_timeout(_CODEX_CLI_TIMEOUT)
+    return register_room_adapter(client, adapter, "codex-cli", _CODEX_CLI_TIMEOUT)
+
+
+def register_room_adapter(client, adapter, engine_name, turn_timeout):
+    """Shared policy, delegation, typing and lifecycle handler for room engines."""
+    engine_timeout = resolve_supervisor_timeout(turn_timeout)
     supervisor = RoomHandlerSupervisor(
-        client=client, engine_name="codex-cli", engine_timeout=engine_timeout
+        client=client, engine_name=engine_name, engine_timeout=engine_timeout
     )
 
     @client.on_message
