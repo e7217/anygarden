@@ -641,6 +641,10 @@ async def test_audit_flush_releases_callers_before_second_pool_checkout(
             )
             return {"ok": True}
 
+        # This test-only route is added after create_app. Keep it ahead of
+        # the SPA catch-all when a frontend bundle is present in the checkout.
+        app.router.routes.insert(0, app.router.routes.pop())
+
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             responses = await asyncio.wait_for(
@@ -657,6 +661,7 @@ async def test_audit_flush_releases_callers_before_second_pool_checkout(
                 timeout=5,
             )
         assert [response.status_code for response in responses] == [200, 200]
+        assert [response.json() for response in responses] == [{"ok": True}, {"ok": True}]
 
         async with factory() as db:
             audits = (await db.scalars(select(RoomAuthorizationAudit))).all()
