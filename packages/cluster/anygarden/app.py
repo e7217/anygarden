@@ -418,6 +418,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.local_execution = backend
             await backend.start()
             owner.write_state("running")
+        else:
+            # #649 — without an integrated node this process serves the API
+            # only; agents must run on a separate machine daemon. Say so once,
+            # so `make dev` users do not read silence as a working setup. Kept
+            # at info: for a multi-host deployment this is the normal state.
+            # Emitted after _startup_server so structlog is already configured.
+            import structlog
+
+            structlog.get_logger().info(
+                "startup.local_execution_disabled",
+                reason=(
+                    "not integrated mode; run `anygarden start` to execute "
+                    "agents in this process, or attach a machine daemon"
+                ),
+            )
         if app.state.config.peer_listen_port is not None:
             # #594 real-machine tier — opt-in federation listener. Fails the
             # startup when services did not compose (missing/invalid peer

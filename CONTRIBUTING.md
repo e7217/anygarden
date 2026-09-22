@@ -15,11 +15,43 @@ make dev     # run the cluster dev server + frontend
 in sync — see the note in the README's [Develop](README.md#develop-from-a-checkout)
 section for why a bare `uv sync` is not enough.
 
+### Choosing a dev mode
+
+`make dev` does **not** run agents: it starts the API without local execution, so
+adding an agent and mentioning it produces nothing. The server logs
+`startup.local_execution_disabled` at boot to make that visible. Pick the mode that
+matches what you are changing:
+
+| What you're working on | Command | You get | You don't get |
+|---|---|---|---|
+| Server or frontend code | `make dev` | backend auto-reload + frontend HMR | **agents do not run** |
+| Anything agents actually do | integrated node + `npm run dev` (below) | real agent execution + frontend HMR | backend auto-reload |
+
+To run the integrated node against the Vite dev server, use two terminals:
+
+```bash
+# Terminal 1 — API + web UI + local agent execution on the port Vite proxies to
+uv run --package anygarden --all-extras anygarden start \
+  --data-dir /tmp/anygarden-dev --port 8001
+```
+
+```bash
+# Terminal 2 — frontend with hot reload, proxying /api and /ws to port 8001
+cd packages/cluster/frontend && npm run dev
+```
+
+Then use `http://localhost:5173`. Vite proxies `/api` and `/ws` to `DEV_PORT`
+(default `8001`), so a node on another port just needs `DEV_PORT=<port> npm run dev`.
+A separate `--data-dir` keeps this throwaway state out of your real `~/.anygarden`.
+
+`--reload` is rejected in integrated mode, so picking up a backend change means
+stopping and restarting the node — `anygarden stop` takes the same `--data-dir`.
+
 ## Project layout
 
-Anygarden is a `uv` workspace of four packages — see [Packages](README.md#packages):
-`cluster` (server + web UI), `machine` (per-host daemon), `agent` (Python runtime),
-and `agent-ts` (TypeScript runtime).
+Anygarden is a `uv` workspace of four packages — `cluster` (server + web UI),
+`machine` (per-host daemon), `agent` (Python runtime), and `agent-ts` (TypeScript
+runtime). See [Packages](README.md#packages) for paths and distribution names.
 
 ## Workflow
 
