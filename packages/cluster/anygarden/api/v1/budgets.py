@@ -2,13 +2,13 @@
 
 Admin-only surface (``get_admin_identity``) over
 :class:`~anygarden.db.models.TokenBudgetPolicy`. Mirrors the
-``/api/v1/llm-gateway`` router style: pydantic schemas with
+other admin router style: pydantic schemas with
 ``extra="forbid"``, ``from_attributes`` output, and the same dependency
 gate.
 
 The gate these policies drive lives in
 ``anygarden.budgets.ledger.evaluate_invocation_block`` and is consulted
-by the LLM gateway reverse proxy. A policy is inert until both
+by the engine-neutral invocation boundary. A policy is inert until both
 ``is_active`` and ``hard_stop_enabled`` are true — created policies
 default to ``hard_stop_enabled=False`` (the no-op default that keeps this
 feature behaviour-neutral until an operator deliberately switches it on).

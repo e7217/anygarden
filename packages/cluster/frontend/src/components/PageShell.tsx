@@ -27,7 +27,7 @@ interface PageShellProps {
   children: ReactNode
   /** When true (default) children are wrapped in a single
    *  ``flex-1 overflow-auto`` scroll region. Pages that own their inner
-   *  layout — the LLM Gateway secondary rail, Topology's canvas — pass
+   *  layout — such as Topology's canvas — pass
    *  ``false`` and lay out the remaining space themselves. */
   scroll?: boolean
 }

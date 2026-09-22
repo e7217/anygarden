@@ -764,17 +764,16 @@ export default function Sidebar({
               MCP Servers
             </button>
             <button
-              aria-label="LLM Gateway, experimental feature"
-              onClick={() => go('/admin/llm-gateway')}
+              aria-label="Usage"
+              onClick={() => go('/admin/usage')}
               className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname.startsWith('/admin/llm-gateway')
+                location.pathname.startsWith('/admin/usage')
                   ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
                   : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
               }`}
             >
               <Waypoints className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              <span className="min-w-0 truncate">LLM Gateway</span>
-              <ExperimentalNavBadge />
+              <span className="min-w-0 truncate">Usage</span>
             </button>
             <button
               aria-label="Federation, experimental feature"

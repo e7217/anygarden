@@ -1,0 +1,13 @@
+# Embedded gateway removal and usage access
+
+The embedded model gateway, its supervisor, proxy, model/secret management API, and runtime controls have been removed. Codex and Pi continue to use their configured provider or direct endpoint through the Python runtime. Shared provider credentials, endpoint credential encryption, usage recording, and budget enforcement remain available.
+
+Administrators can view historical and current usage at `/admin/usage`. The former `/admin/llm-gateway/*` screen addresses redirect there. The admin-only aggregate API is now `GET /api/v1/usage?window=24h`. It retains the previous response fields, model/agent grouping, nullable-safe token/cost sums, and top-50-agent limit. The screen shows the top five agents and the sum of reported costs, excluding missing cost reports. Period values accept hours/days, clamp to 1–720 hours, and fall back to 24 hours for malformed input. Update callers of `/api/v1/llm-gateway/usage`; removed gateway API paths return 404.
+
+No data-deleting migration is added. The chain remains at `075_direct_endpoints`. Historical `llm_gateway_models` and encrypted `llm_gateway_secrets` rows remain in their original tables. They are registered as passive archived schema metadata in the actual Alembic `target_metadata`, without ORM models, API readers, decryption, or runtime use. This prevents autogeneration from proposing table deletion. `usage_ledger`, budgets, agent files/history, and direct endpoint credential tables are unchanged. Archived credentials are not copied into direct endpoint settings or returned by the usage API.
+
+The old gateway settings no longer configure the server. `/healthz` no longer reports a gateway component. `make install` and `make setup` no longer install a gateway tool. Previously installed external tools or saved configuration files are not automatically deleted.
+
+Verification uses temporary SQLite databases, synthetic usage and encrypted test values, and loopback fake CLI/HTTP/WS execution. The repository's whole-schema Alembic check has pre-existing FTS/nullability differences; archived-table comparisons are checked separately and have no differences. The historical migration files remain unchanged.
+
+The former air-gapped relay assumption has no decided replacement. Direct endpoint support does not establish an external relay design. Resolve that architecture question before closing the parent issue; no external relay implementation or deployment is included here.

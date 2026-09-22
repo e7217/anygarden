@@ -1,8 +1,7 @@
 """Engine-neutral usage stream for AnyGarden (#655).
 
-The measured usage rows outlive any single execution engine or gateway: both
-the LLM gateway reverse-proxy and the gateway-free CLI-engine path (WS
-handler) write through :func:`write_usage_row` here. The physical storage is
+The measured usage rows outlive any single execution engine or gateway: the
+current CLI-engine lifecycle frames (WS handler) write through :func:`write_usage_row` here. The physical storage is
 the ``usage_ledger`` table (migration 074).
 """
 
@@ -42,12 +41,9 @@ async def write_usage_row(
     (#420) when the call could be tied to a single in-flight request;
     it stays ``None`` otherwise.
 
-    ``cost_usd`` is the per-request USD cost. Gateway-routed callers
-    (openhands via the reverse proxy) leave this ``None`` — the proxy
-    has no provider-cost signal. CLI engines that self-report a cost
-    populate it: claude-code stamps its SDK's ``total_cost_usd`` (an
-    *estimate*, not a provider invoice); codex / gemini report no cost
-    and stay NULL. Admin usage aggregation sums it nullable-safe.
+    ``cost_usd`` is the optional per-request reported cost, not an invoice.
+    Missing cost reports stay NULL. Historical costs remain in the same ledger;
+    admin usage aggregation sums them nullable-safe.
     """
     try:
         async with session_factory() as db:

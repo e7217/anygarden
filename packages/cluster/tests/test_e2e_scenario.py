@@ -171,7 +171,7 @@ class TestE2EScenario:
             # DB는 in-memory sqlite로 reachable ⇒ ok.
             assert body["components"]["db"] == "ok"
             # gateway 플래그 off ⇒ supervisor None ⇒ disabled (unhealthy 아님).
-            assert body["components"]["gateway"] == "disabled"
+            assert "gateway" not in body["components"]
             print(f"✓ Step 1: 서버 정상 실행 (status={body['status']})")
 
     # ── Step 2: REST API로 머신 목록 조회 ─────────────────────────────
@@ -406,15 +406,6 @@ class TestE2EScenario:
 # 정밀하게 찍어볼 수 있다.
 
 
-class _FakeSupervisor:
-    """``state`` 프로퍼티만 흉내내는 게이트웨이 슈퍼바이저 더블."""
-
-    def __init__(self, state) -> None:
-        self._state = state
-
-    @property
-    def state(self):
-        return self._state
 
 
 @pytest.fixture()
@@ -446,42 +437,12 @@ class TestHealthzDependencyCheck:
         body = resp.json()
         assert body["status"] == "ok"
         assert body["components"]["db"] == "ok"
-        assert body["components"]["gateway"] == "disabled"
+        assert "gateway" not in body["components"]
         # None 태스크는 unhealthy가 아니라 disabled.
         assert body["components"]["orphan_sweeper"] == "disabled"
         assert body["components"]["span_reaper"] == "disabled"
 
-    @pytest.mark.asyncio
-    async def test_gateway_failed_returns_503(self, healthz_app) -> None:
-        """게이트웨이 슈퍼바이저 FAILED ⇒ 503 unhealthy."""
-        from anygarden.llm_gateway.supervisor import GatewayState
 
-        healthz_app.state.llm_gateway_supervisor = _FakeSupervisor(
-            GatewayState.FAILED
-        )
-        tc = TestClient(healthz_app)
-        resp = tc.get("/healthz")
-        assert resp.status_code == 503
-        body = resp.json()
-        assert body["status"] == "unhealthy"
-        assert body["components"]["gateway"] == "unhealthy"
-        # DB는 여전히 살아 있다.
-        assert body["components"]["db"] == "ok"
-
-    @pytest.mark.asyncio
-    async def test_gateway_crashed_returns_200_degraded(self, healthz_app) -> None:
-        """게이트웨이 CRASHED(일시적) ⇒ 200 degraded, 503 아님."""
-        from anygarden.llm_gateway.supervisor import GatewayState
-
-        healthz_app.state.llm_gateway_supervisor = _FakeSupervisor(
-            GatewayState.CRASHED
-        )
-        tc = TestClient(healthz_app)
-        resp = tc.get("/healthz")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "degraded"
-        assert body["components"]["gateway"] == "degraded"
 
     @pytest.mark.asyncio
     async def test_none_tasks_treated_as_disabled(self, healthz_app) -> None:

@@ -801,10 +801,7 @@ class EngineModelOut(BaseModel):
     id: str
     label: str
     reasoning_levels: list[str]
-    # Marker for UI to distinguish static catalog entries from gateway-
-    # registered models. ``"builtin"`` is the existing hand-curated list
-    # in ``engines/catalog.py``; ``"gateway"`` is populated at request
-    # time from ``llm_gateway_models``.
+    # Model catalog provenance retained for API compatibility.
     source: str = "builtin"
 
 
