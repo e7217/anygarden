@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -75,6 +76,7 @@ class SpawnManifest:
     memory_md: str | None = None
     reasoning_effort: str | None = None
     model: str | None = None
+    provider: str | None = None
     # Issue #309 — semantic permission tier ("restricted" |
     # "standard" | "trusted"). The spawner exports this as
     # ``ANYGARDEN_AGENT_PERMISSION_LEVEL`` in the child env so each
@@ -958,6 +960,14 @@ class Spawner:
         - Begins background watch task
         """
         agent_id = msg.agent_id
+        if (msg.engine == "pi-cli" and not msg.provider) or (
+            msg.provider is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", msg.provider)
+        ):
+            return SpawnResult(success=False, agent_id=agent_id,
+                               error="Missing or invalid explicit agent provider")
+        if msg.runtime != "python" and (msg.provider is not None or msg.endpoint_configured):
+            return SpawnResult(success=False, agent_id=agent_id,
+                               error="Provider/direct endpoint configuration requires the Python agent runtime")
         if msg.endpoint_configured and not msg.engine_secrets.get("AG_ENGINE_ENDPOINT_CONFIG"):
             return SpawnResult(
                 success=False,
@@ -1198,6 +1208,10 @@ class Spawner:
             cmd.extend(["--room", room])
         if msg.reasoning_effort:
             cmd.extend(["--reasoning-effort", msg.reasoning_effort])
+        if msg.provider is not None:
+            cmd.extend(["--provider", msg.provider])
+        if msg.endpoint_configured:
+            cmd.append("--endpoint-configured")
         if msg.model:
             cmd.extend(["--model", msg.model])
 

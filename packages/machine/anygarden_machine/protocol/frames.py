@@ -53,6 +53,7 @@ class SyncDesiredStateFrame(BaseModel):
 
     # Per-agent engine model (e.g. "gpt-5.4-mini"). None = adapter default.
     model: str | None = None
+    provider: str | None = None
 
     # Issue #309 — semantic permission tier ("restricted" |
     # "standard" | "trusted"). The machine spawner exports this as

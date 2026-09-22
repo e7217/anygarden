@@ -1345,3 +1345,12 @@ async def test_direct_endpoint_cold_restart_requires_fresh_server_config(spawner
     assert "AG_ENGINE_ENDPOINT_KEY" not in create.call_args.kwargs["env"]
     assert json.loads(proc.stdin.write.call_args.args[0])["AG_ENGINE_ENDPOINT_KEY"] == "test-key"
     assert "test-key" not in (tmp_path / "manifests" / "direct-agent" / "manifest.json").read_text()
+
+
+@pytest.mark.parametrize('provider',[None,'','-bad','bad provider'])
+async def test_invalid_pi_provider_refused_before_subprocess(spawner,provider):
+    msg=SpawnManifest(agent_id='invalid-pi',engine='pi-cli',provider=provider,agent_token='test')
+    with patch('anygarden_machine.spawner.asyncio.create_subprocess_exec',new_callable=AsyncMock) as create:
+        result=await spawner.spawn(msg)
+    assert not result.success and 'provider' in result.error
+    create.assert_not_awaited()

@@ -1717,6 +1717,7 @@ class AgentLifecycle:
             ),
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
+            "provider": agent.provider,
             # #309 — semantic permission tier; the machine forwards it
             # into the agent process env (``ANYGARDEN_AGENT_PERMISSION_LEVEL``)
             # and each engine adapter translates to native dials.
