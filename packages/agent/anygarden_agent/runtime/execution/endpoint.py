@@ -233,3 +233,19 @@ def materialize_pi_endpoint(
         replace_regular(marker_name, hashlib.sha256(content).hexdigest().encode())
     finally:
         os.close(descriptor)
+
+
+def validate_endpoint_invocation(invocation) -> DirectEndpoint | None:
+    """Check trusted descriptor consistency before any child is created."""
+    endpoint = getattr(invocation, "endpoint", None)
+    if endpoint is None:
+        if CHILD_KEY in invocation.environment:
+            raise ValueError("Endpoint credential without endpoint configuration")
+        return None
+    endpoint.validate(invocation.scope.engine)
+    if invocation.model != endpoint.model or invocation.provider != endpoint.provider:
+        raise ValueError("Endpoint provider/model differs from invocation selection")
+    expected = endpoint_environment(endpoint, invocation.environment.get(CHILD_KEY) if endpoint.credential_ref else None)
+    if invocation.environment.get(CHILD_KEY) != expected[CHILD_KEY]:
+        raise ValueError("Direct endpoint credential is unavailable")
+    return endpoint

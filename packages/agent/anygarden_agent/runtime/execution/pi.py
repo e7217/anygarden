@@ -24,6 +24,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .codex import ProcessTree
+from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .contracts import Capabilities, Invocation, RuntimeResult
 
 MAX_TEXT = 1_048_576
@@ -57,6 +58,7 @@ class PiRuntime:
         ``invocation.provider`` is required by the contract for pi-cli and is
         mapped to ``--provider``; validate() already rejects None.
         """
+        validate_endpoint_invocation(invocation)
         if invocation.scope.engine != ENGINE or invocation.provider is None:
             raise ValueError("pi runtime requires an explicit provider")
         cmd = [
@@ -81,6 +83,8 @@ class PiRuntime:
     @staticmethod
     def environment(invocation: Invocation) -> dict[str, str]:
         # Never inherit the node's ambient environment or home/auth/config.
+        endpoint = validate_endpoint_invocation(invocation)
+        materialize_pi_endpoint(invocation.runtime_home, endpoint)
         env = dict(invocation.environment)
         for key in env:
             if key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_")):

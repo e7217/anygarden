@@ -13,6 +13,7 @@ from pathlib import Path
 import psutil
 
 from .contracts import Capabilities, Invocation, RuntimeResult
+from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -101,6 +102,7 @@ class CodexRuntime:
     def command(
         self, invocation: Invocation, session: str | None, output: Path
     ) -> list[str]:
+        endpoint = validate_endpoint_invocation(invocation)
         cmd = [str(self.executable), "exec"]
         if session:
             cmd += ["resume", session]
@@ -126,11 +128,13 @@ class CodexRuntime:
                 "-c",
                 f"model_reasoning_effort={json.dumps(invocation.reasoning_effort)}",
             ]
+        cmd += codex_endpoint_arguments(endpoint)
         return cmd + ["-o", str(output), "-"]
 
     @staticmethod
     def environment(invocation: Invocation) -> dict[str, str]:
         # Never inherit the node's ambient environment or home/auth/config.
+        validate_endpoint_invocation(invocation)
         env = dict(invocation.environment)
         for key in env:
             if key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_")):

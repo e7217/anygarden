@@ -114,3 +114,29 @@ def test_pi_preserves_unmanaged_config_and_refuses_symlink(tmp_path):
     target.write_text('{"providers": {}}')
     materialize_pi_endpoint(home, None)
     assert target.exists()
+
+
+def test_runtime_hooks_reject_missing_key_and_inconsistent_selection(tmp_path):
+    from types import SimpleNamespace
+    from anygarden_agent.runtime.execution.codex import CodexRuntime
+    from anygarden_agent.runtime.execution.pi import PiRuntime
+    from anygarden_agent.runtime.execution.endpoint import CHILD_KEY
+
+    endpoint = DirectEndpoint("local", "m", "http://localhost:8000/v1", "responses", "ref", 1)
+    invocation = SimpleNamespace(endpoint=endpoint, model="m", provider="local",
+        scope=SimpleNamespace(engine="codex-cli"), environment={}, runtime_home=tmp_path)
+    with pytest.raises(ValueError, match="credential"):
+        CodexRuntime.environment(invocation)
+    invocation.environment = {CHILD_KEY: "test-token"}
+    invocation.model = "other"
+    with pytest.raises(ValueError, match="differs"):
+        CodexRuntime.environment(invocation)
+    invocation.model = "m"
+    invocation.scope.engine = "pi-cli"
+    env = PiRuntime.environment(invocation)
+    assert env[CHILD_KEY] == "test-token"
+    assert "test-token" not in (tmp_path / ".pi/agent/models.json").read_text()
+    invocation.endpoint = None
+    invocation.environment = {}
+    PiRuntime.environment(invocation)
+    assert not (tmp_path / ".pi/agent/models.json").exists()
