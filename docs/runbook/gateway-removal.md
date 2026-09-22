@@ -1,6 +1,6 @@
 # Embedded gateway removal and usage access
 
-The embedded model gateway, its supervisor, proxy, model/secret management API, and runtime controls have been removed. Codex and Pi continue to use their configured provider or direct endpoint through the Python runtime. Shared provider credentials, endpoint credential encryption, usage recording, and budget enforcement remain available.
+The embedded model gateway, its supervisor, proxy, model/secret management API, and runtime controls have been removed. Codex and Pi continue to use their configured provider or direct endpoint through the Python runtime. Shared provider credentials, endpoint credential encryption, and usage/cost aggregation for ordinary room turns remain available. Federation execution retains its pre-invocation budget blocking. Ordinary room turns do not currently call that blocking gate; this removal does not add or guarantee a room hard-stop.
 
 Administrators can view historical and current usage at `/admin/usage`. The former `/admin/llm-gateway/*` screen addresses redirect there. The admin-only aggregate API is now `GET /api/v1/usage?window=24h`. It retains the previous response fields, model/agent grouping, nullable-safe token/cost sums, and top-50-agent limit. The screen shows the top five agents and the sum of reported costs, excluding missing cost reports. Period values accept hours/days, clamp to 1–720 hours, and fall back to 24 hours for malformed input. Update callers of `/api/v1/llm-gateway/usage`; removed gateway API paths return 404.
 
