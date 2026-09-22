@@ -1,5 +1,13 @@
 # Runbook: OpenHands agent + Ollama via anygarden LLM gateway (#359)
 
+> ⚠️ **DEPRECATED (2026-09-22, [#652](https://github.com/e7217/anygarden/issues/652)).**
+> The OpenHands engine and the embedded LLM gateway described here are being
+> removed (#656–#659). The replacement is direct `api_base` endpoint
+> configuration per CLI, landing with [#660](https://github.com/e7217/anygarden/issues/660);
+> this runbook will be rewritten for that path (or folded into a shorter
+> local-model section) once #660 is implemented. Everything below documents
+> the removed stack and no longer works after the removal PRs merge.
+
 > 대상: 외부 provider API key 없이 로컬 Ollama 만으로 OpenHands agent 를 동작시키려는 운영자.
 
 ## 사전 조건
