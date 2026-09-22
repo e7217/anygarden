@@ -6,23 +6,76 @@ import { SidebarLayoutProvider } from '@/hooks/useSidebarLayout'
 import { RightSidebarLayoutProvider } from '@/hooks/useRightSidebarLayout'
 import LoginPage from '@/pages/LoginPage'
 import ChatPage from '@/pages/ChatPage'
-import AdminMachinesPage from '@/pages/AdminMachinesPage'
-import AdminSkillsPage from '@/pages/AdminSkillsPage'
-import AdminSystemPage from '@/pages/AdminSystemPage'
-import AdminMCPTemplatesPage from '@/pages/AdminMCPTemplatesPage'
-import AdminLLMGatewayPage from '@/pages/AdminLLMGatewayPage'
-import AdminFederationPage from '@/pages/AdminFederationPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
 import FederationPreviewPage from '@/pages/FederationPreviewPage'
-import { ModelsSection } from '@/components/admin-llm-gateway/ModelsSection'
-import { SecretsSection } from '@/components/admin-llm-gateway/SecretsSection'
-import { StatusSection } from '@/components/admin-llm-gateway/StatusSection'
-import { UsageSection } from '@/components/admin-llm-gateway/UsageSection'
 
 // Topology view is code-split. Pulls in @xyflow/react + dagre
 // (~110KB gzip combined) only when the route is actually visited.
 const TopologyPage = lazy(() => import('@/pages/TopologyPage'))
+
+// #651 — admin surfaces are code-split for the same reason as Topology,
+// with a stronger case behind it: every one of these sits under
+// <AdminRoute>, so a non-admin can never render them, yet before this
+// they shipped inside the entry chunk that every visitor downloads
+// before the login form paints.
+const AdminMachinesPage = lazy(() => import('@/pages/AdminMachinesPage'))
+const AdminSkillsPage = lazy(() => import('@/pages/AdminSkillsPage'))
+const AdminSystemPage = lazy(() => import('@/pages/AdminSystemPage'))
+const AdminMCPTemplatesPage = lazy(() => import('@/pages/AdminMCPTemplatesPage'))
+const AdminLLMGatewayPage = lazy(() => import('@/pages/AdminLLMGatewayPage'))
+const AdminFederationPage = lazy(() => import('@/pages/AdminFederationPage'))
+
+// The gateway sections are named exports, so they need remapping onto
+// `default` — React.lazy only accepts a module with a default export.
+const ModelsSection = lazy(() =>
+  import('@/components/admin-llm-gateway/ModelsSection').then(m => ({ default: m.ModelsSection })),
+)
+const SecretsSection = lazy(() =>
+  import('@/components/admin-llm-gateway/SecretsSection').then(m => ({ default: m.SecretsSection })),
+)
+const StatusSection = lazy(() =>
+  import('@/components/admin-llm-gateway/StatusSection').then(m => ({ default: m.StatusSection })),
+)
+const UsageSection = lazy(() =>
+  import('@/components/admin-llm-gateway/UsageSection').then(m => ({ default: m.UsageSection })),
+)
+
+/** Full-viewport placeholder, matching the route-level loading states. */
+function RouteFallback({ label }: { label: string }) {
+  return (
+    <div className="flex items-center justify-center h-screen text-[var(--color-foreground-muted)]">
+      {label}
+    </div>
+  )
+}
+
+/**
+ * Suspense boundary for a gateway section.
+ *
+ * Deliberately *not* hoisted to <AdminRoute>: a section route element is
+ * rendered at AdminLLMGatewayPage's <Outlet/>, so a boundary here sits
+ * inside the shell and only the content column blanks while a section
+ * chunk loads. A shared boundary further up would tear down the
+ * secondary sidebar and Apply footer on every tab switch.
+ *
+ * A pathless layout route would have been tidier but breaks the
+ * sections: they read `useOutletContext`, and nesting a second bare
+ * <Outlet/> overwrites that context with undefined.
+ */
+function SectionSuspense({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center p-8 text-[var(--color-foreground-muted)]">
+          Loading…
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  )
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -36,7 +89,9 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>
   if (!user) return <Navigate to="/login" />
   if (!user.is_admin) return <Navigate to="/" />
-  return <>{children}</>
+  // Boundary lives after the auth gates so a non-admin is redirected
+  // without ever requesting an admin chunk.
+  return <Suspense fallback={<RouteFallback label="Loading…" />}>{children}</Suspense>
 }
 
 export default function App() {
@@ -100,22 +155,16 @@ export default function App() {
               element={<AdminRoute><AdminLLMGatewayPage /></AdminRoute>}
             >
               <Route index element={<Navigate to="models" replace />} />
-              <Route path="models" element={<ModelsSection />} />
-              <Route path="secrets" element={<SecretsSection />} />
-              <Route path="status" element={<StatusSection />} />
-              <Route path="usage" element={<UsageSection />} />
+              <Route path="models" element={<SectionSuspense><ModelsSection /></SectionSuspense>} />
+              <Route path="secrets" element={<SectionSuspense><SecretsSection /></SectionSuspense>} />
+              <Route path="status" element={<SectionSuspense><StatusSection /></SectionSuspense>} />
+              <Route path="usage" element={<SectionSuspense><UsageSection /></SectionSuspense>} />
             </Route>
             <Route
               path="/topology"
               element={
                 <ProtectedRoute>
-                  <Suspense
-                    fallback={
-                      <div className="flex items-center justify-center h-screen text-[var(--color-foreground-muted)]">
-                        Loading topology…
-                      </div>
-                    }
-                  >
+                  <Suspense fallback={<RouteFallback label="Loading topology…" />}>
                     <TopologyPage />
                   </Suspense>
                 </ProtectedRoute>
