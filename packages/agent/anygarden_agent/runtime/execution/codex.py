@@ -8,11 +8,16 @@ import os
 import signal
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
+from contextvars import ContextVar
 from pathlib import Path
 
 import psutil
 
 from .contracts import Capabilities, Invocation, RuntimeResult
+from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
+
+_MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -101,6 +106,7 @@ class CodexRuntime:
     def command(
         self, invocation: Invocation, session: str | None, output: Path
     ) -> list[str]:
+        endpoint = validate_endpoint_invocation(invocation)
         cmd = [str(self.executable), "exec"]
         if session:
             cmd += ["resume", session]
@@ -126,11 +132,15 @@ class CodexRuntime:
                 "-c",
                 f"model_reasoning_effort={json.dumps(invocation.reasoning_effort)}",
             ]
+        if endpoint is None and invocation.provider is not None:
+            cmd += ["-c", f"model_provider={json.dumps(invocation.provider)}"]
+        cmd += codex_endpoint_arguments(endpoint)
         return cmd + ["-o", str(output), "-"]
 
     @staticmethod
     def environment(invocation: Invocation) -> dict[str, str]:
         # Never inherit the node's ambient environment or home/auth/config.
+        validate_endpoint_invocation(invocation)
         env = dict(invocation.environment)
         for key in env:
             if key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_")):
@@ -154,7 +164,13 @@ class CodexRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            return proc.returncode == 0 and stdout.strip() == b"codex-cli 0.154.0"
+            # Verified boundary versions: 0.154.0 (PR600 evidence) and
+            # 0.155.1 (installed on slock-bot 2026-09-19; same subprocess
+            # contract). Others fail closed with an explicit version error.
+            return proc.returncode == 0 and stdout.strip() in (
+                b"codex-cli 0.154.0",
+                b"codex-cli 0.155.1",
+            )
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -207,17 +223,23 @@ class CodexRuntime:
             except OSError:
                 return RuntimeResult("failed", "not_started", "ENGINE_ERROR")
             tree = ProcessTree(proc.pid)
+            measured: dict[str, int] = {}
             stream: asyncio.Task | None = None
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
                 if cancelled_at_spawn or not authorized():
                     raise asyncio.CancelledError
-                stream = asyncio.create_task(
-                    self._collect(
-                        proc, invocation, session_handle, output, emit, authorized
-                    )
-                )
+                async def collect():
+                    token = _MEASURED_USAGE.set(measured)
+                    try:
+                        return await self._collect(
+                            proc, invocation, session_handle, output, emit, authorized
+                        )
+                    finally:
+                        _MEASURED_USAGE.reset(token)
+
+                stream = asyncio.create_task(collect())
                 deadline = (
                     asyncio.get_running_loop().time() + invocation.timeout_seconds
                 )
@@ -258,8 +280,8 @@ class CodexRuntime:
                     confirmed = await cleanup_task
                     result = RuntimeResult("cancelled", "stopped", "cancelled")
             if not confirmed:
-                return RuntimeResult("unknown", "unknown", "termination_unconfirmed")
-            return result
+                return RuntimeResult("unknown", "unknown", "termination_unconfirmed", usage=dict(measured) or None)
+            return replace(result, usage=dict(measured) or result.usage)
 
     async def _collect(
         self, proc, invocation, session, output, emit, authorized
@@ -279,7 +301,8 @@ class CodexRuntime:
         texts: list[str] = []
         text_size = 0
         completed = failed = False
-        usage = None
+        measured = _MEASURED_USAGE.get()
+        usage = measured if measured is not None else {}
         while line := await proc.stdout.readline():
             try:
                 event = json.loads(line)
@@ -296,13 +319,13 @@ class CodexRuntime:
                 completed = True
                 raw = event.get("usage")
                 if isinstance(raw, dict):
-                    usage = {
+                    usage.update({
                         k: v
                         for k, v in raw.items()
                         if k in {"input_tokens", "output_tokens", "cached_input_tokens"}
                         and type(v) is int
                         and v >= 0
-                    }
+                    })
             elif kind == "turn.failed":
                 failed = True
             elif kind in {

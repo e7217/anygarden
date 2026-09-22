@@ -169,9 +169,7 @@ class TestDetectEnginesIncludesPythonModules:
             result = await detect_engines()
 
         engine_names = [e.engine for e in result.engines]
-        assert "openhands" in engine_names
-        oh = next(e for e in result.engines if e.engine == "openhands")
-        assert oh.version == "1.21.0"
+        assert "openhands" not in engine_names
 
     async def test_openhands_omitted_when_sdk_missing(self) -> None:
         """Without openhands.sdk in sys.modules + no binary, result is empty.
@@ -194,3 +192,14 @@ class TestDetectEnginesIncludesPythonModules:
 
         engine_names = [e.engine for e in result.engines]
         assert "openhands" not in engine_names
+
+
+async def test_detect_installed_pi_binary(tmp_path, monkeypatch):
+    binary = tmp_path / "pi"
+    binary.write_text("#!/bin/sh\necho 0.85.1\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    engines = await detect_engines()
+    pi = next(engine for engine in engines.engines if engine.engine == "pi-cli")
+    assert pi.version == "0.85.1"
+    assert pi.path == str(binary)

@@ -18,6 +18,7 @@ async def select_machine_for(
     db: AsyncSession,
     machine_bus: ExecutionBus,
     required_labels: dict | None = None,
+    required_control_capabilities: set[str] | None = None,
 ) -> Machine:
     """Bin-pack: select online machine with fewest running agents that supports *engine*.
 
@@ -67,6 +68,11 @@ async def select_machine_for(
 
         # Must have an active WS connection
         if machine.id not in connected_ids:
+            continue
+
+        if required_control_capabilities and not required_control_capabilities.issubset(
+            set(machine.control_capabilities or [])
+        ):
             continue
 
         # Must not exceed max_agents

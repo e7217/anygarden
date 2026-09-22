@@ -1,5 +1,13 @@
 # 12 · LLM Gateway (내장 LiteLLM 서브프로세스)
 
+> **Historical design — the embedded gateway is removed.**
+> 현재 실행 경로는 [ADR-008](../decisions/008-two-engine-runtime-contract.md),
+> 설정은 [직접 endpoint 안내](../runbook/direct-model-endpoints.md)를 따른다.
+> 사용량 집계는 `/api/v1/usage`와 `/admin/usage`로 이전됐다.
+> [데이터 보존·이전 안내](../runbook/gateway-removal.md)를 참고할 것.
+> 아래 설명은 당시 목표와 설계의 기록이며 현재 설정 지침이 아니다.
+
+
 > anygarden-server 가 LiteLLM Proxy 를 서브프로세스로 내장 관리하고, 모든 에이전트의 LLM 호출이 `/api/v1/llm/*` 역프록시 경로를 경유하게 한다. 이 계층은 §10 Machine 스케줄링 위에 **얹히는** 선택적 계층이며, Feature flag (`ANYGARDEN_LLM_GATEWAY_ENABLED`) 로 on/off 된다.
 
 배경과 대안 비교는 [ADR-004](../decisions/004-embedded-litellm-gateway.md), 상세 구현 계획은 [`.tmp/plan-197-embedded-litellm-gateway.md`](../../.tmp/plan-197-embedded-litellm-gateway.md), 이슈는 [#197](https://github.com/e7217/anygarden/issues/197).

@@ -89,8 +89,8 @@ async def reconcile_env():
         )
         db.add(machine_token)
 
-        # MachineEngine (claude-code)
-        db.add(MachineEngine(machine_id=machine.id, engine="claude-code"))
+        # MachineEngine (codex-cli)
+        db.add(MachineEngine(machine_id=machine.id, engine="codex-cli"))
 
         # Project
         project = Project(name="reconcile-project")
@@ -102,10 +102,10 @@ async def reconcile_env():
         db.add(room)
         await db.flush()
 
-        # Agent (idle, engine=claude-code)
+        # Agent (idle, engine=codex-cli)
         agent = Agent(
             name="reconcile-agent",
-            engine="claude-code",
+            engine="codex-cli",
             desired_state="idle",
             actual_state="idle",
         )

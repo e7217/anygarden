@@ -73,25 +73,16 @@ describe('buildTemplatePayload', () => {
     ],
   }
 
-  it('fans out a single config to all three engines', () => {
+  it('creates only supported Codex configuration', () => {
     const payload = buildTemplatePayload(baseForm)
-    expect(payload.supported_engines).toEqual(['claude-code', 'codex-cli', 'gemini-cli'])
+    expect(payload.supported_engines).toEqual(['codex-cli'])
     expect(Object.keys(payload.config_per_engine).sort()).toEqual(
-      ['claude-code', 'codex-cli', 'gemini-cli'],
+      ['codex-cli'],
     )
-    const cfg = payload.config_per_engine['claude-code']
+    const cfg = payload.config_per_engine['codex-cli']
     expect(cfg.command).toBe('npx')
     expect(cfg.args).toEqual(['-y', '@modelcontextprotocol/server-github'])
     expect(cfg.env).toEqual({ GITHUB_TOKEN: '${GITHUB_TOKEN}' })
-  })
-
-  it('keeps identical config references across engines so a single JSON.stringify matches', () => {
-    const payload = buildTemplatePayload(baseForm)
-    const a = JSON.stringify(payload.config_per_engine['claude-code'])
-    const b = JSON.stringify(payload.config_per_engine['codex-cli'])
-    const c = JSON.stringify(payload.config_per_engine['gemini-cli'])
-    expect(a).toBe(b)
-    expect(b).toBe(c)
   })
 
   it('stores non-secret env values verbatim', () => {
@@ -101,7 +92,7 @@ describe('buildTemplatePayload', () => {
         { key: 'LOG_LEVEL', secret: false, value: 'info' },
       ],
     })
-    expect(payload.config_per_engine['claude-code'].env).toEqual({ LOG_LEVEL: 'info' })
+    expect(payload.config_per_engine['codex-cli'].env).toEqual({ LOG_LEVEL: 'info' })
     expect(payload.required_env_vars).toEqual([])
   })
 
@@ -112,7 +103,7 @@ describe('buildTemplatePayload', () => {
         { key: 'API_KEY', secret: true, value: '' },
       ],
     })
-    expect(payload.config_per_engine['claude-code'].env).toEqual({
+    expect(payload.config_per_engine['codex-cli'].env).toEqual({
       API_KEY: '${API_KEY}',
     })
     expect(payload.required_env_vars).toEqual(['API_KEY'])
@@ -148,8 +139,8 @@ describe('buildTemplatePayload', () => {
         { key: ' FOO ', secret: false, value: 'bar' },
       ],
     })
-    expect(payload.config_per_engine['claude-code'].args).toEqual(['-y'])
-    expect(payload.config_per_engine['claude-code'].env).toEqual({ FOO: 'bar' })
+    expect(payload.config_per_engine['codex-cli'].args).toEqual(['-y'])
+    expect(payload.config_per_engine['codex-cli'].env).toEqual({ FOO: 'bar' })
   })
 
   it('sets description to null when empty after trim', () => {
@@ -170,18 +161,16 @@ describe('parseTemplateIntoForm', () => {
     env: { GITHUB_TOKEN: '${GITHUB_TOKEN}' },
   }
 
-  it('returns simple mode when all three engines have identical stdio blocks', () => {
+  it('returns simple mode for a Codex stdio block', () => {
     const out: ParsedTemplate = parseTemplateIntoForm({
       name: 'github',
       display_name: 'GitHub',
       description: null,
       config_per_engine: {
-        'claude-code': stdioBlock,
         'codex-cli': stdioBlock,
-        'gemini-cli': stdioBlock,
       },
       required_env_vars: ['GITHUB_TOKEN'],
-      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
+      supported_engines: ['codex-cli'],
     })
     expect(out.mode).toBe('simple')
     if (out.mode !== 'simple') throw new Error('typecheck')
@@ -194,6 +183,17 @@ describe('parseTemplateIntoForm', () => {
       secret: true,
       value: '',
     })
+  })
+
+  it('keeps identical legacy blocks in advanced mode without changing them', () => {
+    const template = {
+      name: 'legacy', display_name: 'Legacy', description: null,
+      config_per_engine: { 'claude-code': stdioBlock, 'codex-cli': stdioBlock },
+      supported_engines: ['claude-code', 'codex-cli'], required_env_vars: [],
+    }
+    const before = JSON.stringify(template)
+    expect(parseTemplateIntoForm(template).mode).toBe('advanced')
+    expect(JSON.stringify(template)).toBe(before)
   })
 
   it('returns advanced mode when engines have divergent configs', () => {
@@ -254,12 +254,10 @@ describe('parseTemplateIntoForm', () => {
       display_name: 'Plain',
       description: null,
       config_per_engine: {
-        'claude-code': block,
         'codex-cli': block,
-        'gemini-cli': block,
       },
       required_env_vars: [],
-      supported_engines: ['claude-code', 'codex-cli', 'gemini-cli'],
+      supported_engines: ['codex-cli'],
     })
     expect(out.mode).toBe('simple')
     if (out.mode !== 'simple') throw new Error('typecheck')

@@ -2,14 +2,11 @@
  * Pure transformations between the simplified MCP template form and the
  * existing `config_per_engine` API shape (#195).
  *
- * The backend keeps a per-engine dict so builtin templates and future
- * engine-specific overrides stay untouched. Admins creating a stdio
- * server almost always want the same config across all three engines —
- * these helpers let the UI present a single form and fan it out at
- * save time.
+ * New stdio templates target Codex. Existing legacy or custom engine blocks
+ * stay in the advanced JSON editor so opening and saving cannot drop them.
  */
 
-export const SUPPORTED_ENGINE_IDS = ['claude-code', 'codex-cli', 'gemini-cli'] as const
+export const SUPPORTED_ENGINE_IDS = ['codex-cli'] as const
 export type SupportedEngine = (typeof SUPPORTED_ENGINE_IDS)[number]
 
 const PLACEHOLDER_RE = /\$\{([A-Z_][A-Z0-9_]*)\}/g
@@ -117,9 +114,7 @@ export function buildTemplatePayload(form: TemplateFormState): ApiPayload {
     description: description || null,
     icon: null,
     config_per_engine: {
-      'claude-code': config,
       'codex-cli': config,
-      'gemini-cli': config,
     },
     supported_engines: [...SUPPORTED_ENGINE_IDS],
     required_env_vars: placeholders,
@@ -149,6 +144,12 @@ function envDictToRows(env: Record<string, unknown>): EnvRow[] {
 }
 
 export function parseTemplateIntoForm(template: TemplateInput): ParsedTemplate {
+  // Keep legacy/unknown blocks in the lossless JSON editor on existing templates.
+  const supported = new Set<string>(SUPPORTED_ENGINE_IDS)
+  if (Object.keys(template.config_per_engine).some(engine => !supported.has(engine)) ||
+      template.supported_engines.some(engine => !supported.has(engine))) {
+    return { mode: 'advanced' }
+  }
   const blocks = SUPPORTED_ENGINE_IDS.map(
     e => template.config_per_engine[e] as Record<string, unknown> | undefined,
   )

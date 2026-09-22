@@ -17,13 +17,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import structlog
 from sqlalchemy import and_, case, event, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-import structlog
 
 from anygarden.agent_availability import (
     CRASHED,
     ENGINE_MISMATCH,
+    INVALID_PROVIDER,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
     SPAWN_FAILED,
@@ -43,7 +44,12 @@ from anygarden.db.models import (
     SkillLibraryEntry,
     WorkspaceAttachment,
 )
-from anygarden.scheduler.gateway_secrets import build_engine_secrets
+from anygarden.engines.endpoints import build_direct_engine_secrets
+from anygarden.engines.validation import (
+    engine_runtime_error,
+    pi_provider_error,
+    removed_engine_error,
+)
 from anygarden.scheduler.execution import ExecutionBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -113,7 +119,6 @@ class AgentLifecycle:
         mcp_template_service=None,
         room_files_dir: Path | None = None,
         cluster_external_url: str | None = None,
-        llm_gateway_enabled: bool = False,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -136,13 +141,6 @@ class AgentLifecycle:
         # on every call. ``None`` skips self-MCP injection (used by
         # tests that don't exercise spawn-time MCP wiring).
         self._cluster_external_url = cluster_external_url
-        # Issue #359 — gateway feature flag piped through so
-        # ``_build_sync_frame`` can decide whether to populate
-        # ``engine_secrets`` for openhands agents. Default ``False``
-        # keeps pre-#359 tests + wiring source-compatible: the
-        # behaviour they expected (``engine_secrets={}`` always) is
-        # exactly what an off-flag still produces.
-        self._llm_gateway_enabled = llm_gateway_enabled
         # Issue #369 — per-agent ``anygarden_token`` cache. Without this,
         # every ``_build_sync_frame`` invocation (which fires on
         # ``request_start``, ``handle_report_actual_state``,
@@ -154,7 +152,7 @@ class AgentLifecycle:
         # token regardless. The agent process reads its
         # ``OPENAI_API_KEY`` from stdin once at spawn; if it lands on
         # a token whose row never committed, every subsequent
-        # gateway request 401s with 'Invalid agent token'.
+        # MCP request 401s with 'Invalid agent token'.
         #
         # Cache contract:
         # - Key: agent_id; value: plaintext anygarden_token string.
@@ -209,6 +207,40 @@ class AgentLifecycle:
                 agent = await self._get_agent(db, agent_id)
                 if agent is None:
                     logger.error("lifecycle.agent_not_found", agent_id=agent_id)
+                    return
+
+                removed = removed_engine_error(agent.engine) or engine_runtime_error(
+                    agent.engine, getattr(agent, "runtime", None)
+                )
+                if removed:
+                    agent.last_crash_reason = removed
+                    _mark_unavailable(
+                        agent,
+                        "engine_removed"
+                        if removed_engine_error(agent.engine)
+                        else "invalid_runtime",
+                        {"engine": agent.engine},
+                    )
+                    await db.commit()
+                    return
+
+                error = pi_provider_error(
+                    agent.engine, getattr(agent, "provider", None)
+                )
+                if error:
+                    agent.last_crash_reason = error
+                    _mark_unavailable(agent, INVALID_PROVIDER)
+                    await db.commit()
+                    return
+
+                try:
+                    await build_direct_engine_secrets(
+                        db, agent, getattr(self._mcp_template_service, "_secrets", None)
+                    )
+                except ValueError:
+                    agent.last_crash_reason = "Direct endpoint configuration or credential unavailable; update agent settings"
+                    _mark_unavailable(agent, "invalid_endpoint")
+                    await db.commit()
                     return
 
                 now = datetime.now(timezone.utc)
@@ -292,10 +324,25 @@ class AgentLifecycle:
                 else:
                     try:
                         machine = await select_machine_for(
-                            agent.engine, db, self._machine_bus
+                            agent.engine,
+                            db,
+                            self._machine_bus,
+                            required_control_capabilities={"direct_endpoint_v1"}
+                            if agent.base_url
+                            else None,
                         )
                     except NoSuitableMachineError:
                         machine = None
+
+                if (
+                    machine is not None
+                    and agent.base_url
+                    and "direct_endpoint_v1" not in (machine.control_capabilities or [])
+                ):
+                    agent.last_crash_reason = "Placed machine does not support direct_endpoint_v1; update it before restarting"
+                    _mark_unavailable(agent, "invalid_endpoint")
+                    await db.commit()
+                    return
 
                 if machine is None:
                     logger.warning(
@@ -539,7 +586,7 @@ class AgentLifecycle:
         """Return the per-agent ``anygarden_token``, minting one on cache miss.
 
         Issue #369 — single mint point for the anygarden self-MCP /
-        gateway-auth bearer. Cache hit returns the previously-minted
+        self-MCP bearer. Cache hit returns the previously-minted
         plaintext (already committed via ``request_start``); miss
         mints a fresh token, stages an ``agent_tokens`` row via
         ``db.add``, and stores the plaintext in the cache.
@@ -558,7 +605,7 @@ class AgentLifecycle:
         one whose surrounding transaction rolled back left the
         plaintext in the cache pointing at a row that was never
         persisted. After a restart the cache is empty but the agent
-        already holds that stdin-piped token, so every gateway/MCP call
+        already holds that stdin-piped token, so every MCP call
         401s in a storm.
 
         Two-stage cache to satisfy both invariants:
@@ -658,9 +705,7 @@ class AgentLifecycle:
                     actual_state=case(
                         (Agent.placed_on_machine_id.is_(None), "stopped"),
                         (
-                            Agent.actual_state.in_(
-                                ("running", "starting", "pending")
-                            ),
+                            Agent.actual_state.in_(("running", "starting", "pending")),
                             "stopping",
                         ),
                         else_=Agent.actual_state,
@@ -1446,6 +1491,62 @@ class AgentLifecycle:
         rooms: list[str],
     ) -> dict:
         """Build a ``sync_desired_state`` dict from DB data."""
+        # Every reconnect/bump/deferred restart converges here. Never publish a
+        # runnable manifest for legacy or corrupted Pi configuration.
+        removed = removed_engine_error(agent.engine) or engine_runtime_error(
+            agent.engine, getattr(agent, "runtime", None)
+        )
+        if removed:
+            agent.last_crash_reason = removed
+            _mark_unavailable(
+                agent,
+                "engine_removed"
+                if removed_engine_error(agent.engine)
+                else "invalid_runtime",
+                {"engine": agent.engine},
+            )
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
+        error = pi_provider_error(agent.engine, getattr(agent, "provider", None))
+        if error and agent.desired_state == "running":
+            agent.last_crash_reason = error
+            _mark_unavailable(agent, INVALID_PROVIDER)
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
+        direct_secrets = {}
+        try:
+            direct_secrets = await build_direct_engine_secrets(
+                db, agent, getattr(self._mcp_template_service, "_secrets", None)
+            )
+            if agent.base_url:
+                machine = (
+                    await db.get(Machine, agent.placed_on_machine_id)
+                    if agent.placed_on_machine_id
+                    else None
+                )
+                if machine is None or "direct_endpoint_v1" not in (
+                    machine.control_capabilities or []
+                ):
+                    raise ValueError(
+                        "Machine cannot enforce direct endpoint configuration"
+                    )
+        except ValueError:
+            agent.last_crash_reason = "Direct endpoint configuration, credential or machine capability unavailable; update agent settings"
+            _mark_unavailable(agent, "invalid_endpoint")
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
         # Agent files
         file_rows = (
             (await db.execute(select(AgentFile).where(AgentFile.agent_id == agent.id)))
@@ -1564,28 +1665,6 @@ class AgentLifecycle:
                     overlays=overlays,
                 )
 
-        # Issue #359 — for openhands agents, ensure we mint a token
-        # even when the agent has no MCP overlays attached. The MCP
-        # block above only mints when ``default is not None`` (engine
-        # has a anygarden_default_entry mapping AND the agent has files
-        # to write to). openhands consumes ``.mcp.json`` so usually
-        # gets a token there, but the gateway path needs to work even
-        # if MCP rendering happens to skip (e.g. cluster_external_url
-        # set but the engine's settings_path is None for some future
-        # variant). The reverse proxy's ``get_current_identity``
-        # validates this same ``agent_tokens`` row, so reusing the
-        # MCP-minted token is safe — both endpoints accept it.
-        if (
-            anygarden_token is None
-            and self._llm_gateway_enabled
-            and self._cluster_external_url
-            and agent.engine == "openhands"
-        ):
-            # Issue #369 — same cached path as the MCP block above so
-            # gateway-only agents (no MCP attachments) still get a
-            # stable, committed token.
-            anygarden_token = self._acquire_anygarden_token(db, agent.id)
-
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
         if rooms:
@@ -1627,21 +1706,11 @@ class AgentLifecycle:
             # ``agent_memory_update`` frames.
             "memory_md": agent.memory_md,
             "files": files_map,
-            # Issue #359 — gateway env vars for openhands only. The
-            # helper guards on engine name + flag + URL + token, so
-            # passing all the conditions through cleanly returns
-            # ``{}`` for any case that doesn't satisfy them. This
-            # preserves pre-#359 behaviour (``engine_secrets={}``) for
-            # the three CLI engines and for openhands agents on
-            # deployments that haven't enabled the gateway yet.
-            "engine_secrets": build_engine_secrets(
-                engine=agent.engine,
-                gateway_enabled=self._llm_gateway_enabled,
-                cluster_external_url=self._cluster_external_url,
-                agent_token=anygarden_token,
-            ),
+            "endpoint_configured": bool(agent.base_url),
+            "engine_secrets": direct_secrets,
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
+            "provider": agent.provider,
             # #309 — semantic permission tier; the machine forwards it
             # into the agent process env (``ANYGARDEN_AGENT_PERMISSION_LEVEL``)
             # and each engine adapter translates to native dials.

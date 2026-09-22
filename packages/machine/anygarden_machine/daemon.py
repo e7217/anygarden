@@ -308,6 +308,7 @@ class MachineDaemon:
             # every write activation from this daemon version.
             control_capabilities=[
                 "agent_generation_reports_v1",
+                "direct_endpoint_v1",
                 "workspace_attach_v1",
                 "workspace_receipt_signing_v1",
             ],
@@ -725,12 +726,14 @@ class MachineDaemon:
             # engine_secrets={} by design (disk storage strips secrets).
             # The freshest frame's secrets live in the in-memory cache.
             engine_secrets=self._manifest_store.get_secrets(agent_id),
+            endpoint_configured=manifest.endpoint_configured,
             # Issue #237 — pass DB snapshot through so the spawner can
             # materialize ``memory/notes.md`` on cold start. ``getattr``
             # keeps compatibility with pre-#237 frames that omit the field.
             memory_md=getattr(manifest, "memory_md", None),
             reasoning_effort=manifest.reasoning_effort,
             model=manifest.model,
+            provider=manifest.provider,
             # Issue #309 — semantic permission tier propagated from
             # the cluster's sync frame. ``getattr`` keeps in-memory
             # manifests from pre-#309 schema revisions compatible.

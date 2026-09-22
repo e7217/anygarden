@@ -88,7 +88,7 @@ class LifecycleFrame(BaseModel):
     completion: Optional[str] = None
     # #461 (Wave 2d) — gateway-free LLM usage telemetry. MUST stay
     # field-compatible with the agent frame (test_protocol_compat
-    # enforces parity). The WS handler writes one ``LLMGatewayUsage``
+    # enforces parity). The WS handler writes one ``UsageLedger``
     # row from these on ``engine_call_finished`` when ``input_tokens`` /
     # ``output_tokens`` is set OR a ``model`` is present; token COUNTS
     # are non-sensitive and persisted, while prompt/completion TEXT stays

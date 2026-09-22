@@ -2039,3 +2039,101 @@ class TestAgentPermissionLevel:
                 .all()
             )
         assert count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "", " ", "--help", "bad name", "x=y", "a" * 65])
+async def test_pi_provider_rejected_before_agent_creation(agents_env, provider):
+    env = agents_env
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    body = {"engine": "pi-cli", "name": "invalid-pi", "provider": provider}
+    response = await env["client"].post("/api/v1/agents", json=body, headers=headers)
+    assert response.status_code == 422
+    async with env["factory"]() as db:
+        assert (await db.execute(select(Agent).where(Agent.name == "invalid-pi"))).scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_pi_custom_provider_roundtrip_update_and_legacy_compatibility(agents_env):
+    env = agents_env
+    client = env["client"]
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    response = await client.post("/api/v1/agents", headers=headers, json={
+        "engine": "pi-cli", "name": "local-pi", "provider": "my-local",
+        "model": "custom-model-id",
+    })
+    assert response.status_code == 201, response.text
+    agent_id = response.json()["id"]
+    assert response.json()["provider"] == "my-local"
+    async with env["factory"]() as db:
+        before_generation = (await db.get(Agent, agent_id)).generation
+    response = await client.put(f"/api/v1/agents/{agent_id}", headers=headers, json={
+        "provider": "openai-codex", "provider_set": True,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["provider"] == "openai-codex"
+    async with env["factory"]() as db:
+        assert (await db.get(Agent, agent_id)).generation > before_generation
+    response = await client.put(f"/api/v1/agents/{agent_id}", headers=headers, json={"name": "renamed"})
+    assert response.json()["provider"] == "openai-codex"
+    response = await client.put(f"/api/v1/agents/{agent_id}", headers=headers, json={
+        "provider": None, "provider_set": True,
+    })
+    assert response.status_code == 422
+    response = await client.get(f"/api/v1/agents/{agent_id}", headers=headers)
+    assert response.json()["provider"] == "openai-codex"
+    response = await client.post("/api/v1/agents", headers=headers, json={"engine": "echo", "name": "legacy"})
+    assert response.status_code == 201
+    assert response.json()["provider"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "", "--help", "bad name"])
+async def test_legacy_pi_start_refused_before_lifecycle(agents_env, provider):
+    env = agents_env
+    async with env["factory"]() as db:
+        agent = Agent(name="legacy-pi", engine="pi-cli", provider=provider)
+        db.add(agent)
+        await db.commit()
+        agent_id = agent.id
+    lifecycle = env["lifecycle"]
+    lifecycle.request_start = AsyncMock()
+    lifecycle.request_stop = AsyncMock()
+    response = await env["client"].post(
+        f"/api/v1/agents/{agent_id}/start",
+        headers={"Authorization": f"Bearer {env['token']}"},
+    )
+    assert response.status_code == 422
+    assert "Provider" in response.json()["detail"]
+    lifecycle.request_start.assert_not_called()
+    lifecycle.request_stop.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, "", "--help", "bad name"])
+async def test_legacy_pi_automatic_start_and_reconnect_never_publish_running(agents_env, provider):
+    env = agents_env
+    async with env["factory"]() as db:
+        agent = Agent(
+            name="legacy-pi", engine="pi-cli", provider=provider,
+            desired_state="running", actual_state="pending",
+            placed_on_machine_id=env["machine"].id,
+        )
+        db.add(agent)
+        await db.commit()
+        agent_id = agent.id
+    lifecycle = env["lifecycle"]
+    env["bus"].send = AsyncMock(return_value=True)
+    await lifecycle.request_start(agent_id)
+    env["bus"].send.assert_not_called()
+    async with env["factory"]() as db:
+        agent = await db.get(Agent, agent_id)
+        assert agent.unavailable_code == "invalid_provider"
+        assert "Provider" in agent.last_crash_reason
+        # Reconnect and deferred restart share this builder: stop-only frames
+        # carry no files, engine credentials or runnable engine config.
+        frame = await lifecycle._build_sync_frame(db, agent, ["legacy-room"])
+        assert frame == {
+            "type": "sync_desired_state", "agent_id": agent_id,
+            "generation": agent.generation, "desired_state": "stopped",
+        }

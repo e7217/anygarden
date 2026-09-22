@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from anygarden_machine.engines.channels import Channel, NpmGlobal, PipVenv
+from anygarden_machine.engines.channels import Channel, NpmGlobal
 
 
 @dataclass(frozen=True)
@@ -54,38 +54,21 @@ class EngineLifecycle:
 
 # Channel instances are stateless; share one per kind.
 _NPM = NpmGlobal()
-_PIP = PipVenv()
 
 
 ENGINE_LIFECYCLES: dict[str, EngineLifecycle] = {
-    "claude-code": EngineLifecycle(
-        engine="claude-code",
-        detect=DetectSpec(mode="binary", binary="claude"),
+    "pi-cli": EngineLifecycle(
+        engine="pi-cli",
+        detect=DetectSpec(mode="binary", binary="pi"),
         channel=_NPM,
-        # NOTE: assumed npm package; verify on a live machine (plan Phase F).
-        package="@anthropic-ai/claude-code",
+        # Verified from the installed Pi 0.85.1 package manifest.
+        package="@earendil-works/pi-coding-agent",
     ),
     "codex-cli": EngineLifecycle(
         engine="codex-cli",
         detect=DetectSpec(mode="binary", binary="codex"),
         channel=_NPM,
         package="@openai/codex",
-    ),
-    "gemini-cli": EngineLifecycle(
-        engine="gemini-cli",
-        detect=DetectSpec(mode="binary", binary="gemini"),
-        channel=_NPM,
-        package="@google/gemini-cli",
-    ),
-    "openhands": EngineLifecycle(
-        engine="openhands",
-        detect=DetectSpec(
-            mode="module",
-            import_path="openhands.sdk",
-            version_attr="__version__",
-        ),
-        channel=_PIP,
-        package="openhands-sdk",
     ),
 }
 
@@ -97,3 +80,13 @@ def get_lifecycle(engine: str) -> EngineLifecycle | None:
     not updatable, so the updater refuses it.
     """
     return ENGINE_LIFECYCLES.get(engine)
+
+
+REMOVED_ENGINES = frozenset(
+    {"claude-code", "claude_code", "gemini-cli", "gemini_cli", "openhands"}
+)
+ENGINE_REMOVED_MESSAGE = "This engine has been removed. Create a codex-cli or pi-cli agent and transfer the settings you want to keep; existing configuration and history are preserved."
+
+
+def removed_engine_error(engine: str) -> str | None:
+    return ENGINE_REMOVED_MESSAGE if engine in REMOVED_ENGINES else None

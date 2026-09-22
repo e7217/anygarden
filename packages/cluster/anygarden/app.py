@@ -9,51 +9,49 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+from anygarden_machine.safefs import secure_chmod
 from fastapi import FastAPI
 from sqlalchemy import select, text
 
-from anygarden_machine.safefs import secure_chmod
-
+from anygarden.api.v1.agents import router as agents_api_router
+from anygarden.api.v1.budgets import router as budgets_router
+from anygarden.api.v1.engine_endpoints import router as engine_endpoints_router
+from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
+from anygarden.api.v1.goals import router as goals_router
+from anygarden.api.v1.graph import router as graph_router
+from anygarden.api.v1.invites import router as invites_router
+from anygarden.api.v1.usage import router as usage_router
+from anygarden.api.v1.machines import router as machines_api_router
+from anygarden.api.v1.mcp_templates import router as mcp_templates_router
+from anygarden.api.v1.projects import router as projects_router
+from anygarden.api.v1.saved import router as saved_router
+from anygarden.api.v1.search import router as search_router
+from anygarden.api.v1.skills import router as skills_api_router
+from anygarden.api.v1.system import router as system_router
+from anygarden.api.v1.tasks import router as tasks_router
+from anygarden.api.v1.turns import router as turns_router
+from anygarden.auth.routes import router as auth_router
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import backfill_message_fts, create_message_fts
 from anygarden.db.models import Base
-from anygarden.observability.logging import configure_logging
-from anygarden.messages.router import router as messages_router
-from anygarden.rooms.router import router as rooms_router
-from anygarden.ws.handler import router as ws_router
-from anygarden.ws.machine_handler import router as machine_ws_router
-from anygarden.api.v1.machines import router as machines_api_router
-from anygarden.api.v1.agents import router as agents_api_router
-from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
-from anygarden.api.v1.graph import router as graph_router
-from anygarden.api.v1.skills import router as skills_api_router
-from anygarden.api.v1.mcp_templates import router as mcp_templates_router
-from anygarden.api.v1.projects import router as projects_router
-from anygarden.api.v1.llm_gateway import router as llm_gateway_admin_router
-from anygarden.api.v1.budgets import router as budgets_router
-from anygarden.llm_gateway.reverse_proxy import router as llm_proxy_router
 from anygarden.mcp import router as mcp_rpc_router
-from anygarden.auth.routes import router as auth_router
-from anygarden.api.v1.invites import router as invites_router
-from anygarden.api.v1.saved import router as saved_router
-from anygarden.api.v1.search import router as search_router
-from anygarden.api.v1.tasks import router as tasks_router
-from anygarden.api.v1.turns import router as turns_router
-from anygarden.api.v1.goals import router as goals_router
-from anygarden.api.v1.system import router as system_router
-from anygarden.routing.router import router as routing_router
-from anygarden.workspaces.router import router as workspaces_router
+from anygarden.messages.router import router as messages_router
+from anygarden.observability.logging import configure_logging
 from anygarden.orchestration.rules import (
     CooldownManager,
     GuestRoomAggregateLimiter,
     TypingTracker,
 )
 from anygarden.presence import PresenceService
-from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.rooms.router import router as rooms_router
+from anygarden.routing.router import router as routing_router
 from anygarden.scheduler.lifecycle import AgentLifecycle
+from anygarden.scheduler.machine_bus import MachineBus
+from anygarden.workspaces.router import router as workspaces_router
+from anygarden.ws.handler import router as ws_router
+from anygarden.ws.machine_handler import router as machine_ws_router
 from anygarden.ws.manager import ConnectionManager
-
 
 _APP_TABLES = (
     "projects",
@@ -164,9 +162,7 @@ async def _repair_failed_upgrade(engine) -> dict | None:
             )
         ).all()
         names = {name for _type, name in objects}
-        dangling_triggers = {
-            name for kind, name in objects if kind == "trigger"
-        }
+        dangling_triggers = {name for kind, name in objects if kind == "trigger"}
         if dangling_triggers and "messages_fts" not in names and "messages" in names:
             await create_message_fts(conn)
             fts_recreated = True
@@ -483,40 +479,21 @@ async def _alembic_action(action: str, db_url: str, target: str) -> None:
     await asyncio.to_thread(_run)
 
 
-async def _reset_openhands_agents_for_restart(db) -> list[str]:
-    """Flip active openhands agents into the orphan state on cluster boot.
-
-    Issue #379 — the openhands engine is an in-process SDK adapter; its
-    per-room ``Conversation`` cache lives in agent-process memory and
-    is lost whenever the agent process restarts. The CLI-based engines
-    (claude-code, codex, gemini-cli) spawn a fresh subprocess per
-    session so they boot cleanly, but openhands agents would otherwise
-    require a manual stop/start to recover. By setting
-    ``actual_state='pending'`` and clearing ``placed_on_machine_id``,
-    the standard machine-reconnect path (``_place_orphaned_agents``
-    in ``ws/machine_handler.py``) picks them up and triggers a fresh
-    ``request_start`` with a bumped generation.
-
-    Returns the agent IDs that were reset, so callers can log them.
-    """
+async def _mark_removed_engine_agents(db) -> list[str]:
+    """Explain retired engines without rewriting their configuration or history."""
     from anygarden.db.models import Agent
+    from anygarden.engines.validation import ENGINE_REMOVED_MESSAGE, REMOVED_ENGINES
+    from anygarden.scheduler.lifecycle import _mark_unavailable
 
-    result = await db.execute(
-        select(Agent).where(
-            Agent.engine == "openhands",
-            Agent.actual_state.in_(("running", "starting", "stopping")),
-        )
+    agents = (
+        (await db.execute(select(Agent).where(Agent.engine.in_(REMOVED_ENGINES))))
+        .scalars()
+        .all()
     )
-    agents = result.scalars().all()
     for agent in agents:
-        agent.actual_state = "pending"
-        agent.desired_state = "running"
-        agent.pid = None
-        agent.placed_on_machine_id = None
-        agent.lifecycle_lease_token = None
-        agent.lifecycle_lease_expires_at = None
-        agent.lifecycle_delivery_state = "released"
-    return [a.id for a in agents]
+        agent.last_crash_reason = ENGINE_REMOVED_MESSAGE
+        _mark_unavailable(agent, "engine_removed", {"engine": agent.engine})
+    return [agent.id for agent in agents]
 
 
 @asynccontextmanager
@@ -860,11 +837,6 @@ async def _startup_server(app: FastAPI) -> None:
             # gemini-cli) call back into for the anygarden self-MCP
             # entry that ``_build_sync_frame`` bakes into spawn frames.
             cluster_external_url=config.cluster_external_url_or_default(),
-            # #359 — gateway feature flag. When on, ``_build_sync_frame``
-            # populates ``engine_secrets`` with OPENAI_BASE_URL +
-            # OPENAI_API_KEY for openhands agents so they route through
-            # the anygarden LLM gateway.
-            llm_gateway_enabled=config.llm_gateway_enabled,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state
@@ -904,10 +876,7 @@ async def _startup_server(app: FastAPI) -> None:
 
     # v2: No stale agent reset. Machines reconnect and report actual state.
     # Server reconciles via sync_batch on reconnect.
-    # Issue #379 — openhands is the lone exception: its in-process SDK
-    # state can't survive a process restart, so we proactively flip
-    # those agents into the orphan state and let the standard
-    # machine-reconnect respawn path bring them back fresh.
+    # Retired engines retain their saved state and receive migration guidance.
     if not engine_provided:
         from anygarden.db.models import Machine as _Machine
 
@@ -920,17 +889,17 @@ async def _startup_server(app: FastAPI) -> None:
                 .where(_Machine.status == "online")
                 .values(status="offline")
             )
-            reset_openhands_ids = await _reset_openhands_agents_for_restart(db)
+            removed_engine_ids = await _mark_removed_engine_agents(db)
             await db.commit()
             import structlog
 
             logger = structlog.get_logger()
             logger.info("startup.machines_reset_offline")
-            if reset_openhands_ids:
+            if removed_engine_ids:
                 logger.info(
-                    "startup.openhands_agents_reset",
-                    count=len(reset_openhands_ids),
-                    agent_ids=reset_openhands_ids,
+                    "startup.removed_engines_blocked",
+                    count=len(removed_engine_ids),
+                    agent_ids=removed_engine_ids,
                 )
 
     # #246 — reconcile on-disk room shared files against the DB. A
@@ -1000,44 +969,6 @@ async def _startup_server(app: FastAPI) -> None:
                 _run_skill_stale_cron(app, interval_seconds),
                 name="skill_stale_cron",
             )
-
-    # #197 — Bootstrap the embedded LLM gateway (optional). Pre-wired
-    # supervisor on app.state (e.g. tests) wins — if something is
-    # already there we leave it alone.
-    if (
-        config.llm_gateway_enabled
-        and getattr(app.state, "llm_gateway_supervisor", None) is None
-    ):
-        from anygarden.llm_gateway.bootstrap import bootstrap_gateway
-
-        # MCPSecrets was already built above for MCP templates; the
-        # llm_gateway reuses the same Fernet key per ADR-004. Fetch it
-        # from the service (which stores it as ``_secrets``) so this
-        # works both when we built the service here and when a test
-        # pre-set ``app.state.mcp_template_service``.
-        gateway_secrets = getattr(app.state.mcp_template_service, "_secrets", None)
-        if gateway_secrets is None:
-            import structlog
-
-            structlog.get_logger().warning(
-                "llm_gateway.bootstrap_skipped",
-                reason="mcp_template_service has no _secrets attribute",
-            )
-        else:
-            try:
-                await bootstrap_gateway(
-                    app,
-                    config,
-                    app.state.session_factory,
-                    gateway_secrets,
-                )
-            except Exception as exc:  # noqa: BLE001
-                import structlog
-
-                structlog.get_logger().warning(
-                    "llm_gateway.bootstrap_failed",
-                    error=str(exc),
-                )
 
     # #204 — orphan sweeper. Writes ``handler_orphaned`` rows when a
     # ``handler_started`` has no matching ``handler_finished`` after
@@ -1135,13 +1066,6 @@ async def _startup_server(app: FastAPI) -> None:
 
 
 async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
-    # #197 — Tear down the gateway before the engine / session factory
-    # go away. ``shutdown_gateway`` is safe to call even if bootstrap
-    # never ran (no-op when app.state lacks the supervisor).
-    from anygarden.llm_gateway.bootstrap import shutdown_gateway
-
-    await shutdown_gateway(app)
-
     # Shutdown: cancel background crons and wait for them to actually
     # stop before the event loop tears down. ``return_exceptions``
     # via the explicit try/except keeps the shutdown path from being
@@ -1278,8 +1202,9 @@ async def _run_delegation_sweeper(
     earliest admin as the channel-admin actor; one bad sweep must not kill
     the loop, and the node admin must exist before anything runs.
     """
-    import structlog
     from datetime import UTC, datetime, timedelta
+
+    import structlog
 
     from anygarden.db.models import User
 
@@ -1539,6 +1464,7 @@ def create_app(
     app.include_router(messages_router)
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
+    app.include_router(engine_endpoints_router)
     app.include_router(graph_router)
     app.include_router(skills_api_router)
     app.include_router(mcp_templates_router)
@@ -1554,11 +1480,8 @@ def create_app(
     app.include_router(goals_router)
     app.include_router(system_router)
     app.include_router(routing_router)
-    # #197 — LLM gateway reverse proxy + admin CRUD. Both are always
-    # included; their handlers 503 when ``app.state.llm_gateway_*``
-    # isn't wired (feature flag off) so this is harmless.
-    app.include_router(llm_proxy_router)
-    app.include_router(llm_gateway_admin_router)
+    # Engine-neutral usage aggregation preserves historical rows.
+    app.include_router(usage_router)
     # #453 — token-budget policy admin CRUD. The gate these policies
     # drive defaults OFF (hard_stop_enabled=False), so registering this
     # router cannot change runtime behaviour until an admin enables a
@@ -1578,10 +1501,9 @@ def create_app(
         """Liveness/readiness probe with real dependency checks.
 
         The server is a switchboard, not a brain — this only inspects
-        the wiring it already owns (DB connectivity, the LLM gateway
-        supervisor, and the long-running background crons). Returns 200
+        the wiring it already owns (DB connectivity and background tasks). Returns 200
         for ``ok``/``degraded`` and 503 only when a *critical*
-        dependency is down (DB unreachable, or gateway ``FAILED``).
+        dependency is down (DB unreachable).
         Components that are intentionally off (feature flag disabled,
         cron interval 0, tracing off) report ``disabled`` and never
         flip the overall status.
@@ -1609,26 +1531,6 @@ def create_app(
             except Exception:  # noqa: BLE001 — any failure ⇒ unhealthy
                 components["db"] = "unhealthy"
                 critical_down = True
-
-        # ── LLM gateway: read the supervisor's state. FAILED is a hard
-        # failure (no path back without operator action); CRASHED is a
-        # transient self-healing state ⇒ degraded but still serving.
-        # Supervisor is None when the gateway flag is off ⇒ disabled. ──
-        supervisor = getattr(app.state, "llm_gateway_supervisor", None)
-        if supervisor is None:
-            components["gateway"] = "disabled"
-        else:
-            from anygarden.llm_gateway.supervisor import GatewayState
-
-            gw_state = supervisor.state
-            if gw_state == GatewayState.FAILED:
-                components["gateway"] = "unhealthy"
-                critical_down = True
-            elif gw_state == GatewayState.CRASHED:
-                components["gateway"] = "degraded"
-                degraded = True
-            else:
-                components["gateway"] = "ok"
 
         # ── Background crons: each is conditionally created and may be
         # None when disabled. A task that exists but has already
@@ -1675,8 +1577,8 @@ def create_app(
         )
 
     # SPA static file serving — must be last so API routes take precedence.
-    from starlette.staticfiles import StaticFiles
     from starlette.responses import FileResponse, Response
+    from starlette.staticfiles import StaticFiles
 
     static_dir = Path(__file__).parent / "static"
     index_html = static_dir / "index.html"
@@ -1690,6 +1592,9 @@ def create_app(
 
         @app.get("/{path:path}")
         async def spa_fallback(path: str):
+            # Removed/unknown API routes are never client-side page routes.
+            if path == "api" or path.startswith("api/"):
+                return Response(status_code=404)
             file = static_dir / path
             if file.is_file():
                 return FileResponse(file)

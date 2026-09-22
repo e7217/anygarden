@@ -19,57 +19,14 @@ dependencies = [
     "structlog>=24.1",
     "pyyaml>=6.0",
     "psutil>=5.9",
-    # Engine dependencies — included by default so all engines work
-    # out of the box without extra install flags.
-    # (#506 removed codex-python: the codex-cli engine invokes the ``codex``
-    # binary directly via subprocess, so no Python SDK dependency is needed.)
-    "claude-agent-sdk>=0.1.0",
-    # Issue #355 Phase 0 — OpenHands V1 SDK as the in-process Python
-    # adapter alternative to the three CLI engines.
-    "openhands-sdk>=1.35,<2",
-    # Runtime tool bundle (TerminalTool / FileEditorTool /
-    # TaskTrackerTool / DelegateTool). Without these the SDK only
-    # ships FinishTool + ThinkTool, so any user query that needs
-    # shell or file work terminates after a single text turn — LLM
-    # emits a preamble ("I'll check..."), no tool call follows, and
-    # the SDK's ``_handle_content_response`` marks the conversation
-    # FINISHED. The package ships these tools as a separate wheel.
-    "openhands-tools>=1.35,<2",
-    # OpenHands drives the LLM through litellm. Whenever the agent has any
-    # tools attached, ``litellm.completion()`` eagerly imports its proxy MCP
-    # handler (``litellm.responses.mcp.*`` -> ``litellm.proxy.
-    # litellm_pre_call_utils``), which runs a top-level ``from fastapi import
-    # HTTPException, Request`` — this happens *before* the conditional
-    # ``_should_use_litellm_mcp_gateway`` check, so it fires even though we
-    # never take the litellm MCP-gateway path. Neither openhands-sdk nor
-    # litellm declares fastapi as a hard dependency (it lives in litellm's
-    # proxy extra), so a clean install — e.g. ``uvx anygarden-agent`` — ships
-    # without it and *every* OpenHands turn dies with ``ModuleNotFoundError:
-    # No module named 'fastapi'`` wrapped as an SDK ``ConversationRunError``,
-    # surfacing as a failed engine call with no reply. orjson/uvicorn (the
-    # other proxy-import deps) already arrive transitively; fastapi is the
-    # only gap. Declared directly so the OpenHands engine actually runs.
-    # Range pinned to match cluster's ``anygarden[server]`` fastapi bound.
-    "fastapi>=0.110,<0.120",
 ]
 
 [project.optional-dependencies]
-# Kept for backward compatibility (pip install anygarden-agent[claude-code])
-claude-code = []
-gemini-cli = []
-openhands = []
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.3",
     "mypy>=1.9",
-    # Installed in dev so the claude-code adapter can actually run
-    # end-to-end against the real SDK; tests use a fake module via
-    # sys.modules so they don't depend on it being present.
-    "claude-agent-sdk>=0.1.0",
-    # Issue #355 — same pattern for openhands-sdk in dev.
-    "openhands-sdk>=1.35,<2",
-    "openhands-tools>=1.35,<2",
 ]
 
 [project.scripts]
@@ -82,8 +39,3 @@ packages = ["anygarden_agent"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# libtmux (transitive via openhands-tools, installed under CI's --all-extras)
-# ships a pytest plugin that applies a mark to a fixture; pytest >=8.4 turns that
-# into a hard error at plugin import, killing collection before any test runs. We
-# don't use its fixtures, so disable its autoload. (#439)
-addopts = "-p no:libtmux"

@@ -1,5 +1,12 @@
 # Runbook: OpenHands agent + Ollama via anygarden LLM gateway (#359)
 
+> **Historical runbook — OpenHands execution is removed.**
+> Use [direct model endpoint setup](direct-model-endpoints.md) for Codex/Pi
+> and [retired-engine migration](retired-engines.md) for existing agents.
+> The commands below describe the former stack; they are not current setup
+> instructions. A local server must support the selected engine's protocol.
+
+
 > 대상: 외부 provider API key 없이 로컬 Ollama 만으로 OpenHands agent 를 동작시키려는 운영자.
 
 ## 사전 조건

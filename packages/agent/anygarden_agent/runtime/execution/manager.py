@@ -98,7 +98,7 @@ class LocalExecutionManager:
                     and result.outcome == "succeeded"
                 ):
                     result = RuntimeResult(
-                        "cancelled", "stopped", "completed_after_cancel"
+                        "cancelled", "stopped", "completed_after_cancel", usage=result.usage
                     )
                 self._store.finish(execution_id, result)
         except asyncio.CancelledError:
@@ -119,6 +119,25 @@ class LocalExecutionManager:
             self._store.finish(
                 execution_id, RuntimeResult("unknown", "unknown", "runtime_error")
             )
+
+    def import_legacy_session(self, scope: SessionScope, handle: str | None, source: str) -> None:
+        """One-time local upgrade of an existing room resume handle.
+
+        Remember consumption independently of scope so a later generation or
+        endpoint change cannot resurrect an old, unfenced native session.
+        """
+        if not self._authorize(scope):
+            raise PermissionError("local session import denied")
+        with self._store.db:
+            self._store.db.execute(
+                "CREATE TABLE IF NOT EXISTS legacy_imports (source TEXT PRIMARY KEY)"
+            )
+            if self._store.db.execute(
+                "INSERT OR IGNORE INTO legacy_imports VALUES (?)", (source,)
+            ).rowcount and handle:
+                self._store.db.execute(
+                    "INSERT OR IGNORE INTO sessions VALUES (?,?)", (scope.key, handle)
+                )
 
     async def events(
         self, execution_id: str, *, after: int = 0

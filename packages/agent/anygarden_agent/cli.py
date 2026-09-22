@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -12,25 +13,33 @@ import structlog
 
 from anygarden_agent import secrets as agent_secrets
 from anygarden_agent.auth.token import load_token
-from anygarden_agent.integrations import ENGINES
+from anygarden_agent.integrations import ENGINES, removed_engine_error
 from anygarden_agent.profile.loader import load_profile
 
 logger = structlog.get_logger(__name__)
 
-_ENGINE_CHOICES = sorted(ENGINES.keys())
+
+_ENGINE_CHOICES = sorted(ENGINES)
+
+
+class _EngineChoice(click.Choice):
+    def convert(self, value, param, ctx):
+        error = removed_engine_error(value)
+        if error:
+            self.fail(error, param, ctx)
+        return super().convert(value, param, ctx)
+
 
 # #492/#500 — CLI engine names → ``_turn_timeout`` engine keys. The helper
-# keys off short names (codex/claude/gemini/openhands); codex-cli shares
+# keys off short names (codex/pi); codex-cli shares
 # codex's turn-timeout profile. Every name in ENGINES MUST map to a key the
 # ``_turn_timeout`` defaults know, else the agent crashes at spawn when
 # ``resolve_turn_timeout`` raises (#500). Regression-tested in test_cli.
 _ENGINE_TIMEOUT_KEY: dict[str, str] = {
-    "claude-code": "claude",
+    "pi-cli": "pi",
     # codex-cli uses the "codex" turn-timeout profile (_ENGINE_DEFAULTS["codex"]);
     # #506 removed the SDK "codex" engine but the timeout key stays for codex-cli.
     "codex-cli": "codex",
-    "gemini-cli": "gemini",
-    "openhands": "openhands",
 }
 
 
@@ -39,17 +48,30 @@ _ENGINE_TIMEOUT_KEY: dict[str, str] = {
     "--engine",
     required=False,
     default=None,
-    type=click.Choice(_ENGINE_CHOICES),
+    type=_EngineChoice(_ENGINE_CHOICES),
     help="LLM engine to use.",
 )
 @click.option("--name", required=False, default=None, help="Agent display name")
-@click.option("--server", required=False, default=None, help="WebSocket server URL (e.g. ws://localhost:8000)")
+@click.option(
+    "--server",
+    required=False,
+    default=None,
+    help="WebSocket server URL (e.g. ws://localhost:8000)",
+)
 @click.option("--token", default=None, help="Auth token (or set ANYGARDEN_TOKEN)")
 @click.option("--room", "rooms", multiple=True, help="Room IDs to join")
+@click.option("--provider", default=None, help="Explicit model provider")
+@click.option(
+    "--endpoint-configured",
+    is_flag=True,
+    help="Require direct endpoint configuration from private stdin",
+)
 @click.option("--model", default=None, help="LLM model name override")
 @click.option("--system-prompt", default=None, help="System prompt override")
 @click.option("--profile", default=None, help="Load agent profile from YAML file")
-@click.option("--reasoning-effort", default=None, help="Reasoning effort level (low/medium/high)")
+@click.option(
+    "--reasoning-effort", default=None, help="Reasoning effort level (low/medium/high)"
+)
 def agent_main(
     engine: str | None,
     name: str | None,
@@ -60,6 +82,8 @@ def agent_main(
     system_prompt: str | None,
     profile: str | None,
     reasoning_effort: str | None,
+    provider: str | None = None,
+    endpoint_configured: bool = False,
 ) -> None:
     """Run a Anygarden agent with the specified engine."""
     # Consume engine_secrets piped by the machine daemon over stdin
@@ -68,7 +92,10 @@ def agent_main(
     # ``anygarden_agent.secrets`` for adapters that need them (#184).
     # Safe in interactive dev runs too: ``load_from_stdin`` short-
     # circuits on a tty-backed stdin.
-    agent_secrets.load_from_stdin()
+    try:
+        agent_secrets.load_from_stdin()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
 
     # If --profile is given, load defaults from the YAML profile
     if profile:
@@ -84,6 +111,10 @@ def agent_main(
         if not rooms:
             rooms = tuple(agent_profile.rooms)
 
+    error = removed_engine_error(engine)
+    if error:
+        raise click.ClickException(error)
+
     # Validate required fields after profile merge
     if not engine:
         click.echo("Error: --engine is required (or specify --profile).", err=True)
@@ -95,12 +126,39 @@ def agent_main(
         click.echo("Error: --server is required.", err=True)
         sys.exit(1)
     if not rooms:
-        click.echo("Error: at least one --room is required (or specify --profile).", err=True)
+        click.echo(
+            "Error: at least one --room is required (or specify --profile).", err=True
+        )
         sys.exit(1)
+
+    execution_launch = None
+    if engine in {"codex-cli", "pi-cli"} or endpoint_configured:
+        from anygarden_agent.runtime.execution.launch import load_execution_launch
+
+        try:
+            execution_launch = load_execution_launch(
+                engine=engine,
+                provider=provider,
+                model=model,
+                generation=int(os.environ.get("ANYGARDEN_AGENT_GENERATION", "0")),
+                endpoint_configured=endpoint_configured,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from None
 
     resolved_token = load_token(cli_token=token)
     asyncio.run(
-        _run_agent(engine, name, server, resolved_token, list(rooms), model, system_prompt, reasoning_effort)
+        _run_agent(
+            engine,
+            name,
+            server,
+            resolved_token,
+            list(rooms),
+            model,
+            system_prompt,
+            reasoning_effort,
+            execution_launch=execution_launch,
+        )
     )
 
 
@@ -113,6 +171,7 @@ async def _run_agent(
     model: str | None,
     system_prompt: str | None,
     reasoning_effort: str | None = None,
+    execution_launch=None,
 ) -> None:
     from anygarden_agent.client import ChatClient
     from anygarden_agent.integrations._turn_timeout import (
@@ -136,16 +195,24 @@ async def _run_agent(
         # under the agent root, so cursors written here survive a respawn
         # and the reconnect replays whatever arrived while we were down.
         state_dir=Path.cwd(),
+        execution_launch=execution_launch,
     )
 
-    # Build kwargs for the integration function based on engine
-    await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)
-
-    for room_id in rooms:
-        await client.join_room(room_id)
-
-    click.echo(f"Agent '{name}' running with engine={engine}, rooms={rooms}")
     try:
+        await _setup_engine(
+            client, engine, name, model, system_prompt, reasoning_effort
+        )
+        if (
+            execution_launch is not None
+            and execution_launch.endpoint is not None
+            and not client.execution_launch_ready
+        ):
+            raise click.ClickException(
+                "Direct endpoints require the common execution bridge; legacy engine fallback refused"
+            )
+        for room_id in rooms:
+            await client.join_room(room_id)
+        click.echo(f"Agent '{name}' running with engine={engine}, rooms={rooms}")
         await client.run()
     finally:
         await client.close()
@@ -196,62 +263,19 @@ async def _setup_engine(
     reasoning_effort: str | None = None,
 ) -> None:
     """Lazy-import and wire the chosen engine to the client."""
-    if engine == "claude-code":
-        from anygarden_agent.integrations.claude_code import integrate_with_claude_code
-
-        # Leave system_prompt None by default so CLAUDE.md (which
-        # Phase 0 materializer symlinks to AGENTS.md) is the sole
-        # system-level source. If a caller passes an explicit
-        # system_prompt string, it gets layered on top via
-        # ClaudeAgentOptions.system_prompt.
-        await integrate_with_claude_code(
-            client,
-            agent_config={
-                "name": name,
-                "system_prompt": _with_identity(name, system_prompt),
-                "model": model,
-            },
+    if engine in {"codex-cli", "pi-cli"}:
+        from anygarden_agent.integrations.room_execution import (
+            integrate_with_room_execution,
         )
-    elif engine == "codex-cli":
-        # #496 — codex exec subprocess engine (SDK 버전 결합 없이 codex 바이너리 직접 호출)
-        from anygarden_agent.integrations.codex_cli import integrate_with_codex_cli
 
-        await integrate_with_codex_cli(
+        await integrate_with_room_execution(
             client,
-            model=model,  # None → codex_cli 기본 모델(gpt-5.6-terra) 사용
+            engine=engine,
+            model=model,
             system_prompt=_with_identity(
                 name, system_prompt or "You are a helpful coding assistant."
             ),
             reasoning_effort=reasoning_effort,
-        )
-    elif engine == "gemini-cli":
-        from anygarden_agent.integrations.gemini_cli import integrate_with_gemini_cli
-
-        await integrate_with_gemini_cli(
-            client,
-            model=model,  # None → gemini CLI 기본 모델 사용
-            system_prompt=_with_identity(
-                name, system_prompt or "You are a helpful coding assistant."
-            ),
-            reasoning_effort=reasoning_effort,
-        )
-    elif engine == "openhands":
-        # Issue #355 — in-process OpenHands SDK adapter. Unlike the
-        # three CLI engines above, ``model`` here MUST carry a litellm
-        # provider prefix (``anthropic/...``, ``openai/...``,
-        # ``gemini/...``); the catalog enforces that shape.
-        from anygarden_agent.integrations.openhands_engine import (
-            integrate_with_openhands,
-        )
-
-        await integrate_with_openhands(
-            client,
-            agent_config={
-                "name": name,
-                "system_prompt": _with_identity(name, system_prompt),
-                "model": model,
-                "reasoning_effort": reasoning_effort,
-            },
         )
     else:
         click.echo(f"Engine '{engine}' is not yet implemented.", err=True)

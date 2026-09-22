@@ -9,7 +9,6 @@
 
 import { Command } from "commander";
 import { ChatClient } from "./client.js";
-import { ClaudeCodeAdapter } from "./engines/claude-code.js";
 import type { EngineAdapter } from "./engines/types.js";
 import type { MessageOut } from "./protocol/frames.js";
 import { shouldRespond } from "./routing/should-respond.js";
@@ -34,9 +33,9 @@ export function buildCli(): Command {
   const cmd = new Command();
   cmd
     .name("anygarden-agent-ts")
-    .description("Anygarden TypeScript agent runtime (Claude Code MVP)")
+    .description("Anygarden TypeScript transport client (use Python for engine execution)")
     .version(CLI_VERSION)
-    .requiredOption("--engine <name>", "engine id (claude_code)")
+    .requiredOption("--engine <name>", "engine id (engine execution requires Python)")
     .option("--name <name>", "display name for this agent", "")
     .requiredOption("--server <url>", "Anygarden cluster WebSocket URL")
     .option("--room <id...>", "room id to join on start (repeatable)", collect, [])
@@ -50,27 +49,15 @@ function collect(value: string, previous: string[]): string[] {
   return previous;
 }
 
-/**
- * Map an ``--engine`` id to an adapter factory. Only ``claude_code``
- * is implemented in this MVP; other ids throw so a misconfigured
- * spawn fails loudly instead of silently doing nothing.
- */
-export function makeAdapter(engine: string, opts: CliOptions): EngineAdapter {
-  switch (engine) {
-    case "claude_code":
-      return new ClaudeCodeAdapter({
-        agentName: opts.name || "ClaudeCode",
-        model: opts.model,
-      });
-    case "codex":
-    case "gemini-cli":
-    case "gemini_cli":
-      throw new Error(
-        `engine '${engine}' is out of scope for the TS runtime MVP (#73 phase 1)`,
-      );
-    default:
-      throw new Error(`unknown engine '${engine}'`);
+/** Preserve the transport client; engine execution is available in Python. */
+export function makeAdapter(engine: string, _opts: CliOptions): EngineAdapter {
+  if (["claude-code", "claude_code", "gemini-cli", "gemini_cli", "openhands"].includes(engine)) {
+    throw new Error("This engine has been removed. Create a Codex or Pi agent with runtime=python; existing configuration and history are preserved.");
   }
+  if (["codex", "codex-cli", "pi-cli"].includes(engine)) {
+    throw new Error("Codex and Pi require the Python agent runtime; choose runtime=python.");
+  }
+  throw new Error(`unknown engine '${engine}'`);
 }
 
 /** Send a non-empty adapter answer to the message's room/thread boundary. */

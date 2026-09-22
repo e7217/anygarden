@@ -16,6 +16,7 @@ export interface Agent {
   agents_md?: string | null;
   reasoning_effort?: string | null;
   model?: string | null;
+  provider?: string | null;
   // Issue #493 — per-agent turn timeout (seconds). ``null`` = global
   // default; the UI shows an empty input with a default placeholder.
   turn_timeout_sec?: number | null;
@@ -151,6 +152,7 @@ export function useAgents() {
     files?: Record<string, string>;
     reasoning_effort?: string;
     model?: string;
+    provider?: string;
   }) => {
     const resp = await apiFetch('/api/v1/agents', {
       method: 'POST',
@@ -253,6 +255,8 @@ export function useAgents() {
       // on the Overview panel. Backend PUT already supports these via
       // the same ``_set`` idiom.
       model?: string | null;
+      provider?: string | null;
+      provider_set?: boolean;
       model_set?: boolean;
       reasoning_effort?: string | null;
       reasoning_effort_set?: boolean;

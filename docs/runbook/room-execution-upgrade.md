@@ -1,0 +1,78 @@
+# Room execution upgrade
+
+Normal `codex-cli` and `pi-cli` room turns now run through
+`LocalExecutionManager`, the process supervision and receipt implementation also
+used by federation. CLI registration binds the private launch selection before
+submission. Existing room wake policy, delegation, room queries, ambient context,
+identity/memory/roster prompts, typing and lifecycle handling remain in place.
+
+## Configuration and permissions
+
+The room registration factory selects local room runtime classes. This option is
+not a federation payload field. Federation still constructs ordinary Invocation
+and isolated runtimes, rejects trusted permissions and external workspace writes,
+and suppresses user configuration/skills as before.
+
+Local Codex keeps the effective `CODEX_HOME` staged by the machine, or its existing
+host-home fallback. OAuth, config.toml MCP definitions, skills and rules continue
+to be read by the installed CLI. No auth/config files are rewritten. Permission
+tiers retain the existing native sandbox and approval mapping, including trusted.
+A selected native provider is passed as a structured config override. An omitted
+Codex model retains the prior adapter default.
+
+Local Pi keeps settings/auth/models under the agent root `.pi/agent` and sessions
+under the agent root `sessions`; installation assets are resolved by Pi itself.
+Local skills, context files, prompt templates and extensions remain enabled.
+Restricted Pi turns select the read/grep/find/ls tool set. Pi does not provide an
+OS sandbox; this is not an external-workspace isolation guarantee. The common
+capability report continues to advertise no workspace enforcement.
+
+Provider credentials enter through private stdin and are merged into only the
+engine child's environment. The parent environment is not mutated. The server
+transport token and private endpoint CONFIG/KEY are removed; the separately
+staged self-MCP credential remains available. Endpoint key selection, Pi auth
+conflict detection and managed-model file preservation still apply in room mode.
+
+## Sessions and upgrade behavior
+
+New receipts and native handles live under `.anygarden-execution/<engine>` inside
+the agent root. Session identity includes agent, authority, room, thread,
+workspace, permission tier, launch generation, provider/model and endpoint
+revision. A process restart with unchanged selection resumes its stored handle.
+Changing one of these boundaries starts a different session. A failed or unknown
+turn is never automatically retried in a fresh native session.
+
+Old Codex `.anygarden-engine-sessions.json` maps rooms to handles without recording
+provider/model. At most once per room, the upgrade can import a handle when all
+of the following are true:
+
+- This is a root-room turn with no direct endpoint.
+- Exactly one bounded native session file in the effective Codex home matches its
+  UUID; its session metadata confirms that ID, workspace and selected provider.
+- Its last turn-context model matches the current effective model.
+
+If metadata is absent, ambiguous, too large to inspect, or incompatible, original
+files are preserved and a new session starts. Starting directly with an endpoint
+also consumes the old room import opportunity without importing it: later
+turning that endpoint off cannot resurrect the old session. Native sessions
+already migrated into the scoped manager store do not require another import.
+Thus legacy continuation is guaranteed only for metadata-confirmed compatibility.
+
+## Usage and cancellation
+
+Each runtime run owns its measured usage accumulator. Pi sums measured assistant
+message usage; invalid/missing token values do not become a measured zero.
+Received tokens survive provider errors, abnormal exits, timeout and cancellation,
+including process-tree cleanup. The room supervisor emits those measurements on
+its existing terminal lifecycle frame. Existing neutral usage-ledger and budget
+consumers remain unchanged; this does not add ledger idempotency.
+
+## Validation limits
+
+The room regressions call actual CLI registration, wake policy, supervisor,
+manager, subprocess collectors and lifecycle handling, using fake executables.
+Direct endpoint tests make HTTP requests only to loopback responders. They cover
+Responses for Codex and Pi, and Chat Completions for Pi. Installed CLI version
+checks are separate evidence; fake CLI HTTP tests do not demonstrate an installed
+CLI completing a model turn. No real provider, deployment, production database
+write or merge is part of this change.

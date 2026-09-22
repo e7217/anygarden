@@ -9,12 +9,11 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from anygarden_machine.spawner import (
     KILL_TIMEOUT,
     RunningAgent,
-    SpawnManifest,
     Spawner,
+    SpawnManifest,
 )
 
 
@@ -38,7 +37,7 @@ def spawn_msg() -> SpawnManifest:
     """A valid SpawnManifest."""
     return SpawnManifest(
         agent_id="agent-test-001",
-        engine="claude-code",
+        engine="codex-cli",
         agent_token="secret-token-xyz",
         profile_yaml="name: test-agent\nmodel: claude-3",
         rooms=["room-alpha"],
@@ -84,7 +83,7 @@ class TestSpawnEnvSecrets:
         """
         msg = SpawnManifest(
             agent_id="agent-secret",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok-xyz",
             profile_yaml="",
             rooms=["r"],
@@ -139,7 +138,7 @@ class TestSpawnEnvSecrets:
         """
         msg = SpawnManifest(
             agent_id="agent-tt",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -172,7 +171,7 @@ class TestSpawnEnvSecrets:
         """
         msg = SpawnManifest(
             agent_id="agent-tt-none",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -205,7 +204,7 @@ class TestSpawnEnvSecrets:
         """
         msg = SpawnManifest(
             agent_id="agent-secret",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok-xyz",
             profile_yaml="",
             rooms=["r"],
@@ -264,7 +263,7 @@ class TestSpawnEnvSecrets:
         """
         msg = SpawnManifest(
             agent_id="agent-secret",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok-xyz",
             profile_yaml="",
             rooms=["r"],
@@ -345,9 +344,6 @@ class TestSpawn:
         assert captured["cwd"] == str(
             spawner._agent_dirs_root / spawn_msg.agent_id
         )
-        assert not (
-            spawner._agent_dirs_root / spawn_msg.agent_id / "workspace"
-        ).exists()
 
     async def test_spawn_points_the_watcher_at_the_agent_log_file(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -606,7 +602,7 @@ class TestSpawn:
         assert result.success is True
         assert "CODEX_HOME" not in captured_env
 
-    @pytest.mark.parametrize("engine", ["claude-code", "gemini-cli"])
+    @pytest.mark.parametrize("engine", ["pi-cli"])
     async def test_spawn_does_not_set_codex_home_for_other_engines(
         self, spawner: Spawner, engine: str
     ) -> None:
@@ -618,7 +614,7 @@ class TestSpawn:
         """
         msg = SpawnManifest(
             agent_id="agent-other",
-            engine=engine,
+            engine=engine, provider="local",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -648,107 +644,8 @@ class TestSpawn:
         assert result.success is True
         assert "CODEX_HOME" not in captured_env
 
-    async def test_spawn_typescript_runtime_uses_anygarden_agent_ts_when_on_path(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
-    ) -> None:
-        """Issue #73 — ``runtime='typescript'`` resolves to the
-        ``anygarden-agent-ts`` binary when present on PATH. The ``which``
-        call must target the TS binary name, not the Python one.
-        """
-        captured_cmd: list[str] = []
 
-        async def capture_exec(*args, **kwargs):
-            captured_cmd.extend(args)
-            proc = MagicMock()
-            proc.pid = 71
-            proc.wait = AsyncMock(return_value=0)
-            proc.stderr = None
-            proc.stdin = AsyncMock()
-            return proc
 
-        def fake_which(name: str):
-            if name == "anygarden-agent-ts":
-                return "/usr/local/bin/anygarden-agent-ts"
-            return None
-
-        spawn_msg.runtime = "typescript"
-
-        with patch(
-            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
-            side_effect=capture_exec,
-        ), patch("anygarden_machine.spawner.shutil.which", side_effect=fake_which):
-            result = await spawner.spawn(spawn_msg)
-
-        assert result.success is True
-        assert captured_cmd[0] == "/usr/local/bin/anygarden-agent-ts"
-        # Same --engine/--name/--server contract as the Python arm.
-        assert "--engine" in captured_cmd
-        assert "--server" in captured_cmd
-
-    async def test_spawn_typescript_runtime_falls_back_to_npx(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
-    ) -> None:
-        """Issue #73 — when ``anygarden-agent-ts`` is not installed,
-        spawner falls back to ``npx -y @anygarden/agent-ts``. This is the
-        "no local install" path on fresh machines."""
-        captured_cmd: list[str] = []
-
-        async def capture_exec(*args, **kwargs):
-            captured_cmd.extend(args)
-            proc = MagicMock()
-            proc.pid = 72
-            proc.wait = AsyncMock(return_value=0)
-            proc.stderr = None
-            proc.stdin = AsyncMock()
-            return proc
-
-        spawn_msg.runtime = "typescript"
-
-        with patch(
-            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
-            side_effect=capture_exec,
-        ), patch(
-            "anygarden_machine.spawner.shutil.which",
-            return_value=None,  # Nothing installed
-        ):
-            result = await spawner.spawn(spawn_msg)
-
-        assert result.success is True
-        assert captured_cmd[0] == "npx"
-        assert captured_cmd[1] == "-y"
-        assert captured_cmd[2] == "@anygarden/agent-ts"
-
-    async def test_spawn_typescript_runtime_logs_binary_resolution(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
-    ) -> None:
-        """Issue #73 — the ``agent_binary_resolved`` log line is
-        emitted with ``runtime='typescript'`` + source=path|npx so
-        operators can tell which runtime and which binary ran."""
-        mock_proc = MagicMock()
-        mock_proc.pid = 73
-        mock_proc.wait = AsyncMock(return_value=0)
-        mock_proc.stderr = None
-        mock_proc.stdin = AsyncMock()
-
-        spawn_msg.runtime = "typescript"
-
-        with patch(
-            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
-            return_value=mock_proc,
-        ), patch(
-            "anygarden_machine.spawner.shutil.which",
-            return_value="/usr/local/bin/anygarden-agent-ts",
-        ), patch("anygarden_machine.spawner.log") as mock_log:
-            await spawner.spawn(spawn_msg)
-            calls = [
-                c
-                for c in mock_log.info.call_args_list
-                if c.args and c.args[0] == "agent_binary_resolved"
-            ]
-            assert len(calls) == 1
-            assert calls[0].kwargs["runtime"] == "typescript"
-            assert calls[0].kwargs["source"] == "path"
-            assert calls[0].kwargs["path"] == "/usr/local/bin/anygarden-agent-ts"
 
     async def test_spawn_python_runtime_still_default(
         self, spawner: Spawner, spawn_msg: SpawnManifest
@@ -1242,7 +1139,7 @@ class TestSessionStorePreservation:
         트리째 prune된다 — #532가 .codex에만 적용됨을 확인."""
         msg = SpawnManifest(
             agent_id="agent-cc",
-            engine="claude-code",
+            engine="codex-cli",
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -1307,3 +1204,65 @@ class TestKillWithLingeringPipes:
         # whether or not the pipes ever hit EOF.
         assert result["success"] is True
         assert "agent-test-001" not in spawner._agents
+
+
+async def test_direct_endpoint_cold_restart_requires_fresh_server_config(spawner, tmp_path):
+    from anygarden_machine.manifest_store import ManifestStore
+    from anygarden_machine.protocol.frames import SyncDesiredStateFrame
+
+    store = ManifestStore(agents_root=tmp_path / "manifests")
+    frame = SyncDesiredStateFrame(
+        agent_id="direct-agent", generation=1, desired_state="running",
+        engine="codex", endpoint_configured=True,
+        engine_secrets={"AG_ENGINE_ENDPOINT_CONFIG": "{}", "AG_ENGINE_ENDPOINT_KEY": "test-key"},
+    )
+    store.save(frame)
+    cold = ManifestStore(agents_root=tmp_path / "manifests")
+    restored = cold.load("direct-agent")
+    assert restored.endpoint_configured
+    assert cold.get_secrets("direct-agent") == {}
+    msg = SpawnManifest(agent_id="direct-agent", engine="codex", agent_token="token",
+                        endpoint_configured=restored.endpoint_configured,
+                        engine_secrets=cold.get_secrets("direct-agent"))
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock) as create:
+        result = await spawner.spawn(msg)
+    assert not result.success
+    assert "reconnect" in result.error
+    create.assert_not_awaited()
+    assert not (tmp_path / "agents" / "direct-agent").exists()
+
+    # An authenticated fresh sync repopulates only the in-memory secret cache.
+    cold.save(frame)
+    msg.engine_secrets = cold.get_secrets("direct-agent")
+    proc = _mock_proc()
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create, patch("anygarden_machine.spawner.shutil.which", return_value="/bin/anygarden-agent"):
+        result = await spawner.spawn(msg)
+    assert result.success
+    create.assert_awaited_once()
+    assert "AG_ENGINE_ENDPOINT_KEY" not in create.call_args.kwargs["env"]
+    assert json.loads(proc.stdin.write.call_args.args[0])["AG_ENGINE_ENDPOINT_KEY"] == "test-key"
+    assert "test-key" not in (tmp_path / "manifests" / "direct-agent" / "manifest.json").read_text()
+
+
+@pytest.mark.parametrize('provider',[None,'','-bad','bad provider'])
+async def test_invalid_pi_provider_refused_before_subprocess(spawner,provider):
+    msg=SpawnManifest(agent_id='invalid-pi',engine='pi-cli',provider=provider,agent_token='test')
+    with patch('anygarden_machine.spawner.asyncio.create_subprocess_exec',new_callable=AsyncMock) as create:
+        result=await spawner.spawn(msg)
+    assert not result.success and 'provider' in result.error
+    create.assert_not_awaited()
+
+@pytest.mark.parametrize('engine_name,runtime', [
+    ('claude-code', 'python'), ('gemini-cli', 'python'), ('openhands', 'python'),
+    ('claude_code', 'typescript'), ('gemini_cli', 'typescript'),
+    ('codex-cli', 'typescript'), ('pi-cli', 'typescript'),
+])
+async def test_unsupported_engine_rejected_before_files_or_processes(spawner, spawn_msg, engine_name, runtime):
+    from dataclasses import replace
+    msg = replace(spawn_msg, engine=engine_name, runtime=runtime, provider='local')
+    with patch('anygarden_machine.spawner.asyncio.create_subprocess_exec', new_callable=AsyncMock) as spawn:
+        result = await spawner.spawn(msg)
+        assert not result.success
+        assert 'removed' in result.error or 'Python' in result.error or 'python' in result.error
+        spawn.assert_not_called()
+    assert not (spawner._agent_dirs_root / msg.agent_id).exists()

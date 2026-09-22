@@ -21,10 +21,15 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
+from contextvars import ContextVar
 from pathlib import Path
 
 from .codex import ProcessTree
+from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .contracts import Capabilities, Invocation, RuntimeResult
+
+_MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
@@ -57,6 +62,7 @@ class PiRuntime:
         ``invocation.provider`` is required by the contract for pi-cli and is
         mapped to ``--provider``; validate() already rejects None.
         """
+        validate_endpoint_invocation(invocation)
         if invocation.scope.engine != ENGINE or invocation.provider is None:
             raise ValueError("pi runtime requires an explicit provider")
         cmd = [
@@ -81,6 +87,8 @@ class PiRuntime:
     @staticmethod
     def environment(invocation: Invocation) -> dict[str, str]:
         # Never inherit the node's ambient environment or home/auth/config.
+        endpoint = validate_endpoint_invocation(invocation)
+        materialize_pi_endpoint(invocation.runtime_home, endpoint)
         env = dict(invocation.environment)
         for key in env:
             if key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_")):
@@ -89,11 +97,27 @@ class PiRuntime:
                 )
         home = str(invocation.runtime_home)
         env["HOME"] = home
-        # A stale host PI_PACKAGE_DIR crashes --mode json with ENOENT
-        # (observed 2026-09-17): always pin it inside the sandboxed home.
-        env["PI_PACKAGE_DIR"] = home
-        env["PI_CONFIG_DIR"] = home
-        env["PI_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
+        # Env split (architect + PM review 2026-09-22):
+        # - PI_PACKAGE_DIR is an INSTALL asset path. Remove the ambient
+        #   override entirely and let the CLI resolve its own executable —
+        #   pinning it at the sandbox home made ``--version`` read a missing
+        #   package.json (0.0.0) and fail the gate.
+        # - PI_CODING_AGENT_DIR is the USER config parent (models.json /
+        #   auth.json / settings): pin it at an isolated adapter-owned
+        #   directory under the sandbox home, never at the install dir
+        #   (that would break isolation).
+        # - PI_CODING_AGENT_SESSION_DIR is the isolated session dir.
+        # - PI_CONFIG_DIR / PI_SESSION_DIR are NOT keys this install reads;
+        #   historical names are dropped so they cannot alias anything.
+        env.pop("PI_PACKAGE_DIR", None)
+        env.pop("PI_CONFIG_DIR", None)
+        env.pop("PI_SESSION_DIR", None)
+        env.pop("PI_CODING_AGENT_DIR", None)
+        agent_dir = invocation.runtime_home / ".pi" / "agent"
+        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+        env["PI_CODING_AGENT_SESSION_DIR"] = str(
+            invocation.runtime_home / "sessions"
+        )
         return env
 
     async def _version_matches(
@@ -109,7 +133,17 @@ class PiRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            return proc.returncode == 0 and stdout.strip() == f"pi {ENGINE_VERSION}".encode()
+            # The CLI prints the package.json version of PI_PACKAGE_DIR —
+            # observed bare (``0.85.1``), sometimes with a ``pi `` prefix.
+            # Parse to a version tuple and compare EXACTLY: a substring
+            # containment check would admit unsupported ``0.85.10``.
+            out = stdout.decode(errors="replace").strip().removeprefix("pi ").strip()
+            try:
+                observed = tuple(int(part) for part in out.split("."))
+                expected = tuple(int(part) for part in ENGINE_VERSION.split("."))
+            except ValueError:
+                return False
+            return proc.returncode == 0 and observed == expected
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -161,17 +195,23 @@ class PiRuntime:
             except OSError:
                 return RuntimeResult("failed", "not_started", "ENGINE_ERROR")
             tree = ProcessTree(proc.pid)
+            measured: dict[str, int] = {}
             stream: asyncio.Task | None = None
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
                 launched(proc.pid)
                 if cancelled_at_spawn or not authorized():
                     raise asyncio.CancelledError
-                stream = asyncio.create_task(
-                    self._collect(
-                        proc, invocation, session_handle, output, emit, authorized
-                    )
-                )
+                async def collect():
+                    token = _MEASURED_USAGE.set(measured)
+                    try:
+                        return await self._collect(
+                            proc, invocation, session_handle, output, emit, authorized
+                        )
+                    finally:
+                        _MEASURED_USAGE.reset(token)
+
+                stream = asyncio.create_task(collect())
                 deadline = (
                     asyncio.get_running_loop().time() + invocation.timeout_seconds
                 )
@@ -208,8 +248,8 @@ class PiRuntime:
                     confirmed = await cleanup_task
                     result = RuntimeResult("cancelled", "stopped", "cancelled")
             if not confirmed:
-                return RuntimeResult("unknown", "unknown", "termination_unconfirmed")
-            return result
+                return RuntimeResult("unknown", "unknown", "termination_unconfirmed", usage=dict(measured) or None)
+            return replace(result, usage=dict(measured) or result.usage)
 
     async def _collect(
         self, proc, invocation, session, output, emit, authorized
@@ -226,7 +266,8 @@ class PiRuntime:
         proc.stdin.close()
         texts: list[str] = []
         text_size = 0
-        usage = None
+        measured = _MEASURED_USAGE.get()
+        usage = measured if measured is not None else {}
         session_handle = session
         failed = False
         settled = False
@@ -246,14 +287,14 @@ class PiRuntime:
                 message = event.get("message")
                 if not isinstance(message, dict):
                     continue
-                raw_usage = message.get("usage")
-                if isinstance(raw_usage, dict):
-                    usage = {
-                        "input_tokens": int(raw_usage.get("input") or 0),
-                        "output_tokens": int(raw_usage.get("output") or 0),
-                    }
                 if message.get("role") != "assistant":
                     continue
+                raw_usage = message.get("usage")
+                if isinstance(raw_usage, dict):
+                    for source, target in (("input", "input_tokens"), ("output", "output_tokens")):
+                        value = raw_usage.get(source)
+                        if type(value) is int and value >= 0:
+                            usage[target] = usage.get(target, 0) + value
                 content = message.get("content")
                 if isinstance(content, list):
                     for block in content:
@@ -297,3 +338,4 @@ class PiRuntime:
         return RuntimeResult(
             "succeeded", "finished", "completed", text, session_handle, usage
         )
+

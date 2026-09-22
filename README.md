@@ -9,9 +9,13 @@ team. Humans and agents share project rooms to chat, mention each other, exchang
 files, and hand off work — Anygarden handles routing, context, permissions, and
 agent lifecycles.
 
-- **Multiple engines** — Claude Code, Codex, Gemini CLI, OpenHands, auto-detected on each machine.
+- **Two execution engines** — Codex and Pi share room execution, cancellation and usage accounting. See the [upgrade guide](docs/runbook/room-execution-upgrade.md) and [retired-engine migration guide](docs/runbook/retired-engines.md).
 - **Distributed machines** — run agents on any host; the server routes work to whichever is online.
-- **Cloud or local models** — point agents at provider CLIs, or run fully local via the built-in LLM gateway.
+- **Cloud or local models** — use engine providers or configure a [direct model endpoint](docs/runbook/direct-model-endpoints.md). Codex requires Responses; Pi supports Responses and Chat Completions.
+
+Administrators can inspect current and historical usage at `/admin/usage`.
+See [gateway retirement](docs/runbook/gateway-removal.md) for the replacement
+usage API and preserved data; the embedded model gateway is removed.
 
 ## Prerequisites
 
@@ -26,9 +30,11 @@ prebuilt web UI. It is needed from a checkout, and wherever the npm-distributed
 TypeScript agent runtime runs.
 
 Each agent engine additionally needs **its own CLI installed and authenticated**
-on the host that runs the agent (`claude`, `codex`, `gemini`, or the OpenHands
-SDK). Engines are detected at startup, so install them before starting the node
-or the machine daemon.
+on the host that runs the agent (`codex` or `pi`). Engines are detected at startup,
+so install them before starting the node or machine daemon. Codex/Pi execution
+requires the Python agent runtime; the TypeScript client does not provide these
+engine adapters. Pi creation requires an explicit provider; its model is optional.
+Direct endpoint configuration requires an explicit model.
 
 ## Quick Start
 
@@ -111,7 +117,7 @@ Anygarden is a `uv` workspace of four packages:
 - Local LLM (Ollama) setup — [`docs/runbook/openhands-ollama-setup.md`](docs/runbook/openhands-ollama-setup.md)
 - Architecture & design — [`docs/design/`](docs/design) · operational runbooks — [`docs/runbook/`](docs/runbook)
 - Environment variables — [`.env.example`](.env.example) · [`packages/cluster/README.md`](packages/cluster/README.md)
-- Contributing — [`CONTRIBUTING.md`](CONTRIBUTING.md) · UI changes follow [`DESIGN.md`](DESIGN.md)
+- Contributing — [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ## License
 

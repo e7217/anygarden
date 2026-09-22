@@ -476,7 +476,7 @@ def _frame_carries_usage(frame: LifecycleFrame) -> bool:
 async def _write_lifecycle_usage_row(
     session_factory: Any, *, agent_id: str, frame: LifecycleFrame
 ) -> None:
-    """Record one ``LLMGatewayUsage`` row from a token-bearing frame (#461).
+    """Record one ``UsageLedger`` row from a token-bearing frame (#461).
 
     CLI engines (claude-code / codex / gemini) bypass the LLM gateway, so
     their usage arrives here on the ``engine_call_finished`` frame instead
@@ -491,7 +491,7 @@ async def _write_lifecycle_usage_row(
     capture_content span gate). Best-effort — swallows DB errors inside
     ``_write_usage_row`` so a hiccup can't break the WS receive loop.
     """
-    from anygarden.llm_gateway.reverse_proxy import _write_usage_row
+    from anygarden.usage import write_usage_row as _write_usage_row
 
     await _write_usage_row(
         session_factory,
@@ -2148,7 +2148,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         _apply_lifecycle_to_metrics(frame_in)
                         # #461 (Wave 2d) — gateway-free LLM usage: when a
                         # CLI engine reported token counts / a model on
-                        # engine_call_finished, record one LLMGatewayUsage
+                        # engine_call_finished, record one UsageLedger
                         # row (its own session so a write error can't roll
                         # back the ActivityLog commit above). openhands
                         # leaves these None — it is counted via the gateway

@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -460,7 +460,7 @@ class TestMigrations:
                 pass
 
     def test_047_cost_usd_column_up_and_down(self) -> None:
-        """#461 (Wave 2d) — migration 047 adds ``llm_gateway_usage.cost_usd``
+        """#461 (Wave 2d) — migration 047 adds ``usage_ledger.cost_usd``
         on upgrade head and removes it on downgrade 047 → 046."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -469,34 +469,64 @@ class TestMigrations:
             command.upgrade(cfg, "head")
 
             engine = create_engine(f"sqlite:///{db_path}")
-            with engine.connect() as conn:
+            with engine.begin() as conn:
                 cols = {
                     row[1]
                     for row in conn.execute(
-                        text("PRAGMA table_info(llm_gateway_usage)")
+                        text("PRAGMA table_info(usage_ledger)")
                     )
                 }
+                # A nonexistent table yields an empty PRAGMA — assert the
+                # table exists before judging columns.
+                assert cols, "usage_ledger table missing at head"
                 assert "cost_usd" in cols
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                # is still present after upgrading through to head.
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
+                # Seed a real row so the downgrade is verified against
+                # actual data, not an empty table (task #98 review).
+                conn.execute(
+                    text(
+                        "INSERT INTO usage_ledger "
+                        "(id, timestamp, identity_kind, identity_id, "
+                        "model_name, status_code) VALUES "
+                        "('seed-1', '2026-09-22 00:00:00.000000', 'agent', "
+                        "'agent-1', 'glm-5.3-flash', 200)"
+                    )
+                )
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
-            # column is gone and the head moved back.
+            # column is gone and the head moved back. At 046 the table is
+            # still named llm_gateway_usage (the 074 rename happens later),
+            # so query THAT name here.
             command.downgrade(cfg, "046")
             engine = create_engine(f"sqlite:///{db_path}")
             with engine.connect() as conn:
+                table = conn.execute(
+                    text(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('usage_ledger', 'llm_gateway_usage')"
+                    )
+                ).scalar()
+                assert table == "llm_gateway_usage", (
+                    "046 must keep the pre-rename table name"
+                )
                 cols = {
                     row[1]
                     for row in conn.execute(
                         text("PRAGMA table_info(llm_gateway_usage)")
                     )
                 }
+                assert cols, "llm_gateway_usage table missing at 046"
                 assert "cost_usd" not in cols
+                # The seeded row must survive the downgrade.
+                count = conn.execute(
+                    text("SELECT COUNT(*) FROM llm_gateway_usage")
+                ).scalar_one()
+                assert count == 1, f"seeded row lost on downgrade: {count}"
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
@@ -542,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -589,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -656,7 +686,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -837,7 +867,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -894,9 +924,8 @@ class TestMigrations:
             # After downgrading to base, there should be no application
             # tables left (alembic_version may remain).
             engine = create_engine(f"sqlite:///{db_path}")  # sync driver for reads
-            with engine.connect() as conn:
-                with pytest.raises(OperationalError):
-                    conn.execute(text("SELECT * FROM messages"))
+            with engine.connect() as conn, pytest.raises(OperationalError):
+                conn.execute(text("SELECT * FROM messages"))
             engine.dispose()
 
             command.upgrade(cfg, "head")
@@ -939,7 +968,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -979,7 +1008,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
             sync_engine.dispose()
         finally:
             try:
@@ -999,7 +1028,7 @@ class TestEnsureSchemaReady:
         create_all and `alembic stamp` ran in separate transactions,
         and a crash between them would trap the operator forever.
         """
-        from anygarden.app import _ensure_schema_ready, _discover_head_revision
+        from anygarden.app import _discover_head_revision, _ensure_schema_ready
         from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -1013,7 +1042,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "072_drop_agent_collaboration_mode"
+            assert head == "075_direct_endpoints"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1058,6 +1087,7 @@ class TestEnsureSchemaReady:
         unstamped" on the next boot and trap the operator.
         """
         from unittest.mock import patch
+
         from anygarden.app import _ensure_schema_ready
         from anygarden.db.engine import build_engine
 
@@ -1076,9 +1106,8 @@ class TestEnsureSchemaReady:
                 with patch(
                     "anygarden.app._discover_head_revision",
                     side_effect=RuntimeError("simulated alembic-config crash"),
-                ):
-                    with pytest.raises(RuntimeError, match="simulated"):
-                        await _ensure_schema_ready(engine, db_url)
+                ), pytest.raises(RuntimeError, match="simulated"):
+                    await _ensure_schema_ready(engine, db_url)
             finally:
                 await engine.dispose()
 
@@ -1115,7 +1144,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "075_direct_endpoints"
             sync_engine.dispose()
         finally:
             try:
@@ -1399,7 +1428,7 @@ class TestMigrationFailureMessage:
         msg = _migration_failure_message(
             db_url="postgresql+asyncpg://ag:sup3rs3cret@db.internal:5432/anygarden",
             current_rev="059",
-            head_rev="072_drop_agent_collaboration_mode",
+            head_rev="074_usage_ledger",
             cause=RuntimeError("boom"),
         )
         assert "sup3rs3cret" not in msg
@@ -1411,12 +1440,12 @@ class TestMigrationFailureMessage:
         msg = _migration_failure_message(
             db_url="sqlite+aiosqlite:////home/u/.anygarden/anygarden.db",
             current_rev="059",
-            head_rev="072_drop_agent_collaboration_mode",
+            head_rev="074_usage_ledger",
             cause=RuntimeError("boom"),
         )
         assert "/home/u/.anygarden/anygarden.db" in msg
         assert "059" in msg
-        assert "072_drop_agent_collaboration_mode" in msg
+        assert "074_usage_ledger" in msg
 
     def test_reports_innermost_cause(self) -> None:
         """SQLAlchemy wraps the DBAPI error; the actionable line is the one
@@ -1534,3 +1563,78 @@ class TestUpgradeFailureIsReportedWithContext:
                 os.unlink(db_path)
             except OSError:
                 pass
+
+
+def test_073_provider_preserves_existing_agents(tmp_path):
+    db_path = str(tmp_path / "provider.db")
+    cfg = _alembic_config(db_path)
+    command.upgrade(cfg, "072_drop_agent_collaboration_mode")
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO agents (id, name, engine, generation, created_at) VALUES ('legacy', 'Legacy Pi', 'pi-cli', 9, CURRENT_TIMESTAMP)"))
+    command.upgrade(cfg, "073_agent_provider")
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT name, engine, generation, provider FROM agents WHERE id='legacy'")).one()
+        assert tuple(row) == ("Legacy Pi", "pi-cli", 9, None)
+    command.downgrade(cfg, "072_drop_agent_collaboration_mode")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT name, generation FROM agents WHERE id='legacy'")).one() == ("Legacy Pi", 9)
+    engine.dispose()
+
+
+def test_075_preserves_agents_and_usage_across_upgrade_and_downgrade(tmp_path):
+    from datetime import datetime, timezone
+    from sqlalchemy import inspect
+
+    path = str(tmp_path / "endpoint.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "074_usage_ledger")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO agents (id, name, engine, provider, generation, created_at) VALUES ('a', 'Local', 'pi-cli', 'custom', 12, CURRENT_TIMESTAMP)"
+            )
+        )
+        # Populate an existing ledger row with all required columns generically,
+        # using the same ORM defaults as normal writes.
+        from anygarden.db.models import UsageLedger
+
+        conn.execute(
+            UsageLedger.__table__.insert().values(
+                id="usage-existing",
+                model_name="m",
+                timestamp=datetime.now(timezone.utc),
+                agent_id="a",
+                identity_kind="agent",
+                identity_id="a",
+                status_code=200,
+            )
+        )
+    command.upgrade(cfg, "075_direct_endpoints")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT provider, generation, base_url, credential_ref FROM agents WHERE id='a'"
+            )
+        ).one() == ("custom", 12, None, None)
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM usage_ledger WHERE id='usage-existing'")
+            ).scalar_one()
+            == 1
+        )
+        assert "engine_credentials" in inspect(conn).get_table_names()
+    command.downgrade(cfg, "074_usage_ledger")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT provider, generation FROM agents WHERE id='a'")
+        ).one() == ("custom", 12)
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM usage_ledger WHERE id='usage-existing'")
+            ).scalar_one()
+            == 1
+        )
+        assert "engine_credentials" not in inspect(conn).get_table_names()
+    engine.dispose()

@@ -34,6 +34,10 @@ SPAWN_FAILED = "spawn_failed"
 ENGINE_MISMATCH = "engine_mismatch"
 CRASHED = "crashed"
 NO_ROOM = "no_room"
+INVALID_PROVIDER = "invalid_provider"
+INVALID_ENDPOINT = "invalid_endpoint"
+ENGINE_REMOVED = "engine_removed"
+INVALID_RUNTIME = "invalid_runtime"
 
 UNAVAILABLE_CODES: frozenset[str] = frozenset(
     {
@@ -42,6 +46,10 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         ENGINE_MISMATCH,
         CRASHED,
         NO_ROOM,
+        INVALID_PROVIDER,
+        INVALID_ENDPOINT,
+        ENGINE_REMOVED,
+        INVALID_RUNTIME,
     }
 )
 
@@ -66,6 +74,14 @@ def render_unavailable_message(
     if audience not in _AUDIENCES:
         raise ValueError(f"unknown audience: {audience!r}")
     d: Mapping[str, object] = detail or {}
+
+    if code == INVALID_RUNTIME:
+        return "Codex/Pi 실행은 Python 런타임을 사용합니다. 관리자에게 런타임 설정 변경을 요청하세요. 기존 설정과 이력은 보존됩니다."
+    if code == ENGINE_REMOVED:
+        return "이 엔진은 지원이 종료되었습니다. Codex 또는 Pi 에이전트를 새로 만들고 필요한 설정을 옮겨 주세요. 기존 설정과 이력은 보존됩니다."
+
+    if code == INVALID_ENDPOINT:
+        return "직접 모델 연결 설정이나 실행 환경을 확인해야 합니다. 관리자에게 설정 확인을 요청하세요."
 
     if code == NO_MACHINE_FOR_ENGINE:
         engine = d.get("engine")
@@ -95,6 +111,9 @@ def render_unavailable_message(
             suffix = f" (exit={exit_code})" if exit_code is not None else ""
             return _with_admin_trace(base + suffix, d)
         return base
+
+    if code == INVALID_PROVIDER:
+        return "Pi 에이전트의 Provider 설정을 보완한 뒤 시작해 주세요."
 
     if code == NO_ROOM:
         return "배정된 방이 없습니다."

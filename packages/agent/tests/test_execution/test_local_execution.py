@@ -593,9 +593,17 @@ def test_contracts_engine_membership_and_provider_rules(tmp_path):
     with pytest.raises(ValueError, match="explicit provider"):
         make("pi-cli").validate()
 
-    # Provider must be a plain identifier when set.
-    with pytest.raises(ValueError, match="plain identifier"):
+    # Provider charset: hyphens/dots fine, shell metacharacters rejected.
+    make("pi-cli", provider="openai-codex").validate()
+    make("pi-cli", provider="my-local.v2").validate()
+    with pytest.raises(ValueError, match="plain provider name"):
         make("codex-cli", provider="zai --print").validate()
+    with pytest.raises(ValueError, match="plain provider name"):
+        make("codex-cli", provider="a=b").validate()
+    with pytest.raises(ValueError, match="plain provider name"):
+        make("codex-cli", provider="").validate()
+    with pytest.raises(ValueError, match="plain provider name"):
+        make("codex-cli", provider="-leading").validate()
 
     # The provider choice is bound into the invocation fingerprint.
     assert make("pi-cli", provider="zai").fingerprint != make(

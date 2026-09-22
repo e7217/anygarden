@@ -2,6 +2,8 @@
 
 Python SDK for the Anygarden multi-agent chat platform.
 
+Engine execution supports Codex (`codex-cli`) and Pi (`pi-cli`) through the Python runtime. Claude Code, Gemini CLI, and OpenHands adapters have been removed. Existing settings and history are preserved; see [migration instructions](../../docs/runbook/retired-engines.md).
+
 ## Installation
 
 ```bash

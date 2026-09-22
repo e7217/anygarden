@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -67,6 +68,7 @@ class SpawnManifest:
     agents_md: str | None = None
     files: dict[str, str] = field(default_factory=dict)
     engine_secrets: dict[str, str] = field(default_factory=dict)
+    endpoint_configured: bool = False
     # Issue #237 — DB snapshot of the agent's long-term memory. The
     # spawner writes this to ``<agent_dir>/memory/notes.md`` if the file
     # doesn't yet exist, preserving the runtime file when it does (the
@@ -74,6 +76,7 @@ class SpawnManifest:
     memory_md: str | None = None
     reasoning_effort: str | None = None
     model: str | None = None
+    provider: str | None = None
     # Issue #309 — semantic permission tier ("restricted" |
     # "standard" | "trusted"). The spawner exports this as
     # ``ANYGARDEN_AGENT_PERMISSION_LEVEL`` in the child env so each
@@ -201,20 +204,6 @@ class Spawner:
 
     # ── Per-agent directory materialization ──────────────────────────────
 
-    _PROTECTED_CLAUDE_DENY = (
-        "Edit(.mcp.json)",
-        "Write(.mcp.json)",
-        "Edit(AGENTS.md)",
-        "Write(AGENTS.md)",
-        "Edit(CLAUDE.md)",
-        "Write(CLAUDE.md)",
-        "Edit(.claude/settings.json)",
-        "Write(.claude/settings.json)",
-        "Bash(rm:.mcp.json)",
-        "Bash(rm:AGENTS.md)",
-        "Bash(rm:CLAUDE.md)",
-    )
-
     # Top-level entries owned by the materializer. These are wiped and
     # recreated on every spawn so stale manifest/config files cannot leak
     # into the next session. Everything else at agent_root is agent/user
@@ -260,109 +249,6 @@ class Spawner:
         }
     )
     _CODEX_WORKSPACE_MARKER = ".anygarden-codex-workspace"
-
-    # Default ``.claude/settings.json`` body for claude-code agents
-    # whose admin manifest doesn't supply one. claude-agent-sdk loads
-    # only project-scoped settings (``setting_sources=["project"]``),
-    # so without this file every tool call gets denied by the SDK's
-    # default ask-mode and there is no human in the loop to approve.
-    # The trust model matches gemini-cli's ``--approval-mode yolo``
-    # and codex's ``workspace-write`` mapping: tool calls are
-    # permitted, while ``permissions.deny`` protects the materialized
-    # instructions/config that live directly in the agent cwd. Admins
-    # who want a tighter policy ship their own ``.claude/settings.json``
-    # via the spawn manifest — that file is written first and the "is
-    # the slot empty?" check below skips the default.
-    #
-    # Issue #309 — the allow-list now varies by ``permission_level``:
-    # ``restricted`` agents lose Bash/Write/Edit/Task so the LLM can
-    # only read and search; ``standard`` keeps the pre-#309 allow
-    # list verbatim; ``trusted`` is identical to ``standard`` because
-    # claude-code has no separate "host access" dial — Bash already
-    # lets the agent shell out wherever the OS lets it. The mapping
-    # is the canonical translation of the cluster's permission tier
-    # for claude-code, and ``_claude_code_default_settings()`` is the
-    # single call site every code path goes through.
-    _CLAUDE_CODE_DEFAULT_SETTINGS = (
-        "{\n"
-        '  "permissions": {\n'
-        '    "allow": [\n'
-        '      "WebSearch",\n'
-        '      "WebFetch",\n'
-        '      "Bash",\n'
-        '      "Read",\n'
-        '      "Write",\n'
-        '      "Edit",\n'
-        '      "Glob",\n'
-        '      "Grep",\n'
-        '      "Task",\n'
-        '      "TodoWrite"\n'
-        "    ],\n"
-        '    "deny": [\n'
-        '      "Edit(.mcp.json)",\n'
-        '      "Write(.mcp.json)",\n'
-        '      "Edit(AGENTS.md)",\n'
-        '      "Write(AGENTS.md)",\n'
-        '      "Edit(CLAUDE.md)",\n'
-        '      "Write(CLAUDE.md)",\n'
-        '      "Edit(.claude/settings.json)",\n'
-        '      "Write(.claude/settings.json)",\n'
-        '      "Bash(rm:.mcp.json)",\n'
-        '      "Bash(rm:AGENTS.md)",\n'
-        '      "Bash(rm:CLAUDE.md)"\n'
-        "    ]\n"
-        "  }\n"
-        "}\n"
-    )
-
-    _CLAUDE_CODE_RESTRICTED_SETTINGS = (
-        "{\n"
-        '  "permissions": {\n'
-        '    "allow": [\n'
-        '      "WebSearch",\n'
-        '      "WebFetch",\n'
-        '      "Read",\n'
-        '      "Glob",\n'
-        '      "Grep"\n'
-        "    ],\n"
-        '    "deny": [\n'
-        '      "Edit(.mcp.json)",\n'
-        '      "Write(.mcp.json)",\n'
-        '      "Edit(AGENTS.md)",\n'
-        '      "Write(AGENTS.md)",\n'
-        '      "Edit(CLAUDE.md)",\n'
-        '      "Write(CLAUDE.md)",\n'
-        '      "Edit(.claude/settings.json)",\n'
-        '      "Write(.claude/settings.json)",\n'
-        '      "Bash(rm:.mcp.json)",\n'
-        '      "Bash(rm:AGENTS.md)",\n'
-        '      "Bash(rm:CLAUDE.md)"\n'
-        "    ]\n"
-        "  }\n"
-        "}\n"
-    )
-
-    @classmethod
-    def _claude_code_default_settings(cls, permission_level: str | None) -> str:
-        """Return the JSON body to materialize at
-        ``.claude/settings.json`` when the admin didn't ship one.
-
-        ``restricted`` strips Bash/Write/Edit/Task so the agent can
-        only inspect files. ``standard``/``trusted``/None keep the
-        pre-#309 broad allow-list. ``ValueError`` on unknown tiers
-        — same fail-loud contract as the codex/gemini mappings.
-        """
-        if permission_level is None or permission_level in (
-            "standard",
-            "trusted",
-        ):
-            return cls._CLAUDE_CODE_DEFAULT_SETTINGS
-        if permission_level == "restricted":
-            return cls._CLAUDE_CODE_RESTRICTED_SETTINGS
-        raise ValueError(
-            f"unknown permission_level: {permission_level!r} — "
-            "expected one of ('restricted', 'standard', 'trusted')"
-        )
 
     @staticmethod
     def _compose_agents_md(msg: SpawnManifest) -> str:
@@ -826,29 +712,6 @@ class Spawner:
                     shutil.rmtree(alias_dir)
             alias_dir.symlink_to(target_rel)
 
-        # --- Default .claude/settings.json for claude-code ------------
-        # Issue #111. The admin-supplied file (if any) was already
-        # written by the manifest loop above, so the existence check
-        # here is the override mechanism: present → admin wins, absent
-        # → fall back to the permissive default that lets the agent
-        # actually use its tools. See ``_CLAUDE_CODE_DEFAULT_SETTINGS``
-        # for the trust-model rationale.
-        if msg.engine == "claude-code":
-            settings_path = agent_root / ".claude" / "settings.json"
-            if not settings_path.exists():
-                settings_path.parent.mkdir(parents=True, exist_ok=True)
-                secure_chmod(settings_path.parent, 0o700)
-                # #309 — pick the allow-list that matches the agent's
-                # permission tier. Admin-supplied settings still win
-                # via the ``settings_path.exists()`` short-circuit
-                # above; this default is only used when the manifest
-                # left the slot empty.
-                safe_write_text(
-                    settings_path,
-                    self._claude_code_default_settings(msg.permission_level),
-                    mode=0o600,
-                )
-
         # --- Symlink host codex auth into per-agent CODEX_HOME --------
         # When ``Spawner.spawn`` is about to redirect ``CODEX_HOME`` at
         # ``<agent_root>/.codex/`` (triggered by a ``.codex/*`` overlay
@@ -957,6 +820,25 @@ class Spawner:
         - Begins background watch task
         """
         agent_id = msg.agent_id
+        from anygarden_machine.engines.registry import removed_engine_error
+        removed = removed_engine_error(msg.engine)
+        if removed:
+            return SpawnResult(success=False, agent_id=agent_id, error=removed)
+        if (msg.engine == "pi-cli" and not msg.provider) or (
+            msg.provider is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", msg.provider)
+        ):
+            return SpawnResult(success=False, agent_id=agent_id,
+                               error="Missing or invalid explicit agent provider")
+        if msg.runtime != "python" and (msg.engine in {"codex-cli", "pi-cli"} or msg.provider is not None or msg.endpoint_configured):
+            return SpawnResult(success=False, agent_id=agent_id,
+                               error="Provider/direct endpoint configuration requires the Python agent runtime")
+        if msg.endpoint_configured and not msg.engine_secrets.get("AG_ENGINE_ENDPOINT_CONFIG"):
+            return SpawnResult(
+                success=False,
+                agent_id=agent_id,
+                error="Direct endpoint configuration unavailable; reconnect to the server before restarting",
+            )
+
 
         if msg.workspace_attachment is not None:
             return SpawnResult(
@@ -1190,6 +1072,10 @@ class Spawner:
             cmd.extend(["--room", room])
         if msg.reasoning_effort:
             cmd.extend(["--reasoning-effort", msg.reasoning_effort])
+        if msg.provider is not None:
+            cmd.extend(["--provider", msg.provider])
+        if msg.endpoint_configured:
+            cmd.append("--endpoint-configured")
         if msg.model:
             cmd.extend(["--model", msg.model])
 

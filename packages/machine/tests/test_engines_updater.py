@@ -23,20 +23,6 @@ class TestRunEngineUpdate:
         assert result.error is None
         assert calls[0] == ["npm", "install", "-g", "@openai/codex@latest"]
 
-    def test_pip_engine_uses_target_interpreter(self):
-        calls: list[list[str]] = []
-        result = run_engine_update(
-            "openhands", python="/agent/venv/bin/python", runner=_ok_runner(calls)
-        )
-        assert result.ok
-        assert calls[0] == [
-            "/agent/venv/bin/python",
-            "-m",
-            "pip",
-            "install",
-            "-U",
-            "openhands-sdk",
-        ]
 
     def test_unknown_engine_is_rejected(self):
         def runner(cmd, **kwargs):
@@ -50,7 +36,7 @@ class TestRunEngineUpdate:
         def runner(cmd, **kwargs):
             return subprocess.CompletedProcess(cmd, 1, "", "npm ERR! boom")
 
-        result = run_engine_update("gemini-cli", runner=runner)
+        result = run_engine_update("pi-cli", runner=runner)
         assert not result.ok
         assert "boom" in (result.error or "")
 
@@ -61,13 +47,3 @@ class TestRunEngineUpdate:
         result = run_engine_update("codex-cli", runner=runner)
         assert not result.ok
         assert "install failed" in (result.error or "")
-
-    def test_pip_engine_without_interpreter_fails(self):
-        # No sys.executable fallback: a pip engine without an explicit
-        # interpreter is refused (else it installs into the wrong venv).
-        def runner(cmd, **kwargs):
-            raise AssertionError("must not run without an interpreter")
-
-        result = run_engine_update("openhands", runner=runner)
-        assert not result.ok
-        assert "interpreter" in (result.error or "")

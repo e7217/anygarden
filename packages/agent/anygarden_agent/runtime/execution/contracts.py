@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from .endpoint import DirectEndpoint, validate_endpoint_invocation
+
 Outcome = Literal["succeeded", "failed", "cancelled", "unknown"]
 ProcessState = Literal["not_started", "running", "finished", "stopped", "unknown"]
 FAILURE_CODES = frozenset(
@@ -18,6 +20,23 @@ FAILURE_CODES = frozenset(
 
 
 SUPPORTED_ENGINES = frozenset({"codex-cli", "pi-cli"})
+
+# Provider names may carry hyphens/dots (``openai-codex``, ``my-local``)
+# but never whitespace, ``=`` or other shell/tooling metacharacters —
+# the closed charset keeps injection out while custom names work.
+_PROVIDER_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _valid_provider(name: str) -> bool:
+    # First char alphanumeric (dev02/API alignment): a leading ``-`` or
+    # ``.`` would read as an option in ``--provider=value`` forms.
+    return (
+        1 <= len(name) <= 64
+        and set(name) <= _PROVIDER_CHARS
+        and name[0].isalnum()
+    )
 
 
 @dataclass(frozen=True)
@@ -57,8 +76,10 @@ class Invocation:
     # Caller is the trusted local policy/materialization layer, never a wire payload.
     environment: dict[str, str] = field(default_factory=dict, repr=False)
     external_workspace: bool = False
+    endpoint: DirectEndpoint | None = None
 
     def validate(self) -> None:
+        validate_endpoint_invocation(self)
         if not self.execution_id or not self.prompt:
             raise ValueError("execution_id and prompt are required")
         # Engine membership is central; version authority belongs to each
@@ -69,10 +90,8 @@ class Invocation:
             # pi without an explicit provider would use the machine's ambient
             # default (the exact path of the 2026-09-17 incident).
             raise ValueError("pi-cli requires an explicit provider")
-        if self.provider is not None and (
-            not self.provider.isidentifier() or len(self.provider) > 64
-        ):
-            raise ValueError("provider must be a plain identifier")
+        if self.provider is not None and not _valid_provider(self.provider):
+            raise ValueError("provider must be a plain provider name")
         if self.permission_level not in {"restricted", "standard"}:
             raise ValueError("unsupported permission level")
         if self.external_workspace:

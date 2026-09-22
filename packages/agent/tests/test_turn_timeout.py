@@ -14,9 +14,9 @@ from anygarden_agent.integrations import _turn_timeout as tt
 _TIMEOUT_ENV_KEYS = (
     "ANYGARDEN_AGENT_TURN_TIMEOUT_SEC",
     "ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC",
-    "ANYGARDEN_AGENT_GEMINI_TURN_TIMEOUT_SEC",
-    "ANYGARDEN_AGENT_CLAUDE_TURN_TIMEOUT_SEC",
-    "ANYGARDEN_AGENT_OPENHANDS_TURN_TIMEOUT_SEC",
+    "ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC",
+    "ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC",
+    "ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC",
     "ANYGARDEN_AGENT_ENGINE_TIMEOUT_SEC",
 )
 
@@ -33,25 +33,22 @@ def _clean_env(monkeypatch):
 
 def test_hardcoded_defaults_per_engine():
     assert tt.resolve_turn_timeout("codex") == 600.0
-    assert tt.resolve_turn_timeout("claude") == 600.0
-    assert tt.resolve_turn_timeout("openhands") == 600.0
-    # gemini intentionally keeps its faster 120s profile when unset.
-    assert tt.resolve_turn_timeout("gemini") == 120.0
+    assert tt.resolve_turn_timeout("pi") == 600.0
 
 
 def test_per_engine_env_overrides_default(monkeypatch):
-    monkeypatch.setenv("ANYGARDEN_AGENT_GEMINI_TURN_TIMEOUT_SEC", "300")
-    assert tt.resolve_turn_timeout("gemini") == 300.0
+    monkeypatch.setenv("ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC", "300")
+    assert tt.resolve_turn_timeout("pi") == 300.0
     # other engines unaffected
     assert tt.resolve_turn_timeout("codex") == 600.0
 
 
-def test_existing_claude_openhands_keys_preserved(monkeypatch):
-    """The helper must read the same env keys claude/openhands already use."""
-    monkeypatch.setenv("ANYGARDEN_AGENT_CLAUDE_TURN_TIMEOUT_SEC", "720")
-    monkeypatch.setenv("ANYGARDEN_AGENT_OPENHANDS_TURN_TIMEOUT_SEC", "480")
-    assert tt.resolve_turn_timeout("claude") == 720.0
-    assert tt.resolve_turn_timeout("openhands") == 480.0
+def test_pi_timeout_key(monkeypatch):
+    """The helper must read the same env keys Codex already use."""
+    monkeypatch.setenv("ANYGARDEN_AGENT_PI_TURN_TIMEOUT_SEC", "720")
+    monkeypatch.setenv("ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC", "480")
+    assert tt.resolve_turn_timeout("pi") == 720.0
+    assert tt.resolve_turn_timeout("codex") == 480.0
 
 
 def test_new_codex_key(monkeypatch):
@@ -64,8 +61,8 @@ def test_per_agent_overrides_everything(monkeypatch):
     monkeypatch.setenv("ANYGARDEN_AGENT_TURN_TIMEOUT_SEC", "450")
     monkeypatch.setenv("ANYGARDEN_AGENT_CODEX_TURN_TIMEOUT_SEC", "900")
     assert tt.resolve_turn_timeout("codex") == 450.0
-    # and applies regardless of engine, including gemini's 120s default
-    assert tt.resolve_turn_timeout("gemini") == 450.0
+    # and applies regardless of engine, including Pi
+    assert tt.resolve_turn_timeout("pi") == 450.0
 
 
 # --- resolve_supervisor_timeout: floor 900 + SUP_SLACK 300 ------------------

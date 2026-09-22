@@ -31,7 +31,7 @@ import {
  * template to an agent without leaving the page.
  */
 
-const SUPPORTED_ENGINES = ['claude-code', 'codex-cli', 'gemini-cli'] as const
+const SUPPORTED_ENGINES = SUPPORTED_ENGINE_IDS
 type EngineId = typeof SUPPORTED_ENGINES[number]
 
 interface Template {
@@ -528,7 +528,7 @@ function makeAdvancedStateFromTemplate(template: Template): AdvancedState {
     configText: JSON.stringify(
       template.config_per_engine && Object.keys(template.config_per_engine).length > 0
         ? template.config_per_engine
-        : { 'claude-code': { command: 'npx', args: [], env: {} } },
+        : { 'codex-cli': { command: 'npx', args: [], env: {} } },
       null,
       2,
     ),

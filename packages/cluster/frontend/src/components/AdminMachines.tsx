@@ -49,6 +49,7 @@ interface MachineEngineInfo {
 }
 
 const ENGINE_LABELS: Record<string, string> = {
+  'pi-cli': 'Pi',
   'codex-cli': 'Codex CLI',
   'claude-code': 'Claude Code',
   'gemini-cli': 'Gemini CLI',
@@ -243,9 +244,12 @@ export default function AdminMachines() {
   const [agentEngine, setAgentEngine] = useState('')
   const [agentReasoning, setAgentReasoning] = useState('')
   const [agentModel, setAgentModel] = useState('')
+  const [agentProvider, setAgentProvider] = useState('')
+  const validPiProvider = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentProvider)
   const [agentCatalog, setAgentCatalog] = useState<EngineCatalog | null>(null)
   const [agentRooms, setAgentRooms] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const engineMetadataById = useMemo(() => {
     const map = new Map<string, (typeof availableEngines)[number]>()
@@ -279,6 +283,7 @@ export default function AdminMachines() {
   // selection from a previous engine (e.g. codex "xhigh") leaking
   // into a different one (gemini).
   useEffect(() => {
+    setAgentProvider('')
     if (!agentEngine) {
       setAgentCatalog(null)
       setAgentModel('')
@@ -367,11 +372,14 @@ export default function AdminMachines() {
 
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
+    if (agentEngine === 'pi-cli' && !validPiProvider) return
+    setCreateError(null)
     setCreating(true)
     try {
       await createAgent({
         name: agentName.trim(),
         engine: agentEngine,
+        ...(agentEngine === 'pi-cli' ? { provider: agentProvider } : {}),
         rooms: Array.from(agentRooms),
         ...(agentReasoning ? { reasoning_effort: agentReasoning } : {}),
         ...(agentModel ? { model: agentModel } : {}),
@@ -384,7 +392,9 @@ export default function AdminMachines() {
       // caches DMs separately so nudge it to refetch otherwise the
       // new agent only appears after a full page reload.
       fetchAgentDMs()
-    } catch { /* ignore */ }
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e))
+    }
     setCreating(false)
   }
 
@@ -1040,7 +1050,25 @@ export default function AdminMachines() {
                 </p>
               ) : null}
             </div>
-            {agentCatalog && agentCatalog.models.length > 0 && (
+            {agentEngine === 'pi-cli' && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="pi-provider">Provider (required)</Label>
+                  <Input id="pi-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
+                    placeholder="zai or my-local" maxLength={64} required aria-invalid={!validPiProvider} />
+                  <p className="text-xs text-[var(--color-foreground-muted)]">
+                    Enter a built-in or configured custom provider name. No provider is selected automatically.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="pi-model">Model</Label>
+                  <Input id="pi-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
+                    list="pi-models" placeholder="Model ID for this provider (optional)" />
+                  <datalist id="pi-models">{agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
+                </div>
+              </>
+            )}
+            {agentEngine !== 'pi-cli' && agentCatalog && agentCatalog.models.length > 0 && (
               <div className="space-y-2">
                 <Label>Model</Label>
                 <select value={agentModel} onChange={e => setAgentModel(e.target.value)} className={selectCSS}>
@@ -1121,7 +1149,8 @@ export default function AdminMachines() {
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine}>
+            {createError && <p role="alert">{createError}</p>}
+            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (agentEngine === 'pi-cli' && !validPiProvider)}>
               {creating ? 'Creating...' : 'Create Agent'}
             </Button>
           </DialogFooter>

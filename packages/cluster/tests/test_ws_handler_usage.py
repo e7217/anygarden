@@ -2,7 +2,7 @@
 
 CLI engines (claude-code / codex / gemini) bypass the LLM gateway, so
 their token usage arrives on the ``engine_call_finished`` LifecycleFrame
-and the WS handler writes one ``LLMGatewayUsage`` row from it via
+and the WS handler writes one ``UsageLedger`` row from it via
 ``_write_lifecycle_usage_row``. A frame with no token data and no model
 (a bare-str engine return, or openhands — already counted through the
 gateway reverse-proxy) must NOT produce a row, so openhands is never
@@ -14,15 +14,14 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select
-
 from anygarden.db.engine import build_session_factory
-from anygarden.db.models import Agent, LLMGatewayUsage, Project, Room
+from anygarden.db.models import Agent, Project, Room, UsageLedger
 from anygarden.ws.handler import (
     _frame_carries_usage,
     _write_lifecycle_usage_row,
 )
 from anygarden.ws.protocol import LifecycleFrame
+from sqlalchemy import select
 
 
 async def _make_agent(db) -> Agent:
@@ -105,7 +104,7 @@ async def test_token_frame_writes_usage_row_with_cost(db, engine):
 
     rows = (
         await db.execute(
-            select(LLMGatewayUsage).where(LLMGatewayUsage.agent_id == agent.id)
+            select(UsageLedger).where(UsageLedger.agent_id == agent.id)
         )
     ).scalars().all()
     assert len(rows) == 1
@@ -144,7 +143,7 @@ async def test_codex_frame_writes_row_with_null_cost(db, engine):
 
     row = (
         await db.execute(
-            select(LLMGatewayUsage).where(LLMGatewayUsage.agent_id == agent.id)
+            select(UsageLedger).where(UsageLedger.agent_id == agent.id)
         )
     ).scalars().one()
     assert row.model_name == "gpt-5.5"
@@ -177,7 +176,7 @@ async def test_all_none_frame_writes_no_row(db, engine):
 
     rows = (
         await db.execute(
-            select(LLMGatewayUsage).where(LLMGatewayUsage.agent_id == agent.id)
+            select(UsageLedger).where(UsageLedger.agent_id == agent.id)
         )
     ).scalars().all()
     assert rows == []

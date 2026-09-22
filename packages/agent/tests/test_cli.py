@@ -73,3 +73,35 @@ class TestEngineSelection:
         """get_adapter raises ValueError for unknown engine names."""
         with pytest.raises(ValueError, match="Unknown engine"):
             get_adapter("nonexistent-engine")
+
+
+@pytest.mark.parametrize(
+    "retired", ["claude-code", "gemini-cli", "openhands", "claude_code", "gemini_cli"]
+)
+def test_retired_cli_and_profile_refuse_before_connection(
+    retired, tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    runner = CliRunner()
+    run = AsyncMock()
+    monkeypatch.setattr("anygarden_agent.cli._run_agent", run)
+    result = runner.invoke(
+        agent_main, ["--engine", retired, "--server", "ws://localhost:1"]
+    )
+    assert result.exit_code != 0 and "preserved" in result.output
+    profile = tmp_path / "legacy.yaml"
+    content = yaml.safe_dump(
+        dict(
+            name="legacy", engine=retired, server_url="ws://localhost:1", rooms=["room"]
+        )
+    )
+    profile.write_text(content)
+    result = runner.invoke(
+        agent_main, ["--profile", str(profile.with_suffix("")), "--server", "ws://localhost:1"]
+    )
+    assert result.exit_code != 0 and "preserved" in result.output
+    assert profile.read_text() == content
+    run.assert_not_called()
+    with pytest.raises(ValueError, match="preserved"):
+        get_adapter(retired)

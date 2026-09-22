@@ -12,12 +12,10 @@ default-OFF no-behaviour-change invariant.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
-from sqlalchemy import select
-
 from anygarden.budgets.ledger import (
     clear_observed_cache,
     evaluate_cost_event,
@@ -28,12 +26,13 @@ from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     Agent,
     Base,
-    LLMGatewayUsage,
     Project,
     Room,
     TokenBudgetIncident,
     TokenBudgetPolicy,
+    UsageLedger,
 )
+from sqlalchemy import select
 
 
 class _MockLifecycle:
@@ -85,7 +84,7 @@ async def factory() -> AsyncIterator:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _add_usage(
@@ -100,7 +99,7 @@ async def _add_usage(
 ) -> None:
     async with fac() as db:
         db.add(
-            LLMGatewayUsage(
+            UsageLedger(
                 identity_kind="agent",
                 identity_id=agent_id or "x",
                 agent_id=agent_id,
