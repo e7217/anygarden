@@ -469,34 +469,64 @@ class TestMigrations:
             command.upgrade(cfg, "head")
 
             engine = create_engine(f"sqlite:///{db_path}")
-            with engine.connect() as conn:
+            with engine.begin() as conn:
                 cols = {
                     row[1]
                     for row in conn.execute(
                         text("PRAGMA table_info(usage_ledger)")
                     )
                 }
+                # A nonexistent table yields an empty PRAGMA — assert the
+                # table exists before judging columns.
+                assert cols, "usage_ledger table missing at head"
                 assert "cost_usd" in cols
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                # is still present after upgrading through to head.
                 assert version == "075_direct_endpoints"
+                # Seed a real row so the downgrade is verified against
+                # actual data, not an empty table (task #98 review).
+                conn.execute(
+                    text(
+                        "INSERT INTO usage_ledger "
+                        "(id, timestamp, identity_kind, identity_id, "
+                        "model_name, status_code) VALUES "
+                        "('seed-1', '2026-09-22 00:00:00.000000', 'agent', "
+                        "'agent-1', 'glm-5.3-flash', 200)"
+                    )
+                )
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
-            # column is gone and the head moved back.
+            # column is gone and the head moved back. At 046 the table is
+            # still named llm_gateway_usage (the 074 rename happens later),
+            # so query THAT name here.
             command.downgrade(cfg, "046")
             engine = create_engine(f"sqlite:///{db_path}")
             with engine.connect() as conn:
+                table = conn.execute(
+                    text(
+                        "SELECT name FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('usage_ledger', 'llm_gateway_usage')"
+                    )
+                ).scalar()
+                assert table == "llm_gateway_usage", (
+                    "046 must keep the pre-rename table name"
+                )
                 cols = {
                     row[1]
                     for row in conn.execute(
-                        text("PRAGMA table_info(usage_ledger)")
+                        text("PRAGMA table_info(llm_gateway_usage)")
                     )
                 }
+                assert cols, "llm_gateway_usage table missing at 046"
                 assert "cost_usd" not in cols
+                # The seeded row must survive the downgrade.
+                count = conn.execute(
+                    text("SELECT COUNT(*) FROM llm_gateway_usage")
+                ).scalar_one()
+                assert count == 1, f"seeded row lost on downgrade: {count}"
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
