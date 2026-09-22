@@ -15,18 +15,28 @@ export function useAuth() {
   const fetchMe = useCallback(async () => {
     const token = getAuthToken();
 
-    // No token — try dev-token auto-login (only works when ANYGARDEN_DEV=1)
+    // No token — try dev-token auto-login (only works when ANYGARDEN_DEV=1).
+    //
+    // #651 — gated on import.meta.env.DEV so `vite build` folds the whole
+    // branch away. The endpoint 404s unless the server runs with
+    // ANYGARDEN_DEV=1, which no shipped script sets, so in a production
+    // bundle this request could only ever log a 404 to the console. The
+    // one combination the guard gives up ("built static assets served by
+    // an ANYGARDEN_DEV=1 server") is undocumented and unused: `make dev`
+    // serves through the vite dev server, where DEV is true.
     if (!token) {
-      try {
-        const devResp = await fetch('/api/v1/auth/dev-token');
-        if (devResp.ok) {
-          const data = await devResp.json();
-          setRegisteredToken(data.token);
-          setUser(data.user);
-          setLoading(false);
-          return;
-        }
-      } catch { /* dev-token not available, normal flow */ }
+      if (import.meta.env.DEV) {
+        try {
+          const devResp = await fetch('/api/v1/auth/dev-token');
+          if (devResp.ok) {
+            const data = await devResp.json();
+            setRegisteredToken(data.token);
+            setUser(data.user);
+            setLoading(false);
+            return;
+          }
+        } catch { /* dev-token not available, normal flow */ }
+      }
       setLoading(false);
       return;
     }

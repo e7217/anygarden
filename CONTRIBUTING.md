@@ -75,7 +75,21 @@ For frontend changes, also type-check and bundle:
 
 ```bash
 cd packages/cluster/frontend && npm run build
+npm test                                       # vitest unit suite
 ```
+
+The Playwright end-to-end suite needs a browser binary that `npm install` does
+not fetch. Install it once, then run the suite against a dev server:
+
+```bash
+make -C packages/cluster e2e-setup             # one-off: downloads chromium
+cd packages/cluster/frontend && npm run test:e2e
+```
+
+If chromium fails to launch on a bare Linux box it is missing shared libraries;
+install them with `npx playwright install-deps chromium` (needs sudo). CI does
+both steps at once as root via `npx playwright install --with-deps chromium` —
+`e2e-setup` leaves the sudo half out so it works on a normal workstation.
 
 ## Database migrations
 
