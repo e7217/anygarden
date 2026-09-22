@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sys
 import threading
 from dataclasses import replace
@@ -47,6 +48,8 @@ def endpoint_server():
     thread.join()
     server.server_close()
 
+
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX subprocess runtime")
 
 SCRIPT = r"""
 import sys,os,json,time,tomllib,urllib.request

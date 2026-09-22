@@ -7,6 +7,7 @@ import hashlib
 import os
 import shutil
 from contextvars import ContextVar
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -59,6 +60,10 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 model=self._model,
                 generation=getattr(self._client, "_generation", None) or 0,
             )
+        if self._engine == "codex-cli" and self._launch.model is None:
+            # Preserve the existing adapter's no-argument default, and include
+            # the effective model in the session fence rather than ambient state.
+            self._launch = replace(self._launch, model=self._model)
         self._environment = staged_environment()
         # Pin the effective existing Codex home, including host OAuth fallback.
         if self._engine == "codex-cli":
