@@ -2123,9 +2123,9 @@ async def test_legacy_pi_automatic_start_and_reconnect_never_publish_running(age
         await db.commit()
         agent_id = agent.id
     lifecycle = env["lifecycle"]
-    env["bus"].send_to_machine = AsyncMock(return_value=True)
+    env["bus"].send = AsyncMock(return_value=True)
     await lifecycle.request_start(agent_id)
-    env["bus"].send_to_machine.assert_not_called()
+    env["bus"].send.assert_not_called()
     async with env["factory"]() as db:
         agent = await db.get(Agent, agent_id)
         assert agent.unavailable_code == "invalid_provider"
