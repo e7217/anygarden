@@ -34,6 +34,7 @@ SPAWN_FAILED = "spawn_failed"
 ENGINE_MISMATCH = "engine_mismatch"
 CRASHED = "crashed"
 NO_ROOM = "no_room"
+INVALID_PROVIDER = "invalid_provider"
 
 UNAVAILABLE_CODES: frozenset[str] = frozenset(
     {
@@ -42,6 +43,7 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         ENGINE_MISMATCH,
         CRASHED,
         NO_ROOM,
+        INVALID_PROVIDER,
     }
 )
 
@@ -95,6 +97,9 @@ def render_unavailable_message(
             suffix = f" (exit={exit_code})" if exit_code is not None else ""
             return _with_admin_trace(base + suffix, d)
         return base
+
+    if code == INVALID_PROVIDER:
+        return "Pi 에이전트의 Provider 설정을 보완한 뒤 시작해 주세요."
 
     if code == NO_ROOM:
         return "배정된 방이 없습니다."
