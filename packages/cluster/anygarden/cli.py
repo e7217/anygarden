@@ -80,23 +80,40 @@ def init(ctx: click.Context) -> None:
 @main.command()
 @click.pass_context
 def migrate(ctx: click.Context) -> None:
-    """Run Alembic migrations to upgrade the database schema."""
-    from alembic.config import Config as AlembicConfig
-    from alembic import command as alembic_command
+    """Run Alembic migrations to upgrade the database schema.
 
-    db_url = ctx.obj.get("db_url")
+    This is the operator's only manual recovery path when the server
+    refuses to boot on a schema mismatch, so it has to work from an
+    installed package in an arbitrary working directory, and it has to
+    target the same database the server would open (#647).
+    """
+    from alembic import command as alembic_command
+    from alembic.config import Config as AlembicConfig
+    from sqlalchemy.engine import make_url
+
+    # Go through Settings rather than re-deriving a default, so --config,
+    # ~/.anygarden/config.env and ANYGARDEN_DB_URL are all honoured. The
+    # previous code read only --db and otherwise hardcoded
+    # ~/.anygarden/anygarden.db, silently ignoring the other two.
+    config = _load_server_settings(
+        None, None, ctx.obj.get("db_url"), None, ctx.obj.get("config_path")
+    )
 
     alembic_cfg = AlembicConfig()
-    alembic_cfg.set_main_option("script_location", "anygarden/db/migrations")
-    if db_url:
-        alembic_cfg.set_main_option("sqlalchemy.url", db_url)
-    else:
-        anygarden_dir = Path.home() / ".anygarden"
-        default_url = f"sqlite+aiosqlite:///{anygarden_dir / 'anygarden.db'}"
-        alembic_cfg.set_main_option("sqlalchemy.url", default_url)
+    # Resolve the script location relative to this package, matching
+    # app.py's _alembic_action. The previous relative path only resolved
+    # when the CWD happened to be the source tree, so an installed
+    # anygarden failed with "Path doesn't exist: anygarden/db/migrations".
+    script_location = Path(__file__).parent / "db" / "migrations"
+    alembic_cfg.set_main_option("script_location", str(script_location))
+    alembic_cfg.set_main_option("sqlalchemy.url", config.db_url)
 
     alembic_command.upgrade(alembic_cfg, "head")
-    click.echo("Migrations applied.")
+    # Name the target: the bug this replaces was invisible precisely
+    # because "Migrations applied." never said what they were applied to.
+    click.echo(
+        f"Migrations applied to {make_url(config.db_url).render_as_string(hide_password=True)}"
+    )
 
 
 def _apply_runtime_env(
