@@ -204,15 +204,19 @@ def materialize_pi_endpoint(
         marker_name = ".anygarden-endpoint.sha256"
         marker = read_regular(marker_name)
         current = read_regular("models.json")
+        # Ownership must hold before every mutation, including activation and
+        # rotation. A marker alone does not authorize replacing an edited file.
+        if current is not None:
+            if marker is None:
+                if endpoint is None:
+                    return
+                raise ValueError("Existing Pi models.json is not managed by AnyGarden")
+            if hashlib.sha256(current).hexdigest().encode() != marker:
+                raise ValueError("Managed Pi endpoint config was modified")
         if endpoint is None:
-            # Preserve operator-staged custom provider files that we never
-            # owned. If a managed file was edited, refuse rather than execute
-            # stale endpoint configuration after an explicit unconfigure.
             if marker is None:
                 return
             if current is not None:
-                if hashlib.sha256(current).hexdigest().encode() != marker:
-                    raise ValueError("Managed Pi endpoint config was modified")
                 os.unlink("models.json", dir_fd=descriptor)
             os.unlink(marker_name, dir_fd=descriptor)
             return

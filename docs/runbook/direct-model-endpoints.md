@@ -21,7 +21,7 @@ The machine persists only an `endpoint_configured` marker, not the endpoint secr
 
 Codex receives a dedicated `ag_direct` provider through structured command-line configuration overrides. Only Responses is supported. Keyless connections omit the environment-key reference.
 
-Pi writes a managed `models.json` under the agent's isolated `runtime_home/.pi/agent` directory. The file references `AG_DIRECT_API_KEY`, never its value. Configuring a new provider replaces the previous managed provider entry; disabling the direct endpoint removes that managed file. Agent directories and session directories remain separate from the CLI installation and other agents.
+Pi writes a managed `models.json` under the agent's isolated `runtime_home/.pi/agent` directory. The file references `AG_DIRECT_API_KEY`, never its value. Configuring a new provider replaces the previous managed provider entry; disabling the direct endpoint removes that managed file. An existing models.json without an AnyGarden ownership marker blocks activation and remains untouched. A managed file changed outside AnyGarden blocks activation, changes and removal; resolve the conflict explicitly before retrying. Agent directories and session directories remain separate from the CLI installation and other agents.
 
 Pi requires a nonempty key for model selection even when a local server needs no authentication. In that mode AnyGarden supplies the nonsecret placeholder `ag-keyless-local`; a server that accepts keyless Pi requests must tolerate this placeholder bearer value. This is distinct from a selected credential that failed to load, which is always an error.
 

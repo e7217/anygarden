@@ -157,3 +157,37 @@ def test_selected_pi_auth_cannot_override_endpoint_and_other_auth_is_preserved(t
         materialize_pi_endpoint(tmp_path, endpoint)
     assert "conflicting-test-key" not in str(error.value)
     assert auth.read_text() == selected
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime boundary")
+def test_pi_existing_user_config_survives_enable_then_disable(tmp_path):
+    directory = tmp_path / ".pi/agent"
+    directory.mkdir(parents=True)
+    target = directory / "models.json"
+    original = b'{"providers":{"user-local":{"baseUrl":"http://localhost:9999/v1"}}}\n'
+    target.write_bytes(original)
+    target.chmod(0o640)
+    with pytest.raises(ValueError, match="not managed"):
+        materialize_pi_endpoint(tmp_path, endpoint())
+    assert target.read_bytes() == original
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert not (directory / ".anygarden-endpoint.sha256").exists()
+    materialize_pi_endpoint(tmp_path, None)
+    assert target.read_bytes() == original
+    assert target.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX runtime boundary")
+def test_pi_modified_managed_config_survives_change_and_disable(tmp_path):
+    materialize_pi_endpoint(tmp_path, endpoint())
+    directory = tmp_path / ".pi/agent"
+    target = directory / "models.json"
+    marker = directory / ".anygarden-endpoint.sha256"
+    original_marker = marker.read_bytes()
+    modified = target.read_bytes() + b'\n'
+    target.write_bytes(modified)
+    for next_config in (endpoint(provider="replacement"), endpoint(), None):
+        with pytest.raises(ValueError, match="modified"):
+            materialize_pi_endpoint(tmp_path, next_config)
+        assert target.read_bytes() == modified
+        assert marker.read_bytes() == original_marker
