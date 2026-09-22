@@ -121,12 +121,12 @@ def setup_room(tmp_path, monkeypatch):
     secrets.clear()
 
 
-async def client_for(engine, monkeypatch, endpoint=None):
+async def client_for(engine, monkeypatch, endpoint=None, model="model"):
     monkeypatch.setenv("TEST_ENGINE", engine)
     launch = ExecutionLaunch(
         engine,
         "local",
-        "model",
+        model,
         7,
         endpoint,
         endpoint_environment(endpoint, "fake-only-token" if endpoint else None),
@@ -138,7 +138,7 @@ async def client_for(engine, monkeypatch, endpoint=None):
     client.sendLifecycle = AsyncMock()
     client.send = AsyncMock()
     client.sendTyping = AsyncMock()
-    await _setup_engine(client, engine, "agent", "model", None)
+    await _setup_engine(client, engine, "agent", model, None)
     assert client.execution_launch_ready
     return client
 
@@ -387,5 +387,31 @@ async def test_initial_endpoint_never_imports_legacy_after_disable(
         ]
         assert len(calls) == 2
         assert all("resume" not in c for c in calls)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine,expected", [("codex-cli", "gpt-5.6-terra"), ("pi-cli", None)]
+)
+async def test_omitted_model_keeps_only_codex_default(
+    setup_room, monkeypatch, engine, expected
+):
+    client = await client_for(engine, monkeypatch, model=None)
+    try:
+        await client._message_handlers[0](message())
+        assert client._execution_adapter._launch.model == expected
+        call = json.loads((setup_room / "workspace" / "calls.jsonl").read_text())
+        if expected:
+            assert call["argv"][call["argv"].index("-m") + 1] == expected
+        else:
+            assert "--model" not in call["argv"]
+        finished = [
+            c.kwargs
+            for c in client.sendLifecycle.call_args_list
+            if c.kwargs.get("event") == "engine_call_finished"
+        ]
+        assert finished[0]["model"] == expected
     finally:
         await client.close()
