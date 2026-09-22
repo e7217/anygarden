@@ -204,16 +204,21 @@ async def test_environment_is_sandboxed(tmp_path, invocation, executable):
         env = record["env"]
         home = str(invocation.runtime_home)
         assert env["HOME"] == home
-        # PI_PACKAGE_DIR now resolves to the adapter's real install dir
-        # (architect 2026-09-22) — never the sandbox home, whose empty
-        # package.json broke --version; PI_CONFIG_DIR stays sandboxed.
-        from anygarden_agent.runtime.execution.pi import _resolve_install_dir
-
-        install = _resolve_install_dir()
-        if install is not None:
-            assert env["PI_PACKAGE_DIR"] == install
-        assert env["PI_CONFIG_DIR"] == home
-        assert env["PI_SESSION_DIR"] == f"{home}/sessions"
+        # Env split contract (architect + PM 2026-09-22): install asset
+        # override REMOVED (CLI resolves its own executable), user config
+        # parent and session dir are isolated under the sandbox home, and
+        # the historical non-keys never appear.
+        assert "PI_PACKAGE_DIR" not in env
+        assert "PI_CONFIG_DIR" not in env
+        assert "PI_SESSION_DIR" not in env
+        assert env["PI_CODING_AGENT_DIR"] == str(
+            invocation.runtime_home / ".pi" / "agent"
+        )
+        assert env["PI_CODING_AGENT_SESSION_DIR"] == str(
+            invocation.runtime_home / "sessions"
+        )
+        assert env["PI_CODING_AGENT_DIR"] != env["PI_CODING_AGENT_SESSION_DIR"]
+        assert env["PI_CODING_AGENT_SESSION_DIR"] == f"{home}/sessions"
         assert env["ZAI_API_KEY"] == "staged-only"
         assert not env.get("ANYGARDEN_HOME")
         assert not env.get("SLOCK_AGENT_ID")
