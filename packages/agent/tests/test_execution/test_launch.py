@@ -178,3 +178,77 @@ async def test_legacy_engine_cannot_ignore_direct_endpoint():
                 execution_launch=launch,
             )
     join.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"base_url": "http://localhost:9000/v1"},
+        {"credential_revision": 2},
+        {"credential_ref": "another-ref"},
+    ],
+)
+def test_descriptor_change_fences_session_with_same_generation(tmp_path, change):
+    secrets.set_secrets(payload())
+    first = load_execution_launch(
+        engine="pi-cli", provider="my-local", model="m", generation=4
+    )
+    altered = payload()
+    descriptor = json.loads(altered[CONFIG_KEY])
+    descriptor.update(change)
+    altered[CONFIG_KEY] = json.dumps(descriptor)
+    secrets.set_secrets(altered)
+    second = load_execution_launch(
+        engine="pi-cli", provider="my-local", model="m", generation=4
+    )
+    base = invocation(tmp_path)
+    assert first.bind(base).scope.key != second.bind(base).scope.key
+    assert second.bind(base).scope.key == second.bind(base).scope.key
+
+
+@pytest.mark.parametrize("key", [CONFIG_KEY, INPUT_KEY])
+@pytest.mark.parametrize(
+    "invalid", [None, 123, {"secret": "do-not-echo"}, ["do-not-echo"], True]
+)
+def test_cli_rejects_original_nonstring_endpoint_json_types(key, invalid):
+    data = payload()
+    data[key] = invalid
+    runner = AsyncMock()
+    with patch("anygarden_agent.cli._run_agent", runner):
+        result = CliRunner().invoke(
+            agent_main,
+            [
+                "--engine",
+                "pi-cli",
+                "--provider",
+                "my-local",
+                "--model",
+                "m",
+                "--name",
+                "a",
+                "--server",
+                "ws://localhost",
+                "--room",
+                "r",
+                "--token",
+                "t",
+                "--endpoint-configured",
+            ],
+            input=json.dumps(data),
+        )
+    assert result.exit_code != 0 and "must be JSON strings" in result.output
+    assert "do-not-echo" not in result.output
+    assert "private-test-key" not in result.output
+    runner.assert_not_awaited()
+
+
+def test_keyless_launch_accepts_absent_key(tmp_path):
+    descriptor = json.loads(payload()[CONFIG_KEY])
+    descriptor.update(credential_ref=None, credential_revision=0)
+    secrets.set_secrets({CONFIG_KEY: json.dumps(descriptor)})
+    launch = load_execution_launch(
+        engine="pi-cli", provider="my-local", model="m", generation=1
+    )
+    assert (
+        launch.bind(invocation(tmp_path)).environment[CHILD_KEY] == "ag-keyless-local"
+    )

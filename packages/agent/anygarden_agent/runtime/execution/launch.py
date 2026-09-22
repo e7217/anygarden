@@ -7,7 +7,8 @@ commands must not instantiate or replace the client launch configuration.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field, replace
+import json
+from dataclasses import asdict, dataclass, field, replace
 
 from anygarden_agent import secrets
 
@@ -39,10 +40,20 @@ class ExecutionLaunch:
             environment.pop(key, None)
         environment.update(self._child_environment)
         # Bind both the caller's policy epoch and the server launch generation;
-        # neither policy changes nor credential rotation may resume an old scope.
+        # descriptor/revision also fences the commit-to-generation-bump interval.
         epoch = int.from_bytes(
             hashlib.sha256(
-                f"{invocation.scope.policy_epoch}:{self.generation}".encode()
+                json.dumps(
+                    [
+                        invocation.scope.policy_epoch,
+                        self.generation,
+                        self.provider,
+                        self.model,
+                        asdict(self.endpoint) if self.endpoint else None,
+                    ],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
             ).digest()[:8],
             "big",
         )

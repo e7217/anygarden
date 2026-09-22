@@ -73,7 +73,10 @@ def agent_main(
     # ``anygarden_agent.secrets`` for adapters that need them (#184).
     # Safe in interactive dev runs too: ``load_from_stdin`` short-
     # circuits on a tty-backed stdin.
-    agent_secrets.load_from_stdin()
+    try:
+        agent_secrets.load_from_stdin()
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
 
     # If --profile is given, load defaults from the YAML profile
     if profile:
