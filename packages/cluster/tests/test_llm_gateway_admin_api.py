@@ -10,16 +10,13 @@ subprocess.
 from __future__ import annotations
 
 import secrets as _stdlib_secrets
-from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
-from cryptography.fernet import Fernet
-from httpx import ASGITransport, AsyncClient, MockTransport, Response
-from sqlalchemy import select
-
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
@@ -28,10 +25,13 @@ from anygarden.db.models import (
     Base,
     LLMGatewayModel,
     LLMGatewaySecret,
-    LLMGatewayUsage,
+    UsageLedger,
     User,
 )
 from anygarden.mcp_templates.encryption import MCPSecrets
+from cryptography.fernet import Fernet
+from httpx import ASGITransport, AsyncClient, MockTransport, Response
+from sqlalchemy import select
 
 
 class _FakeSupervisor:
@@ -503,7 +503,7 @@ async def test_status_503_when_supervisor_absent(env) -> None:
 async def test_usage_aggregates_by_model_and_agent(env) -> None:
     from anygarden.db.models import Agent
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # Three requests: two for claude from agent-A, one for gpt from agent-B.
     # Create real Agent rows first so the FK on agent_id resolves.
     async with env["factory"]() as db:
@@ -514,7 +514,7 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
         a_id, b_id = agent_a.id, agent_b.id
 
         rows = [
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=5),
                 identity_kind="agent", identity_id=a_id,
                 agent_id=a_id,
@@ -522,7 +522,7 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
                 prompt_tokens=100, completion_tokens=50,
                 duration_ms=800, status_code=200,
             ),
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=4),
                 identity_kind="agent", identity_id=a_id,
                 agent_id=a_id,
@@ -530,7 +530,7 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
                 prompt_tokens=200, completion_tokens=80,
                 duration_ms=900, status_code=200,
             ),
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=3),
                 identity_kind="agent", identity_id=b_id,
                 agent_id=b_id,
@@ -539,7 +539,7 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
                 duration_ms=500, status_code=200,
             ),
             # 2-day-old row must be outside the default 24h window.
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(days=2),
                 identity_kind="agent", identity_id=a_id,
                 agent_id=a_id,
@@ -581,7 +581,7 @@ async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:
     it NULL."""
     from anygarden.db.models import Agent
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with env["factory"]() as db:
         agent_a = Agent(name="A", engine="claude-code")
         agent_b = Agent(name="B", engine="codex")
@@ -591,14 +591,14 @@ async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:
 
         rows = [
             # claude-code: self-reported costs.
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=5),
                 identity_kind="agent", identity_id=a_id, agent_id=a_id,
                 model_name="claude-sonnet-4-6",
                 prompt_tokens=100, completion_tokens=50,
                 cost_usd=0.01, duration_ms=800, status_code=200,
             ),
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=4),
                 identity_kind="agent", identity_id=a_id, agent_id=a_id,
                 model_name="claude-sonnet-4-6",
@@ -606,7 +606,7 @@ async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:
                 cost_usd=0.02, duration_ms=900, status_code=200,
             ),
             # codex: tokens but NULL cost — must contribute 0 to the sums.
-            LLMGatewayUsage(
+            UsageLedger(
                 timestamp=now - timedelta(minutes=3),
                 identity_kind="agent", identity_id=b_id, agent_id=b_id,
                 model_name="gpt-5.4",
@@ -812,4 +812,4 @@ async def test_ollama_models_rejects_non_admin(env) -> None:
 
 
 # Avoid unused-import noise from the test scaffolding.
-_ = (pytest, select, LLMGatewayModel)  # noqa: F841
+_ = (pytest, select, LLMGatewayModel)

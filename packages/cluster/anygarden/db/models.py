@@ -2140,8 +2140,13 @@ class LLMGatewaySecret(Base):
     )
 
 
-class LLMGatewayUsage(Base):
+class UsageLedger(Base):
     """One row per LLM request relayed through ``/api/v1/llm/*``.
+
+    Neutral successor of the former ``LLMGatewayUsage`` (task #92):
+    the usage stream is engine-agnostic and outlives any one gateway.
+    The physical table was renamed from ``llm_gateway_usage`` by
+    migration 074 — rows, indices and history are fully preserved.
 
     Written by the reverse-proxy layer after the response completes
     (streaming or not). A 30-day TTL cron prunes stale rows so the
@@ -2158,11 +2163,11 @@ class LLMGatewayUsage(Base):
     same value so queries that don't need the agent join work too.
     """
 
-    __tablename__ = "llm_gateway_usage"
+    __tablename__ = "usage_ledger"
     __table_args__ = (
-        Index("ix_llm_gateway_usage_timestamp", "timestamp"),
-        Index("ix_llm_gateway_usage_agent_ts", "agent_id", "timestamp"),
-        Index("ix_llm_gateway_usage_model_ts", "model_name", "timestamp"),
+        Index("ix_usage_ledger_timestamp", "timestamp"),
+        Index("ix_usage_ledger_agent_ts", "agent_id", "timestamp"),
+        Index("ix_usage_ledger_model_ts", "model_name", "timestamp"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -2208,7 +2213,7 @@ class LLMGatewayUsage(Base):
 
 # ── Token budgets (#453, reliability Wave 1d) ──────────────────────────
 #
-# A policy table on top of the measured ``LLMGatewayUsage`` stream. The
+# A policy table on top of the measured ``UsageLedger`` stream. The
 # reverse proxy sums observed tokens over a rolling/calendar window per
 # scope and, when an *active* policy with ``hard_stop_enabled`` is over
 # its ceiling, refuses the call with 429 at the gateway chokepoint

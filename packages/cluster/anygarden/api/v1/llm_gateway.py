@@ -35,7 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import LLMGatewayModel, LLMGatewaySecret, LLMGatewayUsage
+from anygarden.db.models import LLMGatewayModel, LLMGatewaySecret, UsageLedger
 from anygarden.dependencies import get_admin_identity, get_db
 
 
@@ -677,7 +677,7 @@ async def get_usage(
     identity: Identity = Depends(get_admin_identity),  # noqa: ARG001
     db: AsyncSession = Depends(get_db),
 ) -> UsageOut:
-    """Aggregate usage counters from ``LLMGatewayUsage`` within ``window``.
+    """Aggregate usage counters from ``UsageLedger`` within ``window``.
 
     ``window`` accepts ``Nh`` / ``Nd`` (hours / days). Out-of-range or
     unparseable values fall back to 24h rather than 400 — admin UI
@@ -688,8 +688,8 @@ async def get_usage(
 
     total = (
         await db.execute(
-            select(func.count(LLMGatewayUsage.id)).where(
-                LLMGatewayUsage.timestamp >= since
+            select(func.count(UsageLedger.id)).where(
+                UsageLedger.timestamp >= since
             )
         )
     ).scalar_one()
@@ -699,43 +699,43 @@ async def get_usage(
     total_cost = (
         await db.execute(
             select(
-                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0)
-            ).where(LLMGatewayUsage.timestamp >= since)
+                func.coalesce(func.sum(UsageLedger.cost_usd), 0.0)
+            ).where(UsageLedger.timestamp >= since)
         )
     ).scalar_one()
 
     by_model_rows = (
         await db.execute(
             select(
-                LLMGatewayUsage.model_name,
-                func.count(LLMGatewayUsage.id),
-                func.coalesce(func.sum(LLMGatewayUsage.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMGatewayUsage.completion_tokens), 0),
+                UsageLedger.model_name,
+                func.count(UsageLedger.id),
+                func.coalesce(func.sum(UsageLedger.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageLedger.completion_tokens), 0),
                 # #461 — nullable-safe USD cost sum per model.
-                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0),
+                func.coalesce(func.sum(UsageLedger.cost_usd), 0.0),
             )
-            .where(LLMGatewayUsage.timestamp >= since)
-            .group_by(LLMGatewayUsage.model_name)
-            .order_by(func.count(LLMGatewayUsage.id).desc())
+            .where(UsageLedger.timestamp >= since)
+            .group_by(UsageLedger.model_name)
+            .order_by(func.count(UsageLedger.id).desc())
         )
     ).all()
 
     by_agent_rows = (
         await db.execute(
             select(
-                LLMGatewayUsage.agent_id,
-                func.count(LLMGatewayUsage.id),
-                func.coalesce(func.sum(LLMGatewayUsage.prompt_tokens), 0),
-                func.coalesce(func.sum(LLMGatewayUsage.completion_tokens), 0),
+                UsageLedger.agent_id,
+                func.count(UsageLedger.id),
+                func.coalesce(func.sum(UsageLedger.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageLedger.completion_tokens), 0),
                 # #461 — nullable-safe USD cost sum per agent.
-                func.coalesce(func.sum(LLMGatewayUsage.cost_usd), 0.0),
+                func.coalesce(func.sum(UsageLedger.cost_usd), 0.0),
             )
             .where(
-                LLMGatewayUsage.timestamp >= since,
-                LLMGatewayUsage.agent_id.is_not(None),
+                UsageLedger.timestamp >= since,
+                UsageLedger.agent_id.is_not(None),
             )
-            .group_by(LLMGatewayUsage.agent_id)
-            .order_by(func.count(LLMGatewayUsage.id).desc())
+            .group_by(UsageLedger.agent_id)
+            .order_by(func.count(UsageLedger.id).desc())
             .limit(50)
         )
     ).all()

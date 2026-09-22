@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -460,7 +460,7 @@ class TestMigrations:
                 pass
 
     def test_047_cost_usd_column_up_and_down(self) -> None:
-        """#461 (Wave 2d) — migration 047 adds ``llm_gateway_usage.cost_usd``
+        """#461 (Wave 2d) — migration 047 adds ``usage_ledger.cost_usd``
         on upgrade head and removes it on downgrade 047 → 046."""
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             db_path = tmp.name
@@ -473,7 +473,7 @@ class TestMigrations:
                 cols = {
                     row[1]
                     for row in conn.execute(
-                        text("PRAGMA table_info(llm_gateway_usage)")
+                        text("PRAGMA table_info(usage_ledger)")
                     )
                 }
                 assert "cost_usd" in cols
@@ -482,7 +482,7 @@ class TestMigrations:
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
                 # is still present after upgrading through to head.
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -493,7 +493,7 @@ class TestMigrations:
                 cols = {
                     row[1]
                     for row in conn.execute(
-                        text("PRAGMA table_info(llm_gateway_usage)")
+                        text("PRAGMA table_info(usage_ledger)")
                     )
                 }
                 assert "cost_usd" not in cols
@@ -542,7 +542,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -589,7 +589,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -656,7 +656,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -837,7 +837,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -894,9 +894,8 @@ class TestMigrations:
             # After downgrading to base, there should be no application
             # tables left (alembic_version may remain).
             engine = create_engine(f"sqlite:///{db_path}")  # sync driver for reads
-            with engine.connect() as conn:
-                with pytest.raises(OperationalError):
-                    conn.execute(text("SELECT * FROM messages"))
+            with engine.connect() as conn, pytest.raises(OperationalError):
+                conn.execute(text("SELECT * FROM messages"))
             engine.dispose()
 
             command.upgrade(cfg, "head")
@@ -939,7 +938,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -979,7 +978,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             sync_engine.dispose()
         finally:
             try:
@@ -999,7 +998,7 @@ class TestEnsureSchemaReady:
         create_all and `alembic stamp` ran in separate transactions,
         and a crash between them would trap the operator forever.
         """
-        from anygarden.app import _ensure_schema_ready, _discover_head_revision
+        from anygarden.app import _discover_head_revision, _ensure_schema_ready
         from anygarden.db.engine import build_engine
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -1013,7 +1012,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "072_drop_agent_collaboration_mode"
+            assert head == "074_usage_ledger"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1058,6 +1057,7 @@ class TestEnsureSchemaReady:
         unstamped" on the next boot and trap the operator.
         """
         from unittest.mock import patch
+
         from anygarden.app import _ensure_schema_ready
         from anygarden.db.engine import build_engine
 
@@ -1076,9 +1076,8 @@ class TestEnsureSchemaReady:
                 with patch(
                     "anygarden.app._discover_head_revision",
                     side_effect=RuntimeError("simulated alembic-config crash"),
-                ):
-                    with pytest.raises(RuntimeError, match="simulated"):
-                        await _ensure_schema_ready(engine, db_url)
+                ), pytest.raises(RuntimeError, match="simulated"):
+                    await _ensure_schema_ready(engine, db_url)
             finally:
                 await engine.dispose()
 
@@ -1115,7 +1114,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "072_drop_agent_collaboration_mode"
+                assert version == "074_usage_ledger"
             sync_engine.dispose()
         finally:
             try:
@@ -1399,7 +1398,7 @@ class TestMigrationFailureMessage:
         msg = _migration_failure_message(
             db_url="postgresql+asyncpg://ag:sup3rs3cret@db.internal:5432/anygarden",
             current_rev="059",
-            head_rev="072_drop_agent_collaboration_mode",
+            head_rev="074_usage_ledger",
             cause=RuntimeError("boom"),
         )
         assert "sup3rs3cret" not in msg
@@ -1411,12 +1410,12 @@ class TestMigrationFailureMessage:
         msg = _migration_failure_message(
             db_url="sqlite+aiosqlite:////home/u/.anygarden/anygarden.db",
             current_rev="059",
-            head_rev="072_drop_agent_collaboration_mode",
+            head_rev="074_usage_ledger",
             cause=RuntimeError("boom"),
         )
         assert "/home/u/.anygarden/anygarden.db" in msg
         assert "059" in msg
-        assert "072_drop_agent_collaboration_mode" in msg
+        assert "074_usage_ledger" in msg
 
     def test_reports_innermost_cause(self) -> None:
         """SQLAlchemy wraps the DBAPI error; the actionable line is the one

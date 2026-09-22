@@ -1,6 +1,6 @@
 """Token-cost ledger + invocation-block evaluation (#453, Wave 1d).
 
-This module turns the *measured* ``LLMGatewayUsage`` stream (one row per
+This module turns the *measured* ``UsageLedger`` stream (one row per
 relayed LLM call, written by the reverse proxy) into a budget decision:
 
 - :func:`compute_observed_tokens` — the window SUM of prompt+completion
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import (
     Agent,
-    LLMGatewayUsage,
+    UsageLedger,
     TokenBudgetIncident,
     TokenBudgetPolicy,
 )
@@ -110,20 +110,20 @@ async def compute_observed_tokens(
     stmt = select(
         func.coalesce(
             func.sum(
-                func.coalesce(LLMGatewayUsage.prompt_tokens, 0)
-                + func.coalesce(LLMGatewayUsage.completion_tokens, 0)
+                func.coalesce(UsageLedger.prompt_tokens, 0)
+                + func.coalesce(UsageLedger.completion_tokens, 0)
             ),
             0,
         )
     ).where(
-        LLMGatewayUsage.timestamp >= window_start,
-        LLMGatewayUsage.status_code < 400,
+        UsageLedger.timestamp >= window_start,
+        UsageLedger.status_code < 400,
     )
 
     if scope_type == "agent":
-        stmt = stmt.where(LLMGatewayUsage.agent_id == scope_id)
+        stmt = stmt.where(UsageLedger.agent_id == scope_id)
     elif scope_type == "room":
-        stmt = stmt.where(LLMGatewayUsage.room_id == scope_id)
+        stmt = stmt.where(UsageLedger.room_id == scope_id)
     # scope_type == "global" — no id filter; sums all usage.
 
     total = (await session.execute(stmt)).scalar_one()
