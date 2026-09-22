@@ -3,7 +3,26 @@
 
 ## Unreleased
 
+## v0.13.0 (2026-09-23)
+
+First release since v0.12.0 (2026-07-17). Eleven changes had accumulated
+unreleased, including the WebSocket scheme fix below — without it a node that
+spawns agents through the `uvx` fallback can never connect them. It also
+carries the engine consolidation from #679: Codex and Pi are now the only
+engines.
+
 ### ⚠ Breaking changes
+
+- The `claude-code`, `gemini-cli` and `openhands` engines are removed (#679,
+  #652). `codex-cli` and `pi-cli` are the only accepted `--engine` values; a
+  retired name, whether passed on the command line, read from a profile or
+  given to `get_adapter()`, fails with a message pointing at a codex-cli or
+  pi-cli replacement. Saved agent configuration and history are untouched —
+  see `docs/runbook/retired-engines.md`.
+- `claude-agent-sdk`, `openhands-sdk`, `openhands-tools` and `fastapi` are no
+  longer dependencies, and the empty `claude-code` / `gemini-cli` /
+  `openhands` extras are gone. `pip install anygarden-agent[claude-code]` now
+  fails to resolve the extra; drop it.
 
 - `ChatClient.is_collaborative()` is removed and
   `compose_roster_suffix(room_id)` no longer takes `with_collaborative_hint` —
@@ -13,11 +32,41 @@
   implemented the gate as designed. `compose_session_context_suffix()` drops
   its `include_roster` / `with_collaborative_hint` parameters to match.
 
+### Added
+
+- Durable room cursors with a stale catch-up guard, seeded from the `welcome`
+  frame, so a restarted agent replays what it missed instead of losing it
+  (#640, #642).
+- `PiRuntime` adapter for the `pi-coding-agent` CLI, on top of multi-engine
+  runtime contracts (#619, #621).
+- A durable local Codex execution boundary and in-flight turn recovery
+  (#564, #600).
+- Wake-trigger taxonomy, emoji ACK receipts, and attention policy (#633).
+- Message thread protocol support (#562).
+- Codex and Pi room turns run through the shared execution manager with
+  scoped sessions and measured usage receipts, reported on success, failure,
+  timeout and cancellation (#679). Compatible legacy sessions are imported
+  once; anything else starts a fresh session.
+- Direct endpoint configuration: `--provider` names the model provider and
+  `--endpoint-configured` requires the endpoint to arrive on private stdin.
+  An endpoint agent refuses to fall back to the legacy engine path (#679,
+  #660).
+
 ### Fixed
 
+- Map an `http(s)://` server base to `ws(s)://` when opening room WebSockets
+  (#637). The integrated node passes an `http://` base; `websockets` rejects
+  it outright, so every room connection failed with "isn't a valid URI: scheme
+  isn't ws or wss" and retried forever. Agents stayed silent while their turns
+  piled up undelivered in `agent_turn_outbox`.
 - The cached room roster now refreshes from `room_settings_changed` instead of
   only at `welcome`, so membership changes and edited peer descriptions reach a
   connected agent without a reconnect.
+- Normalized public API errors and documented CLI compatibility (#573).
+- Cancelling a turn no longer closes the room WebSocket before the terminal
+  usage frame is sent, so the next turn reuses the same connection (#679).
+- Malformed stdin credentials are reported as a CLI error instead of a
+  traceback (#679).
 
 ## v0.8.0 (2026-05-22)
 
