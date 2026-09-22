@@ -89,10 +89,15 @@ class PiRuntime:
                 )
         home = str(invocation.runtime_home)
         env["HOME"] = home
-        # A stale host PI_PACKAGE_DIR crashes --mode json with ENOENT
-        # (observed 2026-09-17): always pin it inside the sandboxed home.
-        env["PI_PACKAGE_DIR"] = home
-        env["PI_CONFIG_DIR"] = home
+        # PI_PACKAGE_DIR/PI_CONFIG_DIR are *installed-asset* paths, not user
+        # config. Overriding them (e.g. to runtime_home) makes --version read
+        # an empty package.json and report 0.0.0, breaking the run. They are
+        # deliberately REMOVED so the CLI resolves its own installation dir;
+        # host leakage is prevented because the base is the caller-staged
+        # environment, never the ambient one. Session location is controlled
+        # by the --session-dir flag in command() instead of an env override.
+        env.pop("PI_PACKAGE_DIR", None)
+        env.pop("PI_CONFIG_DIR", None)
         env["PI_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
         return env
 
@@ -109,7 +114,10 @@ class PiRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            return proc.returncode == 0 and stdout.strip() == f"pi {ENGINE_VERSION}".encode()
+            # The installed CLI prints just its version ("0.85.1"); match on
+            # the pinned version token instead of an exact banner format —
+            # format drift must not wedge every run into UNSUPPORTED_RUNTIME.
+            return proc.returncode == 0 and ENGINE_VERSION.encode() in stdout
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -248,10 +256,19 @@ class PiRuntime:
                     continue
                 raw_usage = message.get("usage")
                 if isinstance(raw_usage, dict):
-                    usage = {
-                        "input_tokens": int(raw_usage.get("input") or 0),
-                        "output_tokens": int(raw_usage.get("output") or 0),
-                    }
+                    # Multi-turn runs emit usage per assistant message; the
+                    # receipt must report the SUM across the run, not the
+                    # last message's counters (P1, task #68 review follow-up).
+                    # Non-numeric/negative values never corrupt the total.
+                    if usage is None:
+                        usage = {"input_tokens": 0, "output_tokens": 0}
+                    for target, source_key in (
+                        ("input_tokens", "input"),
+                        ("output_tokens", "output"),
+                    ):
+                        value = raw_usage.get(source_key)
+                        if isinstance(value, int) and value > 0:
+                            usage[target] += value
                 if message.get("role") != "assistant":
                     continue
                 content = message.get("content")

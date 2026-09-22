@@ -66,7 +66,7 @@ def executable(tmp_path):
 import json, os, signal, subprocess, sys, time
 from pathlib import Path
 if sys.argv[1:] == ["--version"]:
-    print("pi " + os.environ.get("FAKE_VERSION", "0.85.1"))
+    print(os.environ.get("FAKE_VERSION", "0.85.1"))
     sys.exit(0)
 prompt = sys.stdin.read()
 with Path("calls.jsonl").open("a") as log:
@@ -155,6 +155,37 @@ async def test_second_execution_resumes_native_session(tmp_path, invocation, exe
         await m.close()
 
 
+async def test_usage_accumulates_across_assistant_messages(tmp_path, invocation, executable):
+    """Multi-turn runs must SUM per-message usage, not keep the last one."""
+    path = executable
+    body = path.read_text()
+    body = body.replace(
+        "if prompt == \"failed\":",
+        "if prompt == \"multi\":\n"
+        "    u1 = {\"input\": 10, \"output\": 2, \"totalTokens\": 12}\n"
+        "    event({\"type\": \"message_start\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"part1\"}], \"usage\": u1}})\n"
+        "    event({\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"part1\"}], \"usage\": u1, \"stopReason\": \"stop\"}})\n"
+        "    u2 = {\"input\": 20, \"output\": 3, \"totalTokens\": 23}\n"
+        "    event({\"type\": \"message_start\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"part2\"}], \"usage\": u2}})\n"
+        "    event({\"type\": \"message_end\", \"message\": {\"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"part2\"}], \"usage\": u2, \"stopReason\": \"stop\"}})\n"
+        "    event({\"type\": \"turn_end\"})\n"
+        "    event({\"type\": \"agent_settled\"})\n"
+        "    sys.exit(0)\n"
+        "if prompt == \"failed\":",
+    )
+    path.write_text(body)
+    invocation = replace(invocation, prompt="multi")
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(invocation)
+        final, _ = await done(m)
+        assert final.outcome == "succeeded"
+        assert final.text == "part1\npart2"
+        assert final.usage == {"input_tokens": 30, "output_tokens": 5}
+    finally:
+        await m.close()
+
+
 async def test_provider_stop_reason_error_maps_to_engine_error(
     tmp_path, invocation, executable
 ):
@@ -203,8 +234,11 @@ async def test_environment_is_sandboxed(tmp_path, invocation, executable):
         env = record["env"]
         home = str(invocation.runtime_home)
         assert env["HOME"] == home
-        assert env["PI_PACKAGE_DIR"] == home
-        assert env["PI_CONFIG_DIR"] == home
+        # Installed-asset paths must be REMOVED, never re-pointed (a wrong
+        # override makes the CLI read an empty package.json and misreport
+        # its version): the host's stale PI_PACKAGE_DIR must not leak in.
+        assert "PI_PACKAGE_DIR" not in env
+        assert "PI_CONFIG_DIR" not in env
         assert env["PI_SESSION_DIR"] == f"{home}/sessions"
         assert env["ZAI_API_KEY"] == "staged-only"
         assert not env.get("ANYGARDEN_HOME")
