@@ -9,13 +9,11 @@ leaves no incident and no stop. Mirrors
 from __future__ import annotations
 
 import secrets
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient, MockTransport, Response
-from sqlalchemy import select
-
 from anygarden.app import create_app
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.budgets.ledger import clear_observed_cache
@@ -25,10 +23,12 @@ from anygarden.db.models import (
     Agent,
     AgentToken,
     Base,
-    LLMGatewayUsage,
     TokenBudgetIncident,
     TokenBudgetPolicy,
+    UsageLedger,
 )
+from httpx import ASGITransport, AsyncClient, MockTransport, Response
+from sqlalchemy import select
 
 
 class _MockLifecycle:
@@ -204,7 +204,7 @@ async def test_default_no_policy_no_stop_no_incident(gateway_env) -> None:
         # ran but did nothing because no hard-stop policy is active.
         usage = (
             await db.execute(
-                select(LLMGatewayUsage).where(LLMGatewayUsage.status_code == 200)
+                select(UsageLedger).where(UsageLedger.status_code == 200)
             )
         ).scalars().all()
         assert len(usage) == 1

@@ -14,18 +14,19 @@ no real network. The tests exercise the observable contract:
 from __future__ import annotations
 
 import secrets
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC
+from typing import Any
 
 import httpx
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient, MockTransport, Response
-from sqlalchemy import select
-
 from anygarden.app import create_app
+from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, AgentToken, Base, LLMGatewayUsage
-from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.db.models import Agent, AgentToken, Base, UsageLedger
+from httpx import ASGITransport, AsyncClient, MockTransport, Response
+from sqlalchemy import select
 
 
 @pytest_asyncio.fixture()
@@ -200,7 +201,7 @@ async def test_successful_response_writes_usage_row(gateway_env) -> None:
     assert resp.status_code == 200
 
     async with gateway_env["factory"]() as db:
-        rows = (await db.execute(select(LLMGatewayUsage))).scalars().all()
+        rows = (await db.execute(select(UsageLedger))).scalars().all()
 
     assert len(rows) == 1
     row = rows[0]
@@ -389,7 +390,8 @@ async def test_guest_token_cannot_traverse_proxy(gateway_env) -> None:
     # care which room; it rejects before inspecting claims). The
     # guest token factory requires a matching User row because
     # ``get_identity`` looks the guest user up by id on every call.
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
+
     from anygarden.db.models import User
 
     async with gateway_env["factory"]() as db:
@@ -411,7 +413,7 @@ async def test_guest_token_cannot_traverse_proxy(gateway_env) -> None:
         invite_id="invite-xyz",
         display_name="Guest Alice",
         secret=gateway_env["app"].state.config.jwt_secret,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
 
     async with AsyncClient(

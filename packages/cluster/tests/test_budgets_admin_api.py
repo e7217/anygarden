@@ -7,16 +7,16 @@ Non-admin 403 gate + CRUD round-trip, mirroring
 from __future__ import annotations
 
 import secrets as _stdlib_secrets
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-
 from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import Base, User
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture()

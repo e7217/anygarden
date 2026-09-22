@@ -17,13 +17,11 @@ supervisor harness.
 from __future__ import annotations
 
 import secrets
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient, MockTransport, Response
-from sqlalchemy import select
-
 from anygarden.app import create_app
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.budgets.ledger import clear_observed_cache
@@ -33,9 +31,11 @@ from anygarden.db.models import (
     Agent,
     AgentToken,
     Base,
-    LLMGatewayUsage,
     TokenBudgetPolicy,
+    UsageLedger,
 )
+from httpx import ASGITransport, AsyncClient, MockTransport, Response
+from sqlalchemy import select
 
 
 @pytest_asyncio.fixture()
@@ -107,7 +107,7 @@ def _install_fake_upstream(app, handler, *, port: int = 4001) -> None:
 async def _seed_usage(factory, *, agent_id: str, prompt: int) -> None:
     async with factory() as db:
         db.add(
-            LLMGatewayUsage(
+            UsageLedger(
                 identity_kind="agent",
                 identity_id=agent_id,
                 agent_id=agent_id,
@@ -192,7 +192,7 @@ async def test_blocked_call_writes_429_usage_row(gateway_env) -> None:
     async with gateway_env["factory"]() as db:
         rows = (
             await db.execute(
-                select(LLMGatewayUsage).where(LLMGatewayUsage.status_code == 429)
+                select(UsageLedger).where(UsageLedger.status_code == 429)
             )
         ).scalars().all()
     assert len(rows) == 1
