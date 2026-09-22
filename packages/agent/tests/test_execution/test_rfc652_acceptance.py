@@ -356,27 +356,47 @@ event({"type": "agent_settled"})
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="cancel path drops observed usage (RuntimeResult carries no usage); "
-    "preservation is a D-track follow-up for the runtime adapter",
-    strict=True,
-)
-async def test_r_l_cancel_preserves_usage_observed_so_far(tmp_path):
-    exe = write_exec(tmp_path, "fake-pi-hang", PI_FAKE_HANG)
+async def test_r_m_cancel_after_turn_end_sync_probe(tmp_path):
+    """실측 프로브(b412d3a3): turn_end progress 관측 → 취소.
+
+    Event로 turn_end progress 수신을 보장한 뒤 취소하므로, 어댑터가
+    message_end를 이미 수신한 시점의 취소임이 보장된다. 현재 main 계열
+    취소 시 측정량이 소실됨을 재현하는 회귀 프로브다.
+    """
+    exe = write_exec(tmp_path, "fake-pi", PI_FAKE_HANG)
     inv = invocation("pi-cli", tmp_path, provider="zai", prompt="hang")
+    turn_end_seen = asyncio.Event()
     m = pi_manager(tmp_path, exe)
+
+    # intercept the runtime's _collect to observe turn_end progress
+    orig_collect = None
+    runtime = m._runtime if hasattr(m, "_runtime") else None
+    if runtime is None:
+        pytest.skip("cannot reach runtime instance for emit interception")
+
+    orig_collect = runtime._collect
+
+    async def collect_spy(proc, inv_, session, output, emit, authorized):
+        async def emit_spy(kind, ev):
+            emit(kind, ev)
+            if kind == "progress" and ev.get("event") == "turn_end":
+                turn_end_seen.set()
+        return await orig_collect(proc, inv_, session, output, emit_spy, authorized)
+
+    runtime._collect = collect_spy
+
     try:
         await m.start(inv)
-        await asyncio.sleep(0.3)  # usage observed before cancel
+        # wait for turn_end progress observation
+        await asyncio.wait_for(turn_end_seen.wait(), timeout=5)
+        # now cancel — the adapter has already seen turn_end
         await m.cancel(inv.execution_id)
         await asyncio.sleep(0.5)
         receipt = await m.reconcile(inv.execution_id)
         assert receipt.outcome == "cancelled"
-        assert receipt.usage is not None
+        assert receipt.usage is not None  # measured amount must survive
     finally:
         await m.close()
-
-
 PI_FAKE_HANG = """#!{sys.executable}
 import json, sys, time
 from pathlib import Path
