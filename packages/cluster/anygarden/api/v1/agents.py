@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, Field, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.agent_availability import render_unavailable_message
 from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import (
@@ -18,21 +19,23 @@ from anygarden.db.models import (
     Agent,
     AgentFile,
     AgentToken,
-    LLMGatewayModel,
     Machine,
     MachineEngine,
     Participant,
     Room,
     Task,
 )
-from anygarden.agent_availability import render_unavailable_message
 from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
-from anygarden.engines.validation import PROVIDER_PATTERN, pi_provider_error
+from anygarden.engines.validation import (
+    PROVIDER_PATTERN,
+    engine_runtime_error,
+    pi_provider_error,
+    removed_engine_error,
+)
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.rooms.roster import broadcast_roster_for_agent
-from anygarden.scheduler.gateway_secrets import openhands_model_id_for_gateway
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
 
 if TYPE_CHECKING:
@@ -119,6 +122,13 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode="after")
     def require_pi_provider(self) -> AgentCreate:
+        if self.engine in {"codex-cli", "pi-cli"} and self.runtime != "python":
+            raise ValueError(
+                "Codex and Pi require the Python agent runtime; choose runtime=python"
+            )
+        error = removed_engine_error(self.engine)
+        if error:
+            raise ValueError(error)
         if self.engine == "pi-cli" and self.provider is None:
             raise ValueError(
                 "pi-cli requires an explicit provider; configure a provider before starting"
@@ -286,9 +296,7 @@ def _agent_to_out(agent: Agent, machine_bus: MachineBus | None) -> AgentOut:
     if agent.unavailable_code:
         detail = dict(agent.unavailable_detail or {})
         if agent.unavailable_until is not None:
-            detail.setdefault(
-                "until", agent.unavailable_until.isoformat()
-            )
+            detail.setdefault("until", agent.unavailable_until.isoformat())
         out.unavailable_reason = UnavailableReasonOut(
             code=agent.unavailable_code,
             message=render_unavailable_message(
@@ -458,13 +466,20 @@ async def update_agent(
     # consumes flips ``runtime_changed`` and keeps the existing
     # "mutate → generation bump → respawn" semantics.
     if body.provider_set and agent.engine == "pi-cli" and body.provider is None:
-        raise HTTPException(status_code=422, detail="pi-cli requires an explicit provider")
+        raise HTTPException(
+            status_code=422, detail="pi-cli requires an explicit provider"
+        )
 
     if agent.base_url and (body.provider_set or body.model_set):
         raise HTTPException(
             409,
             "Use direct model connection settings to change this agent provider or model",
         )
+
+    if body.runtime_set and body.runtime is not None:
+        error = engine_runtime_error(agent.engine, body.runtime)
+        if error:
+            raise HTTPException(status_code=422, detail=error)
 
     runtime_changed = False
     peer_metadata_changed = False
@@ -516,9 +531,7 @@ async def update_agent(
                     details={
                         "from": previous_permission,
                         "to": body.permission_level,
-                        "by_user_id": identity.id
-                        if identity.kind == "user"
-                        else None,
+                        "by_user_id": identity.id if identity.kind == "user" else None,
                     },
                 )
             )
@@ -610,12 +623,16 @@ async def list_agent_files(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     rows = (
-        await db.execute(
-            select(AgentFile)
-            .where(AgentFile.agent_id == agent_id)
-            .order_by(AgentFile.path)
+        (
+            await db.execute(
+                select(AgentFile)
+                .where(AgentFile.agent_id == agent_id)
+                .order_by(AgentFile.path)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -766,6 +783,8 @@ async def list_available_engines(
     rows = (await db.execute(stmt)).all()
     infos: list[EngineInfo] = []
     for row in rows:
+        if removed_engine_error(row.engine):
+            continue
         entry = get_engine_entry(row.engine)
         infos.append(
             EngineInfo(
@@ -810,14 +829,6 @@ async def get_engine_models(
     levels. When a model's ``reasoning_levels`` is empty, the
     engine-level list applies. Clients should union them as needed.
 
-    Issue #359 — for the openhands engine, also surfaces models the
-    operator has registered in ``llm_gateway_models``. They land in
-    the response with ``source="gateway"`` so the UI can badge them
-    distinctly from the static catalog. Other engines keep their
-    pre-#359 behaviour (catalog only) because the gateway path
-    currently only flows engine_secrets to openhands; surfacing
-    gateway models elsewhere would advertise a route the agent can't
-    actually use.
     """
     entry = get_engine_entry(engine)
     if entry is None:
@@ -832,41 +843,6 @@ async def get_engine_models(
         )
         for m in entry.models
     ]
-
-    if engine == "openhands":
-        # Append rows from the gateway table. ``enabled=False`` rows
-        # exist (admin can pause a model without deleting) so we
-        # filter explicitly. ``reasoning_levels`` is left empty —
-        # gateway-registered models have no anygarden-curated effort
-        # taxonomy; clients fall back to the engine-level list per
-        # the existing contract documented in the docstring above.
-        gw_rows = (
-            await db.execute(
-                select(LLMGatewayModel)
-                .where(LLMGatewayModel.enabled.is_(True))
-                .order_by(LLMGatewayModel.model_name)
-            )
-        ).scalars().all()
-        existing_ids = {m.id for m in models}
-        for row in gw_rows:
-            model_id = openhands_model_id_for_gateway(
-                row.provider, row.model_name
-            )
-            if model_id is None:
-                continue
-            if model_id in existing_ids:
-                # A static catalog entry with the same id wins —
-                # operator-registered duplicates would only confuse
-                # the picker. Skip silently.
-                continue
-            models.append(
-                EngineModelOut(
-                    id=model_id,
-                    label=f"{row.model_name} (via gateway)",
-                    reasoning_levels=[],
-                    source="gateway",
-                )
-            )
 
     return EngineCatalogOut(
         engine=entry.engine,
@@ -933,20 +909,20 @@ async def delete_agent(
     # handle Participants / Messages / Tasks, so ``db.delete(room)``
     # is enough.
     dm_rooms = (
-        await db.execute(
-            select(Room)
-            .join(Participant, Participant.room_id == Room.id)
-            .where(Participant.agent_id == agent_id, Room.is_dm.is_(True))
+        (
+            await db.execute(
+                select(Room)
+                .join(Participant, Participant.room_id == Room.id)
+                .where(Participant.agent_id == agent_id, Room.is_dm.is_(True))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     # Clean up related records and delete agent
     memberships = list(
-        (
-            await db.execute(
-                select(Participant).where(Participant.agent_id == agent_id)
-            )
-        )
+        (await db.execute(select(Participant).where(Participant.agent_id == agent_id)))
         .scalars()
         .all()
     )
@@ -981,7 +957,11 @@ async def start_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    error = pi_provider_error(agent.engine, agent.provider)
+    error = (
+        removed_engine_error(agent.engine)
+        or engine_runtime_error(agent.engine, agent.runtime)
+        or pi_provider_error(agent.engine, agent.provider)
+    )
     if error:
         raise HTTPException(status_code=422, detail=error)
 
@@ -1162,7 +1142,9 @@ async def add_agent_room(
     room = (
         await db.execute(select(Room).where(Room.id == body.room_id))
     ).scalar_one_or_none()
-    return AgentRoomOut(room_id=body.room_id, room_name=room.name if room else "", role="member")
+    return AgentRoomOut(
+        room_id=body.room_id, room_name=room.name if room else "", role="member"
+    )
 
 
 @router.delete("/{agent_id}/rooms/{room_id}", status_code=200)
@@ -1272,14 +1254,18 @@ async def create_agent_dm(
         dm_name = body.name
     else:
         existing = (
-            await db.execute(
-                select(Room)
-                .where(Room.is_dm.is_(True))
-                .where(Room.representative_agent_id == agent_id)
-                .join(Participant, Participant.room_id == Room.id)
-                .where(Participant.user_id == identity.id)
+            (
+                await db.execute(
+                    select(Room)
+                    .where(Room.is_dm.is_(True))
+                    .where(Room.representative_agent_id == agent_id)
+                    .join(Participant, Participant.room_id == Room.id)
+                    .where(Participant.user_id == identity.id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         dm_name = f"DM: {agent.name} #{len(existing) + 1}"
 
     room = Room(
@@ -1398,17 +1384,17 @@ async def list_agent_tasks(
     for task, room_name in rows:
         results.append(
             AgentTaskOut(
-            id=task.id,
-            room_id=task.room_id,
-            room_name=room_name,
-            title=task.title,
-            status=task.status,
-            assignee_participant_id=task.assignee_participant_id,
-            created_by=task.created_by,
-            created_at=task.created_at.isoformat(),
-            source_message_id=task.source_message_id,
-            source_thread_root_id=await source_thread_root_id(db, task),
-        )
+                id=task.id,
+                room_id=task.room_id,
+                room_name=room_name,
+                title=task.title,
+                status=task.status,
+                assignee_participant_id=task.assignee_participant_id,
+                created_by=task.created_by,
+                created_at=task.created_at.isoformat(),
+                source_message_id=task.source_message_id,
+                source_thread_root_id=await source_thread_root_id(db, task),
+            )
         )
     return results
 

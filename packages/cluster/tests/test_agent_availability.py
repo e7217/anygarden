@@ -9,15 +9,16 @@ audience gating stays flexible.
 from __future__ import annotations
 
 import pytest
-
 from anygarden.agent_availability import (
-    QUOTA_EXHAUSTED,
     CRASHED,
     ENGINE_MISMATCH,
+    ENGINE_REMOVED,
+    INVALID_ENDPOINT,
+    INVALID_PROVIDER,
+    INVALID_RUNTIME,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
-    INVALID_PROVIDER,
-    INVALID_ENDPOINT,
+    QUOTA_EXHAUSTED,
     SPAWN_FAILED,
     UNAVAILABLE_CODES,
     render_unavailable_message,
@@ -35,6 +36,8 @@ def test_all_codes_are_registered() -> None:
         INVALID_PROVIDER,
         INVALID_ENDPOINT,
         QUOTA_EXHAUSTED,
+        ENGINE_REMOVED,
+        INVALID_RUNTIME,
     }
 
 

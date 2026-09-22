@@ -17,17 +17,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import structlog
 from sqlalchemy import and_, case, event, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-import structlog
 
 from anygarden.agent_availability import (
     CRASHED,
     ENGINE_MISMATCH,
+    INVALID_PROVIDER,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
     SPAWN_FAILED,
-    INVALID_PROVIDER,
 )
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
@@ -44,9 +44,12 @@ from anygarden.db.models import (
     SkillLibraryEntry,
     WorkspaceAttachment,
 )
-from anygarden.scheduler.gateway_secrets import build_engine_secrets
-from anygarden.engines.validation import pi_provider_error
 from anygarden.engines.endpoints import build_direct_engine_secrets
+from anygarden.engines.validation import (
+    engine_runtime_error,
+    pi_provider_error,
+    removed_engine_error,
+)
 from anygarden.scheduler.execution import ExecutionBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -214,7 +217,24 @@ class AgentLifecycle:
                     logger.error("lifecycle.agent_not_found", agent_id=agent_id)
                     return
 
-                error = pi_provider_error(agent.engine, getattr(agent, "provider", None))
+                removed = removed_engine_error(agent.engine) or engine_runtime_error(
+                    agent.engine, getattr(agent, "runtime", None)
+                )
+                if removed:
+                    agent.last_crash_reason = removed
+                    _mark_unavailable(
+                        agent,
+                        "engine_removed"
+                        if removed_engine_error(agent.engine)
+                        else "invalid_runtime",
+                        {"engine": agent.engine},
+                    )
+                    await db.commit()
+                    return
+
+                error = pi_provider_error(
+                    agent.engine, getattr(agent, "provider", None)
+                )
                 if error:
                     agent.last_crash_reason = error
                     _mark_unavailable(agent, INVALID_PROVIDER)
@@ -693,9 +713,7 @@ class AgentLifecycle:
                     actual_state=case(
                         (Agent.placed_on_machine_id.is_(None), "stopped"),
                         (
-                            Agent.actual_state.in_(
-                                ("running", "starting", "pending")
-                            ),
+                            Agent.actual_state.in_(("running", "starting", "pending")),
                             "stopping",
                         ),
                         else_=Agent.actual_state,
@@ -1483,6 +1501,24 @@ class AgentLifecycle:
         """Build a ``sync_desired_state`` dict from DB data."""
         # Every reconnect/bump/deferred restart converges here. Never publish a
         # runnable manifest for legacy or corrupted Pi configuration.
+        removed = removed_engine_error(agent.engine) or engine_runtime_error(
+            agent.engine, getattr(agent, "runtime", None)
+        )
+        if removed:
+            agent.last_crash_reason = removed
+            _mark_unavailable(
+                agent,
+                "engine_removed"
+                if removed_engine_error(agent.engine)
+                else "invalid_runtime",
+                {"engine": agent.engine},
+            )
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
         error = pi_provider_error(agent.engine, getattr(agent, "provider", None))
         if error and agent.desired_state == "running":
             agent.last_crash_reason = error
@@ -1637,28 +1673,6 @@ class AgentLifecycle:
                     overlays=overlays,
                 )
 
-        # Issue #359 — for openhands agents, ensure we mint a token
-        # even when the agent has no MCP overlays attached. The MCP
-        # block above only mints when ``default is not None`` (engine
-        # has a anygarden_default_entry mapping AND the agent has files
-        # to write to). openhands consumes ``.mcp.json`` so usually
-        # gets a token there, but the gateway path needs to work even
-        # if MCP rendering happens to skip (e.g. cluster_external_url
-        # set but the engine's settings_path is None for some future
-        # variant). The reverse proxy's ``get_current_identity``
-        # validates this same ``agent_tokens`` row, so reusing the
-        # MCP-minted token is safe — both endpoints accept it.
-        if (
-            anygarden_token is None
-            and self._llm_gateway_enabled
-            and self._cluster_external_url
-            and agent.engine == "openhands"
-        ):
-            # Issue #369 — same cached path as the MCP block above so
-            # gateway-only agents (no MCP attachments) still get a
-            # stable, committed token.
-            anygarden_token = self._acquire_anygarden_token(db, agent.id)
-
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
         if rooms:
@@ -1700,21 +1714,8 @@ class AgentLifecycle:
             # ``agent_memory_update`` frames.
             "memory_md": agent.memory_md,
             "files": files_map,
-            # Issue #359 — gateway env vars for openhands only. The
-            # helper guards on engine name + flag + URL + token, so
-            # passing all the conditions through cleanly returns
-            # ``{}`` for any case that doesn't satisfy them. This
-            # preserves pre-#359 behaviour (``engine_secrets={}``) for
-            # the three CLI engines and for openhands agents on
-            # deployments that haven't enabled the gateway yet.
             "endpoint_configured": bool(agent.base_url),
-            "engine_secrets": direct_secrets
-            or build_engine_secrets(
-                engine=agent.engine,
-                gateway_enabled=self._llm_gateway_enabled,
-                cluster_external_url=self._cluster_external_url,
-                agent_token=anygarden_token,
-            ),
+            "engine_secrets": direct_secrets,
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,
             "provider": agent.provider,

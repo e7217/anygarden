@@ -1,11 +1,4 @@
-"""Engine integrations -- adapters for Claude Code, Codex, Gemini CLI, and OpenHands.
-
-Issue #355 — OpenHands V1 SDK is the in-process Python alternative to
-the three CLI-subprocess adapters; see
-``.tmp/plan-355-openhands-engine-migration.md`` for the phased
-migration that ends with deprecation marking (CLI removal is tracked
-separately).
-"""
+"""Codex and Pi engine integrations with shared room execution helpers."""
 
 from __future__ import annotations
 
@@ -23,21 +16,15 @@ __all__ = [
 # Lazy-load mapping: engine name -> module path
 ENGINES: dict[str, str] = {
     "pi-cli": "anygarden_agent.integrations.pi_cli",
-    "claude-code": "anygarden_agent.integrations.claude_code",
     # #496 — codex-cli: ``codex exec`` subprocess engine, decoupled from the
     # codex-python SDK's bundled binary version (#506 removed the SDK codex).
     "codex-cli": "anygarden_agent.integrations.codex_cli",
-    "gemini-cli": "anygarden_agent.integrations.gemini_cli",
-    "openhands": "anygarden_agent.integrations.openhands_engine",
 }
 
 # Engine name -> adapter class name
 _ADAPTER_CLASSES: dict[str, str] = {
     "pi-cli": "PiCliAdapter",
-    "claude-code": "ClaudeCodeAdapter",
     "codex-cli": "CodexCliAdapter",
-    "gemini-cli": "GeminiCliAdapter",
-    "openhands": "OpenHandsAdapter",
 }
 
 
@@ -45,7 +32,7 @@ def get_adapter(engine: str, **kwargs: Any) -> EngineAdapter:
     """Lazy-load and instantiate an engine adapter by name.
 
     Args:
-        engine: Engine identifier (e.g. "claude-code").
+        engine: Engine identifier (e.g. "codex-cli").
         **kwargs: Keyword arguments forwarded to the adapter constructor.
 
     Returns:
@@ -54,6 +41,9 @@ def get_adapter(engine: str, **kwargs: Any) -> EngineAdapter:
     Raises:
         ValueError: If the engine name is not recognized.
     """
+    error = removed_engine_error(engine)
+    if error:
+        raise ValueError(error)
     if engine not in ENGINES:
         raise ValueError(
             f"Unknown engine {engine!r}. "
@@ -66,3 +56,13 @@ def get_adapter(engine: str, **kwargs: Any) -> EngineAdapter:
     module = importlib.import_module(module_path)
     adapter_cls = getattr(module, class_name)
     return adapter_cls(**kwargs)
+
+
+REMOVED_ENGINES = frozenset(
+    {"claude-code", "claude_code", "gemini-cli", "gemini_cli", "openhands"}
+)
+ENGINE_REMOVED_MESSAGE = "This engine has been removed. Create a codex-cli or pi-cli agent and transfer the settings you want to keep; existing configuration and history are preserved."
+
+
+def removed_engine_error(engine: str) -> str | None:
+    return ENGINE_REMOVED_MESSAGE if engine in REMOVED_ENGINES else None

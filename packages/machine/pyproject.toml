@@ -27,27 +27,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Issue #357 — in-process Python engines (currently OpenHands) are
-# detected by ``importlib.import_module`` inside the machine process
-# (``detector.py``), which treats ``ImportError`` as "engine absent".
-# Binary engines (claude-code / codex / gemini-cli) are found via
-# ``shutil.which`` and need no Python dep. OpenHands was previously a
-# hard runtime dependency, but ``openhands-sdk`` pulls ``lmnr`` whose
-# pinned ``opentelemetry-semantic-conventions==0.60b1`` is unsatisfiable
-# against the rest of the opentelemetry stack — so a plain
-# ``pip install anygarden-machine`` (and, since #397, ``pip install
-# anygarden``) failed with ResolutionImpossible. Gating it behind an
-# extra restores clean installs; operators who run the OpenHands engine
-# opt in with ``pip install "anygarden-machine[openhands]"`` and the
-# detector advertises it once importable.
-openhands = ["openhands-sdk>=1.35,<2"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.3",
     "mypy>=1.9",
-    # Issue #357 — exercise the OpenHands detection path in tests.
-    "openhands-sdk>=1.35,<2",
 ]
 
 [project.scripts]
@@ -59,8 +43,3 @@ packages = ["anygarden_machine"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# libtmux (transitive via openhands-tools, installed under CI's --all-extras)
-# ships a pytest plugin that applies a mark to a fixture; pytest >=8.4 turns that
-# into a hard error at plugin import, killing collection before any test runs. We
-# don't use its fixtures, so disable its autoload. (#439)
-addopts = "-p no:libtmux"

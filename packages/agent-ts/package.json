@@ -1,7 +1,7 @@
 {
   "name": "@anygarden/agent-ts",
   "version": "0.0.1",
-  "description": "Anygarden TypeScript agent runtime — parallels the Python anygarden-agent for TS-native LLM SDKs (Claude Code, Codex, Gemini CLI).",
+  "description": "Anygarden TypeScript transport client; Codex and Pi execution uses the Python runtime.",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -22,7 +22,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.110",
     "commander": "^12.1.0",
     "pino": "^9.5.0",
     "ws": "^8.18.0",

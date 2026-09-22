@@ -33,9 +33,6 @@ import os
 _ENGINE_DEFAULTS: dict[str, float] = {
     "pi": 600.0,
     "codex": 600.0,
-    "claude": 600.0,
-    "openhands": 600.0,
-    "gemini": 120.0,
 }
 
 # Slack added on top of the turn timeout when deriving the outer layers.

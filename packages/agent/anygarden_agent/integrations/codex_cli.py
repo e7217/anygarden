@@ -50,7 +50,7 @@ from anygarden_agent.integrations.engine_session_store import (
     load_sessions,
     save_sessions,
 )
-from anygarden_agent.integrations.gemini_cli import (
+from anygarden_agent.integrations.process_helpers import (
     _subprocess_group_kwargs,
     _terminate_tree,
 )

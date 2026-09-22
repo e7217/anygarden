@@ -2,23 +2,24 @@
 
 from __future__ import annotations
 
-import json
 import tomllib
 
 import pytest
 import pytest_asyncio
-from cryptography.fernet import Fernet
-from sqlalchemy import select
-
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
-    Agent, AgentFile, Base,
-    MCPServerInstance, MCPServerTemplate,
+    Agent,
+    AgentFile,
+    Base,
+    MCPServerInstance,
+    MCPServerTemplate,
 )
 from anygarden.mcp_templates.encryption import MCPSecrets
 from anygarden.mcp_templates.service import MCPTemplateService
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
+from cryptography.fernet import Fernet
+from sqlalchemy import select
 
 
 @pytest_asyncio.fixture()
@@ -42,7 +43,8 @@ async def _build_frame(
 ) -> dict:
     bus = MachineBus()
     lifecycle = AgentLifecycle(
-        db_factory=factory, machine_bus=bus,
+        db_factory=factory,
+        machine_bus=bus,
         mcp_template_service=service,
         cluster_external_url=cluster_external_url,
     )
@@ -63,8 +65,10 @@ class TestLifecycleOverlay:
         empty settings.json."""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a1",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a1",
+                desired_state="idle",
+                actual_state="idle",
             )
             db.add(agent)
             await db.commit()
@@ -74,11 +78,13 @@ class TestLifecycleOverlay:
         assert frame["files"] == {}
 
     @pytest.mark.asyncio
-    async def test_attached_instance_renders_into_claude_settings(self, env):
+    async def test_attached_instance_renders_into_codex_settings(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a1",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a1",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
@@ -86,134 +92,140 @@ class TestLifecycleOverlay:
                 description=None,
                 icon=None,
                 config_per_engine={
-                    "claude-code": {
+                    "codex-cli": {
                         "command": "npx",
                         "args": ["-y", "gh"],
                         "env": {"T": "${T}"},
                     },
                 },
                 required_env_vars=["T"],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id,
-                template_id=template.id,
-                env_values_encrypted=env["secrets"].encrypt_dict({"T": "secret"}),
-                enabled=True,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                    env_values_encrypted=env["secrets"].encrypt_dict({"T": "secret"}),
+                    enabled=True,
+                )
+            )
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
-        # Issue #142 — Claude Code 2.x reads project-local MCP config
-        # from ``.mcp.json`` at the agent/project root, not from
-        # ``.claude/settings.json``'s mcpServers section (which 2.x
-        # silently ignores).
-        assert ".mcp.json" in frame["files"]
-        data = json.loads(frame["files"][".mcp.json"])
+        # Codex receives MCP configuration in its isolated TOML settings.
+        assert ".codex/config.toml" in frame["files"]
+        data = tomllib.loads(frame["files"][".codex/config.toml"])
         # Credential gets rendered as plaintext in the settings file —
         # that's intentional: the DB has the ciphertext, the on-disk
         # manifest (which the machine materialises inside the agent's
         # own cwd) has the value the engine can use.
-        assert data["mcpServers"]["github"]["env"]["T"] == "secret"
+        assert data["mcp_servers"]["github"]["env"]["T"] == "secret"
 
     @pytest.mark.asyncio
     async def test_disabled_instance_is_skipped(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a1",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a1",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
                 display_name="GitHub",
                 config_per_engine={
-                    "claude-code": {"command": "npx"},
+                    "codex-cli": {"command": "npx"},
                 },
                 required_env_vars=[],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-                enabled=False,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                    enabled=False,
+                )
+            )
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
         # Disabled → overlay skipped → no .mcp.json produced.
-        assert ".mcp.json" not in frame["files"]
+        assert ".codex/config.toml" not in frame["files"]
 
     @pytest.mark.asyncio
     async def test_admin_agent_file_is_merged_with_overlay(self, env):
-        """Admin-authored AgentFile settings.json + MCP overlay should
-        combine: admin's mcpServers keys win on collision, other
-        overlays fill in, non-mcpServers keys are preserved."""
+        """Admin-authored AgentFile config.toml + MCP overlay should
+        combine: admin's mcp_servers keys win on collision, other
+        overlays fill in, non-MCP keys are preserved."""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a1",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a1",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="slack",
                 display_name="Slack",
                 config_per_engine={
-                    "claude-code": {"command": "overlay"},
+                    "codex-cli": {"command": "overlay"},
                 },
                 required_env_vars=[],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            # Issue #142 — admin overrides for MCP live in ``.mcp.json``
-            # at the workspace root (same file Claude Code 2.x reads).
-            # Non-MCP admin settings like ``permissions.allow`` stay
-            # in ``.claude/settings.json`` and don't participate in the
-            # MCP merge path; this test focuses on the MCP merge so we
-            # keep the admin file in the new registry location.
-            db.add(AgentFile(
-                agent_id=agent.id,
-                path=".mcp.json",
-                content=json.dumps({
-                    "custom_key": "kept",
-                    "mcpServers": {"github": {"command": "admin-gh"}},
-                }),
-            ))
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-            ))
+            # Admin entries win on collision; unrelated settings survive.
+            db.add(
+                AgentFile(
+                    agent_id=agent.id,
+                    path=".codex/config.toml",
+                    content='custom_key = "kept"\n[mcp_servers.github]\ncommand = "admin-gh"\n',
+                )
+            )
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                )
+            )
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(env["factory"], env["service"], aid)
-        data = json.loads(frame["files"][".mcp.json"])
+        data = tomllib.loads(frame["files"][".codex/config.toml"])
         # Admin's non-mcp keys preserved verbatim.
         assert data["custom_key"] == "kept"
         # Admin's github entry preserved (admin wins on collision).
-        assert data["mcpServers"]["github"] == {"command": "admin-gh"}
+        assert data["mcp_servers"]["github"] == {"command": "admin-gh"}
         # Overlay's slack entry added on top.
-        assert data["mcpServers"]["slack"] == {"command": "overlay"}
+        assert data["mcp_servers"]["slack"] == {"command": "overlay"}
 
     @pytest.mark.asyncio
     async def test_codex_agent_gets_toml_overlay(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="codex-cli", name="c1",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="c1",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
                 display_name="GitHub",
                 config_per_engine={
                     "codex-cli": {
-                        "command": "npx", "args": ["-y", "gh"],
+                        "command": "npx",
+                        "args": ["-y", "gh"],
                         "env": {"T": "v"},
                     },
                 },
@@ -223,9 +235,12 @@ class TestLifecycleOverlay:
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                )
+            )
             await db.commit()
             aid = agent.id
 
@@ -241,24 +256,29 @@ class TestLifecycleOverlay:
         still boots; the overlay simply doesn't apply."""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="openai", name="o1",
-                desired_state="idle", actual_state="idle",
+                engine="openai",
+                name="o1",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
                 display_name="GitHub",
                 config_per_engine={
-                    "claude-code": {"command": "x"},
+                    "codex-cli": {"command": "x"},
                 },
                 required_env_vars=[],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                )
+            )
             await db.commit()
             aid = agent.id
 
@@ -275,44 +295,22 @@ class TestAnygardenSelfRegistration:
     process-env injection."""
 
     @pytest.mark.asyncio
-    async def test_claude_code_gets_streamable_http_default(self, env):
-        async with env["factory"]() as db:
-            agent = Agent(
-                engine="claude-code", name="a1",
-                desired_state="idle", actual_state="idle",
-            )
-            db.add(agent)
-            await db.commit()
-            aid = agent.id
-
-        frame = await _build_frame(
-            env["factory"], env["service"], aid,
-            cluster_external_url="http://localhost:8001",
-        )
-        rendered = json.loads(frame["files"][".mcp.json"])
-        assert "anygarden" in rendered["mcpServers"]
-        entry = rendered["mcpServers"]["anygarden"]
-        assert entry["type"] == "http"
-        assert entry["url"] == "http://localhost:8001/mcp/rpc"
-        # The header carries a real token, and the same plaintext
-        # value rides on anygarden_mcp_token for the machine spawner.
-        token = frame["anygarden_mcp_token"]
-        assert token
-        assert entry["headers"]["Authorization"] == f"Bearer {token}"
-
-    @pytest.mark.asyncio
     async def test_codex_uses_env_var_indirection(self, env):
         async with env["factory"]() as db:
             agent = Agent(
-                engine="codex-cli", name="cx",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="cx",
+                desired_state="idle",
+                actual_state="idle",
             )
             db.add(agent)
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(
-            env["factory"], env["service"], aid,
+            env["factory"],
+            env["service"],
+            aid,
             cluster_external_url="http://localhost:8001",
         )
         rendered = tomllib.loads(frame["files"][".codex/config.toml"])
@@ -334,8 +332,10 @@ class TestAnygardenSelfRegistration:
         rely on this being a no-op.)"""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a2",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a2",
+                desired_state="idle",
+                actual_state="idle",
             )
             db.add(agent)
             await db.commit()
@@ -352,78 +352,93 @@ class TestAnygardenSelfRegistration:
         §3.2 결정 1)."""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a3",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a3",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="anygarden",
                 display_name="Anygarden (admin override)",
                 config_per_engine={
-                    "claude-code": {"command": "/bin/false", "args": [], "env": {}},
+                    "codex-cli": {"command": "/bin/false", "args": [], "env": {}},
                 },
                 required_env_vars=[],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                )
+            )
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(
-            env["factory"], env["service"], aid,
+            env["factory"],
+            env["service"],
+            aid,
             cluster_external_url="http://localhost:8001",
         )
-        rendered = json.loads(frame["files"][".mcp.json"])
-        entry = rendered["mcpServers"]["anygarden"]
+        rendered = tomllib.loads(frame["files"][".codex/config.toml"])
+        entry = rendered["mcp_servers"]["anygarden"]
         # Admin's stdio command shape wins over the builtin http form.
         assert entry.get("command") == "/bin/false"
         assert "type" not in entry
 
     @pytest.mark.asyncio
     async def test_default_coexists_with_admin_attachment_under_other_name(
-        self, env,
+        self,
+        env,
     ):
         """The common case: admin attaches an external MCP (e.g.
         ``github``) under a non-conflicting name, and the anygarden
         builtin coexists in the same merged manifest."""
         async with env["factory"]() as db:
             agent = Agent(
-                engine="claude-code", name="a4",
-                desired_state="idle", actual_state="idle",
+                engine="codex-cli",
+                name="a4",
+                desired_state="idle",
+                actual_state="idle",
             )
             template = MCPServerTemplate(
                 name="github",
                 display_name="GitHub",
                 config_per_engine={
-                    "claude-code": {
+                    "codex-cli": {
                         "command": "npx",
                         "args": ["-y", "@modelcontextprotocol/server-github"],
                         "env": {},
                     },
                 },
                 required_env_vars=[],
-                supported_engines=["claude-code"],
+                supported_engines=["codex-cli"],
                 source="custom",
             )
             db.add_all([agent, template])
             await db.flush()
-            db.add(MCPServerInstance(
-                agent_id=agent.id, template_id=template.id,
-            ))
+            db.add(
+                MCPServerInstance(
+                    agent_id=agent.id,
+                    template_id=template.id,
+                )
+            )
             await db.commit()
             aid = agent.id
 
         frame = await _build_frame(
-            env["factory"], env["service"], aid,
+            env["factory"],
+            env["service"],
+            aid,
             cluster_external_url="http://localhost:8001",
         )
-        rendered = json.loads(frame["files"][".mcp.json"])
-        servers = rendered["mcpServers"]
+        rendered = tomllib.loads(frame["files"][".codex/config.toml"])
+        servers = rendered["mcp_servers"]
         assert "anygarden" in servers
         assert "github" in servers
-        assert servers["anygarden"]["type"] == "http"
+        assert servers["anygarden"]["url"] == "http://localhost:8001/mcp/rpc"
         assert servers["github"]["command"] == "npx"

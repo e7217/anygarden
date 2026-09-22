@@ -169,9 +169,7 @@ class TestDetectEnginesIncludesPythonModules:
             result = await detect_engines()
 
         engine_names = [e.engine for e in result.engines]
-        assert "openhands" in engine_names
-        oh = next(e for e in result.engines if e.engine == "openhands")
-        assert oh.version == "1.21.0"
+        assert "openhands" not in engine_names
 
     async def test_openhands_omitted_when_sdk_missing(self) -> None:
         """Without openhands.sdk in sys.modules + no binary, result is empty.

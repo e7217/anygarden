@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { buildCli, makeAdapter, sendAdapterReply } from "../src/cli.js";
 import type { ChatClient } from "../src/client.js";
-import type { EngineAdapter } from "../src/engines/types.js";
 
 describe("buildCli", () => {
   it("parses the spawner's argv shape", () => {
@@ -39,22 +38,19 @@ describe("buildCli", () => {
 });
 
 describe("makeAdapter", () => {
-  it("returns a ClaudeCodeAdapter for engine=claude_code", () => {
-    const adapter: EngineAdapter = makeAdapter("claude_code", {
-      engine: "claude_code",
-      name: "alpha",
-      server: "ws://host",
-    });
-    expect(adapter.constructor.name).toBe("ClaudeCodeAdapter");
+  it("refuses removed engines with migration guidance", () => {
+    for (const engine of ["claude_code", "claude-code", "gemini-cli", "openhands"]) {
+      expect(() => makeAdapter(engine, {engine, name: "", server: ""})).toThrow(/removed/);
+    }
   });
 
   it("throws a clear error for Phase-2 engines (codex, gemini)", () => {
     expect(() =>
       makeAdapter("codex", { engine: "codex", name: "", server: "" }),
-    ).toThrow(/out of scope/);
+    ).toThrow(/Python/);
     expect(() =>
       makeAdapter("gemini-cli", { engine: "gemini-cli", name: "", server: "" }),
-    ).toThrow(/out of scope/);
+    ).toThrow(/removed/);
   });
 
   it("throws for unknown engines", () => {
