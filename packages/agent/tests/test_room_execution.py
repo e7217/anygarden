@@ -415,3 +415,33 @@ async def test_omitted_model_keeps_only_codex_default(
         assert finished[0]["model"] == expected
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["codex-cli", "pi-cli"])
+async def test_manager_cancel_finishes_turn_without_cancelling_room_handler(
+    setup_room, monkeypatch, engine
+):
+    monkeypatch.setenv("TEST_OUTCOME", "cancel")
+    client = await client_for(engine, monkeypatch)
+    try:
+        task = asyncio.create_task(client._message_handlers[0](message("cancel-one")))
+        manager = client._execution_adapter._manager
+        async with asyncio.timeout(3):
+            while not manager._store.db.execute(
+                "SELECT 1 FROM events WHERE kind='progress'"
+            ).fetchone():
+                await asyncio.sleep(0.01)
+        execution_id = next(iter(manager._tasks))
+        await manager.cancel(execution_id)
+        await task  # domain cancellation must not escape to the WS receiver
+        events = [c.kwargs for c in client.sendLifecycle.call_args_list]
+        assert events[-1]["event"] == "handler_finished"
+        assert events[-1]["outcome"] == "cancelled"
+        assert events[-2]["input_tokens"] == 3
+        assert events[-2]["output_tokens"] == 1
+        client._execution_adapter._environment["TEST_OUTCOME"] = "ok"
+        await client._message_handlers[0](message("next-turn"))
+        assert client.send.call_args.args[1] == "local answer"
+    finally:
+        await client.close()

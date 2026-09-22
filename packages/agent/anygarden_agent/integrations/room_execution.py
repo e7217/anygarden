@@ -28,6 +28,7 @@ from anygarden_agent.runtime.execution.room import (
 )
 from anygarden_agent.runtime.handler_wrapper import (
     EngineCancelledError,
+    EngineTaskCancelledError,
     EngineError,
     EngineTimeoutError,
     EngineTurn,
@@ -172,7 +173,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 receipt = await asyncio.shield(cleanup)
             except asyncio.CancelledError:
                 receipt = await cleanup
-            raise EngineCancelledError(
+            raise EngineTaskCancelledError(
                 self._telemetry(receipt, invocation.model)
             ) from None
         turn = self._telemetry(receipt, invocation.model)
