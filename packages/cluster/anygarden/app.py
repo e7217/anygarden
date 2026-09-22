@@ -100,6 +100,82 @@ async def _self_heal_message_fts(engine) -> None:
         await backfill_message_fts(conn)
 
 
+async def _repair_failed_upgrade(engine) -> dict | None:
+    """Undo the two states that make ``alembic upgrade head`` unrecoverable.
+
+    Returns a description of what was repaired, or ``None`` when there was
+    nothing this function knows how to fix — in which case the caller must
+    re-raise the original failure rather than retry.
+
+    Both states are SQLite-specific and both were observed together on a
+    real database (#646):
+
+    1. **Dangling ``messages_fts`` triggers.** SQLite reparses the *entire*
+       schema on ``ALTER TABLE ... RENAME``, and Alembic's batch mode is
+       built on temp-table + rename. So triggers left behind by a missing
+       FTS virtual table (#520) break batch migrations on completely
+       unrelated tables — the reported failure was ``060_message_linked_tasks``
+       renaming ``tasks``, which has nothing to do with ``messages``.
+
+    2. **Leftover ``_alembic_tmp_*`` tables.** A failed upgrade is *not*
+       rolled back: pysqlite only opens an implicit transaction before DML,
+       so the ``CREATE TABLE _alembic_tmp_x`` that opens a batch migration
+       lands in autocommit and survives. Batch mode issues a bare
+       ``CREATE TABLE``, so the leftover collides on the next attempt.
+
+    Repairing (1) without (2) is therefore not enough for any database that
+    has already failed to boot once — which is every database that actually
+    hits this bug.
+
+    Only DDL is repaired here. Re-indexing existing rows is deliberately
+    left to ``_self_heal_message_fts`` *after* the upgrade succeeds, because
+    ``backfill_message_fts`` reads concrete ``messages`` columns and must
+    see the final schema, not a mid-migration one.
+    """
+    if engine.dialect.name != "sqlite":
+        return None
+
+    dropped: list[str] = []
+    fts_recreated = False
+
+    async with engine.begin() as conn:
+        leftovers = (
+            await conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    r"AND name LIKE '\_alembic\_tmp\_%' ESCAPE '\'"
+                )
+            )
+        ).scalars()
+        for name in leftovers:
+            # Safe to drop unconditionally: batch mode renames the temp
+            # table into place on success, so anything still named
+            # _alembic_tmp_* is the residue of a failed run. Startup is
+            # single-writer (integrated mode pins WEB_CONCURRENCY=1).
+            await conn.execute(text(f'DROP TABLE "{name}"'))
+            dropped.append(name)
+
+        objects = (
+            await conn.execute(
+                text(
+                    "SELECT type, name FROM sqlite_master "
+                    "WHERE name = 'messages' OR name LIKE 'messages_fts%'"
+                )
+            )
+        ).all()
+        names = {name for _type, name in objects}
+        dangling_triggers = {
+            name for kind, name in objects if kind == "trigger"
+        }
+        if dangling_triggers and "messages_fts" not in names and "messages" in names:
+            await create_message_fts(conn)
+            fts_recreated = True
+
+    if not dropped and not fts_recreated:
+        return None
+    return {"dropped_tmp_tables": dropped, "fts_recreated": fts_recreated}
+
+
 async def _ensure_schema_ready(engine, db_url: str) -> None:
     """Ensure the database schema is ready, using Alembic where possible.
 
@@ -140,7 +216,18 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
                     pass
 
     if has_alembic:
-        await _alembic_action("upgrade", db_url, "head")
+        try:
+            await _alembic_action("upgrade", db_url, "head")
+        except Exception:
+            # The upgrade can be blocked by residue that has nothing to do
+            # with the migration being applied — see _repair_failed_upgrade.
+            # Repair once and retry once; anything else propagates unchanged
+            # so a genuine schema problem is not hidden behind a retry (#646).
+            repaired = await _repair_failed_upgrade(engine)
+            if repaired is None:
+                raise
+            log.warning("startup.schema_upgrade_repaired", **repaired)
+            await _alembic_action("upgrade", db_url, "head")
         log.info("startup.schema_migrated", action="upgrade", target="head")
         # Self-heal a missing/empty FTS index on an existing DB — `upgrade
         # head` won't recreate the table once stamped past migration 008

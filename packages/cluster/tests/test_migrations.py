@@ -1199,3 +1199,182 @@ class TestEnsureSchemaReady:
                 os.unlink(db_path)
             except OSError:
                 pass
+
+
+class TestUpgradeFailureRecovery:
+    """Tests for the Case 1 recovery path in ``app._ensure_schema_ready``.
+
+    SQLite reparses the *entire* schema on ``ALTER TABLE ... RENAME``, so a
+    single dangling trigger — ``messages_fts_*`` left behind when the FTS
+    virtual table went missing (#520) — breaks Alembic batch migrations on
+    completely unrelated tables. That is what made ``_self_heal_message_fts``
+    unreachable: it ran *after* the upgrade that its own target state killed
+    (#646).
+
+    Worse, a failed upgrade is not rolled back. pysqlite only opens an
+    implicit transaction before DML, so the ``CREATE TABLE _alembic_tmp_*``
+    that opens a batch migration is committed in autocommit and survives the
+    failure. Repairing only the trigger therefore still fails on the retry
+    with "table _alembic_tmp_tasks already exists".
+
+    Both leftovers must be cleaned up for the retry to succeed. Revision 059
+    is the last one before ``060_message_linked_tasks``, which does
+    ``batch_alter_table("tasks")`` — the exact migration reported in #646.
+    """
+
+    @staticmethod
+    def _upgrade_to_059(db_path: str) -> None:
+        cfg = _alembic_config(db_path)
+        command.upgrade(cfg, "059")
+
+    @staticmethod
+    def _table_names(db_path: str) -> set[str]:
+        sync_engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with sync_engine.connect() as conn:
+                return {
+                    row[0]
+                    for row in conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='table'")
+                    ).all()
+                }
+        finally:
+            sync_engine.dispose()
+
+    @staticmethod
+    def _head() -> str:
+        from anygarden.app import _discover_head_revision
+
+        return _discover_head_revision()
+
+    @staticmethod
+    def _revision(db_path: str) -> str:
+        sync_engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            with sync_engine.connect() as conn:
+                return conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one()
+        finally:
+            sync_engine.dispose()
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_dangling_fts_trigger(self) -> None:
+        """messages_fts dropped, its triggers left behind → boot must still
+        reach head instead of dying inside an unrelated batch migration."""
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            self._upgrade_to_059(db_path)
+
+            sync_engine = create_engine(f"sqlite:///{db_path}")
+            with sync_engine.begin() as conn:
+                # Drop the virtual table only; SQLite keeps the triggers.
+                conn.execute(text("DROP TABLE messages_fts"))
+                triggers = {
+                    row[0]
+                    for row in conn.execute(
+                        text("SELECT name FROM sqlite_master WHERE type='trigger'")
+                    ).all()
+                }
+            sync_engine.dispose()
+            assert "messages_fts_insert" in triggers, (
+                "test setup is wrong: the dangling trigger must survive the drop"
+            )
+
+            db_url = f"sqlite+aiosqlite:///{db_path}"
+            engine = build_engine(db_url)
+            try:
+                await _ensure_schema_ready(engine, db_url)
+            finally:
+                await engine.dispose()
+
+            assert self._revision(db_path) == self._head()
+            assert "messages_fts" in self._table_names(db_path), (
+                "the self-heal must also have restored the FTS index"
+            )
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_leftover_alembic_tmp_table(self) -> None:
+        """A ``_alembic_tmp_*`` table left by a previously failed boot must
+        not block the retry. Batch mode issues a bare CREATE TABLE, so the
+        leftover collides on the next attempt."""
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            self._upgrade_to_059(db_path)
+
+            sync_engine = create_engine(f"sqlite:///{db_path}")
+            with sync_engine.begin() as conn:
+                conn.execute(text("CREATE TABLE _alembic_tmp_tasks (id VARCHAR(36))"))
+            sync_engine.dispose()
+
+            db_url = f"sqlite+aiosqlite:///{db_path}"
+            engine = build_engine(db_url)
+            try:
+                await _ensure_schema_ready(engine, db_url)
+            finally:
+                await engine.dispose()
+
+            assert self._revision(db_path) == self._head()
+            assert "_alembic_tmp_tasks" not in self._table_names(db_path), (
+                "the stale batch-migration scratch table must be cleaned up"
+            )
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
+
+    @pytest.mark.asyncio
+    async def test_unrelated_upgrade_failure_is_not_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failure the repair step cannot explain must propagate unchanged,
+        and must not be retried — otherwise a genuine schema problem hides
+        behind a second identical traceback."""
+        import anygarden.app as app_module
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "head")
+
+            calls: list[tuple[str, str]] = []
+
+            async def _boom(action: str, url: str, target: str) -> None:
+                calls.append((action, target))
+                raise RuntimeError("unrelated migration explosion")
+
+            monkeypatch.setattr(app_module, "_alembic_action", _boom)
+
+            db_url = f"sqlite+aiosqlite:///{db_path}"
+            engine = build_engine(db_url)
+            try:
+                with pytest.raises(RuntimeError, match="unrelated migration explosion"):
+                    await _ensure_schema_ready(engine, db_url)
+            finally:
+                await engine.dispose()
+
+            assert len(calls) == 1, (
+                f"a repair-less failure must not be retried, got {calls}"
+            )
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
