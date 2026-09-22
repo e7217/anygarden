@@ -45,6 +45,27 @@ For frontend changes, also type-check and bundle:
 cd packages/cluster/frontend && npm run build
 ```
 
+## Database migrations
+
+`make dev` does **not** run Alembic. The server migrates its own database during
+startup, against the URL it actually opens, so normal development needs no
+migration step.
+
+When you write or test a migration by hand, name the target database explicitly —
+Alembic has no default and will refuse to run without one:
+
+```bash
+cd packages/cluster
+uv run alembic -x db_url=sqlite+aiosqlite:////tmp/scratch.db upgrade head
+uv run alembic -x db_url=sqlite+aiosqlite:////tmp/scratch.db downgrade -1
+uv run alembic -x db_url=sqlite+aiosqlite:////tmp/scratch.db upgrade head
+```
+
+Use a scratch file like the one above rather than your real database: with no
+implicit default, `downgrade -1` can only damage a database you named yourself.
+`ANYGARDEN_DB_URL` works too, and is what you want when the point is to migrate
+the database the app will open.
+
 ## UI changes
 
 Any work under `packages/cluster/frontend/` must follow the design system documented

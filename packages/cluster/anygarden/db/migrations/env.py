@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from anygarden.db.migration_url import resolve_db_url
 from anygarden.db.models import Base
 
 config = context.config
@@ -19,9 +21,24 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def _db_url() -> str:
+    """Resolve the migration target; see ``anygarden.db.migration_url``.
+
+    Deliberately called per-invocation rather than at import time so the
+    "nothing configured" error surfaces as an Alembic ``CommandError``
+    during the command, not as an import failure.
+    """
+    return resolve_db_url(
+        context.get_x_argument(as_dictionary=True),
+        os.environ,
+        config.get_main_option("sqlalchemy.url"),
+        config_file=config.config_file_name,
+    )
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    url = config.get_main_option("sqlalchemy.url")
+    url = _db_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -41,7 +58,7 @@ def do_run_migrations(connection) -> None:  # type: ignore[no-untyped-def]
 async def run_async_migrations() -> None:
     """Run migrations in 'online' mode with async engine."""
     connectable = create_async_engine(
-        config.get_main_option("sqlalchemy.url"),
+        _db_url(),
         poolclass=pool.NullPool,
     )
     async with connectable.connect() as connection:

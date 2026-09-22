@@ -279,6 +279,15 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
 
     # Case 3: legacy DB with data but no Alembic marker — refuse to boot
     # so the operator is forced to make an explicit, auditable decision.
+    #
+    # Name the database in the recovery steps (#647): the old text told the
+    # operator to cd into a directory that does not exist and run alembic
+    # against alembic.ini, whose URL points somewhere else entirely — so
+    # following it would stamp the wrong file. Redact any password first;
+    # this string lands in boot logs and bug reports.
+    from sqlalchemy.engine import make_url
+
+    safe_url = make_url(db_url).render_as_string(hide_password=True)
     raise RuntimeError(
         "Database contains application tables but no alembic_version "
         "row — this is a legacy unstamped database. Refusing to boot "
@@ -290,11 +299,11 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
         "  1. Determine which Alembic revision your current schema "
         "matches (check messages.participant_id nullability to "
         "distinguish pre- vs post-004).\n"
-        "  2. Stamp that revision explicitly:\n"
-        "       cd anygarden-server && uv run alembic -c alembic.ini "
-        "stamp <revision_id>\n"
+        "  2. Stamp that revision explicitly, naming this database:\n"
+        f"       alembic -x db_url={safe_url} stamp <revision_id>\n"
+        "     (run from packages/cluster in a source checkout)\n"
         "  3. Run the remaining migrations:\n"
-        "       uv run anygarden-server migrate\n"
+        "       anygarden server migrate\n"
         "  4. Restart the server.\n"
         "\n"
         f"Detected application tables: {sorted(existing_tables)}"
