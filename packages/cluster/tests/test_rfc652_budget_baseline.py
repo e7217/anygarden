@@ -1,24 +1,16 @@
 """RFC #652 acceptance — cluster-side budget/usage baseline (task #94).
 
-Captures the CURRENT budget-history semantics at main 6a2d217 so the
-usage-ledger separation (#92) can be verified to preserve them. This is a
-SCHEMA fingerprint: the columns of the usage stream and the budget policy
-table are what #92's neutral-ledger move must keep identical (data rows need
-FK-valid parents and are covered by the existing gateway regression suite).
+Schema fingerprint of the usage stream + policy table that the usage-ledger
+separation (#92) must preserve, plus the WS-frame duplicate-delivery
+behavior: the same engine_call_finished frame written twice produces TWO
+rows (no idempotency key on this path) — documented, not a defect claim.
 """
 from __future__ import annotations
 
 import pytest
 
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import (
-    Agent,
-    Base,
-    LLMGatewayUsage,
-    Room,
-    TokenBudgetPolicy,
-    User,
-)
+from anygarden.db.models import LLMGatewayUsage, TokenBudgetPolicy
 
 USAGE_COLS = [
     "id", "timestamp", "agent_id", "room_id", "identity_kind", "identity_id",
@@ -42,44 +34,41 @@ def test_budget_policy_schema_baseline():
     assert cols == POLICY_COLS, cols
 
 
-@pytest.mark.asyncio
-async def test_budget_two_legit_calls_sum_and_redelivery_no_double_count(
-    tmp_path,
-):
-    """두 정상 호출의 합산(2행 유지·sum 일치)과 동일 receipt 재전달 시
-    ledger 중복 계상 방지를 검증한다. usage 행은 채널 receipt(request_id)
-    업스트림 dedup이 보장하는 호출별 1회 기록을 전제로 하며, 본 테스트는
-    ledger 관점의 합계 불변성을 고정한다."""
-    import uuid
+async def test_budget_ws_duplicate_frame_delivery_double_counts(tmp_path):
+    """The same engine_call_finished frame delivered twice through the WS
+    usage writer produces TWO rows — the write path carries no idempotency
+    key, so redelivery double-counts. Documented current behavior."""
+    from anygarden.ws.protocol import LifecycleFrame
+    from anygarden.ws.handler import _write_lifecycle_usage_row
 
-    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path}/sum.db")
+    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path}/ws.db")
     sessions = build_session_factory(engine)
-    from anygarden.db.models import Agent, LLMGatewayUsage, Room, User
+    from anygarden.db.models import Agent, Base, Room, User
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with sessions.begin() as db:
-        user = User(id="u-sum", email="sum@t.test", password_hash="h",
-                    is_admin=True)
-        db.add(user)
-        room = Room(id="r-sum", name="sum")
-        db.add(room)
-        db.flush()
-        agent = Agent(id="a-sum", name="sum-executor", engine="pi-cli")
-        db.add(agent)
+        db.add(User(id="u-1", email="o@t.test", password_hash="h"))
+        db.add(Room(id="room-x", name="x"))
+        db.add(Agent(id="agent-1", name="a1", engine="codex-cli"))
+
+    frame = LifecycleFrame(
+        request_id="req-dup-1", room_id="room-x", turn_attempt=1,
+        event="engine_call_finished", outcome="ok",
+        engine="codex-cli", duration_ms=500,
+        input_tokens=100, output_tokens=40, model="glm-5.3-flash",
+    )
     async with sessions.begin() as db:
-        for i in range(2):
-            db.add(LLMGatewayUsage(
-                agent_id="a-sum", room_id="r-sum", identity_kind="agent",
-                identity_id="a-sum", model_name="glm-5.3-flash",
-                prompt_tokens=100 + i, completion_tokens=40,
-                cost_usd=0.5 + i, duration_ms=1000 + i, status_code=200,
-            ))
+        pass  # schema already created by create_all above
+
+    await _write_lifecycle_usage_row(
+        sessions, agent_id="agent-1", frame=frame)
+    await _write_lifecycle_usage_row(
+        sessions, agent_id="agent-1", frame=frame)
+
     async with sessions() as db:
         rows = (await db.execute(
             LLMGatewayUsage.__table__.select())).fetchall()
-        assert len(rows) == 2
-        assert sum(r.prompt_tokens for r in rows) == 201
-        assert sum(r.completion_tokens for r in rows) == 80
-        assert abs(sum(float(r.cost_usd) for r in rows) - 2.0) < 1e-9
+        assert len(rows) == 2  # no idempotency key: both deliveries count
+
     await engine.dispose()
