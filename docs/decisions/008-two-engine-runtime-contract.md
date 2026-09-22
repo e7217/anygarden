@@ -72,7 +72,7 @@ was left as an open plan), and the gateway's maintenance weight
 5. **Gateway retirement sequence** (#652): usage ledger first (#655 —
    neutral naming, full history preservation), engine removals next
    (#656–#659: gemini-cli, openhands, claude-code and the gateway itself),
-   then local-model documentation (#660). Existing agents on removed
+   then local-model documentation (#661). Existing agents on removed
    engines are never silently converted: execution is blocked with UI
    transition guidance.
 
@@ -106,4 +106,5 @@ was left as an open plan), and the gateway's maintenance weight
 - [#652](https://github.com/e7217/anygarden/issues/652) — direction and sequencing
 - [#653](https://github.com/e7217/anygarden/issues/653) / [#654](https://github.com/e7217/anygarden/issues/654) / [#655](https://github.com/e7217/anygarden/issues/655) — Phase 1 implementation
 - [#660](https://github.com/e7217/anygarden/issues/660) — local-model endpoint configuration and its acceptance criteria
+- [#661](https://github.com/e7217/anygarden/issues/661) — documentation deliverable this ADR implements
 - [ADR-004](./004-embedded-litellm-gateway.md), [ADR-005](./005-openhands-validation-plan.md) — superseded

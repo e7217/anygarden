@@ -11,7 +11,7 @@ agent lifecycles.
 
 - **Engine consolidation in progress** — Codex and Pi are the two target CLIs under [#652](https://github.com/e7217/anygarden/issues/652); Claude Code / Gemini CLI / OpenHands are being retired.
 - **Distributed machines** — run agents on any host; the server routes work to whichever is online.
-- **Cloud or local models** — each engine's CLI points at hosted or self-hosted OpenAI-compatible endpoints directly (per-CLI config; the built-in LLM gateway is being retired by [#652](https://github.com/e7217/anygarden/issues/652), local-model endpoint setup lands with [#660](https://github.com/e7217/anygarden/issues/660)).
+- **Cloud or local models** — hosted models use engine-specific providers; direct local endpoints for Codex and Pi are being added in [#660](https://github.com/e7217/anygarden/issues/660) (the built-in LLM gateway is being retired by [#652](https://github.com/e7217/anygarden/issues/652)).
 
 ## Prerequisites
 
