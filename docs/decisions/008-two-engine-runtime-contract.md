@@ -19,11 +19,13 @@ ADR-004 embedded a LiteLLM subprocess to solve three problems: air-gapped
 relaying, centralized usage tracking, and protocol unification across CLI
 engines. Since that decision:
 
-- The engine layer converged on a single **Runtime contract**
-  (`capabilities / start / events / cancel / reconcile`, receipt boundaries,
-  process-tree supervision, cancellation and timeout semantics) shared by
-  `CodexRuntime` (codex-cli) and `PiRuntime` (pi-coding-agent 0.85.1,
-  merged in #621). Adding an engine no longer means absorbing a foreign SDK.
+- The engine layer is being consolidated onto a single **Runtime protocol**
+  (`capabilities()` + `run()`, per `contracts.py`) — supervision, receipts and
+  events live in the `ExecutionManager` layer (`LocalExecutionManager`:
+  `start/events/cancel/reconcile`), which wraps runtimes. Both target engines
+  (`CodexRuntime`, `PiRuntime` — pi-coding-agent 0.85.1, merged in #621)
+  implement that protocol. Adding an engine no longer means absorbing a
+  foreign SDK.
 - The delegation path was validated end-to-end on real machines (federation
   two-node E2E, task #50/#54) and by the approved Track C provider canary
   (task #69) — evidence for the **federation path**.
@@ -62,9 +64,11 @@ was left as an open plan), and the gateway's maintenance weight
    names; the relaxation lands with #653.)
 4. **No ambient environment inheritance.** Runtimes receive `HOME`, config
    directories and credentials exclusively from the staged invocation
-   environment. Development and regression probes run with mock executables
-   and `PI_OFFLINE=1`; real provider calls happen only through the approved
-   Track C canary process.
+   environment. Development and regression probes run against mock
+   executables; `PI_OFFLINE=1` marks the offline configuration but is not a
+   network-blocking guarantee — isolation comes from the fake executables
+   and from never staging real credentials. Real provider calls happen only
+   through the approved Track C canary process.
 5. **Gateway retirement sequence** (#652): usage ledger first (#655 —
    neutral naming, full history preservation), engine removals next
    (#656–#659: gemini-cli, openhands, claude-code and the gateway itself),
@@ -74,23 +78,28 @@ was left as an open plan), and the gateway's maintenance weight
 
 ## Explicitly given up
 
-- **Air-gapped relaying through the embedded gateway.** An offline machine
-  can no longer borrow another machine's egress via `/api/v1/llm/*`.
-  Whether a relay is still needed is an open user decision — the option is
-  deliberately **not** declared dead.
 - **Non-OpenAI protocol unification** (e.g. Anthropic `/v1/messages`
   through the same port). Each engine speaks its own CLI's protocol.
 - **Gateway-database usage tracking.** Usage moves to the neutral ledger
   (#655) with full history preservation; aggregation semantics are
   regression-tested for equivalence.
 
+## Open decision (not given up)
+
+- **Air-gapped relaying through the embedded gateway.** An offline machine
+  can no longer borrow another machine's egress via `/api/v1/llm/*` once
+  the gateway retires. Whether a relay is still needed is an open user
+  decision — the option is deliberately **not** declared dead.
+
 ## Verification status
 
 - Federation path: real-machine two-node E2E and the provider canary are
   completed evidence (tasks #50/#54/#69).
-- Room execution path on the new contract: acceptance regression suite is
-  being prepared (task #94) and gates the transition. Until it passes,
-  the gateway remains the exercised path for general room agents.
+- Room execution path on the new contract: the acceptance regression suite
+  (task #94) gates the transition. Today the gateway's remaining consumer
+  is the OpenHands engine (#359 reverse-proxy path) — the other engines
+  call upstream directly — so the suite must cover the codex/pi direct
+  paths plus the removal of the OpenHands consumer.
 
 ## References
 
