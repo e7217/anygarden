@@ -6,6 +6,16 @@ Plan A의 토폴로지를 **구현 관점**에서 구체화한다. 모든 박스
 
 ---
 
+## 현재 실행 구조
+
+일반 room의 Codex/Pi 실행은 정책·supervisor를 거쳐 LocalExecutionManager로
+들어간다. 신뢰된 로컬 등록 경로에서만 기존 CLI 설정을 보존하고, federation은
+격리된 runtime 계약을 유지한다. 직접 endpoint 설정과 세션 경계는
+[ADR-008](../decisions/008-two-engine-runtime-contract.md), 업그레이드 동작은
+[room 실행 안내](../runbook/room-execution-upgrade.md)를 기준으로 한다.
+아래 gateway 그림은 과거 선택 경로의 기록이며, 제거된 OpenHands 실행을
+현재 지원 기능으로 해석하면 안 된다.
+
 ## 1.1 시스템 토폴로지
 
 이 시스템은 4종류의 **물리적으로 독립된 호스트**로 구성된다:

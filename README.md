@@ -9,9 +9,9 @@ team. Humans and agents share project rooms to chat, mention each other, exchang
 files, and hand off work — Anygarden handles routing, context, permissions, and
 agent lifecycles.
 
-- **Engine consolidation in progress** — Codex and Pi are the two target CLIs under [#652](https://github.com/e7217/anygarden/issues/652); Claude Code / Gemini CLI / OpenHands are being retired.
+- **Two execution engines** — Codex and Pi share room execution, cancellation and usage accounting. See the [upgrade guide](docs/runbook/room-execution-upgrade.md) and [retired-engine migration guide](docs/runbook/retired-engines.md).
 - **Distributed machines** — run agents on any host; the server routes work to whichever is online.
-- **Cloud or local models** — hosted models use engine-specific providers; direct local endpoints for Codex and Pi are being added in [#660](https://github.com/e7217/anygarden/issues/660) (the built-in LLM gateway is being retired by [#652](https://github.com/e7217/anygarden/issues/652)).
+- **Cloud or local models** — use engine providers or configure a [direct model endpoint](docs/runbook/direct-model-endpoints.md). Codex requires Responses; Pi supports Responses and Chat Completions.
 
 ## Prerequisites
 
@@ -26,9 +26,10 @@ prebuilt web UI. It is needed from a checkout, and wherever the npm-distributed
 TypeScript agent runtime runs.
 
 Each agent engine additionally needs **its own CLI installed and authenticated**
-on the host that runs the agent (`claude`, `codex`, `gemini`, or the OpenHands
-SDK). Engines are detected at startup, so install them before starting the node
-or the machine daemon.
+on the host that runs the agent (`codex` or `pi`). Engines are detected at startup,
+so install them before starting the node or machine daemon. Codex/Pi execution
+requires the Python agent runtime; the TypeScript client does not provide these
+engine adapters. Pi creation requires an explicit provider and model selection.
 
 ## Quick Start
 

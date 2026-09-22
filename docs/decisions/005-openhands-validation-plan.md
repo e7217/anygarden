@@ -7,7 +7,7 @@
 > premise this plan validated — OpenHands replacing the CLI adapters — was
 > reversed by #652 on other grounds (dependency weight, maintenance
 > history, and the codex/pi Runtime contract that delivers the wanted
-> boundaries without an SDK). OpenHands removal is tracked by #656–#659.
+> boundaries without an SDK). OpenHands execution is removed under #657; this plan is retained as historical context.
 > Date: 2026-05-09
 > Issue: #355
 

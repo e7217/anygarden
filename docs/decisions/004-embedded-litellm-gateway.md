@@ -6,8 +6,8 @@ date: 2026-04-20
 ---
 
 > **Superseded (2026-09-22, [#652](https://github.com/e7217/anygarden/issues/652)).**
-> The embedded LiteLLM gateway is being retired. Engines are being
-> consolidated onto a single Runtime contract with per-CLI endpoint
+> The embedded LiteLLM gateway is being retired. Codex/Pi now use
+> a common Runtime contract with per-CLI endpoint
 > configuration (#653–#660) — see
 > [ADR-008](./008-two-engine-runtime-contract.md). The text below is kept for
 > historical context. The air-gapped relay this ADR provided is deliberately
