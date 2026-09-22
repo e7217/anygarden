@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from anygarden_agent.profile.loader import load_profile
 
 logger = structlog.get_logger(__name__)
 
-_ENGINE_CHOICES = sorted(ENGINES.keys())
+_ENGINE_CHOICES = sorted(set(ENGINES) | {"pi-cli"})
 
 # #492/#500 — CLI engine names → ``_turn_timeout`` engine keys. The helper
 # keys off short names (codex/claude/gemini/openhands); codex-cli shares
@@ -46,6 +47,8 @@ _ENGINE_TIMEOUT_KEY: dict[str, str] = {
 @click.option("--server", required=False, default=None, help="WebSocket server URL (e.g. ws://localhost:8000)")
 @click.option("--token", default=None, help="Auth token (or set ANYGARDEN_TOKEN)")
 @click.option("--room", "rooms", multiple=True, help="Room IDs to join")
+@click.option("--provider", default=None, help="Explicit model provider")
+@click.option("--endpoint-configured", is_flag=True, help="Require direct endpoint configuration from private stdin")
 @click.option("--model", default=None, help="LLM model name override")
 @click.option("--system-prompt", default=None, help="System prompt override")
 @click.option("--profile", default=None, help="Load agent profile from YAML file")
@@ -60,6 +63,8 @@ def agent_main(
     system_prompt: str | None,
     profile: str | None,
     reasoning_effort: str | None,
+    provider: str | None = None,
+    endpoint_configured: bool = False,
 ) -> None:
     """Run a Anygarden agent with the specified engine."""
     # Consume engine_secrets piped by the machine daemon over stdin
@@ -98,9 +103,21 @@ def agent_main(
         click.echo("Error: at least one --room is required (or specify --profile).", err=True)
         sys.exit(1)
 
+    execution_launch = None
+    if engine in {"codex-cli", "pi-cli"} or endpoint_configured:
+        from anygarden_agent.runtime.execution.launch import load_execution_launch
+        try:
+            execution_launch = load_execution_launch(
+                engine=engine, provider=provider, model=model,
+                generation=int(os.environ.get("ANYGARDEN_AGENT_GENERATION", "0")),
+                endpoint_configured=endpoint_configured,
+            )
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from None
+
     resolved_token = load_token(cli_token=token)
     asyncio.run(
-        _run_agent(engine, name, server, resolved_token, list(rooms), model, system_prompt, reasoning_effort)
+        _run_agent(engine, name, server, resolved_token, list(rooms), model, system_prompt, reasoning_effort, execution_launch=execution_launch)
     )
 
 
@@ -113,6 +130,7 @@ async def _run_agent(
     model: str | None,
     system_prompt: str | None,
     reasoning_effort: str | None = None,
+    execution_launch=None,
 ) -> None:
     from anygarden_agent.client import ChatClient
     from anygarden_agent.integrations._turn_timeout import (
@@ -136,10 +154,14 @@ async def _run_agent(
         # under the agent root, so cursors written here survive a respawn
         # and the reconnect replays whatever arrived while we were down.
         state_dir=Path.cwd(),
+        execution_launch=execution_launch,
     )
 
     # Build kwargs for the integration function based on engine
     await _setup_engine(client, engine, name, model, system_prompt, reasoning_effort)
+    if execution_launch is not None and execution_launch.endpoint is not None and not client.execution_launch_ready:
+        await client.close()
+        raise click.ClickException("Direct endpoints require the common execution bridge; legacy engine fallback refused")
 
     for room_id in rooms:
         await client.join_room(room_id)

@@ -126,7 +126,11 @@ class ChatClient:
         max_reconnect_delay: float = 60.0,
         ping_timeout: float = 600.0,
         state_dir: Path | None = None,
+        execution_launch=None,
     ) -> None:
+        # Trusted startup snapshot; room wire messages never mutate this.
+        self.execution_launch = execution_launch
+        self.execution_launch_ready = False
         self._server_url = server_url.rstrip("/")
         self._token = token
         self._agent_name = agent_name

@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from .endpoint import DirectEndpoint, validate_endpoint_invocation
+
 Outcome = Literal["succeeded", "failed", "cancelled", "unknown"]
 ProcessState = Literal["not_started", "running", "finished", "stopped", "unknown"]
 FAILURE_CODES = frozenset(
@@ -74,8 +76,10 @@ class Invocation:
     # Caller is the trusted local policy/materialization layer, never a wire payload.
     environment: dict[str, str] = field(default_factory=dict, repr=False)
     external_workspace: bool = False
+    endpoint: DirectEndpoint | None = None
 
     def validate(self) -> None:
+        validate_endpoint_invocation(self)
         if not self.execution_id or not self.prompt:
             raise ValueError("execution_id and prompt are required")
         # Engine membership is central; version authority belongs to each

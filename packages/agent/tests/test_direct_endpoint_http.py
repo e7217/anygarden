@@ -3,7 +3,6 @@ import json
 import os
 import sys
 import threading
-from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -70,13 +69,9 @@ else:
     Path(args[args.index('-o')+1]).write_text(answer)
 ''')
     executable.chmod(0o700)
-    # The subclass is a temporary test adapter until #653 supplies the optional field.
-    @dataclass(frozen=True)
-    class EndpointInvocation(Invocation):
-        endpoint: DirectEndpoint | None = None
     env=endpoint_environment(endpoint,'fake-only-token' if authenticated else None)
     env['TEST_ENGINE']=engine
-    invocation=EndpointInvocation('direct-1',SessionScope('n','a','n','r',None,'w',1,1,engine,'0.85.1' if engine=='pi-cli' else '0.155.1'),
+    invocation=Invocation('direct-1',SessionScope('n','a','n','r',None,'w',1,1,engine,'0.85.1' if engine=='pi-cli' else '0.155.1'),
         'hello',workspace,home,model=endpoint.model,provider=endpoint.provider,environment=env,endpoint=endpoint)
     monkeypatch.setenv('AG_DIRECT_API_KEY','ambient-must-not-be-used')
     runtime=PiRuntime(executable) if engine=='pi-cli' else CodexRuntime(executable)
