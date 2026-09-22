@@ -3,11 +3,14 @@
 ## 개발 환경
 
 ```bash
-cd anygarden-cluster
+cd packages/cluster
 make install    # 백엔드 + 프론트엔드 의존성 설치
-make migrate    # DB 마이그레이션
 make dev        # 서버(8001) + 프론트엔드(5173) 동시 실행
 ```
+
+마이그레이션 단계는 없다. 서버가 기동 중에 자기 DB를 직접 upgrade 한다
+(`_ensure_schema_ready`). 예전의 `make migrate`는 `alembic.ini`에 박힌
+URL — 앱이 열지 않는 파일 — 을 마이그레이션하고 성공을 보고했다 (#647).
 
 브라우저에서 `http://localhost:5173` 접속.
 
@@ -16,16 +19,22 @@ make dev        # 서버(8001) + 프론트엔드(5173) 동시 실행
 ### 서버 실행
 
 ```bash
-uvx anygarden-cluster --host 0.0.0.0 --port 8000
+uvx anygarden server --host 0.0.0.0 --port 8000
 ```
 
 또는 직접 설치:
 
 ```bash
-pip install anygarden-cluster
-anygarden-server init          # ~/.anygarden/ 초기화, JWT 시크릿 생성
-anygarden-server migrate       # DB 마이그레이션
-anygarden-server --host 0.0.0.0 --port 8000
+pip install anygarden
+anygarden server init          # ~/.anygarden/ 초기화, JWT 시크릿 생성
+anygarden server --host 0.0.0.0 --port 8000
+```
+
+`anygarden server`는 기동 시 스키마를 자동으로 맞춘다. 스키마 불일치로
+부팅이 거부될 때만 수동으로 돌린다:
+
+```bash
+anygarden server migrate       # ANYGARDEN_DB_URL / --config / --db 를 따른다
 ```
 
 ### 환경변수
