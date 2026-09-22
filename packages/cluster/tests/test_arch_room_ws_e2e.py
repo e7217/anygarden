@@ -238,6 +238,49 @@ async def test_real_ws_lease_to_usage(setup_room, monkeypatch, engine_name, outc
                 request_id = turn.request_id
                 attempt_no = attempt.attempt_number
                 lease = attempt.lease_token
+            if outcome == "cancel":
+                connection = client._connections[room_id]
+                client._execution_adapter._environment["TEST_OUTCOME"] = "ok"
+                await human.send(
+                    json.dumps({"type": "send", "content": "@agent next turn"})
+                )
+                async with asyncio.timeout(10):
+                    while True:
+                        async with factory() as db:
+                            turns = (
+                                (
+                                    await db.execute(
+                                        select(AgentTurn).where(
+                                            AgentTurn.agent_id == agent_id
+                                        )
+                                    )
+                                )
+                                .scalars()
+                                .all()
+                            )
+                            rows = (
+                                (
+                                    await db.execute(
+                                        select(UsageLedger).where(
+                                            UsageLedger.agent_id == agent_id
+                                        )
+                                    )
+                                )
+                                .scalars()
+                                .all()
+                            )
+                            if (
+                                len(turns) == 2
+                                and len(rows) == 2
+                                and any(t.state == "completed" for t in turns)
+                            ):
+                                break
+                        await asyncio.sleep(0.01)
+                assert client._connections[room_id] is connection
+                assert sorted(t.state for t in turns) == ["cancelled", "completed"]
+                assert all(
+                    (r.prompt_tokens, r.completion_tokens) == (3, 1) for r in rows
+                )
             # Authenticated but wrong lease cannot inject usage into this turn.
             async with websockets.connect(
                 f"ws://127.0.0.1:{port}/ws/rooms/{room_id}?generation=7",
@@ -282,20 +325,17 @@ async def test_real_ws_lease_to_usage(setup_room, monkeypatch, engine_name, outc
                                 break
                         await asyncio.sleep(0.01)
                 async with factory() as db:
-                    assert (
-                        len(
-                            (
-                                await db.execute(
-                                    select(UsageLedger).where(
-                                        UsageLedger.agent_id == agent_id
-                                    )
+                    assert len(
+                        (
+                            await db.execute(
+                                select(UsageLedger).where(
+                                    UsageLedger.agent_id == agent_id
                                 )
                             )
-                            .scalars()
-                            .all()
                         )
-                        == 1
-                    )
+                        .scalars()
+                        .all()
+                    ) == (2 if outcome == "cancel" else 1)
     finally:
         if client is not None:
             await client.close()
