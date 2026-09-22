@@ -7,7 +7,7 @@ date: 2026-09-22
 
 # 8. Two-engine Runtime contract and direct endpoint configuration
 
-Supersedes [ADR-004](./004-embedded-litellm-gateway.md) and the uncompleted
+Supersedes [ADR-004](./004-embedded-litellm-gateway.md) and the historical
 OpenHands adoption plan in [ADR-005](./005-openhands-validation-plan.md).
 This records the implementation direction of [#652](https://github.com/e7217/anygarden/issues/652)
 and the documentation deliverable [#661](https://github.com/e7217/anygarden/issues/661).
@@ -36,8 +36,10 @@ flowchart LR
     F[Federation local policy] --> E
     E --> C[Codex or Pi runtime]
     C --> P[Selected provider or direct endpoint]
-    E --> W[Terminal lifecycle over authenticated WS]
+    E --> Q[Room result returned to supervisor]
+    Q --> W[Room supervisor sends lifecycle over authenticated WS]
     W --> L[Neutral usage ledger and budgets]
+    E --> D[Federation receipt returned to executor]
 ```
 
 ## Direct endpoints and secrets

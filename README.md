@@ -29,7 +29,8 @@ Each agent engine additionally needs **its own CLI installed and authenticated**
 on the host that runs the agent (`codex` or `pi`). Engines are detected at startup,
 so install them before starting the node or machine daemon. Codex/Pi execution
 requires the Python agent runtime; the TypeScript client does not provide these
-engine adapters. Pi creation requires an explicit provider and model selection.
+engine adapters. Pi creation requires an explicit provider; its model is optional.
+Direct endpoint configuration requires an explicit model.
 
 ## Quick Start
 
