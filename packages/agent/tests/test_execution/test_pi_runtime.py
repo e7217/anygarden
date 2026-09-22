@@ -16,6 +16,7 @@ from dataclasses import replace
 
 import psutil
 import pytest
+
 from anygarden_agent.runtime.execution import (
     Invocation,
     LocalExecutionManager,
@@ -203,7 +204,14 @@ async def test_environment_is_sandboxed(tmp_path, invocation, executable):
         env = record["env"]
         home = str(invocation.runtime_home)
         assert env["HOME"] == home
-        assert env["PI_PACKAGE_DIR"] == home
+        # PI_PACKAGE_DIR now resolves to the adapter's real install dir
+        # (architect 2026-09-22) — never the sandbox home, whose empty
+        # package.json broke --version; PI_CONFIG_DIR stays sandboxed.
+        from anygarden_agent.runtime.execution.pi import _resolve_install_dir
+
+        install = _resolve_install_dir()
+        if install is not None:
+            assert env["PI_PACKAGE_DIR"] == install
         assert env["PI_CONFIG_DIR"] == home
         assert env["PI_SESSION_DIR"] == f"{home}/sessions"
         assert env["ZAI_API_KEY"] == "staged-only"
@@ -273,3 +281,55 @@ async def test_missing_provider_is_contract_rejected(tmp_path, invocation, execu
     runtime = PiRuntime(executable)
     with pytest.raises(ValueError):
         runtime.command(invocation, None, tmp_path / "out")
+
+
+@pytest.mark.asyncio
+async def test_usage_sums_across_multiple_assistant_messages(tmp_path):
+    """P1 (architect fixture 2026-09-22): (10,2)+(20,3) must total (30,5).
+
+    Overwriting kept only the last block — multi-tool turns under-reported
+    usage. Uses a fake emitting two usage-bearing assistant messages.
+    """
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "runtime-home"
+    workspace.mkdir()
+    home.mkdir()
+    fake = tmp_path / "fake-pi-multi"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        + r"""
+import json, sys
+if sys.argv[1:] == ["--version"]:
+    print("pi 0.85.1")
+    sys.exit(0)
+sys.stdin.read()
+def emit(v):
+    print(json.dumps(v), flush=True)
+emit({"type": "session", "version": 3, "id": "native-pi-session"})
+emit({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "part-1"}], "usage": {"input": 10, "output": 2}}})
+emit({"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "part-2"}], "usage": {"input": 20, "output": 3}}})
+emit({"type": "agent_settled"})
+"""
+    )
+    fake.chmod(0o700)
+    inv = Invocation(
+        "execution-1",
+        SessionScope(
+            "node-a", "agent-1", "node-a", "room", None,
+            "managed-workspace", 1, 1, engine="pi-cli", engine_version="0.85.1",
+        ),
+        "multi",
+        workspace,
+        home,
+        provider="zai",
+        model="glm-5.3-flash",
+        timeout_seconds=5,
+    )
+    m = manager(tmp_path, fake)
+    try:
+        await m.start(inv)
+        receipt, _events = await done(m)
+        assert receipt.outcome == "succeeded"
+        assert receipt.usage == {"input_tokens": 30, "output_tokens": 5}
+    finally:
+        await m.close()
