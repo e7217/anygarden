@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 from anygarden.app import create_app
 from anygarden.cli import dispatch
@@ -861,3 +862,70 @@ def test_invalid_credentials_with_peer_port_fail_startup(tmp_path):
     with pytest.raises(OSError):
         # Health endpoint must not be serving either.
         urllib.request.urlopen(f"http://127.0.0.1:{api_port}/healthz", timeout=0.5)
+
+
+# --------------------------------------------------------------------------
+# #649 — server-only boots announce that local execution is off
+
+
+def _server_only_config(tmp_path):
+    """Same shape as ``node_config`` minus the integrated data directory."""
+    return AnygardenSettings(
+        db_url=f"sqlite+aiosqlite:///{tmp_path / 'server.db'}",
+        jwt_secret="synthetic-local-test-secret-not-a-real-credential",
+        room_files_dir=tmp_path / "files",
+        artifact_files_dir=tmp_path / "artifacts",
+    )
+
+
+def _silence_logging_setup(monkeypatch):
+    """Keep ``capture_logs`` installed across startup.
+
+    ``_startup_server`` calls ``configure_logging``, which re-runs
+    ``structlog.configure`` and would replace the capturing processor
+    chain. The real ordering — the event is emitted *after*
+    ``_startup_server``, so structlog is configured by then — is asserted
+    by the two tests below only for presence/absence; rendering is covered
+    by the live boot.
+    """
+    import anygarden.app as module
+
+    monkeypatch.setattr(module, "configure_logging", lambda *a, **k: None)
+
+
+async def test_local_execution_disabled_is_logged_outside_integrated_mode(
+    tmp_path, monkeypatch
+):
+    """A ``make dev``-style boot says agents will not run here."""
+    _silence_logging_setup(monkeypatch)
+    app = create_app(_server_only_config(tmp_path))
+    with capture_logs() as entries:
+        async with app.router.lifespan_context(app):
+            assert getattr(app.state, "local_execution", None) is None
+    emitted = [
+        entry
+        for entry in entries
+        if entry["event"] == "startup.local_execution_disabled"
+    ]
+    assert len(emitted) == 1
+    # info, not a warning: for a multi-host deployment this is normal.
+    assert emitted[0]["log_level"] == "info"
+    assert "anygarden start" in emitted[0]["reason"]
+
+
+async def test_integrated_mode_stays_silent_about_disabled_local_execution(
+    tmp_path, monkeypatch
+):
+    """``anygarden start`` runs agents, so the notice must not appear."""
+    _silence_logging_setup(monkeypatch)
+    app = create_app(node_config(tmp_path))
+    with capture_logs() as entries:
+        async with app.router.lifespan_context(app):
+            # Readiness additionally needs the first signup; the branch under
+            # test only needs the backend to have been constructed at all.
+            assert app.state.local_execution is not None
+    assert not [
+        entry
+        for entry in entries
+        if entry["event"] == "startup.local_execution_disabled"
+    ]
