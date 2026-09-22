@@ -65,7 +65,11 @@ See [room upgrade behavior](../runbook/room-execution-upgrade.md).
 
 ## Usage and cancellation
 
-The neutral `usage_ledger` preserves prior rows and budget consumers. Measured
+The neutral `usage_ledger` preserves prior rows and budget consumers. Ordinary
+room usage is recorded and aggregated; the pre-invocation budget hard-stop is
+currently called by the federation executor, not by every ordinary room turn.
+Gateway retirement preserves that existing boundary rather than adding a room
+hard-stop guarantee. Measured
 usage survives success, provider failure, timeout and cancellation. Execution
 cancellation sends terminal lifecycle events while keeping the room WebSocket
 alive; actual handler-task cancellation retains separate cleanup semantics.
@@ -84,7 +88,7 @@ API paths return 404. Existing API clients must update their usage URL.
 
 Historical gateway model and encrypted secret rows stay in their original tables
 as passive schema metadata, without runtime readers or decryption. The migration
-chain remains at 075; usage history, budget enforcement and direct endpoint
+chain remains at 075; usage history, existing federation budget checks and direct endpoint
 credentials are unchanged. See [gateway retirement](../runbook/gateway-removal.md).
 
 Direct endpoints do not replace the old proposal that an air-gapped machine could
