@@ -1,4 +1,4 @@
-.PHONY: install dev server server-dev frontend test lint e2e clean
+.PHONY: install dev server server-dev frontend test lint e2e e2e-setup clean
 
 install:                ## Install all dependencies
 	uv sync --dev
@@ -32,9 +32,15 @@ lint:                   ## Run linter
 e2e:                    ## Run full E2E pipeline test
 	uv run python scripts/e2e_full_pipeline.py
 
+# Deliberately without --with-deps (which CI uses): that switch shells out to
+# sudo apt-get and fails on any workstation without passwordless sudo. Run
+# `npx playwright install-deps chromium` yourself if chromium won't launch.
+e2e-setup:              ## Install the Playwright browser for frontend/ e2e (one-off)
+	cd frontend && npx playwright install chromium
+
 clean:                  ## Remove build artifacts and caches
 	rm -rf dist/ .pytest_cache/ __pycache__/
 	find . -type d -name __pycache__ -exec rm -rf {} +
 
 help:                   ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
