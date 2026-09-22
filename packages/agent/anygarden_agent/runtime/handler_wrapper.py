@@ -160,8 +160,15 @@ class EngineTimeoutError(EngineError):
     """
 
 
-class EngineCancelledError(asyncio.CancelledError):
-    """Cancellation with measured usage after confirmed runtime cleanup."""
+class EngineCancelledError(EngineError):
+    """An execution was cancelled; the room transport remains alive."""
+
+    def __init__(self, turn: EngineTurn):
+        super().__init__("cancelled", turn=turn)
+
+
+class EngineTaskCancelledError(asyncio.CancelledError):
+    """The handler task itself is stopping after confirmed runtime cleanup."""
 
     def __init__(self, turn: EngineTurn):
         super().__init__()
@@ -434,6 +441,12 @@ class RoomHandlerSupervisor:
                 outcome = "timeout"
                 error = _truncate(str(exc))
                 transient = bool(getattr(exc, "transient", False))
+            except EngineCancelledError as exc:
+                outcome = "cancelled"
+                if exc.turn is not None:
+                    model, input_tokens, output_tokens, cost_usd = (
+                        exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
+                    )
             except asyncio.CancelledError as exc:
                 turn = getattr(exc, "turn", None)
                 # User cancellation — never retried/queued. Close the spans
