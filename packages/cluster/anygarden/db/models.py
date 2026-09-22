@@ -287,6 +287,9 @@ class Agent(Base):
     engine: Mapped[str] = mapped_column(String(128), nullable=False)
     # Explicit Pi provider; NULL preserves existing agents without guessing.
     provider: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    base_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
+    api_protocol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    credential_ref: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
 
     placed_on_machine_id: Mapped[Optional[str]] = mapped_column(
         String(36),
@@ -2427,3 +2430,21 @@ class InteractionResolution(Base):
     request_message_id: Mapped[str] = mapped_column(String(36), nullable=False)
     resolution_message_id: Mapped[str] = mapped_column(String(36), nullable=False)
     resolved_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class EngineCredential(Base):
+    """Agent/engine-bound credential; only authenticated local policy resolves it."""
+
+    __tablename__ = "engine_credentials"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    agent_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("agents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    engine: Mapped[str] = mapped_column(String(128), nullable=False)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)

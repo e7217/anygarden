@@ -30,6 +30,7 @@ from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.skills import router as skills_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
 from anygarden.api.v1.projects import router as projects_router
+from anygarden.api.v1.engine_endpoints import router as engine_endpoints_router
 from anygarden.api.v1.llm_gateway import router as llm_gateway_admin_router
 from anygarden.api.v1.budgets import router as budgets_router
 from anygarden.llm_gateway.reverse_proxy import router as llm_proxy_router
@@ -1539,6 +1540,7 @@ def create_app(
     app.include_router(messages_router)
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
+    app.include_router(engine_endpoints_router)
     app.include_router(graph_router)
     app.include_router(skills_api_router)
     app.include_router(mcp_templates_router)

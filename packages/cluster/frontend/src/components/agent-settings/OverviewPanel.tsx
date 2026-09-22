@@ -29,6 +29,7 @@ import PresenceDot from '@/components/PresenceDot'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
+import DirectEndpointPanel from '@/components/agent-settings/DirectEndpointPanel'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
 // ``loading`` while the catalog fetch is in flight, ``unavailable``
@@ -90,6 +91,7 @@ interface Props {
 
 export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }: Props) {
   const [showPicker, setShowPicker] = useState(false)
+  const [showEndpoint, setShowEndpoint] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
@@ -477,6 +479,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
           onDone={() => setShowPicker(false)}
         />
       ) : null}
+
+      {(agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && <>
+        <Button variant="outline" onClick={() => setShowEndpoint(!showEndpoint)} aria-expanded={showEndpoint}>Configure direct model connection</Button>
+        {showEndpoint && <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} onSaved={() => updateAgent(agent.id, {})} />}
+      </>}
 
       {/* Metadata grid */}
       <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-3 text-sm">

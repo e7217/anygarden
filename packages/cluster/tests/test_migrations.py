@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -482,7 +482,7 @@ class TestMigrations:
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
                 # is still present after upgrading through to head.
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             # Downgrade two steps (head 048 → 047 → 046) and confirm the
@@ -542,7 +542,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -589,7 +589,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -656,7 +656,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -837,7 +837,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -938,7 +938,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -978,7 +978,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             sync_engine.dispose()
         finally:
             try:
@@ -1012,7 +1012,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "074_usage_ledger"
+            assert head == "075_direct_endpoints"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1114,7 +1114,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "074_usage_ledger"
+                assert version == "075_direct_endpoints"
             sync_engine.dispose()
         finally:
             try:
@@ -1549,4 +1549,62 @@ def test_073_provider_preserves_existing_agents(tmp_path):
     command.downgrade(cfg, "072_drop_agent_collaboration_mode")
     with engine.connect() as conn:
         assert conn.execute(text("SELECT name, generation FROM agents WHERE id='legacy'")).one() == ("Legacy Pi", 9)
+    engine.dispose()
+
+
+def test_075_preserves_agents_and_usage_across_upgrade_and_downgrade(tmp_path):
+    from datetime import datetime, timezone
+    from sqlalchemy import inspect
+
+    path = str(tmp_path / "endpoint.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "074_usage_ledger")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO agents (id, name, engine, provider, generation, created_at) VALUES ('a', 'Local', 'pi-cli', 'custom', 12, CURRENT_TIMESTAMP)"
+            )
+        )
+        # Populate an existing ledger row with all required columns generically,
+        # using the same ORM defaults as normal writes.
+        from anygarden.db.models import UsageLedger
+
+        conn.execute(
+            UsageLedger.__table__.insert().values(
+                id="usage-existing",
+                model_name="m",
+                timestamp=datetime.now(timezone.utc),
+                agent_id="a",
+                identity_kind="agent",
+                identity_id="a",
+                status_code=200,
+            )
+        )
+    command.upgrade(cfg, "075_direct_endpoints")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text(
+                "SELECT provider, generation, base_url, credential_ref FROM agents WHERE id='a'"
+            )
+        ).one() == ("custom", 12, None, None)
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM usage_ledger WHERE id='usage-existing'")
+            ).scalar_one()
+            == 1
+        )
+        assert "engine_credentials" in inspect(conn).get_table_names()
+    command.downgrade(cfg, "074_usage_ledger")
+    with engine.connect() as conn:
+        assert conn.execute(
+            text("SELECT provider, generation FROM agents WHERE id='a'")
+        ).one() == ("custom", 12)
+        assert (
+            conn.execute(
+                text("SELECT count(*) FROM usage_ledger WHERE id='usage-existing'")
+            ).scalar_one()
+            == 1
+        )
+        assert "engine_credentials" not in inspect(conn).get_table_names()
     engine.dispose()

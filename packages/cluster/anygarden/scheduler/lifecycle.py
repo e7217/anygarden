@@ -46,6 +46,7 @@ from anygarden.db.models import (
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
 from anygarden.engines.validation import pi_provider_error
+from anygarden.engines.endpoints import build_direct_engine_secrets
 from anygarden.scheduler.execution import ExecutionBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -220,6 +221,16 @@ class AgentLifecycle:
                     await db.commit()
                     return
 
+                try:
+                    await build_direct_engine_secrets(
+                        db, agent, getattr(self._mcp_template_service, "_secrets", None)
+                    )
+                except ValueError:
+                    agent.last_crash_reason = "Direct endpoint configuration or credential unavailable; update agent settings"
+                    _mark_unavailable(agent, "invalid_endpoint")
+                    await db.commit()
+                    return
+
                 now = datetime.now(timezone.utc)
                 lease_active = bool(
                     agent.lifecycle_lease_token
@@ -301,10 +312,25 @@ class AgentLifecycle:
                 else:
                     try:
                         machine = await select_machine_for(
-                            agent.engine, db, self._machine_bus
+                            agent.engine,
+                            db,
+                            self._machine_bus,
+                            required_control_capabilities={"direct_endpoint_v1"}
+                            if agent.base_url
+                            else None,
                         )
                     except NoSuitableMachineError:
                         machine = None
+
+                if (
+                    machine is not None
+                    and agent.base_url
+                    and "direct_endpoint_v1" not in (machine.control_capabilities or [])
+                ):
+                    agent.last_crash_reason = "Placed machine does not support direct_endpoint_v1; update it before restarting"
+                    _mark_unavailable(agent, "invalid_endpoint")
+                    await db.commit()
+                    return
 
                 if machine is None:
                     logger.warning(
@@ -1467,6 +1493,32 @@ class AgentLifecycle:
                 "desired_state": "stopped",
                 "generation": agent.generation,
             }
+        direct_secrets = {}
+        try:
+            direct_secrets = await build_direct_engine_secrets(
+                db, agent, getattr(self._mcp_template_service, "_secrets", None)
+            )
+            if agent.base_url:
+                machine = (
+                    await db.get(Machine, agent.placed_on_machine_id)
+                    if agent.placed_on_machine_id
+                    else None
+                )
+                if machine is None or "direct_endpoint_v1" not in (
+                    machine.control_capabilities or []
+                ):
+                    raise ValueError(
+                        "Machine cannot enforce direct endpoint configuration"
+                    )
+        except ValueError:
+            agent.last_crash_reason = "Direct endpoint configuration, credential or machine capability unavailable; update agent settings"
+            _mark_unavailable(agent, "invalid_endpoint")
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
         # Agent files
         file_rows = (
             (await db.execute(select(AgentFile).where(AgentFile.agent_id == agent.id)))
@@ -1655,7 +1707,9 @@ class AgentLifecycle:
             # preserves pre-#359 behaviour (``engine_secrets={}``) for
             # the three CLI engines and for openhands agents on
             # deployments that haven't enabled the gateway yet.
-            "engine_secrets": build_engine_secrets(
+            "endpoint_configured": bool(agent.base_url),
+            "engine_secrets": direct_secrets
+            or build_engine_secrets(
                 engine=agent.engine,
                 gateway_enabled=self._llm_gateway_enabled,
                 cluster_external_url=self._cluster_external_url,

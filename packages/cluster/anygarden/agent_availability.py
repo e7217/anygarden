@@ -35,6 +35,7 @@ ENGINE_MISMATCH = "engine_mismatch"
 CRASHED = "crashed"
 NO_ROOM = "no_room"
 INVALID_PROVIDER = "invalid_provider"
+INVALID_ENDPOINT = "invalid_endpoint"
 
 UNAVAILABLE_CODES: frozenset[str] = frozenset(
     {
@@ -44,6 +45,7 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         CRASHED,
         NO_ROOM,
         INVALID_PROVIDER,
+        INVALID_ENDPOINT,
     }
 )
 
@@ -68,6 +70,9 @@ def render_unavailable_message(
     if audience not in _AUDIENCES:
         raise ValueError(f"unknown audience: {audience!r}")
     d: Mapping[str, object] = detail or {}
+
+    if code == INVALID_ENDPOINT:
+        return "직접 모델 연결 설정이나 실행 환경을 확인해야 합니다. 관리자에게 설정 확인을 요청하세요."
 
     if code == NO_MACHINE_FOR_ENGINE:
         engine = d.get("engine")

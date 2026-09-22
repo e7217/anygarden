@@ -460,6 +460,12 @@ async def update_agent(
     if body.provider_set and agent.engine == "pi-cli" and body.provider is None:
         raise HTTPException(status_code=422, detail="pi-cli requires an explicit provider")
 
+    if agent.base_url and (body.provider_set or body.model_set):
+        raise HTTPException(
+            409,
+            "Use direct model connection settings to change this agent provider or model",
+        )
+
     runtime_changed = False
     peer_metadata_changed = False
     # #644 — set by edits to a field the participant roster *renders*
@@ -978,6 +984,30 @@ async def start_agent(
     error = pi_provider_error(agent.engine, agent.provider)
     if error:
         raise HTTPException(status_code=422, detail=error)
+
+    if agent.base_url or agent.api_protocol or agent.credential_ref:
+        from anygarden.engines.endpoints import build_direct_engine_secrets
+        from anygarden.scheduler.placement import (
+            NoSuitableMachineError,
+            select_machine_for,
+        )
+
+        try:
+            service = getattr(request.app.state, "mcp_template_service", None)
+            await build_direct_engine_secrets(
+                db, agent, getattr(service, "_secrets", None)
+            )
+            await select_machine_for(
+                agent.engine,
+                db,
+                request.app.state.machine_bus,
+                required_control_capabilities={"direct_endpoint_v1"},
+            )
+        except (ValueError, NoSuitableMachineError):
+            raise HTTPException(
+                422,
+                "Direct endpoint configuration, credential or compatible machine unavailable",
+            ) from None
 
     # Check agent has rooms assigned
     room_result = await db.execute(
