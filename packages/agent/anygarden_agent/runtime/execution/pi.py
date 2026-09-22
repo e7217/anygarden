@@ -92,6 +92,11 @@ class PiRuntime:
         # A stale host PI_PACKAGE_DIR crashes --mode json with ENOENT
         # (observed 2026-09-17): always pin it inside the sandboxed home.
         env["PI_PACKAGE_DIR"] = home
+        # #652/#660 — Pi reads models.json from PI_CODING_AGENT_DIR
+        # (installed 0.85.1 dist/config.js:406,422; architect review
+        # 2026-09-22): pin it inside the sandboxed home so provider/model
+        # config is adapter-owned and a stale host value can never leak in.
+        env["PI_CODING_AGENT_DIR"] = home
         env["PI_CONFIG_DIR"] = home
         env["PI_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
         return env
