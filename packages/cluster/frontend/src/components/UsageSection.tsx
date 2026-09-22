@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { BarChart3, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useGatewayUsage, type UsageBucket } from '@/hooks/useLLMGateway'
+import { useUsage, type UsageBucket } from '@/hooks/useUsage'
 import { cn } from '@/lib/utils'
 
 /**
  * Usage aggregates — rendered as a 3-card summary + horizontal bars
- * for the top models + a plain list for the top agents. MVP skips
- * real cost estimation ($--) until Phase 5 wires pricing data.
+ * for the top models + a plain list for the top agents.
  */
 
 const WINDOWS = [
@@ -19,7 +18,7 @@ const WINDOWS = [
 
 export function UsageSection() {
   const [window, setWindow] = useState('24h')
-  const { usage, status, error, refresh } = useGatewayUsage(window)
+  const { usage, status, error, refresh } = useUsage(window)
 
   const totalTokens = usage
     ? usage.by_model.reduce(
@@ -35,7 +34,7 @@ export function UsageSection() {
             Usage
           </h1>
           <p className="mt-1 text-[13px] text-[var(--color-foreground-muted)]">
-            Aggregated traffic through the gateway.
+            Measured engine usage, including historical requests.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -72,9 +71,9 @@ export function UsageSection() {
           label={`tokens (${usage?.window_hours ?? 0}h)`}
         />
         <SummaryCard
-          value="$—"
-          label="est. cost"
-          hint="Pricing data coming in Phase 5"
+          value={usage ? `$${usage.total_cost_usd.toFixed(4)}` : "$—"}
+          label="reported cost"
+          hint="Sum of available cost reports; excludes unreported costs"
         />
       </div>
 

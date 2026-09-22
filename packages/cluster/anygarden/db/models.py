@@ -25,6 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from anygarden.db.types import UtcDateTime
+from anygarden.db.archived_gateway import register_archived_gateway_tables
 
 
 def _utcnow() -> datetime:
@@ -2060,94 +2061,12 @@ class Goal(Base):
     )
 
 
-# ── LLM Gateway (#197) ─────────────────────────────────────────────────
-#
-# A LiteLLM subprocess supervised by anygarden-server routes every agent
-# LLM call through `/api/v1/llm/*`. These three tables back the admin
-# CRUD surface and usage telemetry. See docs/design/12-llm-gateway.md
-# and docs/decisions/004-embedded-litellm-gateway.md for rationale.
-
-
-class LLMGatewayModel(Base):
-    """One entry in the gateway's ``model_list`` (config.yaml).
-
-    Admin-managed. Each row renders to a single ``litellm_params`` block
-    when the config writer serialises the DB state. Secrets never land
-    in the rendered yaml — only a reference (``api_key_ref``) to the
-    ``LLMGatewaySecret`` row whose decrypted value is injected into the
-    LiteLLM subprocess env at spawn time.
-    """
-
-    __tablename__ = "llm_gateway_models"
-    __table_args__ = (
-        UniqueConstraint("model_name", name="uq_llm_gateway_models_name"),
-        Index("ix_llm_gateway_models_provider", "provider"),
-    )
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    # User-facing identifier ("claude-sonnet-4-6"). Unique within the
-    # gateway — an agent's ``model`` request maps to exactly one row.
-    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    # "anthropic" / "openai" / "bedrock" / "vertex" / "azure" / "ollama" /
-    # "custom". Used by the UI for grouping and preset prefill only; the
-    # actual routing is determined by ``upstream_model``.
-    provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    # LiteLLM-native routing identifier ("anthropic/claude-sonnet-4-6",
-    # "openai/gpt-5.4", "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0").
-    upstream_model: Mapped[str] = mapped_column(String(255), nullable=False)
-    # The env var name (not value!) LiteLLM should read for this model's
-    # credentials. Matches the PK of a ``LLMGatewaySecret`` row. The
-    # config writer emits ``api_key: os.environ/ANYGARDEN_LITELLM_<ref>`` and
-    # the supervisor injects ``ANYGARDEN_LITELLM_<ref>=<decrypted>`` at spawn.
-    api_key_ref: Mapped[str] = mapped_column(String(64), nullable=False)
-    # Optional extras passed through to ``litellm_params`` verbatim —
-    # temperature, max_tokens, custom headers, etc. JSON dict.
-    extra_params: Mapped[Optional[dict]] = mapped_column(
-        JSON, nullable=True, default=None
-    )
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, default=_utcnow, onupdate=_utcnow
-    )
-
-
-class LLMGatewaySecret(Base):
-    """Encrypted API key for a LiteLLM upstream provider.
-
-    Stored separately from ``LLMGatewayModel`` so one secret can back
-    multiple models (e.g. two Anthropic models sharing one key), and so
-    rotating a key does not touch model rows. Ciphertext is opaque
-    bytes produced by the existing ``MCPSecrets`` Fernet — reusing the
-    operator-managed ``ANYGARDEN_MCP_SECRETS_KEY`` keeps KMS surface a
-    single key to rotate.
-
-    ``env_var_name`` is the natural PK (matches ``api_key_ref`` on model
-    rows) so a model row lookup does not need to carry an extra foreign
-    key column.
-    """
-
-    __tablename__ = "llm_gateway_secrets"
-
-    env_var_name: Mapped[str] = mapped_column(String(64), primary_key=True)
-    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    last_tested_at: Mapped[Optional[datetime]] = mapped_column(
-        UtcDateTime, nullable=True, default=None
-    )
-    # "ok" / "invalid" / "timeout" / "error:<short>". Free-form string so
-    # the UI can render the raw status without an enum migration every
-    # time a new failure mode appears.
-    last_test_status: Mapped[Optional[str]] = mapped_column(
-        String(64), nullable=True, default=None
-    )
-    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, default=_utcnow, onupdate=_utcnow
-    )
+# Keep retired tables in Alembic target_metadata, without executable ORM models.
+register_archived_gateway_tables(Base.metadata)
 
 
 class UsageLedger(Base):
-    """One row per LLM request relayed through ``/api/v1/llm/*``.
+    """Durable measured usage from current engines and preserved historical requests.
 
     Neutral successor of the former ``LLMGatewayUsage`` (task #92):
     the usage stream is engine-agnostic and outlives any one gateway.

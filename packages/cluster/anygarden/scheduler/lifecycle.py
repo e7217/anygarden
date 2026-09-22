@@ -119,7 +119,6 @@ class AgentLifecycle:
         mcp_template_service=None,
         room_files_dir: Path | None = None,
         cluster_external_url: str | None = None,
-        llm_gateway_enabled: bool = False,
     ) -> None:
         self._db_factory = db_factory
         self._machine_bus = machine_bus
@@ -142,13 +141,6 @@ class AgentLifecycle:
         # on every call. ``None`` skips self-MCP injection (used by
         # tests that don't exercise spawn-time MCP wiring).
         self._cluster_external_url = cluster_external_url
-        # Issue #359 — gateway feature flag piped through so
-        # ``_build_sync_frame`` can decide whether to populate
-        # ``engine_secrets`` for openhands agents. Default ``False``
-        # keeps pre-#359 tests + wiring source-compatible: the
-        # behaviour they expected (``engine_secrets={}`` always) is
-        # exactly what an off-flag still produces.
-        self._llm_gateway_enabled = llm_gateway_enabled
         # Issue #369 — per-agent ``anygarden_token`` cache. Without this,
         # every ``_build_sync_frame`` invocation (which fires on
         # ``request_start``, ``handle_report_actual_state``,
@@ -160,7 +152,7 @@ class AgentLifecycle:
         # token regardless. The agent process reads its
         # ``OPENAI_API_KEY`` from stdin once at spawn; if it lands on
         # a token whose row never committed, every subsequent
-        # gateway request 401s with 'Invalid agent token'.
+        # MCP request 401s with 'Invalid agent token'.
         #
         # Cache contract:
         # - Key: agent_id; value: plaintext anygarden_token string.
@@ -594,7 +586,7 @@ class AgentLifecycle:
         """Return the per-agent ``anygarden_token``, minting one on cache miss.
 
         Issue #369 — single mint point for the anygarden self-MCP /
-        gateway-auth bearer. Cache hit returns the previously-minted
+        self-MCP bearer. Cache hit returns the previously-minted
         plaintext (already committed via ``request_start``); miss
         mints a fresh token, stages an ``agent_tokens`` row via
         ``db.add``, and stores the plaintext in the cache.
@@ -613,7 +605,7 @@ class AgentLifecycle:
         one whose surrounding transaction rolled back left the
         plaintext in the cache pointing at a row that was never
         persisted. After a restart the cache is empty but the agent
-        already holds that stdin-piped token, so every gateway/MCP call
+        already holds that stdin-piped token, so every MCP call
         401s in a storm.
 
         Two-stage cache to satisfy both invariants:

@@ -20,7 +20,7 @@ from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.invites import router as invites_router
-from anygarden.api.v1.llm_gateway import router as llm_gateway_admin_router
+from anygarden.api.v1.usage import router as usage_router
 from anygarden.api.v1.machines import router as machines_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
 from anygarden.api.v1.projects import router as projects_router
@@ -35,7 +35,6 @@ from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import backfill_message_fts, create_message_fts
 from anygarden.db.models import Base
-from anygarden.llm_gateway.reverse_proxy import router as llm_proxy_router
 from anygarden.mcp import router as mcp_rpc_router
 from anygarden.messages.router import router as messages_router
 from anygarden.observability.logging import configure_logging
@@ -838,11 +837,6 @@ async def _startup_server(app: FastAPI) -> None:
             # gemini-cli) call back into for the anygarden self-MCP
             # entry that ``_build_sync_frame`` bakes into spawn frames.
             cluster_external_url=config.cluster_external_url_or_default(),
-            # #359 — gateway feature flag. When on, ``_build_sync_frame``
-            # populates ``engine_secrets`` with OPENAI_BASE_URL +
-            # Provider credentials for explicitly configured gateway clients route through
-            # the anygarden LLM gateway.
-            llm_gateway_enabled=config.llm_gateway_enabled,
         )
 
     # Initialize WebSocket manager and orchestration singletons on app.state
@@ -976,44 +970,6 @@ async def _startup_server(app: FastAPI) -> None:
                 name="skill_stale_cron",
             )
 
-    # #197 — Bootstrap the embedded LLM gateway (optional). Pre-wired
-    # supervisor on app.state (e.g. tests) wins — if something is
-    # already there we leave it alone.
-    if (
-        config.llm_gateway_enabled
-        and getattr(app.state, "llm_gateway_supervisor", None) is None
-    ):
-        from anygarden.llm_gateway.bootstrap import bootstrap_gateway
-
-        # MCPSecrets was already built above for MCP templates; the
-        # llm_gateway reuses the same Fernet key per ADR-004. Fetch it
-        # from the service (which stores it as ``_secrets``) so this
-        # works both when we built the service here and when a test
-        # pre-set ``app.state.mcp_template_service``.
-        gateway_secrets = getattr(app.state.mcp_template_service, "_secrets", None)
-        if gateway_secrets is None:
-            import structlog
-
-            structlog.get_logger().warning(
-                "llm_gateway.bootstrap_skipped",
-                reason="mcp_template_service has no _secrets attribute",
-            )
-        else:
-            try:
-                await bootstrap_gateway(
-                    app,
-                    config,
-                    app.state.session_factory,
-                    gateway_secrets,
-                )
-            except Exception as exc:  # noqa: BLE001
-                import structlog
-
-                structlog.get_logger().warning(
-                    "llm_gateway.bootstrap_failed",
-                    error=str(exc),
-                )
-
     # #204 — orphan sweeper. Writes ``handler_orphaned`` rows when a
     # ``handler_started`` has no matching ``handler_finished`` after
     # 20 min (engine_timeout 15 min + 5 min slack). Disabled when
@@ -1110,13 +1066,6 @@ async def _startup_server(app: FastAPI) -> None:
 
 
 async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
-    # #197 — Tear down the gateway before the engine / session factory
-    # go away. ``shutdown_gateway`` is safe to call even if bootstrap
-    # never ran (no-op when app.state lacks the supervisor).
-    from anygarden.llm_gateway.bootstrap import shutdown_gateway
-
-    await shutdown_gateway(app)
-
     # Shutdown: cancel background crons and wait for them to actually
     # stop before the event loop tears down. ``return_exceptions``
     # via the explicit try/except keeps the shutdown path from being
@@ -1531,11 +1480,8 @@ def create_app(
     app.include_router(goals_router)
     app.include_router(system_router)
     app.include_router(routing_router)
-    # #197 — LLM gateway reverse proxy + admin CRUD. Both are always
-    # included; their handlers 503 when ``app.state.llm_gateway_*``
-    # isn't wired (feature flag off) so this is harmless.
-    app.include_router(llm_proxy_router)
-    app.include_router(llm_gateway_admin_router)
+    # Engine-neutral usage aggregation preserves historical rows.
+    app.include_router(usage_router)
     # #453 — token-budget policy admin CRUD. The gate these policies
     # drive defaults OFF (hard_stop_enabled=False), so registering this
     # router cannot change runtime behaviour until an admin enables a
@@ -1555,10 +1501,9 @@ def create_app(
         """Liveness/readiness probe with real dependency checks.
 
         The server is a switchboard, not a brain — this only inspects
-        the wiring it already owns (DB connectivity, the LLM gateway
-        supervisor, and the long-running background crons). Returns 200
+        the wiring it already owns (DB connectivity and background tasks). Returns 200
         for ``ok``/``degraded`` and 503 only when a *critical*
-        dependency is down (DB unreachable, or gateway ``FAILED``).
+        dependency is down (DB unreachable).
         Components that are intentionally off (feature flag disabled,
         cron interval 0, tracing off) report ``disabled`` and never
         flip the overall status.
@@ -1586,26 +1531,6 @@ def create_app(
             except Exception:  # noqa: BLE001 — any failure ⇒ unhealthy
                 components["db"] = "unhealthy"
                 critical_down = True
-
-        # ── LLM gateway: read the supervisor's state. FAILED is a hard
-        # failure (no path back without operator action); CRASHED is a
-        # transient self-healing state ⇒ degraded but still serving.
-        # Supervisor is None when the gateway flag is off ⇒ disabled. ──
-        supervisor = getattr(app.state, "llm_gateway_supervisor", None)
-        if supervisor is None:
-            components["gateway"] = "disabled"
-        else:
-            from anygarden.llm_gateway.supervisor import GatewayState
-
-            gw_state = supervisor.state
-            if gw_state == GatewayState.FAILED:
-                components["gateway"] = "unhealthy"
-                critical_down = True
-            elif gw_state == GatewayState.CRASHED:
-                components["gateway"] = "degraded"
-                degraded = True
-            else:
-                components["gateway"] = "ok"
 
         # ── Background crons: each is conditionally created and may be
         # None when disabled. A task that exists but has already
@@ -1667,6 +1592,9 @@ def create_app(
 
         @app.get("/{path:path}")
         async def spa_fallback(path: str):
+            # Removed/unknown API routes are never client-side page routes.
+            if path == "api" or path.startswith("api/"):
+                return Response(status_code=404)
             file = static_dir / path
             if file.is_file():
                 return FileResponse(file)
