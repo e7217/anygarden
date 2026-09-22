@@ -218,16 +218,37 @@ async def _ensure_schema_ready(engine, db_url: str) -> None:
     if has_alembic:
         try:
             await _alembic_action("upgrade", db_url, "head")
-        except Exception:
+        except Exception as first_error:
             # The upgrade can be blocked by residue that has nothing to do
             # with the migration being applied — see _repair_failed_upgrade.
-            # Repair once and retry once; anything else propagates unchanged
-            # so a genuine schema problem is not hidden behind a retry (#646).
+            # Repair once and retry once; anything else is reported with
+            # context so a genuine schema problem is neither hidden behind a
+            # retry (#646) nor buried in a bare traceback (#650).
+            log.debug("startup.schema_migration_traceback", exc_info=True)
             repaired = await _repair_failed_upgrade(engine)
             if repaired is None:
-                raise
+                raise RuntimeError(
+                    _migration_failure_message(
+                        db_url,
+                        await _read_current_revision(engine),
+                        _try_head_revision(),
+                        first_error,
+                    )
+                ) from first_error
             log.warning("startup.schema_upgrade_repaired", **repaired)
-            await _alembic_action("upgrade", db_url, "head")
+            try:
+                await _alembic_action("upgrade", db_url, "head")
+            except Exception as retry_error:
+                log.debug("startup.schema_migration_traceback", exc_info=True)
+                raise RuntimeError(
+                    _migration_failure_message(
+                        db_url,
+                        await _read_current_revision(engine),
+                        _try_head_revision(),
+                        retry_error,
+                        repaired=repaired,
+                    )
+                ) from retry_error
         log.info("startup.schema_migrated", action="upgrade", target="head")
         # Self-heal a missing/empty FTS index on an existing DB — `upgrade
         # head` won't recreate the table once stamped past migration 008
@@ -328,6 +349,113 @@ def _discover_head_revision() -> str:
     if head is None:
         raise RuntimeError("No Alembic head revision found in versions/")
     return head
+
+
+def _innermost_cause(exc: BaseException) -> BaseException:
+    """Walk the ``__cause__`` chain to the error that actually happened.
+
+    SQLAlchemy wraps DBAPI errors, so the outermost message is boilerplate
+    and the actionable line sits underneath. Guards against a cyclic chain.
+    """
+    seen = {id(exc)}
+    while exc.__cause__ is not None and id(exc.__cause__) not in seen:
+        exc = exc.__cause__
+        seen.add(id(exc))
+    return exc
+
+
+def _safe_db_label(db_url: str) -> tuple[str, bool]:
+    """Return ``(printable_url, is_sqlite)`` with any password removed.
+
+    A startup failure message is the most-copied artefact of a broken boot —
+    it lands in logs, issue reports and screenshots. A DSN password in it
+    cannot be recalled, so it never gets rendered. An unparseable URL is
+    elided rather than echoed, since we cannot know what it contains.
+    """
+    try:
+        from sqlalchemy.engine import make_url
+
+        url = make_url(db_url)
+        return url.render_as_string(hide_password=True), url.drivername.startswith(
+            "sqlite"
+        )
+    except Exception:
+        return "(unparseable database URL)", False
+
+
+def _migration_failure_message(
+    db_url: str,
+    current_rev: str | None,
+    head_rev: str | None,
+    cause: BaseException,
+    repaired: dict | None = None,
+) -> str:
+    """Compose the operator-facing text for a failed ``upgrade head`` (#650).
+
+    Case 3 (legacy unstamped) and the integrated-node schema guard already
+    explain themselves; the Case 1 upgrade failure was the one path that
+    surfaced as a bare traceback. Every lookup here is failure-tolerant:
+    building the diagnostic must never be the thing that fails.
+    """
+    label, is_sqlite = _safe_db_label(db_url)
+    lines = [
+        "Schema migration failed.",
+        f"  database:         {label}",
+        f"  current revision: {current_rev or 'unknown'}",
+        f"  target:           head ({head_rev or 'unknown'})",
+        f"  cause:            {_innermost_cause(cause)}",
+    ]
+
+    if repaired:
+        done = []
+        if repaired.get("dropped_tmp_tables"):
+            done.append("dropped " + ", ".join(repaired["dropped_tmp_tables"]))
+        if repaired.get("fts_recreated"):
+            done.append("recreated messages_fts")
+        if done:
+            lines.append(
+                f"  repaired first:   {'; '.join(done)} — the retry still failed"
+            )
+
+    lines.append("")
+    if is_sqlite:
+        # Established by experiment, not assumed: pysqlite only opens an
+        # implicit transaction before DML, so a failed batch migration rolls
+        # back its data changes but leaves its scratch table committed.
+        lines.append(
+            "The alembic_version marker above is unchanged, but SQLite does not "
+            "roll back DDL: a partially applied batch migration can leave "
+            "_alembic_tmp_* tables behind."
+        )
+        lines.append("")
+    lines.extend(
+        [
+            "To investigate:",
+            "  1. Back up the database before any manual repair.",
+            "  2. Inspect the migrations between the two revisions above.",
+            "  3. Re-run with --log-level DEBUG for the full traceback.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+async def _read_current_revision(engine) -> str | None:
+    """Best-effort ``alembic_version`` read; ``None`` when unavailable."""
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(text("SELECT version_num FROM alembic_version"))
+            revisions = list(result.scalars())
+        return ", ".join(revisions) or None
+    except Exception:
+        return None
+
+
+def _try_head_revision() -> str | None:
+    """Best-effort head lookup; ``None`` when the versions dir is unreadable."""
+    try:
+        return _discover_head_revision()
+    except Exception:
+        return None
 
 
 async def _alembic_action(action: str, db_url: str, target: str) -> None:
