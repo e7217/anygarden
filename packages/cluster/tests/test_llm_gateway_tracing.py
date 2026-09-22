@@ -9,10 +9,17 @@ span and (b) stamped with the in-flight ``room_id`` on the usage row.
 from __future__ import annotations
 
 import secrets
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import pytest_asyncio
+from anygarden.app import create_app
+from anygarden.auth.token import generate_token, hash_agent_token
+from anygarden.config import AnygardenSettings
+from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.models import Agent, AgentToken, Base, Room, UsageLedger
+from anygarden.observability.tracing import SPAN_LLM, TracingService
 from httpx import ASGITransport, AsyncClient, MockTransport, Response
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -20,13 +27,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from sqlalchemy import select
-
-from anygarden.app import create_app
-from anygarden.auth.token import generate_token, hash_agent_token
-from anygarden.config import AnygardenSettings
-from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, AgentToken, Base, LLMGatewayUsage, Room
-from anygarden.observability.tracing import SPAN_LLM, TracingService
 
 
 class _FakeSupervisor:
@@ -58,7 +58,7 @@ async def env() -> AsyncIterator[dict[str, Any]]:
     async with factory() as db:
         agent = Agent(name="TraceTest", engine="codex")
         db.add(agent)
-        # A real room — ``LLMGatewayUsage.room_id`` is an FK, so the
+        # A real room — ``UsageLedger.room_id`` is an FK, so the
         # correlation target must exist (as it always does in prod,
         # where room_id comes from a live lifecycle frame).
         room = Room(name="TraceRoom")
@@ -114,9 +114,9 @@ async def _post(app, token: str) -> Response:
         )
 
 
-async def _usage_rows(factory) -> list[LLMGatewayUsage]:
+async def _usage_rows(factory) -> list[UsageLedger]:
     async with factory() as db:
-        return list((await db.execute(select(LLMGatewayUsage))).scalars().all())
+        return list((await db.execute(select(UsageLedger))).scalars().all())
 
 
 async def test_llm_call_correlates_room_when_engine_call_in_flight(env):

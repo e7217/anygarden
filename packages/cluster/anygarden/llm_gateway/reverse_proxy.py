@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.budgets.ledger import evaluate_cost_event, evaluate_invocation_block
-from anygarden.db.models import LLMGatewayUsage
+from anygarden.db.models import UsageLedger
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.llm_gateway.usage_logger import parse_json_usage, parse_stream_event
 
@@ -102,7 +102,7 @@ async def _write_usage_row(
     try:
         async with session_factory() as db:
             db.add(
-                LLMGatewayUsage(
+                UsageLedger(
                     identity_kind=identity_kind,
                     identity_id=identity_id,
                     agent_id=agent_id,

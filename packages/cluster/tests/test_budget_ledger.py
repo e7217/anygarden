@@ -1,7 +1,7 @@
 """Unit tests for :mod:`anygarden.budgets.ledger` (#453, Wave 1d).
 
 Drives the window SUM and the hard-stop evaluation directly against an
-in-memory DB, seeding ``LLMGatewayUsage`` rows and
+in-memory DB, seeding ``UsageLedger`` rows and
 ``TokenBudgetPolicy`` rows by hand. No FastAPI, no proxy — those are
 covered by ``test_llm_gateway_reverse_proxy.py``.
 """
@@ -9,11 +9,10 @@ covered by ``test_llm_gateway_reverse_proxy.py``.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
-
 from anygarden.budgets.ledger import (
     clear_observed_cache,
     compute_observed_tokens,
@@ -24,10 +23,10 @@ from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     Agent,
     Base,
-    LLMGatewayUsage,
     Project,
     Room,
     TokenBudgetPolicy,
+    UsageLedger,
 )
 
 
@@ -42,7 +41,7 @@ async def factory() -> AsyncIterator:
     fac = build_session_factory(engine)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # ``llm_gateway_usage.agent_id`` / ``room_id`` carry FKs and SQLite
+    # ``usage_ledger.agent_id`` / ``room_id`` carry FKs and SQLite
     # enforces them, so seed real Agent/Room rows with the fixed ids the
     # tests reference rather than dangling synthetic ones.
     async with fac() as db:
@@ -71,7 +70,7 @@ async def factory() -> AsyncIterator:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _add_usage(
@@ -86,7 +85,7 @@ async def _add_usage(
 ) -> None:
     async with fac() as db:
         db.add(
-            LLMGatewayUsage(
+            UsageLedger(
                 identity_kind="agent",
                 identity_id=agent_id or "x",
                 agent_id=agent_id,
