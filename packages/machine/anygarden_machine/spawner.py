@@ -67,6 +67,7 @@ class SpawnManifest:
     agents_md: str | None = None
     files: dict[str, str] = field(default_factory=dict)
     engine_secrets: dict[str, str] = field(default_factory=dict)
+    endpoint_configured: bool = False
     # Issue #237 — DB snapshot of the agent's long-term memory. The
     # spawner writes this to ``<agent_dir>/memory/notes.md`` if the file
     # doesn't yet exist, preserving the runtime file when it does (the
@@ -957,6 +958,13 @@ class Spawner:
         - Begins background watch task
         """
         agent_id = msg.agent_id
+        if msg.endpoint_configured and not msg.engine_secrets.get("AG_ENGINE_ENDPOINT_CONFIG"):
+            return SpawnResult(
+                success=False,
+                agent_id=agent_id,
+                error="Direct endpoint configuration unavailable; reconnect to the server before restarting",
+            )
+
 
         if msg.workspace_attachment is not None:
             return SpawnResult(

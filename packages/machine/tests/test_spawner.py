@@ -1307,3 +1307,41 @@ class TestKillWithLingeringPipes:
         # whether or not the pipes ever hit EOF.
         assert result["success"] is True
         assert "agent-test-001" not in spawner._agents
+
+
+async def test_direct_endpoint_cold_restart_requires_fresh_server_config(spawner, tmp_path):
+    from anygarden_machine.manifest_store import ManifestStore
+    from anygarden_machine.protocol.frames import SyncDesiredStateFrame
+
+    store = ManifestStore(agents_root=tmp_path / "manifests")
+    frame = SyncDesiredStateFrame(
+        agent_id="direct-agent", generation=1, desired_state="running",
+        engine="codex", endpoint_configured=True,
+        engine_secrets={"AG_ENGINE_ENDPOINT_CONFIG": "{}", "AG_ENGINE_ENDPOINT_KEY": "test-key"},
+    )
+    store.save(frame)
+    cold = ManifestStore(agents_root=tmp_path / "manifests")
+    restored = cold.load("direct-agent")
+    assert restored.endpoint_configured
+    assert cold.get_secrets("direct-agent") == {}
+    msg = SpawnManifest(agent_id="direct-agent", engine="codex", agent_token="token",
+                        endpoint_configured=restored.endpoint_configured,
+                        engine_secrets=cold.get_secrets("direct-agent"))
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock) as create:
+        result = await spawner.spawn(msg)
+    assert not result.success
+    assert "reconnect" in result.error
+    create.assert_not_awaited()
+    assert not (tmp_path / "agents" / "direct-agent").exists()
+
+    # An authenticated fresh sync repopulates only the in-memory secret cache.
+    cold.save(frame)
+    msg.engine_secrets = cold.get_secrets("direct-agent")
+    proc = _mock_proc()
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create, patch("anygarden_machine.spawner.shutil.which", return_value="/bin/anygarden-agent"):
+        result = await spawner.spawn(msg)
+    assert result.success
+    create.assert_awaited_once()
+    assert "AG_ENGINE_ENDPOINT_KEY" not in create.call_args.kwargs["env"]
+    assert json.loads(proc.stdin.write.call_args.args[0])["AG_ENGINE_ENDPOINT_KEY"] == "test-key"
+    assert "test-key" not in (tmp_path / "manifests" / "direct-agent" / "manifest.json").read_text()

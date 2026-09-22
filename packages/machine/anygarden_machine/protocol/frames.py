@@ -39,6 +39,8 @@ class SyncDesiredStateFrame(BaseModel):
     agents_md: str | None = None
     files: dict[str, str] = Field(default_factory=dict)
     engine_secrets: dict[str, str] = Field(default_factory=dict)
+    # Durable fail-closed marker; configuration and credentials remain stdin-only.
+    endpoint_configured: bool = False
 
     # Issue #237 — per-agent long-term memory scratchpad (markdown).
     # The cluster ships the DB snapshot here and the machine materializes
