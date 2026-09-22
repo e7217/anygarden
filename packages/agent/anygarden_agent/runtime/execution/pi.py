@@ -89,21 +89,27 @@ class PiRuntime:
                 )
         home = str(invocation.runtime_home)
         env["HOME"] = home
-        # PI_PACKAGE_DIR / PI_CODING_AGENT_DIR are INSTALL asset paths, not
-        # user configuration (architect review 2026-09-22): a stale host
-        # value crashed --mode json with ENOENT, while pinning them at the
-        # sandbox home made ``--version`` read a missing package.json
-        # (0.0.0) and failed the version gate. Drop the ambient values and
-        # pin both to the adapter's real install directory so models.json
-        # and the version resolve from adapter-owned assets.
-        install_dir = _resolve_install_dir()
+        # Env split (architect + PM review 2026-09-22):
+        # - PI_PACKAGE_DIR is an INSTALL asset path. Remove the ambient
+        #   override entirely and let the CLI resolve its own executable —
+        #   pinning it at the sandbox home made ``--version`` read a missing
+        #   package.json (0.0.0) and fail the gate.
+        # - PI_CODING_AGENT_DIR is the USER config parent (models.json /
+        #   auth.json / settings): pin it at an isolated adapter-owned
+        #   directory under the sandbox home, never at the install dir
+        #   (that would break isolation).
+        # - PI_CODING_AGENT_SESSION_DIR is the isolated session dir.
+        # - PI_CONFIG_DIR / PI_SESSION_DIR are NOT keys this install reads;
+        #   historical names are dropped so they cannot alias anything.
         env.pop("PI_PACKAGE_DIR", None)
+        env.pop("PI_CONFIG_DIR", None)
+        env.pop("PI_SESSION_DIR", None)
         env.pop("PI_CODING_AGENT_DIR", None)
-        if install_dir is not None:
-            env["PI_PACKAGE_DIR"] = install_dir
-            env["PI_CODING_AGENT_DIR"] = install_dir
-        env["PI_CONFIG_DIR"] = home
-        env["PI_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
+        agent_dir = invocation.runtime_home / ".pi" / "agent"
+        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
+        env["PI_CODING_AGENT_SESSION_DIR"] = str(
+            invocation.runtime_home / "sessions"
+        )
         return env
 
     async def _version_matches(
@@ -120,9 +126,16 @@ class PiRuntime:
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
             # The CLI prints the package.json version of PI_PACKAGE_DIR —
-            # observed bare (``0.85.1``); accept an optional ``pi `` prefix.
+            # observed bare (``0.85.1``), sometimes with a ``pi `` prefix.
+            # Parse to a version tuple and compare EXACTLY: a substring
+            # containment check would admit unsupported ``0.85.10``.
             out = stdout.decode(errors="replace").strip().removeprefix("pi ").strip()
-            return proc.returncode == 0 and out == ENGINE_VERSION
+            try:
+                observed = tuple(int(part) for part in out.split("."))
+                expected = tuple(int(part) for part in ENGINE_VERSION.split("."))
+            except ValueError:
+                return False
+            return proc.returncode == 0 and observed == expected
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -324,24 +337,3 @@ class PiRuntime:
             "succeeded", "finished", "completed", text, session_handle, usage
         )
 
-
-def _resolve_install_dir() -> str | None:
-    """Directory holding the pi package.json (version + models.json)."""
-    import shutil
-    from pathlib import Path
-
-    exe = Path(shutil.which("pi") or "pi").resolve()
-    try:
-        # <prefix>/bin/pi -> <prefix>/lib/node_modules/<pkg>/dist/bundle/cli.js
-        # or a direct node_modules/.bin link; walk up to the package root
-        # that contains package.json for @earendil-works/pi-coding-agent.
-        for candidate in (
-            exe.parent.parent,           # bin/../  (package root)
-            exe.parent.parent.parent,    # dist/bundle/.. (package root)
-            exe.parent,                  # .bin link target's parent
-        ):
-            if (candidate / "package.json").is_file():
-                return str(candidate)
-    except OSError:
-        pass
-    return None
