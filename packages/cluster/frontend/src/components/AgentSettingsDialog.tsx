@@ -56,6 +56,8 @@ interface Props {
       avatar_value?: string | null
       avatar_value_set?: boolean
       model?: string | null
+      provider?: string | null
+      provider_set?: boolean
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean

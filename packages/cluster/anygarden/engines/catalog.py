@@ -107,6 +107,14 @@ class EngineCatalogEntry:
 
 
 ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
+    # Suggestions only: model IDs depend on the explicitly selected provider.
+    # Do not apply a cross-provider default; custom model IDs remain accepted.
+    "pi-cli": EngineCatalogEntry(
+        engine="pi-cli",
+        default_model="",
+        models=(EngineModel(id="glm-5.3-flash", label="GLM 5.3 Flash (zai)"),),
+        reasoning_levels=(),
+    ),
     # Codex CLI (exec) engine. Reasoning levels come from the backend's
     # own validation error (none/minimal/low/medium/high/xhigh/max — see
     # module docstring). Model list verified by round-tripping an actual

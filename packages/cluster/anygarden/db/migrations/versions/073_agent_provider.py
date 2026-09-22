@@ -1,6 +1,6 @@
 """Add explicit agent provider without guessing defaults for existing agents."""
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "073_agent_provider"
 down_revision = "072_drop_agent_collaboration_mode"

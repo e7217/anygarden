@@ -69,6 +69,8 @@ interface Props {
       avatar_value?: string | null
       avatar_value_set?: boolean
       model?: string | null
+      provider?: string | null
+      provider_set?: boolean
       model_set?: boolean
       reasoning_effort?: string | null
       reasoning_effort_set?: boolean
@@ -105,6 +107,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
   // updateAgent so a fat-fingered double-click can't race two PUTs.
   const [catalogState, setCatalogState] = useState<CatalogState>({ kind: 'loading' })
   const [configSaving, setConfigSaving] = useState(false)
+  const [providerDraft, setProviderDraft] = useState(agent?.provider ?? '')
+  const [piModelDraft, setPiModelDraft] = useState(agent?.model ?? '')
+  useEffect(() => {
+    setProviderDraft(agent?.provider ?? '')
+    setPiModelDraft(agent?.model ?? '')
+  }, [agent?.id, agent?.provider, agent?.model])
   const [configError, setConfigError] = useState<string | null>(null)
   // Issue #493 — per-agent turn timeout (seconds). Blur-commit like
   // ``nameDraft``; empty clears back to the global default. A dedicated
@@ -245,6 +253,22 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
     setConfigError(null)
     try {
       await updateAgent(agent.id, { model: nextVal, model_set: true })
+    } catch (e) {
+      setConfigError(e instanceof Error ? e.message : String(e))
+    }
+    setConfigSaving(false)
+  }
+
+  const handleProviderCommit = async () => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(providerDraft)) {
+      setConfigError('Provider is required: use letters, numbers, dots, underscores or hyphens; start with a letter or number.')
+      return
+    }
+    if (providerDraft === agent.provider) return
+    setConfigSaving(true)
+    setConfigError(null)
+    try {
+      await updateAgent(agent.id, { provider: providerDraft, provider_set: true })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
     }
@@ -506,6 +530,18 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
           ) : null}
         </dd>
 
+        {agent.engine === 'pi-cli' && (
+          <>
+            <dt className="text-[var(--color-foreground-muted)]">Provider</dt>
+            <dd>
+              <Input aria-label="Agent provider" value={providerDraft} maxLength={64} required
+                onChange={e => setProviderDraft(e.target.value)} onBlur={() => void handleProviderCommit()}
+                disabled={configSaving} placeholder="zai or my-local" />
+              {!agent.provider && <p role="alert">Set an explicit provider before starting this Pi agent.</p>}
+            </dd>
+          </>
+        )}
+
         {/* #217 — Model + Reasoning editing. Rows only render when
             the catalog resolved successfully; unknown/loading engines
             fall back to the name-only metadata we had before. */}
@@ -513,7 +549,14 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
           <>
             <dt className="text-[var(--color-foreground-muted)]">Model</dt>
             <dd>
-              <select
+              {agent.engine === 'pi-cli' ? (
+                <>
+                  <Input aria-label="Agent model" value={piModelDraft} list="overview-pi-models"
+                    onChange={e => setPiModelDraft(e.target.value)} onBlur={() => void handleModelChange(piModelDraft)}
+                    disabled={configSaving} placeholder="Model ID for this provider (optional)" />
+                  <datalist id="overview-pi-models">{catalogState.catalog.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
+                </>
+              ) : <select
                 value={agent.model ?? ''}
                 onChange={e => void handleModelChange(e.target.value)}
                 disabled={configSaving}
@@ -538,7 +581,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
                     Current: {agent.model} (no longer in catalog)
                   </option>
                 ) : null}
-              </select>
+              </select>}
             </dd>
 
             <dt className="text-[var(--color-foreground-muted)]">Reasoning</dt>

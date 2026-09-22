@@ -27,6 +27,7 @@ from anygarden.engines.catalog import is_deprecated
 
 class TestCatalog:
     def test_known_engines_are_present(self) -> None:
+        assert "pi-cli" in ENGINE_CATALOG
         assert "codex-cli" in ENGINE_CATALOG
         assert "claude-code" in ENGINE_CATALOG
         assert "gemini-cli" in ENGINE_CATALOG
@@ -34,6 +35,10 @@ class TestCatalog:
     def test_default_model_is_listed_in_models(self) -> None:
         for entry in ENGINE_CATALOG.values():
             model_ids = [m.id for m in entry.models]
+            if entry.engine == "pi-cli":
+                assert entry.default_model == ""  # provider-specific; never guess
+                assert model_ids
+                continue
             assert entry.default_model in model_ids, (
                 f"{entry.engine}: default {entry.default_model} missing from {model_ids}"
             )

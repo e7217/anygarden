@@ -65,6 +65,13 @@ ENGINE_LIFECYCLES: dict[str, EngineLifecycle] = {
         # NOTE: assumed npm package; verify on a live machine (plan Phase F).
         package="@anthropic-ai/claude-code",
     ),
+    "pi-cli": EngineLifecycle(
+        engine="pi-cli",
+        detect=DetectSpec(mode="binary", binary="pi"),
+        channel=_NPM,
+        # Verified from the installed Pi 0.85.1 package manifest.
+        package="@earendil-works/pi-coding-agent",
+    ),
     "codex-cli": EngineLifecycle(
         engine="codex-cli",
         detect=DetectSpec(mode="binary", binary="codex"),

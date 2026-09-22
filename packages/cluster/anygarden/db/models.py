@@ -285,6 +285,9 @@ class Agent(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     engine: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Explicit Pi provider; NULL preserves existing agents without guessing.
+    provider: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
     placed_on_machine_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         ForeignKey("machines.id", ondelete="SET NULL"),

@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +81,11 @@ def _validate_turn_timeout(value: Optional[int]) -> Optional[int]:
 TurnTimeoutSec = Annotated[Optional[int], AfterValidator(_validate_turn_timeout)]
 
 
+ProviderName = Annotated[
+    str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+]
+
+
 class AgentCreate(BaseModel):
     engine: str
     name: str
@@ -96,6 +101,7 @@ class AgentCreate(BaseModel):
     files: Optional[dict[str, str]] = None
     reasoning_effort: Optional[str] = None
     model: Optional[str] = None
+    provider: Optional[ProviderName] = None
     # Issue #493 — per-agent turn timeout (seconds). None = global default.
     turn_timeout_sec: TurnTimeoutSec = None
     restart_policy: str = "restart_anywhere"
@@ -109,6 +115,14 @@ class AgentCreate(BaseModel):
     # Capped at 200 chars to keep the per-turn token cost predictable
     # when the agent runtime appends it inline to every system prompt.
     description: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def require_pi_provider(self) -> AgentCreate:
+        if self.engine == "pi-cli" and self.provider is None:
+            raise ValueError(
+                "pi-cli requires an explicit provider; configure a provider before starting"
+            )
+        return self
 
 
 class AgentUpdate(BaseModel):
@@ -133,7 +147,9 @@ class AgentUpdate(BaseModel):
     reasoning_effort: Optional[str] = None
     reasoning_effort_set: bool = False
     model: Optional[str] = None
+    provider: Optional[ProviderName] = None
     model_set: bool = False
+    provider_set: bool = False
     # Issue #493 — per-agent turn timeout (seconds). ``_set`` flag follows
     # the established pattern so a rename PATCH can't silently clear it.
     # Range-validated by ``TurnTimeoutSec``; ``None`` clears it back to the
@@ -202,6 +218,7 @@ class UnavailableReasonOut(BaseModel):
 
 
 class AgentOut(BaseModel):
+    provider: Optional[str] = None
     id: str
     name: str
     engine: str
@@ -362,6 +379,7 @@ async def create_agent(
         agents_md=body.agents_md,
         reasoning_effort=body.reasoning_effort,
         model=body.model,
+        provider=body.provider,
         turn_timeout_sec=body.turn_timeout_sec,
         restart_policy=body.restart_policy,
         runtime=body.runtime,
@@ -438,6 +456,9 @@ async def update_agent(
     # swap would be surprising. Any field the subprocess actually
     # consumes flips ``runtime_changed`` and keeps the existing
     # "mutate → generation bump → respawn" semantics.
+    if body.provider_set and agent.engine == "pi-cli" and body.provider is None:
+        raise HTTPException(status_code=422, detail="pi-cli requires an explicit provider")
+
     runtime_changed = False
     peer_metadata_changed = False
     # #644 — set by edits to a field the participant roster *renders*
@@ -461,6 +482,9 @@ async def update_agent(
         runtime_changed = True
     if body.model_set:
         agent.model = body.model
+        runtime_changed = True
+    if body.provider_set and agent.provider != body.provider:
+        agent.provider = body.provider
         runtime_changed = True
     if body.turn_timeout_sec_set:
         # Issue #493 — the agent subprocess reads the timeout from its spawn

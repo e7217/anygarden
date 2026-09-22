@@ -10,6 +10,7 @@ def test_all_supported_engines_present():
     assert set(ENGINE_LIFECYCLES) == {
         "claude-code",
         "codex-cli",
+        "pi-cli",
         "gemini-cli",
         "openhands",
     }
@@ -19,6 +20,7 @@ def test_all_supported_engines_present():
     "engine,kind,package",
     [
         ("codex-cli", "npm", "@openai/codex"),
+        ("pi-cli", "npm", "@earendil-works/pi-coding-agent"),
         ("gemini-cli", "npm", "@google/gemini-cli"),
         ("claude-code", "npm", "@anthropic-ai/claude-code"),
         ("openhands", "pip", "openhands-sdk"),

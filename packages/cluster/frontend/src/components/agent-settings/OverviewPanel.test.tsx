@@ -427,3 +427,38 @@ describe('OverviewPanel', () => {
     })
   })
 })
+
+
+describe('Pi provider configuration', () => {
+  const catalog: EngineCatalog = { engine: 'pi-cli', default_model: '', models: [], reasoning_levels: [] }
+  it('shows missing provider guidance and saves a custom name', async () => {
+    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: null }), catalog })
+    expect(screen.getByText('Set an explicit provider before starting this Pi agent.')).toBeInTheDocument()
+    const provider = screen.getByLabelText('Agent provider')
+    fireEvent.change(provider, { target: { value: 'my-local' } })
+    fireEvent.blur(provider)
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+      provider: 'my-local', provider_set: true,
+    }))
+  })
+  it('refuses blank and option-looking providers', async () => {
+    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: 'zai' }), catalog })
+    await screen.findByLabelText('Agent model')
+    const provider = screen.getByLabelText('Agent provider')
+    for (const value of ['', '--help', 'bad name']) {
+      fireEvent.change(provider, { target: { value } })
+      fireEvent.blur(provider)
+    }
+    expect(updateAgent).not.toHaveBeenCalled()
+    expect(screen.getByTestId('overview-config-error')).toHaveTextContent('Provider is required')
+  })
+  it('accepts a custom model ID without a closed catalog', async () => {
+    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: 'my-local' }), catalog })
+    const model = await screen.findByLabelText('Agent model')
+    fireEvent.change(model, { target: { value: 'local-model-v2' } })
+    fireEvent.blur(model)
+    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
+      model: 'local-model-v2', model_set: true,
+    }))
+  })
+})
