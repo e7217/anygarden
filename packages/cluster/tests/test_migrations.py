@@ -1378,3 +1378,159 @@ class TestUpgradeFailureRecovery:
                 os.unlink(db_path)
             except OSError:
                 pass
+
+
+class TestMigrationFailureMessage:
+    """Tests for ``app._migration_failure_message`` (#650).
+
+    A failed ``alembic upgrade head`` used to surface as a bare ~80-line
+    SQLAlchemy traceback: no database, no revisions, no recovery hint. The
+    sibling paths already explain themselves — Case 3 prints a numbered
+    baseline procedure, and the integrated-node guard names what it needs —
+    so Case 1 was the odd one out.
+    """
+
+    def test_password_is_never_rendered(self) -> None:
+        """The message is the single most-copied artefact of a failed boot
+        (logs, issue reports, screenshots). A DSN password in it cannot be
+        recalled, so masking is a hard requirement, not a nicety."""
+        from anygarden.app import _migration_failure_message
+
+        msg = _migration_failure_message(
+            db_url="postgresql+asyncpg://ag:sup3rs3cret@db.internal:5432/anygarden",
+            current_rev="059",
+            head_rev="072_drop_agent_collaboration_mode",
+            cause=RuntimeError("boom"),
+        )
+        assert "sup3rs3cret" not in msg
+        assert "db.internal" in msg, "the host must still be identifiable"
+
+    def test_sqlite_path_is_visible(self) -> None:
+        from anygarden.app import _migration_failure_message
+
+        msg = _migration_failure_message(
+            db_url="sqlite+aiosqlite:////home/u/.anygarden/anygarden.db",
+            current_rev="059",
+            head_rev="072_drop_agent_collaboration_mode",
+            cause=RuntimeError("boom"),
+        )
+        assert "/home/u/.anygarden/anygarden.db" in msg
+        assert "059" in msg
+        assert "072_drop_agent_collaboration_mode" in msg
+
+    def test_reports_innermost_cause(self) -> None:
+        """SQLAlchemy wraps the DBAPI error; the actionable line is the one
+        underneath. Reporting the wrapper reproduces the original complaint."""
+        from anygarden.app import _migration_failure_message
+
+        try:
+            try:
+                raise ValueError("no such table: main.messages_fts")
+            except ValueError as inner:
+                raise RuntimeError("(sqlite3.OperationalError) wrapped") from inner
+        except RuntimeError as outer:
+            msg = _migration_failure_message(
+                db_url="sqlite+aiosqlite:///x.db",
+                current_rev="059",
+                head_rev="072",
+                cause=outer,
+            )
+        assert "no such table: main.messages_fts" in msg
+
+    def test_repair_summary_only_when_a_repair_happened(self) -> None:
+        """After a repaired-then-still-failed upgrade the operator must be
+        told what was already changed, or they will misjudge the DB state."""
+        from anygarden.app import _migration_failure_message
+
+        without = _migration_failure_message(
+            db_url="sqlite+aiosqlite:///x.db",
+            current_rev="059",
+            head_rev="072",
+            cause=RuntimeError("boom"),
+        )
+        with_repair = _migration_failure_message(
+            db_url="sqlite+aiosqlite:///x.db",
+            current_rev="059",
+            head_rev="072",
+            cause=RuntimeError("boom"),
+            repaired={
+                "dropped_tmp_tables": ["_alembic_tmp_tasks"],
+                "fts_recreated": True,
+            },
+        )
+        assert "_alembic_tmp_tasks" not in without
+        assert "_alembic_tmp_tasks" in with_repair
+        assert "messages_fts" in with_repair
+
+    def test_unknown_revision_does_not_break_the_message(self) -> None:
+        """Building the diagnostic must never be the thing that fails."""
+        from anygarden.app import _migration_failure_message
+
+        msg = _migration_failure_message(
+            db_url="sqlite+aiosqlite:///x.db",
+            current_rev=None,
+            head_rev=None,
+            cause=RuntimeError("boom"),
+        )
+        assert "unknown" in msg
+        assert "boom" in msg
+
+    def test_unparseable_url_does_not_break_the_message(self) -> None:
+        from anygarden.app import _migration_failure_message
+
+        msg = _migration_failure_message(
+            db_url="::: not a url :::",
+            current_rev="059",
+            head_rev="072",
+            cause=RuntimeError("boom"),
+        )
+        assert "boom" in msg
+        assert "not a url" not in msg, (
+            "an unparseable URL must be elided rather than echoed verbatim"
+        )
+
+
+class TestUpgradeFailureIsReportedWithContext:
+    """End-to-end: an unrecoverable upgrade failure must arrive as a
+    ``RuntimeError`` carrying database, revisions and root cause (#650)."""
+
+    @pytest.mark.asyncio
+    async def test_unrecoverable_failure_carries_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import anygarden.app as app_module
+        from anygarden.app import _ensure_schema_ready
+        from anygarden.db.engine import build_engine
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            db_path = tmp.name
+        try:
+            cfg = _alembic_config(db_path)
+            command.upgrade(cfg, "059")
+
+            async def _boom(action: str, url: str, target: str) -> None:
+                raise RuntimeError("unrelated migration explosion")
+
+            monkeypatch.setattr(app_module, "_alembic_action", _boom)
+
+            db_url = f"sqlite+aiosqlite:///{db_path}"
+            engine = build_engine(db_url)
+            try:
+                with pytest.raises(RuntimeError) as excinfo:
+                    await _ensure_schema_ready(engine, db_url)
+            finally:
+                await engine.dispose()
+
+            msg = str(excinfo.value)
+            assert "Schema migration failed" in msg
+            assert db_path in msg
+            assert "059" in msg
+            assert "unrelated migration explosion" in msg
+            assert excinfo.value.__cause__ is not None, (
+                "the original exception must stay chained for the traceback"
+            )
+        finally:
+            try:
+                os.unlink(db_path)
+            except OSError:
+                pass
