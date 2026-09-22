@@ -396,3 +396,28 @@ import signal
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 time.sleep(60)
 """.replace("{sys.executable}", sys.executable)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="cancel path drops observed usage (RuntimeResult carries no usage); "
+    "preservation is a D-track follow-up — flips to PASS when fixed",
+    strict=True,
+)
+async def test_r_m_cancel_after_turn_end_preserves_usage(tmp_path):
+    """turn_end progress 콜백 수신 이후 취소: 어댑터가 해당 progress를 이미
+    받은 시점의 취소임을 보장하고, 이 경우에도 측정량이 receipt에 보존되어야
+    한다(현재 main/6f486ef 계열에서는 소실 — dev01 수정 대기)."""
+    exe = write_exec(tmp_path, "fake-pi", PI_FAKE_HANG)
+    inv = invocation("pi-cli", tmp_path, provider="zai", prompt="hang")
+    m = pi_manager(tmp_path, exe)
+    try:
+        await m.start(inv)
+        await asyncio.sleep(0.3)  # turn_end progress fires before cancel
+        await m.cancel(inv.execution_id)
+        await asyncio.sleep(0.5)
+        receipt = await m.reconcile(inv.execution_id)
+        assert receipt.outcome == "cancelled"
+        assert receipt.usage is not None  # measured amount must survive
+    finally:
+        await m.close()
