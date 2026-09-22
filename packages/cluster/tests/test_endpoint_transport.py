@@ -75,8 +75,20 @@ async def test_db_to_invocation_preserves_explicit_selection(
             return_value="/bin/anygarden-agent",
         ),
     ):
-        await daemon._handle(frame)
-        await asyncio.gather(*list(daemon._spawn_tasks))
+        try:
+            await daemon._handle(frame)
+            await asyncio.gather(*list(daemon._spawn_tasks))
+        finally:
+            pending = list(daemon._spawn_tasks)
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            watchers = [agent.watch_task for agent in list(daemon._spawner._agents.values()) if agent.watch_task]
+            await asyncio.gather(*watchers, return_exceptions=True)
+        assert not daemon._spawn_tasks
+        assert not daemon._spawner._agents
+        create.assert_awaited_once()
     args = create.call_args.args
     env = create.call_args.kwargs["env"]
     stdin = process.stdin.write.call_args.args[0].decode()
