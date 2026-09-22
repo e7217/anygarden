@@ -216,6 +216,16 @@ def materialize_pi_endpoint(
                 os.unlink("models.json", dir_fd=descriptor)
             os.unlink(marker_name, dir_fd=descriptor)
             return
+        # Pi gives auth.json credentials priority over models.json apiKey.
+        # Refuse pre-existing credentials rather than silently selecting them.
+        auth = read_regular("auth.json")
+        if auth is not None:
+            try:
+                stored_auth = json.loads(auth)
+                if not isinstance(stored_auth, dict) or endpoint.provider in stored_auth:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise ValueError("Stored Pi authentication conflicts with the selected direct endpoint provider") from None
         data = {
             "providers": {
                 endpoint.provider: {

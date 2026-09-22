@@ -140,3 +140,20 @@ def test_runtime_hooks_reject_missing_key_and_inconsistent_selection(tmp_path):
     invocation.environment = {}
     PiRuntime.environment(invocation)
     assert not (tmp_path / ".pi/agent/models.json").exists()
+
+
+def test_selected_pi_auth_cannot_override_endpoint_and_other_auth_is_preserved(tmp_path):
+    directory = tmp_path / ".pi" / "agent"
+    directory.mkdir(parents=True)
+    auth = directory / "auth.json"
+    original = '{"another-provider":{"type":"api_key","key":"other-test-key"}}'
+    auth.write_text(original)
+    endpoint = DirectEndpoint("local", "m", "http://localhost:8000/v1", "responses")
+    materialize_pi_endpoint(tmp_path, endpoint)
+    assert auth.read_text() == original
+    selected = '{"local":{"type":"api_key","key":"conflicting-test-key"}}'
+    auth.write_text(selected)
+    with pytest.raises(ValueError, match="conflicts") as error:
+        materialize_pi_endpoint(tmp_path, endpoint)
+    assert "conflicting-test-key" not in str(error.value)
+    assert auth.read_text() == selected
