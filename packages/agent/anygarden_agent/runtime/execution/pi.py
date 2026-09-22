@@ -89,14 +89,19 @@ class PiRuntime:
                 )
         home = str(invocation.runtime_home)
         env["HOME"] = home
-        # A stale host PI_PACKAGE_DIR crashes --mode json with ENOENT
-        # (observed 2026-09-17): always pin it inside the sandboxed home.
-        env["PI_PACKAGE_DIR"] = home
-        # #652/#660 — Pi reads models.json from PI_CODING_AGENT_DIR
-        # (installed 0.85.1 dist/config.js:406,422; architect review
-        # 2026-09-22): pin it inside the sandboxed home so provider/model
-        # config is adapter-owned and a stale host value can never leak in.
-        env["PI_CODING_AGENT_DIR"] = home
+        # PI_PACKAGE_DIR / PI_CODING_AGENT_DIR are INSTALL asset paths, not
+        # user configuration (architect review 2026-09-22): a stale host
+        # value crashed --mode json with ENOENT, while pinning them at the
+        # sandbox home made ``--version`` read a missing package.json
+        # (0.0.0) and failed the version gate. Drop the ambient values and
+        # pin both to the adapter's real install directory so models.json
+        # and the version resolve from adapter-owned assets.
+        install_dir = _resolve_install_dir()
+        env.pop("PI_PACKAGE_DIR", None)
+        env.pop("PI_CODING_AGENT_DIR", None)
+        if install_dir is not None:
+            env["PI_PACKAGE_DIR"] = install_dir
+            env["PI_CODING_AGENT_DIR"] = install_dir
         env["PI_CONFIG_DIR"] = home
         env["PI_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
         return env
@@ -114,7 +119,10 @@ class PiRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            return proc.returncode == 0 and stdout.strip() == f"pi {ENGINE_VERSION}".encode()
+            # The CLI prints the package.json version of PI_PACKAGE_DIR —
+            # observed bare (``0.85.1``); accept an optional ``pi `` prefix.
+            out = stdout.decode(errors="replace").strip().removeprefix("pi ").strip()
+            return proc.returncode == 0 and out == ENGINE_VERSION
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -253,10 +261,23 @@ class PiRuntime:
                     continue
                 raw_usage = message.get("usage")
                 if isinstance(raw_usage, dict):
-                    usage = {
+                    # Multi-tool turns emit one usage block per assistant
+                    # message: SUM them (P1, architect fixture 2026-09-22) —
+                    # overwriting kept only the last (20,3) instead of the
+                    # (30,5) total across (10,2)+(20,3) calls.
+                    part = {
                         "input_tokens": int(raw_usage.get("input") or 0),
                         "output_tokens": int(raw_usage.get("output") or 0),
                     }
+                    if usage is None:
+                        usage = part
+                    else:
+                        usage = {
+                            "input_tokens": usage["input_tokens"]
+                            + part["input_tokens"],
+                            "output_tokens": usage["output_tokens"]
+                            + part["output_tokens"],
+                        }
                 if message.get("role") != "assistant":
                     continue
                 content = message.get("content")
@@ -302,3 +323,25 @@ class PiRuntime:
         return RuntimeResult(
             "succeeded", "finished", "completed", text, session_handle, usage
         )
+
+
+def _resolve_install_dir() -> str | None:
+    """Directory holding the pi package.json (version + models.json)."""
+    import shutil
+    from pathlib import Path
+
+    exe = Path(shutil.which("pi") or "pi").resolve()
+    try:
+        # <prefix>/bin/pi -> <prefix>/lib/node_modules/<pkg>/dist/bundle/cli.js
+        # or a direct node_modules/.bin link; walk up to the package root
+        # that contains package.json for @earendil-works/pi-coding-agent.
+        for candidate in (
+            exe.parent.parent,           # bin/../  (package root)
+            exe.parent.parent.parent,    # dist/bundle/.. (package root)
+            exe.parent,                  # .bin link target's parent
+        ):
+            if (candidate / "package.json").is_file():
+                return str(candidate)
+    except OSError:
+        pass
+    return None

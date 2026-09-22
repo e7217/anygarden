@@ -154,7 +154,13 @@ class CodexRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            return proc.returncode == 0 and stdout.strip() == b"codex-cli 0.154.0"
+            # Verified boundary versions: 0.154.0 (PR600 evidence) and
+            # 0.155.1 (installed on slock-bot 2026-09-19; same subprocess
+            # contract). Others fail closed with an explicit version error.
+            return proc.returncode == 0 and stdout.strip() in (
+                b"codex-cli 0.154.0",
+                b"codex-cli 0.155.1",
+            )
         finally:
             if proc.returncode is None:
                 proc.kill()
