@@ -13,6 +13,10 @@ agent lifecycles.
 - **Distributed machines** — run agents on any host; the server routes work to whichever is online.
 - **Cloud or local models** — use engine providers or configure a [direct model endpoint](docs/runbook/direct-model-endpoints.md). Codex requires Responses; Pi supports Responses and Chat Completions.
 
+Administrators can inspect current and historical usage at `/admin/usage`.
+See [gateway retirement](docs/runbook/gateway-removal.md) for the replacement
+usage API and preserved data; the embedded model gateway is removed.
+
 ## Prerequisites
 
 | | Version | Needed for |

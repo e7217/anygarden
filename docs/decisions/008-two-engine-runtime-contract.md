@@ -76,10 +76,16 @@ replay deduplication or delivery across network failure.
 
 ## Gateway retirement and unresolved relay requirement
 
-The OpenHands gateway consumer is removed. The embedded gateway service/API itself
-is a separate retirement change in [#659](https://github.com/e7217/anygarden/issues/659).
-Usage aggregation must remain available through a neutral API/UI when it is removed.
-Historical gateway configuration and encrypted secret rows must be retained.
+The embedded gateway supervisor, proxy, management API/UI and tool installation
+are removed under [#659](https://github.com/e7217/anygarden/issues/659).
+Administrators use `/admin/usage` and `GET /api/v1/usage` for ledger aggregates;
+old gateway screen addresses redirect to the usage screen, while removed gateway
+API paths return 404. Existing API clients must update their usage URL.
+
+Historical gateway model and encrypted secret rows stay in their original tables
+as passive schema metadata, without runtime readers or decryption. The migration
+chain remains at 075; usage history, budget enforcement and direct endpoint
+credentials are unchanged. See [gateway retirement](../runbook/gateway-removal.md).
 
 Direct endpoints do not replace the old proposal that an air-gapped machine could
 borrow another machine's internet access. Whether a relay is still needed remains

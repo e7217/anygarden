@@ -1,11 +1,12 @@
 # 12 · LLM Gateway (내장 LiteLLM 서브프로세스)
 
-> ⚠️ **DEPRECATED (2026-09-22, [#652](https://github.com/e7217/anygarden/issues/652))** —
-> 이 설계는 [ADR-008](../decisions/008-two-engine-runtime-contract.md) 으로 대체 결정됐습니다.
-> 게이트웨이는 #655(사용량 ledger 분리)와 #656–#659(엔진 제거) 순서로 은퇴하며,
-> 로컬 모델 연결은 #660(엔진 CLI 직접 endpoint 설정)으로 대체됩니다. 아래 문서는
-> 과거 설계 기록으로 유지됩니다. OpenHands 소비자는 제거됐으며 현재 Codex/Pi는
-> 직접 endpoint를 사용합니다. 아래의 모든 엔진 중계 설명은 당시 목표이지 현재 동작이 아닙니다.
+> **Historical design — the embedded gateway is removed.**
+> 현재 실행 경로는 [ADR-008](../decisions/008-two-engine-runtime-contract.md),
+> 설정은 [직접 endpoint 안내](../runbook/direct-model-endpoints.md)를 따른다.
+> 사용량 집계는 `/api/v1/usage`와 `/admin/usage`로 이전됐다.
+> [데이터 보존·이전 안내](../runbook/gateway-removal.md)를 참고할 것.
+> 아래 설명은 당시 목표와 설계의 기록이며 현재 설정 지침이 아니다.
+
 
 > anygarden-server 가 LiteLLM Proxy 를 서브프로세스로 내장 관리하고, 모든 에이전트의 LLM 호출이 `/api/v1/llm/*` 역프록시 경로를 경유하게 한다. 이 계층은 §10 Machine 스케줄링 위에 **얹히는** 선택적 계층이며, Feature flag (`ANYGARDEN_LLM_GATEWAY_ENABLED`) 로 on/off 된다.
 
