@@ -16,6 +16,7 @@ from anygarden.agent_availability import (
     ENGINE_MISMATCH,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
+    INVALID_PROVIDER,
     SPAWN_FAILED,
     UNAVAILABLE_CODES,
     render_unavailable_message,
@@ -30,6 +31,7 @@ def test_all_codes_are_registered() -> None:
         ENGINE_MISMATCH,
         CRASHED,
         NO_ROOM,
+    INVALID_PROVIDER,
         QUOTA_EXHAUSTED,
     }
 

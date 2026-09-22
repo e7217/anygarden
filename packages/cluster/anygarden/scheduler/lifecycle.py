@@ -27,6 +27,7 @@ from anygarden.agent_availability import (
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
     SPAWN_FAILED,
+    INVALID_PROVIDER,
 )
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
@@ -44,6 +45,7 @@ from anygarden.db.models import (
     WorkspaceAttachment,
 )
 from anygarden.scheduler.gateway_secrets import build_engine_secrets
+from anygarden.engines.validation import pi_provider_error
 from anygarden.scheduler.execution import ExecutionBus
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
@@ -209,6 +211,13 @@ class AgentLifecycle:
                 agent = await self._get_agent(db, agent_id)
                 if agent is None:
                     logger.error("lifecycle.agent_not_found", agent_id=agent_id)
+                    return
+
+                error = pi_provider_error(agent.engine, getattr(agent, "provider", None))
+                if error:
+                    agent.last_crash_reason = error
+                    _mark_unavailable(agent, INVALID_PROVIDER)
+                    await db.commit()
                     return
 
                 now = datetime.now(timezone.utc)
@@ -1446,6 +1455,18 @@ class AgentLifecycle:
         rooms: list[str],
     ) -> dict:
         """Build a ``sync_desired_state`` dict from DB data."""
+        # Every reconnect/bump/deferred restart converges here. Never publish a
+        # runnable manifest for legacy or corrupted Pi configuration.
+        error = pi_provider_error(agent.engine, getattr(agent, "provider", None))
+        if error and agent.desired_state == "running":
+            agent.last_crash_reason = error
+            _mark_unavailable(agent, INVALID_PROVIDER)
+            return {
+                "type": "sync_desired_state",
+                "agent_id": agent.id,
+                "desired_state": "stopped",
+                "generation": agent.generation,
+            }
         # Agent files
         file_rows = (
             (await db.execute(select(AgentFile).where(AgentFile.agent_id == agent.id)))

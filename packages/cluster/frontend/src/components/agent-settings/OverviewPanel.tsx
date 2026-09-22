@@ -264,11 +264,14 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       setConfigError('Provider is required: use letters, numbers, dots, underscores or hyphens; start with a letter or number.')
       return
     }
-    if (providerDraft === agent.provider) return
+    if (providerDraft === agent.provider && (piModelDraft || null) === (agent.model ?? null)) return
     setConfigSaving(true)
     setConfigError(null)
     try {
-      await updateAgent(agent.id, { provider: providerDraft, provider_set: true })
+      await updateAgent(agent.id, {
+        provider: providerDraft, provider_set: true,
+        model: piModelDraft || null, model_set: true,
+      })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
     }
@@ -535,7 +538,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             <dt className="text-[var(--color-foreground-muted)]">Provider</dt>
             <dd>
               <Input aria-label="Agent provider" value={providerDraft} maxLength={64} required
-                onChange={e => setProviderDraft(e.target.value)} onBlur={() => void handleProviderCommit()}
+                onChange={e => setProviderDraft(e.target.value)}
                 disabled={configSaving} placeholder="zai or my-local" />
               {!agent.provider && <p role="alert">Set an explicit provider before starting this Pi agent.</p>}
             </dd>
@@ -552,8 +555,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
               {agent.engine === 'pi-cli' ? (
                 <>
                   <Input aria-label="Agent model" value={piModelDraft} list="overview-pi-models"
-                    onChange={e => setPiModelDraft(e.target.value)} onBlur={() => void handleModelChange(piModelDraft)}
+                    onChange={e => setPiModelDraft(e.target.value)}
                     disabled={configSaving} placeholder="Model ID for this provider (optional)" />
+                  <Button className="mt-2" disabled={configSaving} onClick={() => void handleProviderCommit()}>
+                    Apply provider and model
+                  </Button>
                   <datalist id="overview-pi-models">{catalogState.catalog.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
                 </>
               ) : <select

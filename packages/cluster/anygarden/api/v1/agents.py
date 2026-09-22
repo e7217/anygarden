@@ -28,6 +28,7 @@ from anygarden.db.models import (
 from anygarden.agent_availability import render_unavailable_message
 from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
+from anygarden.engines.validation import PROVIDER_PATTERN, pi_provider_error
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.rooms.roster import broadcast_roster_for_agent
@@ -82,7 +83,7 @@ TurnTimeoutSec = Annotated[Optional[int], AfterValidator(_validate_turn_timeout)
 
 
 ProviderName = Annotated[
-    str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    str, Field(min_length=1, max_length=64, pattern=PROVIDER_PATTERN)
 ]
 
 
@@ -973,6 +974,10 @@ async def start_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    error = pi_provider_error(agent.engine, agent.provider)
+    if error:
+        raise HTTPException(status_code=422, detail=error)
 
     # Check agent has rooms assigned
     room_result = await db.execute(

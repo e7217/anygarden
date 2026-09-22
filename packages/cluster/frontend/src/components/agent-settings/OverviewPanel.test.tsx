@@ -437,8 +437,10 @@ describe('Pi provider configuration', () => {
     const provider = screen.getByLabelText('Agent provider')
     fireEvent.change(provider, { target: { value: 'my-local' } })
     fireEvent.blur(provider)
+    expect(updateAgent).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Apply provider and model' }))
     await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-      provider: 'my-local', provider_set: true,
+      provider: 'my-local', provider_set: true, model: null, model_set: true,
     }))
   })
   it('refuses blank and option-looking providers', async () => {
@@ -447,7 +449,7 @@ describe('Pi provider configuration', () => {
     const provider = screen.getByLabelText('Agent provider')
     for (const value of ['', '--help', 'bad name']) {
       fireEvent.change(provider, { target: { value } })
-      fireEvent.blur(provider)
+      fireEvent.click(await screen.findByRole('button', { name: 'Apply provider and model' }))
     }
     expect(updateAgent).not.toHaveBeenCalled()
     expect(screen.getByTestId('overview-config-error')).toHaveTextContent('Provider is required')
@@ -456,9 +458,9 @@ describe('Pi provider configuration', () => {
     const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: 'my-local' }), catalog })
     const model = await screen.findByLabelText('Agent model')
     fireEvent.change(model, { target: { value: 'local-model-v2' } })
-    fireEvent.blur(model)
+    fireEvent.click(screen.getByRole('button', { name: 'Apply provider and model' }))
     await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-      model: 'local-model-v2', model_set: true,
+      model: 'local-model-v2', model_set: true, provider: 'my-local', provider_set: true,
     }))
   })
 })
