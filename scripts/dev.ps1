@@ -1,7 +1,7 @@
 # Windows-equivalent of `make dev` (see Makefile in repo root).
 #
-# Runs DB migrations, starts the cluster backend on port 8001 with
-# auto-reload, and the Vite frontend in parallel. Stop with Ctrl+C
+# Starts the cluster backend on port 8001 with auto-reload, and the
+# Vite frontend in parallel. Stop with Ctrl+C
 # (the trap below propagates termination to the child processes).
 #
 # Requires: PowerShell 5.1+, uv (https://docs.astral.sh/uv/),
@@ -14,9 +14,9 @@ $env:ANYGARDEN_PORT = $DevPort
 
 Push-Location $PSScriptRoot/..
 try {
-    Write-Host "[anygarden] alembic upgrade head" -ForegroundColor Cyan
-    uv run --package anygarden alembic -c packages/cluster/alembic.ini upgrade head
-
+    # No `alembic upgrade head` here (#647): the backend migrates its own
+    # database at startup, against the URL it actually opens. This line used
+    # alembic.ini's hardcoded URL, which pointed somewhere else entirely.
     Write-Host "[anygarden] starting backend on http://127.0.0.1:$DevPort" -ForegroundColor Cyan
     $backend = Start-Process -PassThru -NoNewWindow -FilePath "uv" `
         -ArgumentList @(

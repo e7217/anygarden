@@ -1,4 +1,4 @@
-.PHONY: install dev server server-dev frontend test lint migrate e2e clean
+.PHONY: install dev server server-dev frontend test lint e2e clean
 
 install:                ## Install all dependencies
 	uv sync --dev
@@ -6,7 +6,12 @@ install:                ## Install all dependencies
 
 DEV_PORT ?= 8001
 
-dev: migrate           ## Run server + frontend concurrently (dev mode, migrating first)
+# No migration step here on purpose (#647). The server migrates its own
+# database during startup (`_ensure_schema_ready` in anygarden/app.py),
+# against the URL it actually opens. The `migrate` target that used to
+# run first used alembic.ini's hardcoded URL, which pointed at a file the
+# app never opens -- so it migrated a phantom DB and reported success.
+dev:                    ## Run server + frontend concurrently (dev mode)
 	$(MAKE) -j2 server-dev frontend
 
 server:                 ## Run backend server
@@ -23,9 +28,6 @@ test:                   ## Run backend tests
 
 lint:                   ## Run linter
 	uv run ruff check anygarden tests
-
-migrate:                ## Run alembic migrations
-	uv run alembic upgrade head
 
 e2e:                    ## Run full E2E pipeline test
 	uv run python scripts/e2e_full_pipeline.py
