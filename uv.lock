@@ -168,7 +168,7 @@ provides-extras = ["server", "machine", "agent", "dev"]
 
 [[package]]
 name = "anygarden-agent"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/agent" }
 dependencies = [
     { name = "click" },
