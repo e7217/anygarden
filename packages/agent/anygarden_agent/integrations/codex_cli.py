@@ -154,10 +154,10 @@ class CodexCliAdapter(EngineAdapter):
     ) -> None:
         # Fallback when no model is passed. Keep in sync with the codex-cli
         # ``default_model`` in anygarden.engines.catalog (currently the
-        # GPT-5.6 balanced tier). Production paths always pass an explicit
+        # GPT-6 workhorse tier). Production paths always pass an explicit
         # model from the catalog/DB; this only bites the no-arg construction
         # path.
-        self._model = model or "gpt-5.6-terra"
+        self._model = model or "gpt-6-sol"
         self._system_prompt = system_prompt
         self._reasoning_effort = reasoning_effort
         self._permission_level = permission_level

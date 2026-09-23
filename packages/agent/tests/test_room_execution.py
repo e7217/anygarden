@@ -396,7 +396,7 @@ async def test_initial_endpoint_never_imports_legacy_after_disable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "engine,expected", [("codex-cli", "gpt-5.6-terra"), ("pi-cli", None)]
+    "engine,expected", [("codex-cli", "gpt-6-sol"), ("pi-cli", None)]
 )
 async def test_omitted_model_keeps_only_codex_default(
     setup_room, monkeypatch, engine, expected
