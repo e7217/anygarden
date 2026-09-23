@@ -52,6 +52,13 @@ engines.
   An endpoint agent refuses to fall back to the legacy engine path (#679,
   #660).
 
+### Changed
+
+- The `codex-cli` adapter's fallback model is now `gpt-6-sol` (was
+  `gpt-5.6-terra`), matching the server catalog default (#692). It only
+  applies when no model is passed; agents with a pinned model are
+  unaffected.
+
 ### Fixed
 
 - Map an `http(s)://` server base to `ws(s)://` when opening room WebSockets

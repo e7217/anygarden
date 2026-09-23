@@ -3,6 +3,17 @@
 
 ## Unreleased
 
+### Changed
+
+- The codex-cli model catalog offers the GPT-6 family (`gpt-6-astra`,
+  `gpt-6-sol`, `gpt-6-luna`) and the `ultra` reasoning level (astra and sol).
+  The default model is now `gpt-6-sol` (#692).
+- `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.3-codex-spark` and
+  `gpt-5.2` are no longer offered, because the Codex backend rejects them for
+  ChatGPT-account logins. An agent already pinned to one keeps its stored
+  value, and the settings panel shows it as "no longer in catalog". Pick a
+  listed model to make the agent usable again.
+
 ### ⚠ Breaking changes
 
 - Removed `agents.collaboration_mode` (migration `072`). The column read as a

@@ -15,7 +15,7 @@ class EngineModel:
     """A single model offered by an engine."""
 
     id: str
-    """Identifier passed to the adapter (e.g. ``"gpt-5.4"``)."""
+    """Identifier passed to the adapter (e.g. ``"gpt-6-sol"``)."""
 
     label: str
     """Human-friendly display name."""
@@ -91,16 +91,39 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # gpt-5.1-codex-max/mini) return "not supported with a ChatGPT account"
     # and are omitted. (#506 removed the SDK ``codex`` entry.)
     #
-    # GPT-5.6 (2026-07-09) ships as three tiers keyed by OpenAI's
-    # codenames — sol (flagship), terra (balanced), luna (cost-efficient);
-    # all three are live-verified against codex 0.144.1 and add the new
-    # ``max`` reasoning level. ``default_model`` is the balanced ``terra``
-    # tier — a sensible cost/quality default for everyday agents; operators
-    # can pick ``sol`` per-agent when a task warrants the flagship.
+    # GPT-6 (astra 2026-09-04; sol and luna 2026-09-22) keeps the codename
+    # tiers: astra (frontier), sol (workhorse), luna (fast/cheap). Each
+    # model's reasoning levels are the ones codex itself lists for it:
+    # astra/sol add ``ultra``, and GPT-6 rejects ``minimal``. All three were
+    # live-verified against codex 0.155.1 on 2026-09-23 (#692).
+    # ``default_model`` is ``sol``, the tier codex calls its workhorse, for
+    # the same cost/quality reason terra was the GPT-5.6 default. Operators
+    # can pick astra per agent when a task needs the frontier model.
+    #
+    # #692 removed gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark
+    # and gpt-5.2: the backend now answers them with "not supported when
+    # using Codex with a ChatGPT account". GPT-5.6 and 5.5 still work
+    # (codex labels them "Older"/"Legacy") and stay available for agents
+    # already pinned to them.
     "codex-cli": EngineCatalogEntry(
         engine="codex-cli",
-        default_model="gpt-5.6-terra",
+        default_model="gpt-6-sol",
         models=(
+            EngineModel(
+                id="gpt-6-astra",
+                label="GPT-6 Astra",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
+            EngineModel(
+                id="gpt-6-sol",
+                label="GPT-6 Sol",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
+            EngineModel(
+                id="gpt-6-luna",
+                label="GPT-6 Luna",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
+            ),
             EngineModel(
                 id="gpt-5.6-sol",
                 label="GPT-5.6 Sol",
@@ -121,33 +144,16 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
                 label="GPT-5.5",
                 reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
             ),
-            EngineModel(
-                id="gpt-5.4",
-                label="GPT-5.4",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
-            ),
-            EngineModel(
-                id="gpt-5.4-mini",
-                label="GPT-5.4 Mini",
-                reasoning_levels=("minimal", "low", "medium", "high"),
-            ),
-            EngineModel(
-                id="gpt-5.3-codex",
-                label="GPT-5.3 Codex",
-                reasoning_levels=("low", "medium", "high", "xhigh"),
-            ),
-            EngineModel(
-                id="gpt-5.3-codex-spark",
-                label="GPT-5.3 Codex Spark",
-                reasoning_levels=("minimal", "low"),
-            ),
-            EngineModel(
-                id="gpt-5.2",
-                label="GPT-5.2",
-                reasoning_levels=("low", "medium", "high"),
-            ),
         ),
-        reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+        reasoning_levels=(
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+        ),
         supported_versions=("0.154.0", "0.155.1"),
     ),
     # Claude Code: ``--effort`` (session flag) accepts
