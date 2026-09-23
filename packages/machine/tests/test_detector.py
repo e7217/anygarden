@@ -199,6 +199,8 @@ async def test_detect_installed_pi_binary(tmp_path, monkeypatch):
     binary.write_text("#!/bin/sh\necho 0.85.1\n")
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
+    # #688 — a global pi is only considered with the explicit opt-in.
+    monkeypatch.setenv("ANYGARDEN_PI_USE_PATH", "1")
     engines = await detect_engines()
     pi = next(engine for engine in engines.engines if engine.engine == "pi-cli")
     assert pi.version == "0.85.1"

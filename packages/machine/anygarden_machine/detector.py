@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from anygarden_machine.engines import managed
 from anygarden_machine.engines.registry import ENGINE_LIFECYCLES
 
 log = structlog.get_logger()
@@ -66,11 +67,33 @@ PYTHON_MODULE_ENGINES: list[tuple[str, str, str]] = [
 ]
 
 
+# #688 — engines run from an AnyGarden-managed install. Only Pi today.
+MANAGED_ENGINES: list[tuple[str, str]] = [
+    (lc.engine, lc.detect.binary)
+    for lc in ENGINE_LIFECYCLES.values()
+    if lc.detect.mode == "managed" and lc.detect.binary
+]
+
+
 async def _detect_binary(name: str, binary: str) -> EngineInfo | None:
     """Try to detect an engine by running `<binary> --version`."""
     path = shutil.which(binary)
     if path is None:
         return None
+    return await _detect_path(name, path)
+
+
+async def _detect_managed(name: str, binary: str) -> EngineInfo | None:
+    """Managed install first; ``PATH`` only with the explicit opt-in (#688)."""
+    executable = managed.managed_pi_executable() if name == "pi-cli" else None
+    if executable is not None:
+        return await _detect_path(name, str(executable))
+    if name == "pi-cli" and managed.pi_path_opt_in():
+        return await _detect_binary(name, binary)
+    return None
+
+
+async def _detect_path(name: str, path: str) -> EngineInfo | None:
     try:
         proc = await asyncio.create_subprocess_exec(
             path,
@@ -137,6 +160,7 @@ async def detect_engines() -> DetectionResult:
     result = DetectionResult()
 
     binary_tasks = [_detect_binary(name, binary) for name, binary in BINARY_ENGINES]
+    binary_tasks += [_detect_managed(name, binary) for name, binary in MANAGED_ENGINES]
     detected = await asyncio.gather(*binary_tasks, return_exceptions=True)
     for item in detected:
         if isinstance(item, EngineInfo):

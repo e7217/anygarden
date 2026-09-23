@@ -1266,3 +1266,58 @@ async def test_unsupported_engine_rejected_before_files_or_processes(spawner, sp
         assert 'removed' in result.error or 'Python' in result.error or 'python' in result.error
         spawn.assert_not_called()
     assert not (spawner._agent_dirs_root / msg.agent_id).exists()
+
+
+class TestManagedPiExecutable:
+    """#688 — Pi agents receive the managed, version-pinned executable."""
+
+    async def _spawn_env(self, spawner: Spawner, engine: str = "pi-cli") -> dict:
+        msg = SpawnManifest(
+            agent_id=f"agent-{engine}",
+            engine=engine,
+            provider="local" if engine == "pi-cli" else None,
+            agent_token="tok",
+            profile_yaml="",
+            rooms=["r"],
+            server_url="wss://localhost:8000/ws/agent",
+        )
+        captured: dict = {}
+
+        async def capture_exec(*args, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return _mock_proc()
+
+        with patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            side_effect=capture_exec,
+        ), patch(
+            "anygarden_machine.spawner.shutil.which",
+            return_value="/usr/local/bin/anygarden-agent",
+        ):
+            result = await spawner.spawn(msg)
+        assert result.success is True
+        return captured["env"]
+
+    async def test_managed_executable_exported(self, spawner: Spawner, monkeypatch) -> None:
+        from anygarden_machine.engines import managed
+
+        exe = managed.managed_prefix() / "node_modules" / ".bin" / "pi"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("#!/bin/sh\necho 0.85.1\n")
+        exe.chmod(0o755)
+        env = await self._spawn_env(spawner)
+        assert env["ANYGARDEN_PI_EXECUTABLE"] == str(exe)
+
+    async def test_absent_without_managed_install(self, spawner: Spawner) -> None:
+        env = await self._spawn_env(spawner)
+        assert "ANYGARDEN_PI_EXECUTABLE" not in env
+
+    async def test_not_exported_for_other_engines(self, spawner: Spawner) -> None:
+        from anygarden_machine.engines import managed
+
+        exe = managed.managed_prefix() / "node_modules" / ".bin" / "pi"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+        env = await self._spawn_env(spawner, engine="codex-cli")
+        assert "ANYGARDEN_PI_EXECUTABLE" not in env

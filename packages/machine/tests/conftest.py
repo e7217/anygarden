@@ -10,6 +10,17 @@ import pytest
 from anygarden_machine.protocol.frames import SyncDesiredStateFrame
 
 
+@pytest.fixture(autouse=True)
+def _isolated_managed_engines(tmp_path_factory, monkeypatch):
+    """#688 — never read or create ``~/.anygarden/engines`` from tests."""
+    monkeypatch.setenv(
+        "ANYGARDEN_MANAGED_ENGINES_DIR", str(tmp_path_factory.mktemp("managed-engines"))
+    )
+    monkeypatch.delenv("ANYGARDEN_PI_USE_PATH", raising=False)
+    monkeypatch.delenv("ANYGARDEN_MANAGED_PI", raising=False)
+    monkeypatch.delenv("ANYGARDEN_PI_EXECUTABLE", raising=False)
+
+
 @pytest.fixture
 def spawn_agent_frame() -> SyncDesiredStateFrame:
     """A SyncDesiredStateFrame representing a running agent (replaces old SpawnAgentFrame)."""

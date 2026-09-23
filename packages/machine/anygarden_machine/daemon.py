@@ -17,6 +17,7 @@ from anygarden_machine import __version__
 from anygarden_machine.config import save_token
 from anygarden_machine.crash_budget import CrashBudget
 from anygarden_machine.detector import detect_engines
+from anygarden_machine.engines.managed import ensure_managed_pi
 from anygarden_machine.engines.registry import get_lifecycle
 from anygarden_machine.engines.updater import run_engine_update
 from anygarden_machine.manifest_store import ManifestStore
@@ -211,6 +212,13 @@ class MachineDaemon:
 
     async def run(self) -> None:
         """Main WebSocket reconnection loop with exponential backoff."""
+        # #688 — provision the pinned Pi before the first register so the
+        # advertised pi-cli capability already points at the managed install.
+        # Failure only means Pi agents can't start; the daemon still serves.
+        try:
+            await ensure_managed_pi()
+        except Exception as exc:  # noqa: BLE001 — never block startup
+            log.warning("managed_pi.provision_error", error=str(exc))
         backoff = RECONNECT_BASE
         while True:
             try:

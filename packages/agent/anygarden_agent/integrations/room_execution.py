@@ -35,6 +35,43 @@ from anygarden_agent.runtime.handler_wrapper import (
 )
 
 
+PI_EXECUTABLE_ENV = "ANYGARDEN_PI_EXECUTABLE"
+PI_PATH_OPT_IN_ENV = "ANYGARDEN_PI_USE_PATH"
+
+
+def resolve_engine_executable(engine: str) -> str:
+    """Pick the CLI binary for ``engine`` (#688).
+
+    Pi runs the machine-managed, version-pinned install handed over by the
+    spawner in ``ANYGARDEN_PI_EXECUTABLE``. ``pi`` from ``PATH`` is used only
+    with the explicit ``ANYGARDEN_PI_USE_PATH=1`` opt-in — a silent fallback
+    would let any global upgrade change the runtime under every agent.
+    """
+    if engine != "pi-cli":
+        found = shutil.which("codex")
+        if found is None:
+            raise ValueError(f"{engine} executable is not installed")
+        return found
+    explicit = os.environ.get(PI_EXECUTABLE_ENV)
+    if explicit:
+        path = Path(explicit)
+        if not (path.is_absolute() and path.is_file() and os.access(path, os.X_OK)):
+            raise ValueError(
+                f"{PI_EXECUTABLE_ENV} does not point to an executable Pi install"
+            )
+        return str(path)
+    if os.environ.get(PI_PATH_OPT_IN_ENV) == "1":
+        found = shutil.which("pi")
+        if found is not None:
+            return found
+        raise ValueError(f"{PI_PATH_OPT_IN_ENV}=1 is set but no pi is on PATH")
+    raise ValueError(
+        "pi-cli managed Pi install is missing on this machine: run the "
+        "machine's Update engine action for Pi (installs the pinned version) "
+        f"or set {PI_PATH_OPT_IN_ENV}=1 to use pi from PATH"
+    )
+
+
 class RoomExecutionAdapter(CodexCliAdapter):
     """Reuse room prompt/context composition; execute only through the manager."""
 
@@ -50,9 +87,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         )
 
     async def start(self):
-        self._codex_path = shutil.which("pi" if self._engine == "pi-cli" else "codex")
-        if self._codex_path is None:
-            raise ValueError(f"{self._engine} executable is not installed")
+        self._codex_path = resolve_engine_executable(self._engine)
         self._launch = self._client.execution_launch
         if self._launch is None:
             self._launch = load_execution_launch(

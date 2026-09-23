@@ -106,3 +106,37 @@ class TestEngineUpdateHandler:
 
         assert sent[-1]["status"] == "failed"
         assert sent[-1]["error"] == "boom"
+
+
+class TestManagedPiProvisioning:
+    """#688 — the pinned Pi is provisioned once before the first register."""
+
+    async def test_run_provisions_before_connecting(self, daemon: MachineDaemon):
+        order: list[str] = []
+
+        async def provision():
+            order.append("provision")
+
+        async def connect():
+            order.append("connect")
+            raise __import__("asyncio").CancelledError
+
+        with patch(
+            "anygarden_machine.daemon.ensure_managed_pi", side_effect=provision
+        ), patch.object(daemon, "_connect_and_serve", side_effect=connect), patch.object(
+            daemon._spawner, "drain", AsyncMock()
+        ):
+            await daemon.run()
+        assert order == ["provision", "connect"]
+
+    async def test_provisioning_error_does_not_block_startup(self, daemon: MachineDaemon):
+        async def connect():
+            raise __import__("asyncio").CancelledError
+
+        with patch(
+            "anygarden_machine.daemon.ensure_managed_pi",
+            side_effect=RuntimeError("boom"),
+        ), patch.object(daemon, "_connect_and_serve", side_effect=connect), patch.object(
+            daemon._spawner, "drain", AsyncMock()
+        ):
+            await daemon.run()
