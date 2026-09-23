@@ -338,3 +338,30 @@ emit({"type": "agent_settled"})
         assert receipt.usage == {"input_tokens": 30, "output_tokens": 5}
     finally:
         await m.close()
+
+
+async def test_version_mismatch_reports_observed_and_expected(
+    tmp_path, invocation, executable
+):
+    text = executable.read_text()
+    executable.write_text(text.replace('"0.85.1"', '"0.87.1"'))
+    runtime = PiRuntime(executable)
+    m = LocalExecutionManager(tmp_path / "receipts", runtime, authorize=lambda _: True)
+    try:
+        await m.start(invocation)
+        final, _ = await done(m)
+        assert final.reason == "UNSUPPORTED_RUNTIME"
+    finally:
+        await m.close()
+    assert runtime.observed_version == "0.87.1"
+    assert runtime.unsupported_detail() == (
+        "pi-cli 0.87.1 is not supported; this build requires 0.85.1"
+    )
+
+
+def test_unsupported_detail_without_observed_version(tmp_path):
+    runtime = PiRuntime(tmp_path / "missing-pi")
+    assert runtime.observed_version is None
+    assert runtime.unsupported_detail() == (
+        "could not read the installed pi-cli version; this build requires 0.85.1"
+    )

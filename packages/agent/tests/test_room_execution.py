@@ -56,7 +56,7 @@ import sys,os,json,time,tomllib,urllib.request
 from pathlib import Path
 args=sys.argv[1:]; pi=os.environ['TEST_ENGINE']=='pi-cli'
 if args==['--version']:
-    print('0.85.1' if pi else 'codex-cli 0.155.1');sys.exit(0)
+    print(os.environ.get('TEST_VERSION') or ('0.85.1' if pi else 'codex-cli 0.155.1'));sys.exit(0)
 assert 'ANYGARDEN_TOKEN' not in os.environ
 assert 'AG_ENGINE_ENDPOINT_KEY' not in os.environ
 assert 'AG_ENGINE_ENDPOINT_CONFIG' not in os.environ
@@ -443,5 +443,40 @@ async def test_manager_cancel_finishes_turn_without_cancelling_room_handler(
         client._execution_adapter._environment["TEST_OUTCOME"] = "ok"
         await client._message_handlers[0](message("next-turn"))
         assert client.send.call_args.args[1] == "local answer"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine,version,expected",
+    [
+        (
+            "pi-cli",
+            "0.87.1",
+            "UNSUPPORTED_RUNTIME: pi-cli 0.87.1 is not supported; this build requires 0.85.1",
+        ),
+        (
+            "codex-cli",
+            "codex-cli 0.160.0",
+            "UNSUPPORTED_RUNTIME: codex-cli 0.160.0 is not supported; "
+            "this build requires one of 0.154.0, 0.155.1",
+        ),
+    ],
+)
+async def test_version_mismatch_error_names_observed_and_expected(
+    setup_room, monkeypatch, engine, version, expected
+):
+    monkeypatch.setenv("TEST_VERSION", version)
+    client = await client_for(engine, monkeypatch)
+    try:
+        await client._message_handlers[0](message())
+        finished = [
+            c.kwargs
+            for c in client.sendLifecycle.call_args_list
+            if c.kwargs.get("event") == "engine_call_finished"
+        ]
+        assert finished[0]["outcome"] == "failed"
+        assert finished[0]["error"] == expected
     finally:
         await client.close()

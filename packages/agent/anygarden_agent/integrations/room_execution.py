@@ -72,6 +72,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
             self._environment["CODEX_HOME"] = home
         runtime_cls = RoomPiRuntime if self._engine == "pi-cli" else RoomCodexRuntime
         runtime = runtime_cls(Path(self._codex_path).absolute())
+        self._runtime = runtime
         self._runtime_version = runtime.capabilities().engine_version
         self._manager = LocalExecutionManager(
             self._root / ".anygarden-execution" / self._engine,
@@ -193,7 +194,12 @@ class RoomExecutionAdapter(CodexCliAdapter):
             EngineTimeoutError if receipt.reason == "TIMEOUT_STOPPED" else EngineError
         )
         # Receipt codes only: no provider stderr or credentials in logs/notices.
-        raise error_cls(receipt.reason or "runtime_error", turn=turn)
+        reason = receipt.reason or "runtime_error"
+        if reason == "UNSUPPORTED_RUNTIME":
+            # #687 — name the observed vs required CLI version (non-secret)
+            # so a version drift is not mistaken for an endpoint failure.
+            reason = f"{reason}: {self._runtime.unsupported_detail()}"
+        raise error_cls(reason, turn=turn)
 
     def _legacy_compatible(self, handle, invocation):
         from .room_session_upgrade import legacy_codex_session_matches

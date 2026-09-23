@@ -812,6 +812,8 @@ class EngineCatalogOut(BaseModel):
     reasoning_levels: list[str]
     deprecated: bool = False
     deprecation_note: Optional[str] = None
+    # #687 — exact CLI versions the adapter accepts (empty = no gate).
+    supported_versions: list[str] = []
 
 
 @router.get("/engines/{engine}/models", response_model=EngineCatalogOut)
@@ -848,6 +850,7 @@ async def get_engine_models(
         reasoning_levels=list(entry.reasoning_levels),
         deprecated=entry.deprecated,
         deprecation_note=entry.deprecation_note,
+        supported_versions=list(entry.supported_versions),
     )
 
 

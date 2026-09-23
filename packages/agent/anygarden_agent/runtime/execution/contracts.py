@@ -21,6 +21,25 @@ FAILURE_CODES = frozenset(
 
 SUPPORTED_ENGINES = frozenset({"codex-cli", "pi-cli"})
 
+
+def unsupported_version_detail(
+    engine: str, observed: str | None, supported: tuple[str, ...]
+) -> str:
+    """Operator-facing reason for a failed CLI version gate (#687).
+
+    The receipt keeps the closed ``UNSUPPORTED_RUNTIME`` code; this text is
+    only attached locally. Versions are not secrets, so naming both the
+    observed and the expected version is safe and makes the fix obvious.
+    """
+    required = (
+        supported[0]
+        if len(supported) == 1
+        else "one of " + ", ".join(supported)
+    )
+    if observed is None:
+        return f"could not read the installed {engine} version; this build requires {required}"
+    return f"{engine} {observed} is not supported; this build requires {required}"
+
 # Provider names may carry hyphens/dots (``openai-codex``, ``my-local``)
 # but never whitespace, ``=`` or other shell/tooling metacharacters —
 # the closed charset keeps injection out while custom names work.

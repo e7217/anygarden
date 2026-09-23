@@ -14,13 +14,22 @@ from pathlib import Path
 
 import psutil
 
-from .contracts import Capabilities, Invocation, RuntimeResult
+from .contracts import (
+    Capabilities,
+    Invocation,
+    RuntimeResult,
+    unsupported_version_detail,
+)
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
+ENGINE = "codex-cli"
+# Verified boundary versions: 0.154.0 (PR600 evidence) and 0.155.1 (installed
+# on slock-bot 2026-09-19; same subprocess contract). Others fail closed.
+SUPPORTED_VERSIONS = ("0.154.0", "0.155.1")
 
 
 class ProcessTree:
@@ -99,9 +108,16 @@ class CodexRuntime:
         if not executable.is_absolute():
             raise ValueError("Codex executable must be an absolute local path")
         self.executable = executable
+        # Last ``--version`` output seen by the gate (#687); non-secret.
+        self.observed_version: str | None = None
 
     def capabilities(self) -> Capabilities:
         return Capabilities(cancel=os.name == "posix")
+
+    def unsupported_detail(self) -> str:
+        return unsupported_version_detail(
+            ENGINE, self.observed_version, SUPPORTED_VERSIONS
+        )
 
     def command(
         self, invocation: Invocation, session: str | None, output: Path
@@ -164,13 +180,11 @@ class CodexRuntime:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            # Verified boundary versions: 0.154.0 (PR600 evidence) and
-            # 0.155.1 (installed on slock-bot 2026-09-19; same subprocess
-            # contract). Others fail closed with an explicit version error.
-            return proc.returncode == 0 and stdout.strip() in (
-                b"codex-cli 0.154.0",
-                b"codex-cli 0.155.1",
-            )
+            out = stdout.decode(errors="replace").strip()
+            self.observed_version = out.removeprefix("codex-cli ").strip()[:64] or None
+            return proc.returncode == 0 and out in {
+                f"codex-cli {version}" for version in SUPPORTED_VERSIONS
+            }
         finally:
             if proc.returncode is None:
                 proc.kill()
