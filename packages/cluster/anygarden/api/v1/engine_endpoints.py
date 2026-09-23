@@ -12,10 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Agent, EngineCredential, Machine
 from anygarden.dependencies import get_admin_identity, get_db
-from anygarden.engines.endpoints import EndpointConfiguration, credential_for
+from anygarden.engines.endpoints import (
+    EndpointConfiguration,
+    ModelProbeError,
+    credential_for,
+    probe_models,
+    validate_base_url,
+)
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-endpoints"])
+probe_router = APIRouter(prefix="/api/v1/engine-endpoints", tags=["agent-endpoints"])
 
 
 async def _agent(db, agent_id):
@@ -245,3 +252,59 @@ async def delete_credential(
         )
     await db.delete(row)
     await db.commit()
+
+
+_PROBE_FIELDS = {"base_url", "api_key", "agent_id", "credential_ref"}
+
+
+@probe_router.post("/models")
+async def discover_models(
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List model IDs served at ``{base_url}/models`` (#685).
+
+    Probed from this server, so the result is labelled
+    ``reachable_from: "server"`` — the placed machine may still differ.
+    Accepts either a not-yet-stored ``api_key`` or a stored credential of
+    the given agent; neither is ever echoed.
+    """
+    body = await _body(request)
+    if set(body) - _PROBE_FIELDS:
+        raise HTTPException(422, "Invalid probe payload")
+    try:
+        base_url = validate_base_url(body.get("base_url"))
+    except ValueError:
+        raise HTTPException(
+            422, "Endpoint URL must be HTTP(S), without credentials, query or fragment"
+        ) from None
+    api_key = body.get("api_key")
+    if api_key is not None:
+        api_key, _ = _secret_value({"value": api_key})
+    ref = body.get("credential_ref")
+    if ref is not None:
+        if api_key is not None or not isinstance(body.get("agent_id"), str):
+            raise HTTPException(422, "Invalid probe payload")
+        agent = await _agent(db, body["agent_id"])
+        try:
+            row = await credential_for(db, agent, ref)
+            api_key = _secrets(request).decrypt_dict(row.encrypted_value)["v"]
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(
+                422, "Credential reference is unavailable for this agent"
+            ) from None
+    try:
+        models = await probe_models(
+            base_url,
+            api_key,
+            transport=getattr(request.app.state, "engine_probe_transport", None),
+        )
+    except ModelProbeError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from None
+    return {
+        "models": [
+            {"id": m.id, "max_model_len": m.max_model_len} for m in models
+        ],
+        "reachable_from": "server",
+    }

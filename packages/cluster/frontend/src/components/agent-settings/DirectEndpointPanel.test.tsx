@@ -55,3 +55,45 @@ describe('direct endpoint editor', () => {
     expect(saved).not.toHaveBeenCalled()
   })
 })
+
+describe('direct endpoint status and model discovery (#685)', () => {
+  function mockWith(saved: Record<string, string | null>, models = ['m', 'other-model']) {
+    const calls: Array<{url: string; method: string; body: unknown}> = []
+    vi.mocked(apiFetch).mockImplementation(async (url, init) => {
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ url, method, body })
+      if (url === '/api/v1/engine-endpoints/models') {
+        return new Response(JSON.stringify({ models: models.map(id => ({ id, max_model_len: null })), reachable_from: 'server' }))
+      }
+      return new Response(JSON.stringify(url.endsWith('/credentials') ? [] : saved))
+    })
+    return calls
+  }
+  it('is rendered with a status line when not configured', async () => {
+    mockWith({ provider: 'local', model: null, base_url: null, api_protocol: null, credential_ref: null })
+    render(<DirectEndpointPanel agentId="a" engine="pi-cli" onSaved={vi.fn()} />)
+    expect(await screen.findByText('Direct connection: not configured')).toBeInTheDocument()
+  })
+  it('shows the configured target and warns when the model is not served', async () => {
+    const calls = mockWith(config)
+    render(<DirectEndpointPanel agentId="a" engine="codex-cli" onSaved={vi.fn()} />)
+    expect(await screen.findByText('Direct connection: http://localhost:8000/v1 · Responses')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Load models' }))
+    expect(await screen.findByText(/2 models found/)).toBeInTheDocument()
+    expect(calls.find(c => c.url === '/api/v1/engine-endpoints/models')?.body).toEqual({ base_url: 'http://localhost:8000/v1' })
+    expect(screen.queryByText(/is not in the list served/)).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Endpoint model'), { target: { value: 'typo-model' } })
+    expect(screen.getByText(/"typo-model" is not in the list served by this endpoint/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Apply connection' })).toBeEnabled()
+  })
+  it('probes with the selected stored credential by reference', async () => {
+    const calls = mockWith({ ...config, credential_ref: 'ref-1' })
+    render(<DirectEndpointPanel agentId="a" engine="pi-cli" onSaved={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Load models' }))
+    await screen.findByText(/models found/)
+    expect(calls.find(c => c.url === '/api/v1/engine-endpoints/models')?.body).toEqual({
+      base_url: 'http://localhost:8000/v1', agent_id: 'a', credential_ref: 'ref-1',
+    })
+  })
+})

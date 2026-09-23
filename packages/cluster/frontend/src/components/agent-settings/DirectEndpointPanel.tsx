@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { type DiscoveredModel, discoverEndpointModels, isValidEndpointUrl } from '@/lib/engineEndpoints'
 
 interface Configuration {
   provider: string | null
@@ -12,11 +13,23 @@ interface Configuration {
 }
 interface Credential { id: string; label: string; revision: number }
 
+const PROTOCOL_LABELS: Record<string, string> = { responses: 'Responses', 'chat-completions': 'Chat Completions' }
+
+function connectionSummary(saved: Configuration | null): string {
+  if (!saved?.base_url) return 'Direct connection: not configured'
+  return `Direct connection: ${saved.base_url} · ${PROTOCOL_LABELS[saved.api_protocol ?? ''] ?? saved.api_protocol}`
+}
+
 export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
   agentId: string; engine: string; onSaved: () => Promise<unknown>
 }) {
   const path = `/api/v1/agents/${agentId}/endpoint`
   const [config, setConfig] = useState<Configuration | null>(null)
+  // Last configuration confirmed by the server — drives the status line.
+  const [saved, setSaved] = useState<Configuration | null>(null)
+  // #685 — model IDs served by the endpoint (null until loaded).
+  const [models, setModels] = useState<DiscoveredModel[] | null>(null)
+  const [modelsStatus, setModelsStatus] = useState('')
   const [credentials, setCredentials] = useState<Credential[]>([])
   const [value, setValue] = useState('')
   const [label, setLabel] = useState('Endpoint credential')
@@ -35,7 +48,7 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
   useEffect(() => {
     let active = true
     Promise.all([request(path), request(`${path}/credentials`)]).then(([next, rows]) => {
-      if (active) { setConfig(next); setCredentials(rows) }
+      if (active) { setConfig(next); setSaved(next); setCredentials(rows) }
     }).catch(e => { if (active) setError(e.message) })
     return () => { active = false }
   }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -48,7 +61,7 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
   async function save(enabled: boolean) {
     await action(async () => {
       const next = await request(path, 'PUT', enabled ? config : { base_url: null })
-      setConfig(next); await onSaved()
+      setConfig(next); setSaved(next); await onSaved()
       setStatus('Connection settings saved. The agent will restart with the new settings.')
     })
   }
@@ -62,15 +75,36 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
       setStatus(rotate ? 'Credential replaced. The agent will restart if it uses this credential.' : 'Credential stored. Apply connection settings to use it.')
     })
   }
+  async function loadModels() {
+    if (!config?.base_url) return
+    const base_url = config.base_url
+    await action(async () => {
+      setModels(null); setModelsStatus('')
+      const result = await discoverEndpointModels(config.credential_ref
+        ? { base_url, agent_id: agentId, credential_ref: config.credential_ref }
+        : { base_url })
+      setModels(result.models)
+      const where = result.reachable_from === 'server' ? 'reachable from the AnyGarden server' : `reachable from ${result.reachable_from}`
+      setModelsStatus(`${result.models.length} ${result.models.length === 1 ? 'model' : 'models'} found · ${where}`)
+    })
+  }
+  const modelNotServed = models !== null && !!config?.model && !models.some(m => m.id === config.model)
   return <section className="space-y-3 rounded border p-3" aria-label="Direct model connection">
     <h3 className="font-medium">Direct model connection</h3>
+    <p className="text-sm text-[var(--color-foreground-muted)]">{connectionSummary(saved)}</p>
     <p className="text-sm">Connect this agent to a local or custom model server. Use a Responses endpoint for Codex; Pi also supports Chat Completions.</p>
     {error && <p role="alert">{error}</p>}
     {status && <p role="status">{status}</p>}
     {!config ? (!error && <p>Loading connection settings…</p>) : <fieldset disabled={busy} className="space-y-3">
       <label className="block">Provider ID<Input aria-label="Endpoint provider" value={config.provider ?? ''} onChange={e => setConfig({ ...config, provider: e.target.value })} /></label>
-      <label className="block">Model ID<Input aria-label="Endpoint model" value={config.model ?? ''} onChange={e => setConfig({ ...config, model: e.target.value })} /></label>
-      <label className="block">Base URL<Input aria-label="Endpoint base URL" placeholder="http://localhost:8000/v1" value={config.base_url ?? ''} onChange={e => setConfig({ ...config, base_url: e.target.value })} /></label>
+      <label className="block">Base URL<Input aria-label="Endpoint base URL" placeholder="http://localhost:8000/v1" value={config.base_url ?? ''} onChange={e => { setConfig({ ...config, base_url: e.target.value }); setModels(null); setModelsStatus('') }} /></label>
+      <label className="block">Model ID<Input aria-label="Endpoint model" list="direct-endpoint-models" value={config.model ?? ''} onChange={e => setConfig({ ...config, model: e.target.value })} /></label>
+      <datalist id="direct-endpoint-models">{models?.map(m => <option key={m.id} value={m.id} />)}</datalist>
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" disabled={!isValidEndpointUrl(config.base_url ?? '')} onClick={() => void loadModels()}>Load models</Button>
+        {modelsStatus && <span className="text-xs text-[var(--color-foreground-muted)]">{modelsStatus}</span>}
+      </div>
+      {modelNotServed && <p className="text-xs text-[var(--color-warning)]">"{config.model}" is not in the list served by this endpoint. Check the ID matches <code>/models</code> exactly.</p>}
       <label className="block">API protocol<select aria-label="Endpoint API protocol" value={config.api_protocol ?? ''} onChange={e => setConfig({ ...config, api_protocol: e.target.value })}>
         <option value="" disabled>Select a protocol</option><option value="responses">Responses</option>{engine === 'pi-cli' && <option value="chat-completions">Chat Completions</option>}
       </select></label>

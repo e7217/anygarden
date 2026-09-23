@@ -15,7 +15,10 @@ from sqlalchemy import select, text
 
 from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
-from anygarden.api.v1.engine_endpoints import router as engine_endpoints_router
+from anygarden.api.v1.engine_endpoints import (
+    probe_router as engine_endpoint_probe_router,
+    router as engine_endpoints_router,
+)
 from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.graph import router as graph_router
@@ -1465,6 +1468,7 @@ def create_app(
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
     app.include_router(engine_endpoints_router)
+    app.include_router(engine_endpoint_probe_router)
     app.include_router(graph_router)
     app.include_router(skills_api_router)
     app.include_router(mcp_templates_router)

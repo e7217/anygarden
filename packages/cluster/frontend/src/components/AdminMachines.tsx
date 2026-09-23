@@ -17,6 +17,12 @@ import {
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { unsupportedEngineVersionWarning } from '@/lib/engineVersion'
+import { applyEndpoint, storeEndpointCredential, type DiscoveredModel } from '@/lib/engineEndpoints'
+import CreateAgentEndpointSection, {
+  emptyEndpointDraft,
+  endpointDraftReady,
+  type EndpointDraft,
+} from '@/components/CreateAgentEndpointSection'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -248,6 +254,13 @@ export default function AdminMachines() {
   const [agentProvider, setAgentProvider] = useState('')
   const validPiProvider = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(agentProvider)
   const [agentCatalog, setAgentCatalog] = useState<EngineCatalog | null>(null)
+  // #685 — optional direct endpoint (local / custom OpenAI-compatible server).
+  const [endpointDraft, setEndpointDraft] = useState<EndpointDraft>(() => emptyEndpointDraft(''))
+  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([])
+  const endpointCapable = agentEngine === 'pi-cli' || agentEngine === 'codex-cli'
+  const endpointActive = endpointCapable && endpointDraft.enabled
+  // Pi always needs an explicit provider; Codex only as the endpoint's ID.
+  const providerRequired = agentEngine === 'pi-cli' || endpointActive
   const [agentRooms, setAgentRooms] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -294,6 +307,8 @@ export default function AdminMachines() {
   // into a different one (gemini).
   useEffect(() => {
     setAgentProvider('')
+    setEndpointDraft(emptyEndpointDraft(agentEngine))
+    setDiscoveredModels([])
     if (!agentEngine) {
       setAgentCatalog(null)
       setAgentModel('')
@@ -382,26 +397,48 @@ export default function AdminMachines() {
 
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
-    if (agentEngine === 'pi-cli' && !validPiProvider) return
+    if (providerRequired && !validPiProvider) return
+    if (endpointActive && !endpointDraftReady(endpointDraft, agentModel)) return
     setCreateError(null)
     setCreating(true)
+    const endpoint = endpointActive ? endpointDraft : null
+    const model = agentModel.trim()
     try {
-      await createAgent({
+      // #685 — the (secret-free) endpoint is persisted with the agent in one
+      // request; an API key goes through the write-only credential endpoint.
+      const created = await createAgent({
         name: agentName.trim(),
         engine: agentEngine,
-        ...(agentEngine === 'pi-cli' ? { provider: agentProvider } : {}),
+        ...(providerRequired ? { provider: agentProvider } : {}),
         rooms: Array.from(agentRooms),
         ...(agentReasoning ? { reasoning_effort: agentReasoning } : {}),
-        ...(agentModel ? { model: agentModel } : {}),
+        ...(model ? { model } : {}),
+        ...(endpoint ? { endpoint: { base_url: endpoint.baseUrl, api_protocol: endpoint.protocol } } : {}),
       })
       setAgentName(''); setAgentEngine(''); setAgentReasoning('')
       setAgentModel(''); setAgentCatalog(null); setAgentRooms(new Set())
-      setCreateAgentOpen(false)
+      setEndpointDraft(emptyEndpointDraft('')); setDiscoveredModels([])
       fetchDetail(selectedId)
       // create_agent auto-creates a DM room server-side; the sidebar
       // caches DMs separately so nudge it to refetch otherwise the
       // new agent only appears after a full page reload.
       fetchAgentDMs()
+      if (endpoint?.auth === 'key') {
+        try {
+          const credentialRef = await storeEndpointCredential(created.id, endpoint.apiKey)
+          await applyEndpoint(created.id, {
+            provider: agentProvider, model, base_url: endpoint.baseUrl,
+            api_protocol: endpoint.protocol, credential_ref: credentialRef,
+          })
+        } catch (e) {
+          // The agent exists; keep the dialog open to explain, but the form
+          // is already reset so a second click cannot create a duplicate.
+          setCreateError(`Agent created, but the API key was not applied: ${e instanceof Error ? e.message : String(e)}. Add it in the agent's Settings → Direct model connection.`)
+          setCreating(false)
+          return
+        }
+      }
+      setCreateAgentOpen(false)
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : String(e))
     }
@@ -1072,18 +1109,38 @@ export default function AdminMachines() {
                   <Input id="pi-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
                     placeholder="zai or my-local" maxLength={64} required aria-invalid={!validPiProvider} />
                   <p className="text-xs text-[var(--color-foreground-muted)]">
-                    Enter a built-in or configured custom provider name. No provider is selected automatically.
+                    {endpointActive
+                      ? 'A name for this model server (e.g. my-local). It is used only by this agent.'
+                      : 'Enter a built-in or configured custom provider name. No provider is selected automatically.'}
                   </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="pi-model">Model</Label>
                   <Input id="pi-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
-                    list="pi-models" placeholder="Model ID for this provider (optional)" />
-                  <datalist id="pi-models">{agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
+                    list="pi-models" placeholder={endpointActive ? 'Model ID served by the endpoint (required)' : 'Model ID for this provider (optional)'} />
+                  <datalist id="pi-models">
+                    {discoveredModels.map(m => <option key={`endpoint-${m.id}`} value={m.id}>{m.max_model_len ? `${m.id} (${m.max_model_len.toLocaleString()} tokens)` : m.id}</option>)}
+                    {!endpointActive && agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                  </datalist>
                 </div>
               </>
             )}
-            {agentEngine !== 'pi-cli' && agentCatalog && agentCatalog.models.length > 0 && (
+            {agentEngine === 'codex-cli' && endpointActive && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="endpoint-provider">Provider ID</Label>
+                  <Input id="endpoint-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
+                    placeholder="local" maxLength={64} aria-invalid={!validPiProvider} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="endpoint-model">Model</Label>
+                  <Input id="endpoint-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
+                    list="endpoint-models" placeholder="Model ID served by the endpoint (required)" />
+                  <datalist id="endpoint-models">{discoveredModels.map(m => <option key={m.id} value={m.id} />)}</datalist>
+                </div>
+              </>
+            )}
+            {agentEngine !== 'pi-cli' && !endpointActive && agentCatalog && agentCatalog.models.length > 0 && (
               <div className="space-y-2">
                 <Label>Model</Label>
                 <select value={agentModel} onChange={e => setAgentModel(e.target.value)} className={selectCSS}>
@@ -1117,6 +1174,22 @@ export default function AdminMachines() {
                   })()}
                 </select>
               </div>
+            )}
+            {endpointCapable && (
+              <CreateAgentEndpointSection
+                engine={agentEngine}
+                draft={endpointDraft}
+                onChange={next => {
+                  // Codex needs a provider ID only for the endpoint; seed one.
+                  if (next.enabled && !endpointDraft.enabled && agentEngine === 'codex-cli' && !agentProvider) setAgentProvider('local')
+                  setEndpointDraft(next)
+                }}
+                onModelsLoaded={models => {
+                  setDiscoveredModels(models)
+                  if (models.length === 1 && !agentModel) setAgentModel(models[0].id)
+                }}
+                selectClassName={selectCSS}
+              />
             )}
             {agentReasoningLevels.length > 0 && (
               <div className="space-y-2">
@@ -1165,7 +1238,7 @@ export default function AdminMachines() {
           </div>
           <DialogFooter>
             {createError && <p role="alert">{createError}</p>}
-            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (agentEngine === 'pi-cli' && !validPiProvider)}>
+            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (providerRequired && !validPiProvider) || (endpointActive && !endpointDraftReady(endpointDraft, agentModel))}>
               {creating ? 'Creating...' : 'Create Agent'}
             </Button>
           </DialogFooter>

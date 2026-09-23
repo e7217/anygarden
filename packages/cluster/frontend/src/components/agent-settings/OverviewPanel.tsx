@@ -91,7 +91,6 @@ interface Props {
 
 export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }: Props) {
   const [showPicker, setShowPicker] = useState(false)
-  const [showEndpoint, setShowEndpoint] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
@@ -480,10 +479,10 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
         />
       ) : null}
 
-      {(agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && <>
-        <Button variant="outline" onClick={() => setShowEndpoint(!showEndpoint)} aria-expanded={showEndpoint}>Configure direct model connection</Button>
-        {showEndpoint && <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} onSaved={() => updateAgent(agent.id, {})} />}
-      </>}
+      {/* #685 — always visible so operators can find the Base URL field. */}
+      {(agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && (
+        <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} onSaved={() => updateAgent(agent.id, {})} />
+      )}
 
       {/* Metadata grid */}
       <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-3 text-sm">
