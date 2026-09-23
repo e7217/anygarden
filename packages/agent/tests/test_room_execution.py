@@ -111,6 +111,9 @@ def setup_room(tmp_path, monkeypatch):
         "anygarden_agent.integrations.room_execution.shutil.which",
         lambda _: str(executable),
     )
+    # #688 — Pi uses the machine-managed executable handed over by the spawner.
+    monkeypatch.setenv("ANYGARDEN_PI_EXECUTABLE", str(executable))
+    monkeypatch.delenv("ANYGARDEN_PI_USE_PATH", raising=False)
     monkeypatch.setenv("ANYGARDEN_TOKEN", "transport-must-not-inherit")
     monkeypatch.setenv("ANYGARDEN_AGENT_TOKEN", "self-mcp-fixture")
     monkeypatch.setenv("ANYGARDEN_AGENT_GENERATION", "7")
@@ -480,3 +483,31 @@ async def test_version_mismatch_error_names_observed_and_expected(
         assert finished[0]["error"] == expected
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_pi_without_managed_install_or_opt_in_refuses_to_start(
+    setup_room, monkeypatch
+):
+    """#688 — never silently fall back to whatever ``pi`` is on PATH."""
+    monkeypatch.delenv("ANYGARDEN_PI_EXECUTABLE")
+    with pytest.raises(ValueError, match="managed Pi install is missing"):
+        await client_for("pi-cli", monkeypatch)
+
+
+@pytest.mark.asyncio
+async def test_pi_path_opt_in_uses_path(setup_room, monkeypatch):
+    monkeypatch.delenv("ANYGARDEN_PI_EXECUTABLE")
+    monkeypatch.setenv("ANYGARDEN_PI_USE_PATH", "1")
+    client = await client_for("pi-cli", monkeypatch)
+    try:
+        assert client._execution_adapter._codex_path == str(setup_room / "fake-cli")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_pi_explicit_executable_must_be_executable(setup_room, monkeypatch):
+    monkeypatch.setenv("ANYGARDEN_PI_EXECUTABLE", str(setup_room / "missing-pi"))
+    with pytest.raises(ValueError, match="ANYGARDEN_PI_EXECUTABLE"):
+        await client_for("pi-cli", monkeypatch)

@@ -21,7 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from anygarden_machine.engines.channels import Channel, NpmGlobal
+from anygarden_machine.engines import managed
+from anygarden_machine.engines.channels import Channel, NpmGlobal, NpmManagedPrefix
 
 
 @dataclass(frozen=True)
@@ -34,9 +35,12 @@ class DetectSpec:
 
     ``mode="module"``: import ``import_path`` and read ``version_attr`` — for
     in-process Python SDK engines that have no CLI binary.
+
+    ``mode="managed"`` (#688): run the AnyGarden-managed, version-pinned
+    install; ``binary`` on ``PATH`` is used only with the explicit opt-in.
     """
 
-    mode: str  # "binary" | "module"
+    mode: str  # "binary" | "module" | "managed"
     binary: str | None = None
     import_path: str | None = None
     version_attr: str | None = None
@@ -57,12 +61,15 @@ _NPM = NpmGlobal()
 
 
 ENGINE_LIFECYCLES: dict[str, EngineLifecycle] = {
+    # #688 — Pi runs from an AnyGarden-managed prefix pinned to the version
+    # the agent adapter was verified against; the global ``pi`` is ignored
+    # unless ANYGARDEN_PI_USE_PATH=1.
     "pi-cli": EngineLifecycle(
         engine="pi-cli",
-        detect=DetectSpec(mode="binary", binary="pi"),
-        channel=_NPM,
+        detect=DetectSpec(mode="managed", binary="pi"),
+        channel=NpmManagedPrefix(managed.PI_PINNED_VERSION, managed.managed_prefix),
         # Verified from the installed Pi 0.85.1 package manifest.
-        package="@earendil-works/pi-coding-agent",
+        package=managed.PI_PACKAGE,
     ),
     "codex-cli": EngineLifecycle(
         engine="codex-cli",

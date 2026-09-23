@@ -18,6 +18,8 @@ package name, source, or shell fragment.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -124,6 +126,46 @@ class NpmGlobal:
         # System-global install; the interpreter path is irrelevant. ``@latest``
         # lets npm resolve the newest published version.
         return ["npm", "install", "-g", f"{package}@latest"]
+
+
+class NpmManagedPrefix:
+    """AnyGarden-owned, version-pinned npm install (#688).
+
+    ``npm install --prefix <prefix> <pkg>@<pinned>``. The "latest" version is
+    the pinned one — the adapter is verified against exactly that release —
+    so the registry is never consulted and *Update engine* can only (re)install
+    the supported version, never move the machine to an untested ``@latest``.
+    ``prefix`` is resolved lazily so the managed root follows the environment.
+    """
+
+    kind = "npm-managed"
+
+    def __init__(self, pinned_version: str, prefix: Callable[[], Path]):
+        self.pinned_version = pinned_version
+        self._prefix = prefix
+
+    async def latest_version(
+        self, package: str, *, client: httpx.AsyncClient | None = None
+    ) -> str | None:
+        return self.pinned_version
+
+    def normalize(self, raw: str) -> str | None:
+        return _first_version(raw)
+
+    def update_argv(self, package: str, python: str | None = None) -> list[str]:
+        prefix = self._prefix()
+        # npm expects the prefix to exist; creating it is the only side
+        # effect and is confined to the managed root.
+        prefix.mkdir(parents=True, exist_ok=True)
+        return [
+            "npm",
+            "install",
+            "--prefix",
+            str(prefix),
+            "--no-audit",
+            "--no-fund",
+            f"{package}@{self.pinned_version}",
+        ]
 
 
 class PipVenv:

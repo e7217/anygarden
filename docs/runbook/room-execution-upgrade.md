@@ -96,15 +96,44 @@ When the installed CLI is outside this list, the turn fails before any model
 request with `UNSUPPORTED_RUNTIME`. The activity log names both versions, e.g.
 `UNSUPPORTED_RUNTIME: pi-cli 0.87.1 is not supported; this build requires 0.85.1`,
 and the *Create Agent on Machine* dialog warns when the machine's detected version
-does not match. Note that the machine's *Update engine* action installs `@latest`,
-which can move a CLI off the supported version.
-
-To pin the supported version on a node:
+does not match. For Codex, the machine's *Update engine* action installs `@latest`,
+which can move the CLI off the supported version. Pin it with:
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent@0.85.1
 npm install -g @openai/codex@0.155.1
 ```
+
+### Managed Pi install (#688)
+
+Pi agents no longer use the `pi` that happens to be first on `PATH`. The machine
+daemon owns a private, version-pinned install:
+
+```
+~/.anygarden/engines/pi-cli/<pinned version>/node_modules/.bin/pi
+```
+
+- **Provisioning.** At daemon start, if the managed install is missing and the
+  machine already has a global `pi` (or `ANYGARDEN_MANAGED_PI=1`), the daemon
+  runs `npm install --prefix <that dir> @earendil-works/pi-coding-agent@<pinned>`.
+  A failure is only logged; the daemon still starts. `ANYGARDEN_MANAGED_PI=0`
+  disables this.
+- **Update engine** for Pi (re)installs the pinned version into the managed
+  prefix. It never installs `@latest` globally, and it doesn't touch the
+  operator's own `pi`.
+- **Detection** advertises `pi-cli` from the managed install. A global `pi` is
+  considered only with `ANYGARDEN_PI_USE_PATH=1` in the daemon environment.
+- **Agents** receive the managed path as `ANYGARDEN_PI_EXECUTABLE`. Without it,
+  and without `ANYGARDEN_PI_USE_PATH=1`, a Pi agent refuses to start with
+  "managed Pi install is missing". There is no silent `PATH` fallback. Setting
+  `ANYGARDEN_PI_EXECUTABLE` in the daemon environment overrides the managed path.
+- **Air-gapped nodes.** Pre-seed the prefix, for example
+  `npm install --prefix ~/.anygarden/engines/pi-cli/0.85.1 <local tarball or registry package>`,
+  or point `ANYGARDEN_MANAGED_ENGINES_DIR` at a pre-populated root.
+
+Operators can upgrade their own global `pi` freely. Moving agents to a new Pi
+release is a code change: bump `PI_PINNED_VERSION` (machine) and `ENGINE_VERSION`
+(agent) together, which a test enforces. The new version installs into its own
+directory next to the old one.
 
 Supporting a new CLI release is a code change: verify the JSON event stream,
 isolation flags and config schema against the adapter, then add the version to

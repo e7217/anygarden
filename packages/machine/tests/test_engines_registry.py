@@ -17,7 +17,7 @@ def test_all_supported_engines_present():
     "engine,kind,package",
     [
         ("codex-cli", "npm", "@openai/codex"),
-        ("pi-cli", "npm", "@earendil-works/pi-coding-agent"),
+        ("pi-cli", "npm-managed", "@earendil-works/pi-coding-agent"),
     ],
 )
 def test_channel_and_package(engine, kind, package):

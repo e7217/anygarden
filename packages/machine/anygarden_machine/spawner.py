@@ -16,6 +16,10 @@ from typing import Any, Callable, Coroutine, Optional
 import psutil
 import structlog
 
+from anygarden_machine.engines.managed import (
+    EXECUTABLE_ENV as MANAGED_PI_EXECUTABLE_ENV,
+    managed_pi_executable,
+)
 from anygarden_machine.agent_dir import (
     AgentFilePathError,
     validate_agent_file_path,
@@ -932,6 +936,18 @@ class Spawner:
         # special-case the missing key.
         env["ANYGARDEN_AGENT_PERMISSION_LEVEL"] = msg.permission_level or "standard"
         env["ANYGARDEN_AGENT_GENERATION"] = str(msg.generation)
+
+        # #688 — Pi agents run the machine-managed, version-pinned install
+        # rather than whatever ``pi`` is first on PATH. An operator-set
+        # ANYGARDEN_PI_EXECUTABLE in the daemon env is an explicit override
+        # and wins; without either, the agent refuses to start unless
+        # ANYGARDEN_PI_USE_PATH=1.
+        if msg.engine == "pi-cli":
+            managed_pi = managed_pi_executable()
+            if managed_pi is not None:
+                env.setdefault(MANAGED_PI_EXECUTABLE_ENV, str(managed_pi))
+        else:
+            env.pop(MANAGED_PI_EXECUTABLE_ENV, None)
 
         # Issue #493 — per-agent turn timeout. Unlike permission_level this is
         # set ONLY when present: the engine adapter's resolution chain treats a
