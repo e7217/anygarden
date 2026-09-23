@@ -27,7 +27,12 @@ from pathlib import Path
 
 from .codex import ProcessTree
 from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
-from .contracts import Capabilities, Invocation, RuntimeResult
+from .contracts import (
+    Capabilities,
+    Invocation,
+    RuntimeResult,
+    unsupported_version_detail,
+)
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
@@ -35,6 +40,9 @@ MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
 ENGINE = "pi-cli"
 ENGINE_VERSION = "0.85.1"
+# Exact versions the adapter was verified against (event stream, isolation
+# flags, models.json schema, PI_* env names). Never prefix-match.
+SUPPORTED_VERSIONS = (ENGINE_VERSION,)
 
 
 class PiRuntime:
@@ -42,6 +50,9 @@ class PiRuntime:
         if not executable.is_absolute():
             raise ValueError("Pi executable must be an absolute local path")
         self.executable = executable
+        # Last ``--version`` output seen by the gate (non-secret), used to
+        # explain an UNSUPPORTED_RUNTIME failure to the operator (#687).
+        self.observed_version: str | None = None
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
@@ -120,6 +131,11 @@ class PiRuntime:
         )
         return env
 
+    def unsupported_detail(self) -> str:
+        return unsupported_version_detail(
+            ENGINE, self.observed_version, SUPPORTED_VERSIONS
+        )
+
     async def _version_matches(
         self, invocation: Invocation, env: dict[str, str]
     ) -> bool:
@@ -138,12 +154,16 @@ class PiRuntime:
             # Parse to a version tuple and compare EXACTLY: a substring
             # containment check would admit unsupported ``0.85.10``.
             out = stdout.decode(errors="replace").strip().removeprefix("pi ").strip()
+            self.observed_version = out[:64] or None
             try:
                 observed = tuple(int(part) for part in out.split("."))
-                expected = tuple(int(part) for part in ENGINE_VERSION.split("."))
+                supported = {
+                    tuple(int(part) for part in version.split("."))
+                    for version in SUPPORTED_VERSIONS
+                }
             except ValueError:
                 return False
-            return proc.returncode == 0 and observed == expected
+            return proc.returncode == 0 and observed in supported
         finally:
             if proc.returncode is None:
                 proc.kill()

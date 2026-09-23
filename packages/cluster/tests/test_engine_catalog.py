@@ -183,7 +183,16 @@ class TestEngineModelsEndpoint:
         # #506 — codex-cli is the recommended (non-deprecated) engine.
         assert data["deprecated"] is False
         assert data["deprecation_note"] is None
+        assert data["supported_versions"] == ["0.154.0", "0.155.1"]
 
+    @pytest.mark.asyncio
+    async def test_pi_cli_exposes_supported_versions(self, catalog_env) -> None:
+        resp = await catalog_env["client"].get(
+            "/api/v1/agents/engines/pi-cli/models",
+            headers={"Authorization": f"Bearer {catalog_env['token']}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["supported_versions"] == ["0.85.1"]
 
     @pytest.mark.asyncio
     async def test_get_unknown_engine_returns_404(self, catalog_env) -> None:
@@ -224,3 +233,11 @@ class TestEngineModelsEndpoint:
         # GPT-5.6 tiers surface the new ``max`` level.
         sol = next(m for m in data["models"] if m["id"] == "gpt-5.6-sol")
         assert "max" in sol["reasoning_levels"]
+
+
+def test_supported_versions_match_agent_adapters() -> None:
+    """#687 — the catalog mirrors the adapters' exact version gates."""
+    pi = pytest.importorskip("anygarden_agent.runtime.execution.pi")
+    codex = pytest.importorskip("anygarden_agent.runtime.execution.codex")
+    assert ENGINE_CATALOG["pi-cli"].supported_versions == pi.SUPPORTED_VERSIONS
+    assert ENGINE_CATALOG["codex-cli"].supported_versions == codex.SUPPORTED_VERSIONS

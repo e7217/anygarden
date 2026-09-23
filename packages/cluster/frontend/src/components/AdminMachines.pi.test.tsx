@@ -9,9 +9,11 @@ const mocks = vi.hoisted(() => ({
   fetchEngineCatalog: vi.fn().mockResolvedValue({
     engine: 'pi-cli', default_model: '', reasoning_levels: [],
     models: [{ id: 'glm-5.3-flash', label: 'GLM 5.3 Flash (zai)', reasoning_levels: [] }],
+    supported_versions: ['0.85.1'],
   }),
   machines: [{ id: 'm1', name: 'Test machine', hostname: 'test', status: 'online' }],
   agents: [], availableEngines: [{ engine: 'pi-cli', machine_count: 1 }],
+  piVersion: '0.85.1',
 }))
 vi.mock('@/hooks/useMachines', () => ({ useMachines: () => ({ machines: mocks.machines }) }))
 vi.mock('@/hooks/useAgents', () => ({ useAgents: () => ({
@@ -20,14 +22,14 @@ vi.mock('@/hooks/useAgents', () => ({ useAgents: () => ({
 }) }))
 vi.mock('@/hooks/useRooms', () => ({ useRooms: () => ({ projects: [], rooms: {}, fetchAgentDMs: mocks.fetchAgentDMs }) }))
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn(async (path: string) => ({
-  ok: true, json: async () => path.endsWith('/engines') ? [{ engine: 'pi-cli', version: '0.85.1' }] : [],
+  ok: true, json: async () => path.endsWith('/engines') ? [{ engine: 'pi-cli', version: mocks.piVersion }] : [],
 })) }))
 vi.mock('@/components/AgentSettingsDialog', () => ({ default: () => null }))
 vi.mock('@/components/AgentSettingsMenu', () => ({ default: () => null }))
 vi.mock('@/components/EntityAvatar', () => ({ EntityAvatar: () => null }))
 
 import AdminMachines from './AdminMachines'
-afterEach(() => { cleanup(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.piVersion = '0.85.1' })
 
 it('requires an explicit provider and submits custom provider/model from Pi creation', async () => {
   render(<AdminMachines />)
@@ -46,4 +48,19 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
     name: 'Local worker', engine: 'pi-cli', provider: 'my-local', model: 'local-model-v2', rooms: [],
   }))
+})
+
+it('warns before creation when the machine Pi version fails the adapter gate (#687)', async () => {
+  mocks.piVersion = '0.87.1'
+  render(<AdminMachines />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await screen.findByLabelText('Provider (required)')
+  expect(await screen.findByText(/has pi-cli 0\.87\.1, but this build requires 0\.85\.1/)).toBeInTheDocument()
+})
+
+it('shows no version warning for the supported Pi version', async () => {
+  render(<AdminMachines />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await screen.findByLabelText('Provider (required)')
+  expect(screen.queryByText(/but this build requires/)).not.toBeInTheDocument()
 })

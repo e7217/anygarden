@@ -54,6 +54,15 @@ class EngineCatalogEntry:
     record.
     """
 
+    supported_versions: tuple[str, ...] = ()
+    """#687 — exact CLI versions the agent adapter's version gate accepts.
+
+    Mirrors ``SUPPORTED_VERSIONS`` in ``anygarden_agent.runtime.execution``
+    (kept in sync by test; the server does not depend on the agent
+    package). The admin UI compares a machine's detected engine version
+    against this list to warn before an agent fails with
+    ``UNSUPPORTED_RUNTIME``. Empty means "no version gate"."""
+
     deprecation_note: Optional[str] = None
     """Human-readable rationale shown alongside the legacy badge.
 
@@ -71,6 +80,7 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
         default_model="",
         models=(EngineModel(id="glm-5.3-flash", label="GLM 5.3 Flash (zai)"),),
         reasoning_levels=(),
+        supported_versions=("0.85.1",),
     ),
     # Codex CLI (exec) engine. Reasoning levels come from the backend's
     # own validation error (none/minimal/low/medium/high/xhigh/max — see
@@ -138,6 +148,7 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             ),
         ),
         reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+        supported_versions=("0.154.0", "0.155.1"),
     ),
     # Claude Code: ``--effort`` (session flag) accepts
     # ``low/medium/high/xhigh/max``. There is no ``disabled`` option at

@@ -16,6 +16,7 @@ import {
   DoorOpen, FileCog, History, Loader2, ArrowUpCircle,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { unsupportedEngineVersionWarning } from '@/lib/engineVersion'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -274,6 +275,15 @@ export default function AdminMachines() {
   )
 
   const preferredMachineEngine = sortedMachineEngines[0]?.engine ?? ''
+  // #687 — warn before creation when the machine's CLI version would trip
+  // the adapter's exact version gate (UNSUPPORTED_RUNTIME on every turn).
+  const agentEngineVersionWarning = agentEngine && agentCatalog?.engine === agentEngine
+    ? unsupportedEngineVersionWarning(
+        agentEngine,
+        machineEngines.find(e => e.engine === agentEngine)?.version,
+        agentCatalog.supported_versions,
+      )
+    : null
   const selectedAgentEngineMeta = agentEngine
     ? engineMetadataById.get(agentEngine)
     : undefined
@@ -1049,6 +1059,11 @@ export default function AdminMachines() {
                   Deprecated engine. OpenHands is recommended for new agents.
                 </p>
               ) : null}
+              {agentEngineVersionWarning && (
+                <p role="status" className="text-xs text-[var(--color-warning)]">
+                  {agentEngineVersionWarning}
+                </p>
+              )}
             </div>
             {agentEngine === 'pi-cli' && (
               <>

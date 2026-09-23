@@ -73,6 +73,8 @@ export interface EngineCatalog {
   reasoning_levels: string[];
   deprecated?: boolean;
   deprecation_note?: string | null;
+  // #687 — exact CLI versions the agent adapter accepts (empty = no gate).
+  supported_versions?: string[];
 }
 
 export interface AvailableEngine {
