@@ -155,6 +155,8 @@ export function useAgents() {
     reasoning_effort?: string;
     model?: string;
     provider?: string;
+    // #685 — secret-free direct endpoint stored with the agent.
+    endpoint?: { base_url: string; api_protocol: 'responses' | 'chat-completions' };
   }) => {
     const resp = await apiFetch('/api/v1/agents', {
       method: 'POST',

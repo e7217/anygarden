@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
-from typing import TYPE_CHECKING, Annotated, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import AfterValidator, BaseModel, Field, model_validator
@@ -27,6 +27,7 @@ from anygarden.db.models import (
 )
 from anygarden.dependencies import get_admin_identity, get_db
 from anygarden.engines import get_engine_entry
+from anygarden.engines.endpoints import EndpointConfiguration
 from anygarden.engines.validation import (
     PROVIDER_PATTERN,
     engine_runtime_error,
@@ -119,6 +120,13 @@ class AgentCreate(BaseModel):
     # Capped at 200 chars to keep the per-turn token cost predictable
     # when the agent runtime appends it inline to every system prompt.
     description: Optional[str] = Field(default=None, max_length=200)
+    # #685 — optional direct endpoint persisted with the agent in one
+    # transaction: ``{"base_url": ..., "api_protocol": ...}``. Provider and
+    # model come from the fields above. Kept loosely typed and validated in
+    # the handler so a malformed (possibly credential-bearing) URL is never
+    # reflected in a field-level 422. Secrets never travel here — API keys
+    # use the write-only ``/agents/{id}/endpoint/credentials`` endpoint.
+    endpoint: Optional[dict[str, Any]] = None
 
     @model_validator(mode="after")
     def require_pi_provider(self) -> AgentCreate:
@@ -339,6 +347,52 @@ class AgentFileDelete(BaseModel):
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
+async def _validated_create_endpoint(
+    body: AgentCreate, db: AsyncSession, request: Request
+) -> Optional[EndpointConfiguration]:
+    """#685 — validate a create-time direct endpoint before any row exists."""
+    if body.endpoint is None:
+        return None
+    try:
+        if set(body.endpoint) - {"base_url", "api_protocol"}:
+            raise ValueError
+        config = EndpointConfiguration(
+            provider=body.provider or "",
+            model=body.model or "",
+            base_url=body.endpoint.get("base_url"),
+            api_protocol=body.endpoint.get("api_protocol"),
+        )
+        config.validate_engine(body.engine)
+    except ValueError:
+        # pydantic.ValidationError is a ValueError; never echo the input.
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Invalid direct endpoint: a provider, model, HTTP(S) base URL "
+                "(no credentials, query or fragment) and supported API protocol "
+                "are required. Codex requires Responses."
+            ),
+        ) from None
+    from anygarden.scheduler.placement import (
+        NoSuitableMachineError,
+        select_machine_for,
+    )
+
+    try:
+        await select_machine_for(
+            body.engine,
+            db,
+            request.app.state.machine_bus,
+            required_control_capabilities={"direct_endpoint_v1"},
+        )
+    except NoSuitableMachineError:
+        raise HTTPException(
+            status_code=409,
+            detail="No available machine supports direct endpoints; update or connect a machine with direct_endpoint_v1 capability",
+        ) from None
+    return config
+
+
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AgentOut)
 async def create_agent(
     body: AgentCreate,
@@ -379,6 +433,8 @@ async def create_agent(
             capability=Capability.MEMBER_MANAGE,
         )
 
+    endpoint = await _validated_create_endpoint(body, db, request)
+
     agent = Agent(
         name=body.name,
         engine=body.engine,
@@ -393,6 +449,8 @@ async def create_agent(
         restart_policy=body.restart_policy,
         runtime=body.runtime,
         description=body.description,
+        base_url=endpoint.base_url if endpoint else None,
+        api_protocol=endpoint.api_protocol if endpoint else None,
     )
     db.add(agent)
     await db.flush()
