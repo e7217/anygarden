@@ -77,31 +77,27 @@ checks are separate evidence; fake CLI HTTP tests do not demonstrate an installe
 CLI completing a model turn. No real provider, deployment, production database
 write or merge is part of this change.
 
-## Supported CLI versions
+## CLI version handling
 
-Each adapter runs `<cli> --version` before every turn and accepts only exact,
-verified versions (no prefix matching — `0.85.10` is not `0.85.1`):
+The Pi adapter accepts an exact verified version. The Codex adapter reads
+`codex --version` once when an agent starts, uses it to separate session state,
+and attempts execution regardless of the reported version:
 
 | Engine | Supported versions | Package |
 |---|---|---|
 | `pi-cli` | `0.85.1` | `@earendil-works/pi-coding-agent` |
-| `codex-cli` | `0.154.0`, `0.155.1` | `@openai/codex` |
+| `codex-cli` | No version gate; latest CLI is attempted | `@openai/codex` |
 
 The source of truth is `SUPPORTED_VERSIONS` in
 `anygarden_agent/runtime/execution/{pi,codex}.py`; the server catalog mirrors it
 (`GET /api/v1/agents/engines/{engine}/models` → `supported_versions`) and a test
 keeps the two in sync.
 
-When the installed CLI is outside this list, the turn fails before any model
-request with `UNSUPPORTED_RUNTIME`. The activity log names both versions, e.g.
-`UNSUPPORTED_RUNTIME: pi-cli 0.87.1 is not supported; this build requires 0.85.1`,
-and the *Create Agent on Machine* dialog warns when the machine's detected version
-does not match. For Codex, the machine's *Update engine* action installs `@latest`,
-which can move the CLI off the supported version. Pin it with:
-
-```bash
-npm install -g @openai/codex@0.155.1
-```
+An unsupported Pi version fails before a model request with
+`UNSUPPORTED_RUNTIME`, and the *Create Agent on Machine* dialog warns about it.
+Codex version drift does not block a turn; an incompatible CLI command or event
+stream is reported through the ordinary engine failure path. The machine's
+*Update engine* action installs the latest Codex CLI.
 
 ### Managed Pi install (#688)
 
@@ -135,6 +131,6 @@ release is a code change: bump `PI_PINNED_VERSION` (machine) and `ENGINE_VERSION
 (agent) together, which a test enforces. The new version installs into its own
 directory next to the old one.
 
-Supporting a new CLI release is a code change: verify the JSON event stream,
-isolation flags and config schema against the adapter, then add the version to
-`SUPPORTED_VERSIONS` (and the catalog entry).
+For Pi, supporting a new release remains a pinned-version code change. For
+Codex, test new releases against the JSON event stream, isolation flags and
+config schema; an untested version can still be attempted.

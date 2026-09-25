@@ -298,6 +298,9 @@ class TestRosterRefreshFrame:
             },
         )
         suffix = client.compose_roster_suffix("room-a")
+        assert "Current room ID: room-a" in suffix
+        assert "participant IDs below are only for assignee_pid" in suffix
+        assert "routing token in the final reply" in suffix
         assert "new-bot" in suffix
         assert "새 소개문" in suffix
         assert "old-bot" not in suffix

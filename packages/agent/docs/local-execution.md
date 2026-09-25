@@ -5,10 +5,11 @@ ChatClient, joining a room WebSocket, claiming a task, or deciding a retry.
 It implements the #587 contract at PR596 `ac7667718f26a78e4a4b686011ee456ab074c9b5`
 (the execution/result contract is unchanged from `7ff28be`).
 
-The first backend targets **POSIX and Codex CLI 0.154.0**. Other versions/platforms
-fail explicitly. This is local protocol/process compatibility, not evidence of
-provider authentication, model access, live AI success, or two-node acceptance.
-Historical CLI 0.146.0 fixtures do not certify the selected version.
+The backend requires **POSIX**. It records the Codex CLI version for session
+separation but attempts execution with any installed version. Command or event
+stream incompatibility fails through the normal engine result path. This is
+local protocol/process compatibility, not evidence of provider authentication,
+model access, live AI success, or two-node acceptance.
 
 ## Node integration
 

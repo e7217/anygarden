@@ -1,4 +1,4 @@
-"""Codex 0.154.0 subprocess boundary, independent of ChatClient and room WS."""
+"""Codex subprocess boundary, independent of ChatClient and room WS."""
 
 from __future__ import annotations
 
@@ -8,18 +8,13 @@ import os
 import signal
 import tempfile
 from collections.abc import Callable
-from dataclasses import replace
 from contextvars import ContextVar
+from dataclasses import replace
 from pathlib import Path
 
 import psutil
 
-from .contracts import (
-    Capabilities,
-    Invocation,
-    RuntimeResult,
-    unsupported_version_detail,
-)
+from .contracts import Capabilities, Invocation, RuntimeResult
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
@@ -27,9 +22,9 @@ _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=
 MAX_TEXT = 1_048_576
 MAX_LINE = 1_048_576
 ENGINE = "codex-cli"
-# Verified boundary versions: 0.154.0 (PR600 evidence) and 0.155.1 (installed
-# on slock-bot 2026-09-19; same subprocess contract). Others fail closed.
-SUPPORTED_VERSIONS = ("0.154.0", "0.155.1")
+# An empty catalog list means Codex versions are observed, not gated. CLI
+# compatibility is determined by the actual exec/result protocol.
+SUPPORTED_VERSIONS: tuple[str, ...] = ()
 
 
 class ProcessTree:
@@ -108,15 +103,14 @@ class CodexRuntime:
         if not executable.is_absolute():
             raise ValueError("Codex executable must be an absolute local path")
         self.executable = executable
-        # Last ``--version`` output seen by the gate (#687); non-secret.
+        # Observed once for session fencing and diagnostics; never a gate.
         self.observed_version: str | None = None
+        self._version_checked = False
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(cancel=os.name == "posix")
-
-    def unsupported_detail(self) -> str:
-        return unsupported_version_detail(
-            ENGINE, self.observed_version, SUPPORTED_VERSIONS
+        return Capabilities(
+            engine_version=self.observed_version or "unknown",
+            cancel=os.name == "posix",
         )
 
     def command(
@@ -167,24 +161,31 @@ class CodexRuntime:
         env["HOME"] = str(invocation.runtime_home)
         return env
 
-    async def _version_matches(
-        self, invocation: Invocation, env: dict[str, str]
-    ) -> bool:
-        proc = await asyncio.create_subprocess_exec(
-            str(self.executable),
-            "--version",
-            cwd=invocation.workspace,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
+    async def observe_version(self, cwd: Path, env: dict[str, str]) -> None:
+        """Read the CLI version once without preventing an execution attempt."""
+        if self._version_checked:
+            return
+        self._version_checked = True
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                str(self.executable),
+                "--version",
+                cwd=cwd,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except OSError:
+            return
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
-            out = stdout.decode(errors="replace").strip()
-            self.observed_version = out.removeprefix("codex-cli ").strip()[:64] or None
-            return proc.returncode == 0 and out in {
-                f"codex-cli {version}" for version in SUPPORTED_VERSIONS
-            }
+            if proc.returncode == 0:
+                out = stdout.decode(errors="replace").strip()
+                self.observed_version = (
+                    out.removeprefix("codex-cli ").strip()[:64] or None
+                )
+        except TimeoutError:
+            pass
         finally:
             if proc.returncode is None:
                 proc.kill()
@@ -203,12 +204,9 @@ class CodexRuntime:
             return RuntimeResult("failed", "not_started", "UNSUPPORTED_RUNTIME")
         env = self.environment(invocation)
         try:
-            if not await self._version_matches(invocation, env):
-                return RuntimeResult("failed", "not_started", "UNSUPPORTED_RUNTIME")
+            await self.observe_version(invocation.workspace, env)
         except asyncio.CancelledError:
             return RuntimeResult("cancelled", "not_started", "cancelled")
-        except (TimeoutError, OSError):
-            return RuntimeResult("failed", "not_started", "UNSUPPORTED_RUNTIME")
 
         if not authorized():
             return RuntimeResult("failed", "not_started", "POLICY_DENIED")

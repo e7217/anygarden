@@ -28,12 +28,11 @@ from anygarden_agent.runtime.execution.room import (
 )
 from anygarden_agent.runtime.handler_wrapper import (
     EngineCancelledError,
-    EngineTaskCancelledError,
     EngineError,
+    EngineTaskCancelledError,
     EngineTimeoutError,
     EngineTurn,
 )
-
 
 PI_EXECUTABLE_ENV = "ANYGARDEN_PI_EXECUTABLE"
 PI_PATH_OPT_IN_ENV = "ANYGARDEN_PI_USE_PATH"
@@ -107,6 +106,8 @@ class RoomExecutionAdapter(CodexCliAdapter):
             self._environment["CODEX_HOME"] = home
         runtime_cls = RoomPiRuntime if self._engine == "pi-cli" else RoomCodexRuntime
         runtime = runtime_cls(Path(self._codex_path).absolute())
+        if self._engine == "codex-cli":
+            await runtime.observe_version(self._root, self._environment)
         self._runtime = runtime
         self._runtime_version = runtime.capabilities().engine_version
         self._manager = LocalExecutionManager(
@@ -230,7 +231,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
         )
         # Receipt codes only: no provider stderr or credentials in logs/notices.
         reason = receipt.reason or "runtime_error"
-        if reason == "UNSUPPORTED_RUNTIME":
+        if reason == "UNSUPPORTED_RUNTIME" and self._engine == "pi-cli":
             # #687 — name the observed vs required CLI version (non-secret)
             # so a version drift is not mistaken for an endpoint failure.
             reason = f"{reason}: {self._runtime.unsupported_detail()}"

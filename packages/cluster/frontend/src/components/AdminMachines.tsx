@@ -288,8 +288,8 @@ export default function AdminMachines() {
   )
 
   const preferredMachineEngine = sortedMachineEngines[0]?.engine ?? ''
-  // #687 — warn before creation when the machine's CLI version would trip
-  // the adapter's exact version gate (UNSUPPORTED_RUNTIME on every turn).
+  // #687 — warn before creation for engines that publish an exact version gate.
+  // Codex publishes an empty list because it attempts unlisted versions.
   const agentEngineVersionWarning = agentEngine && agentCatalog?.engine === agentEngine
     ? unsupportedEngineVersionWarning(
         agentEngine,

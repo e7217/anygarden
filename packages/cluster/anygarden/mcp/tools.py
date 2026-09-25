@@ -165,7 +165,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "create_task",
         "description": (
-            "Create a new task in a room you orchestrate, optionally "
+            "Create a new task in a room you orchestrate. Use the current "
+            "room ID from your room context for room_id, never your agent "
+            "ID or a participant ID. Optionally "
             "assigning it to one of the room's agent participants. Call "
             "this multiple times in a single turn to break a complex "
             "user request into independently delegated units of work. "
