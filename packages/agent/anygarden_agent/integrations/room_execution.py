@@ -110,6 +110,28 @@ class RoomExecutionAdapter(CodexCliAdapter):
             await runtime.observe_version(self._root, self._environment)
         self._runtime = runtime
         self._runtime_version = runtime.capabilities().engine_version
+        if self._engine == "pi-cli" and self._launch.native_auth is not None:
+            # Run the same isolated configuration and Pi auth resolver used by
+            # turns before this process joins a room or reports ready.
+            scope = SessionScope(
+                "local-preflight", self._identity(), "local-preflight",
+                "startup", None, str(self._root), 0, 0,
+                engine="pi-cli", engine_version=self._runtime_version,
+            )
+            preflight = self._launch.bind(RoomInvocation(
+                execution_id="startup-preflight", scope=scope,
+                prompt="preflight", workspace=self._root,
+                runtime_home=self._root, environment=self._environment,
+            ))
+            reason = await runtime.preflight(preflight)
+            if reason:
+                guidance = {
+                    "AUTH_MISSING": "add this agent's Pi provider API key in agent settings",
+                    "UNKNOWN_PROVIDER": "check the selected Pi provider and model",
+                    "AUTH_CHECK_FAILED": "check this agent's Pi provider/model authentication settings",
+                    "UNSUPPORTED_RUNTIME": runtime.unsupported_detail(),
+                }.get(reason, "check Pi agent settings")
+                raise ValueError(f"{reason}: {guidance}")
         self._manager = LocalExecutionManager(
             self._root / ".anygarden-execution" / self._engine,
             runtime,

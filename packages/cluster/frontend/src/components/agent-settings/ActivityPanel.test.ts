@@ -10,6 +10,9 @@ describe('activityErrorMessage', () => {
   it('explains classified engine failures without exposing raw details', () => {
     expect(activityErrorMessage('ENGINE_AUTH_ERROR')).toContain('인증 설정을 확인하세요')
     expect(activityErrorMessage('PI_PROVIDER_ERROR')).toContain('Pi Provider 설정을 확인하세요')
+    expect(activityErrorMessage('AUTH_MISSING')).toContain('API 키가 없습니다')
+    expect(activityErrorMessage('UNKNOWN_PROVIDER')).toContain('공급자를 찾을 수 없습니다')
+    expect(activityErrorMessage('AUTH_CHECK_FAILED')).toContain('인증 확인에 실패했습니다')
     expect(activityErrorMessage('ENGINE_ERROR')).toBe('ENGINE_ERROR')
   })
 })

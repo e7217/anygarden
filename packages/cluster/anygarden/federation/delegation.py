@@ -44,9 +44,14 @@ TASK_STATUS = {
 TERMINAL = {"completed", "failed", "rejected", "cancelled"}
 FAILURE_CODES = {
     "ENGINE_ERROR",
+    "ENGINE_AUTH_ERROR",
+    "PI_PROVIDER_ERROR",
     "TIMEOUT_STOPPED",
     "UNSUPPORTED_RUNTIME",
     "POLICY_DENIED",
+    "AUTH_MISSING",
+    "UNKNOWN_PROVIDER",
+    "AUTH_CHECK_FAILED",
 }
 
 

@@ -36,6 +36,7 @@ CRASHED = "crashed"
 NO_ROOM = "no_room"
 INVALID_PROVIDER = "invalid_provider"
 INVALID_ENDPOINT = "invalid_endpoint"
+INVALID_PI_AUTH = "invalid_pi_auth"
 ENGINE_REMOVED = "engine_removed"
 INVALID_RUNTIME = "invalid_runtime"
 
@@ -48,6 +49,7 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         NO_ROOM,
         INVALID_PROVIDER,
         INVALID_ENDPOINT,
+        INVALID_PI_AUTH,
         ENGINE_REMOVED,
         INVALID_RUNTIME,
     }
@@ -82,6 +84,9 @@ def render_unavailable_message(
 
     if code == INVALID_ENDPOINT:
         return "직접 모델 연결 설정이나 실행 환경을 확인해야 합니다. 관리자에게 설정 확인을 요청하세요."
+
+    if code == INVALID_PI_AUTH:
+        return "Pi 인증 설정을 확인해야 합니다. 관리자에게 에이전트별 API 키 등록을 요청하세요."
 
     if code == NO_MACHINE_FOR_ENGINE:
         engine = d.get("engine")

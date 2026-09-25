@@ -85,12 +85,13 @@ def staged_environment() -> dict[str, str]:
     from anygarden_agent import secrets
 
     from .endpoint import CHILD_KEY, CONFIG_KEY, INPUT_KEY
+    from .pi_auth import CONFIG_KEY as PI_CONFIG_KEY, INPUT_KEY as PI_INPUT_KEY
 
     # Preserve the existing local engine configuration, but never pass the
     # server transport identity or private endpoint descriptor into a tool.
     env = secrets.env_with_secrets()
     for key in list(env):
-        if key in {CHILD_KEY, CONFIG_KEY, INPUT_KEY} or (
+        if key in {CHILD_KEY, CONFIG_KEY, INPUT_KEY, PI_CONFIG_KEY, PI_INPUT_KEY} or (
             key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_"))
             and key != "ANYGARDEN_AGENT_TOKEN"  # staged self-MCP credential
         ):

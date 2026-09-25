@@ -45,6 +45,8 @@ from anygarden.db.models import (
     WorkspaceAttachment,
 )
 from anygarden.engines.endpoints import build_direct_engine_secrets
+from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
+from anygarden.engines.pi_auth import build_pi_native_engine_secrets
 from anygarden.engines.validation import (
     engine_runtime_error,
     pi_provider_error,
@@ -242,6 +244,15 @@ class AgentLifecycle:
                     _mark_unavailable(agent, "invalid_endpoint")
                     await db.commit()
                     return
+                try:
+                    await build_pi_native_engine_secrets(
+                        db, agent, getattr(self._mcp_template_service, "_secrets", None)
+                    )
+                except ValueError:
+                    agent.last_crash_reason = "Pi provider credential is missing or unavailable; add an API key in agent settings"
+                    _mark_unavailable(agent, "invalid_pi_auth")
+                    await db.commit()
+                    return
 
                 now = datetime.now(timezone.utc)
                 lease_active = bool(
@@ -327,9 +338,13 @@ class AgentLifecycle:
                             agent.engine,
                             db,
                             self._machine_bus,
-                            required_control_capabilities={"direct_endpoint_v1"}
-                            if agent.base_url
-                            else None,
+                            required_control_capabilities=(
+                                {"direct_endpoint_v1"}
+                                if agent.base_url
+                                else {PI_AUTH_CAPABILITY}
+                                if agent.engine == "pi-cli"
+                                else None
+                            ),
                         )
                     except NoSuitableMachineError:
                         machine = None
@@ -341,6 +356,16 @@ class AgentLifecycle:
                 ):
                     agent.last_crash_reason = "Placed machine does not support direct_endpoint_v1; update it before restarting"
                     _mark_unavailable(agent, "invalid_endpoint")
+                    await db.commit()
+                    return
+                if (
+                    machine is not None
+                    and agent.engine == "pi-cli"
+                    and not agent.base_url
+                    and PI_AUTH_CAPABILITY not in (machine.control_capabilities or [])
+                ):
+                    agent.last_crash_reason = "Placed machine cannot enforce Pi native authentication; update it before restarting"
+                    _mark_unavailable(agent, "invalid_pi_auth")
                     await db.commit()
                     return
 
@@ -1526,6 +1551,11 @@ class AgentLifecycle:
             direct_secrets = await build_direct_engine_secrets(
                 db, agent, getattr(self._mcp_template_service, "_secrets", None)
             )
+            direct_secrets.update(
+                await build_pi_native_engine_secrets(
+                    db, agent, getattr(self._mcp_template_service, "_secrets", None)
+                )
+            )
             if agent.base_url:
                 machine = (
                     await db.get(Machine, agent.placed_on_machine_id)
@@ -1539,14 +1569,35 @@ class AgentLifecycle:
                         "Machine cannot enforce direct endpoint configuration"
                     )
         except ValueError:
-            agent.last_crash_reason = "Direct endpoint configuration, credential or machine capability unavailable; update agent settings"
-            _mark_unavailable(agent, "invalid_endpoint")
+            if agent.engine == "pi-cli" and not agent.base_url:
+                agent.last_crash_reason = "Pi provider credential is missing or unavailable; add an API key in agent settings"
+                _mark_unavailable(agent, "invalid_pi_auth")
+            else:
+                agent.last_crash_reason = "Direct endpoint configuration, credential or machine capability unavailable; update agent settings"
+                _mark_unavailable(agent, "invalid_endpoint")
             return {
                 "type": "sync_desired_state",
                 "agent_id": agent.id,
                 "desired_state": "stopped",
                 "generation": agent.generation,
             }
+        if agent.engine == "pi-cli" and not agent.base_url:
+            machine = (
+                await db.get(Machine, agent.placed_on_machine_id)
+                if agent.placed_on_machine_id
+                else None
+            )
+            if machine is None or PI_AUTH_CAPABILITY not in (
+                machine.control_capabilities or []
+            ):
+                agent.last_crash_reason = "Placed machine cannot enforce Pi native authentication; update it before restarting"
+                _mark_unavailable(agent, "invalid_pi_auth")
+                return {
+                    "type": "sync_desired_state",
+                    "agent_id": agent.id,
+                    "desired_state": "stopped",
+                    "generation": agent.generation,
+                }
         # Agent files
         file_rows = (
             (await db.execute(select(AgentFile).where(AgentFile.agent_id == agent.id)))
@@ -1707,6 +1758,7 @@ class AgentLifecycle:
             "memory_md": agent.memory_md,
             "files": files_map,
             "endpoint_configured": bool(agent.base_url),
+            "pi_auth_configured": agent.engine == "pi-cli" and not bool(agent.base_url),
             "engine_secrets": direct_secrets,
             "reasoning_effort": agent.reasoning_effort,
             "model": agent.model,

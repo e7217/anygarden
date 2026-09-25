@@ -76,6 +76,7 @@ class SpawnManifest:
     files: dict[str, str] = field(default_factory=dict)
     engine_secrets: dict[str, str] = field(default_factory=dict)
     endpoint_configured: bool = False
+    pi_auth_configured: bool = False
     # Issue #237 — DB snapshot of the agent's long-term memory. The
     # spawner writes this to ``<agent_dir>/memory/notes.md`` if the file
     # doesn't yet exist, preserving the runtime file when it does (the
@@ -845,6 +846,19 @@ class Spawner:
                 agent_id=agent_id,
                 error="Direct endpoint configuration unavailable; reconnect to the server before restarting",
             )
+        if msg.engine == "pi-cli" and not msg.endpoint_configured and not msg.pi_auth_configured:
+            return SpawnResult(
+                success=False, agent_id=agent_id,
+                error="Pi native authentication configuration is required; update or reconnect to the server",
+            )
+        if msg.pi_auth_configured and not (
+            msg.engine_secrets.get("AG_PI_NATIVE_AUTH_CONFIG")
+            and msg.engine_secrets.get("AG_PI_NATIVE_AUTH_KEY")
+        ):
+            return SpawnResult(
+                success=False, agent_id=agent_id,
+                error="Pi provider credential unavailable; reconnect to the server before restarting",
+            )
 
 
         if msg.workspace_attachment is not None:
@@ -1107,6 +1121,8 @@ class Spawner:
             cmd.extend(["--provider", msg.provider])
         if msg.endpoint_configured:
             cmd.append("--endpoint-configured")
+        if msg.pi_auth_configured:
+            cmd.append("--pi-auth-configured")
         if msg.model:
             cmd.extend(["--model", msg.model])
 

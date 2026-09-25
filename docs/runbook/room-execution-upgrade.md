@@ -22,6 +22,8 @@ Codex model retains the prior adapter default.
 
 Local Pi keeps settings/auth/models under the agent root `.pi/agent` and sessions
 under the agent root `sessions`; installation assets are resolved by Pi itself.
+Native API-key providers require [per-agent Pi authentication](pi-native-auth.md);
+a successful login in the machine user's default Pi directory is insufficient.
 Local skills, context files, prompt templates and extensions remain enabled.
 Restricted Pi turns select the read/grep/find/ls tool set. Pi does not provide an
 OS sandbox; this is not an external-workspace isolation guarantee. The common

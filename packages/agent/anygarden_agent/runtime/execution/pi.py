@@ -21,8 +21,8 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
-from dataclasses import replace
 from contextvars import ContextVar
+from dataclasses import replace
 from pathlib import Path
 
 from .codex import ProcessTree
@@ -34,6 +34,8 @@ from .contracts import (
 )
 from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .failure_feedback import classify_failure
+from .pi_auth import INPUT_KEY as PI_INPUT_KEY
+from .pi_auth import materialize_native_auth
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
@@ -100,8 +102,21 @@ class PiRuntime:
     def environment(invocation: Invocation) -> dict[str, str]:
         # Never inherit the node's ambient environment or home/auth/config.
         endpoint = validate_endpoint_invocation(invocation)
+        native_auth = getattr(invocation, "native_auth", None)
+        key = invocation.environment.get(PI_INPUT_KEY)
+        if bool(native_auth) != bool(key) or (
+            native_auth is not None
+            and (
+                invocation.scope.engine != ENGINE
+                or endpoint is not None
+                or native_auth.provider != invocation.provider
+            )
+        ):
+            raise ValueError("Pi provider credential does not match invocation")
+        materialize_native_auth(invocation.runtime_home, native_auth, key)
         materialize_pi_endpoint(invocation.runtime_home, endpoint)
         env = dict(invocation.environment)
+        env.pop(PI_INPUT_KEY, None)
         for key in env:
             if key.startswith(("ANYGARDEN_", "RAFT_", "SLOCK_")):
                 raise ValueError(
@@ -127,15 +142,76 @@ class PiRuntime:
         env.pop("PI_CODING_AGENT_DIR", None)
         agent_dir = invocation.runtime_home / ".pi" / "agent"
         env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-        env["PI_CODING_AGENT_SESSION_DIR"] = str(
-            invocation.runtime_home / "sessions"
-        )
+        env["PI_CODING_AGENT_SESSION_DIR"] = str(invocation.runtime_home / "sessions")
         return env
 
     def unsupported_detail(self) -> str:
         return unsupported_version_detail(
             ENGINE, self.observed_version, SUPPORTED_VERSIONS
         )
+
+    async def check_native_auth(
+        self, invocation: Invocation, env: dict[str, str]
+    ) -> str | None:
+        """Use Pi's own local auth/model resolver in the runtime environment."""
+        if invocation.native_auth is None:
+            return None
+        command = [
+            str(self.executable),
+            "auth",
+            "check",
+            "--provider",
+            invocation.provider,
+        ]
+        if invocation.model:
+            command += ["--model", invocation.model]
+        command += ["--json", "--no-refresh"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=invocation.workspace,
+                env=env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+            if len(stdout) > 4096:
+                return "AUTH_CHECK_FAILED"
+            result = json.loads(stdout)
+            if (
+                not isinstance(result, dict)
+                or result.get("provider") != invocation.provider
+            ):
+                return "AUTH_CHECK_FAILED"
+            if result.get("status") == "ready" and proc.returncode == 0:
+                return None
+            if result.get("reason") == "provider_not_found":
+                return "UNKNOWN_PROVIDER"
+            if result.get("reason") in {
+                "credentials_not_configured",
+                "credential_not_available",
+            }:
+                return "AUTH_MISSING"
+            return "AUTH_CHECK_FAILED"
+        except (OSError, TimeoutError, ValueError, UnicodeDecodeError):
+            return "AUTH_CHECK_FAILED"
+
+    async def preflight(self, invocation: Invocation) -> str | None:
+        try:
+            env = self.environment(invocation)
+        except (OSError, ValueError):
+            return "AUTH_CHECK_FAILED"
+        try:
+            if not await self._version_matches(invocation, env):
+                return "UNSUPPORTED_RUNTIME"
+        except (OSError, TimeoutError):
+            return "UNSUPPORTED_RUNTIME"
+        return await self.check_native_auth(invocation, env)
 
     async def _version_matches(
         self, invocation: Invocation, env: dict[str, str]
@@ -181,7 +257,12 @@ class PiRuntime:
         invocation.validate()
         if os.name != "posix":
             return RuntimeResult("failed", "not_started", "UNSUPPORTED_RUNTIME")
-        env = self.environment(invocation)
+        try:
+            env = self.environment(invocation)
+        except (OSError, ValueError):
+            if invocation.native_auth is None:
+                raise
+            return RuntimeResult("failed", "not_started", "AUTH_CHECK_FAILED")
         try:
             if not await self._version_matches(invocation, env):
                 return RuntimeResult("failed", "not_started", "UNSUPPORTED_RUNTIME")
@@ -192,6 +273,10 @@ class PiRuntime:
 
         if not authorized():
             return RuntimeResult("failed", "not_started", "POLICY_DENIED")
+
+        auth_error = await self.check_native_auth(invocation, env)
+        if auth_error:
+            return RuntimeResult("failed", "not_started", auth_error)
 
         with tempfile.TemporaryDirectory(prefix="anygarden-pi-") as directory:
             output = Path(directory) / "last-message.txt"
@@ -223,6 +308,7 @@ class PiRuntime:
                 launched(proc.pid)
                 if cancelled_at_spawn or not authorized():
                     raise asyncio.CancelledError
+
                 async def collect():
                     token = _MEASURED_USAGE.set(measured)
                     try:
@@ -250,6 +336,7 @@ class PiRuntime:
             except Exception:  # noqa: BLE001 — reap child before reporting unknown
                 result = RuntimeResult("unknown", "unknown", "invalid_runtime_output")
             finally:
+
                 async def cleanup() -> bool:
                     confirmed = await tree.stop()
                     if stream is not None and not stream.done():
@@ -269,7 +356,12 @@ class PiRuntime:
                     confirmed = await cleanup_task
                     result = RuntimeResult("cancelled", "stopped", "cancelled")
             if not confirmed:
-                return RuntimeResult("unknown", "unknown", "termination_unconfirmed", usage=dict(measured) or None)
+                return RuntimeResult(
+                    "unknown",
+                    "unknown",
+                    "termination_unconfirmed",
+                    usage=dict(measured) or None,
+                )
             return replace(result, usage=dict(measured) or result.usage)
 
     async def _collect(
@@ -314,7 +406,10 @@ class PiRuntime:
                     continue
                 raw_usage = message.get("usage")
                 if isinstance(raw_usage, dict):
-                    for source, target in (("input", "input_tokens"), ("output", "output_tokens")):
+                    for source, target in (
+                        ("input", "input_tokens"),
+                        ("output", "output_tokens"),
+                    ):
                         value = raw_usage.get(source)
                         if type(value) is int and value >= 0:
                             usage[target] = usage.get(target, 0) + value

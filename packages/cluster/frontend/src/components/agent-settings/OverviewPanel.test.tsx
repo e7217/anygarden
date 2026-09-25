@@ -436,11 +436,12 @@ describe('Pi provider configuration', () => {
     expect(screen.getByText('Set an explicit provider before starting this Pi agent.')).toBeInTheDocument()
     const provider = screen.getByLabelText('Agent provider')
     fireEvent.change(provider, { target: { value: 'my-local' } })
+    fireEvent.change(await screen.findByLabelText('Agent model'), { target: { value: 'local-model' } })
     fireEvent.blur(provider)
     expect(updateAgent).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: 'Apply provider and model' }))
     await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-      provider: 'my-local', provider_set: true, model: null, model_set: true,
+      provider: 'my-local', provider_set: true, model: 'local-model', model_set: true,
     }))
   })
   it('refuses blank and option-looking providers', async () => {

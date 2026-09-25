@@ -317,6 +317,7 @@ class MachineDaemon:
             control_capabilities=[
                 "agent_generation_reports_v1",
                 "direct_endpoint_v1",
+                "pi_native_auth_v1",
                 "workspace_attach_v1",
                 "workspace_receipt_signing_v1",
             ],
@@ -735,6 +736,7 @@ class MachineDaemon:
             # The freshest frame's secrets live in the in-memory cache.
             engine_secrets=self._manifest_store.get_secrets(agent_id),
             endpoint_configured=manifest.endpoint_configured,
+            pi_auth_configured=manifest.pi_auth_configured,
             # Issue #237 — pass DB snapshot through so the spawner can
             # materialize ``memory/notes.md`` on cold start. ``getattr``
             # keeps compatibility with pre-#237 frames that omit the field.

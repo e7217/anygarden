@@ -679,6 +679,11 @@ class TestSpawn:
         msg = SpawnManifest(
             agent_id="agent-other",
             engine=engine, provider="local",
+            pi_auth_configured=True,
+            engine_secrets={
+                "AG_PI_NATIVE_AUTH_CONFIG": '{"provider":"local","revision":1}',
+                "AG_PI_NATIVE_AUTH_KEY": "test-key",
+            },
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],
@@ -1308,6 +1313,43 @@ async def test_direct_endpoint_cold_restart_requires_fresh_server_config(spawner
     assert "test-key" not in (tmp_path / "manifests" / "direct-agent" / "manifest.json").read_text()
 
 
+async def test_pi_native_auth_cold_restart_requires_fresh_server_config(spawner, tmp_path):
+    from anygarden_machine.manifest_store import ManifestStore
+    from anygarden_machine.protocol.frames import SyncDesiredStateFrame
+
+    store = ManifestStore(agents_root=tmp_path / "manifests")
+    frame = SyncDesiredStateFrame(
+        agent_id="native-pi", generation=1, desired_state="running",
+        engine="pi-cli", provider="zai", pi_auth_configured=True,
+        engine_secrets={"AG_PI_NATIVE_AUTH_CONFIG": '{"provider":"zai","revision":1}',
+                        "AG_PI_NATIVE_AUTH_KEY": "private-test-key"},
+    )
+    store.save(frame)
+    cold = ManifestStore(agents_root=tmp_path / "manifests")
+    restored = cold.load("native-pi")
+    assert restored.pi_auth_configured
+    assert cold.get_secrets("native-pi") == {}
+    msg = SpawnManifest(
+        agent_id="native-pi", engine="pi-cli", provider="zai", agent_token="token",
+        pi_auth_configured=restored.pi_auth_configured,
+        engine_secrets=cold.get_secrets("native-pi"),
+    )
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock) as create:
+        result = await spawner.spawn(msg)
+    assert not result.success and "reconnect" in result.error
+    create.assert_not_awaited()
+    cold.save(frame)
+    msg.engine_secrets = cold.get_secrets("native-pi")
+    proc = _mock_proc()
+    with patch("anygarden_machine.spawner.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=proc) as create, patch("anygarden_machine.spawner.shutil.which", return_value="/bin/anygarden-agent"):
+        result = await spawner.spawn(msg)
+    assert result.success
+    assert "--pi-auth-configured" in create.call_args.args
+    assert "AG_PI_NATIVE_AUTH_KEY" not in create.call_args.kwargs["env"]
+    assert json.loads(proc.stdin.write.call_args.args[0])["AG_PI_NATIVE_AUTH_KEY"] == "private-test-key"
+    assert "private-test-key" not in (tmp_path / "manifests" / "native-pi" / "manifest.json").read_text()
+
+
 @pytest.mark.parametrize('provider',[None,'','-bad','bad provider'])
 async def test_invalid_pi_provider_refused_before_subprocess(spawner,provider):
     msg=SpawnManifest(agent_id='invalid-pi',engine='pi-cli',provider=provider,agent_token='test')
@@ -1340,6 +1382,11 @@ class TestManagedPiExecutable:
             agent_id=f"agent-{engine}",
             engine=engine,
             provider="local" if engine == "pi-cli" else None,
+            pi_auth_configured=engine == "pi-cli",
+            engine_secrets={
+                "AG_PI_NATIVE_AUTH_CONFIG": '{"provider":"local","revision":1}',
+                "AG_PI_NATIVE_AUTH_KEY": "test-key",
+            } if engine == "pi-cli" else {},
             agent_token="tok",
             profile_yaml="",
             rooms=["r"],

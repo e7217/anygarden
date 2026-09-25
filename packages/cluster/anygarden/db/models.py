@@ -2367,3 +2367,16 @@ class EngineCredential(Base):
     encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class PiNativeCredential(Base):
+    """One encrypted native Pi API key per agent, bound to its provider."""
+
+    __tablename__ = "pi_native_credentials"
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)

@@ -14,6 +14,7 @@ from anygarden.agent_availability import (
     ENGINE_MISMATCH,
     ENGINE_REMOVED,
     INVALID_ENDPOINT,
+    INVALID_PI_AUTH,
     INVALID_PROVIDER,
     INVALID_RUNTIME,
     NO_MACHINE_FOR_ENGINE,
@@ -35,6 +36,7 @@ def test_all_codes_are_registered() -> None:
         NO_ROOM,
         INVALID_PROVIDER,
         INVALID_ENDPOINT,
+        INVALID_PI_AUTH,
         QUOTA_EXHAUSTED,
         ENGINE_REMOVED,
         INVALID_RUNTIME,
@@ -114,4 +116,3 @@ def test_room_notice_names_agent_and_hides_stderr() -> None:
     assert "Nova" in notice
     assert stderr not in notice
     assert "관리자" in notice
-

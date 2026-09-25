@@ -35,6 +35,7 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   render(<AdminMachines />)
   fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
   const provider = await screen.findByLabelText('Provider (required)')
+  expect(screen.getByText(/save a Pi provider API key before starting/)).toBeInTheDocument()
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local worker' } })
   const submit = screen.getByRole('button', { name: 'Create Agent' })
   expect(provider).toHaveValue('')
@@ -42,7 +43,7 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   fireEvent.change(provider, { target: { value: '--help' } })
   expect(submit).toBeDisabled()
   fireEvent.change(provider, { target: { value: 'my-local' } })
-  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'local-model-v2' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'local-model-v2' } })
   expect(submit).toBeEnabled()
   fireEvent.click(submit)
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({

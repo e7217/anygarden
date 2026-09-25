@@ -21,6 +21,9 @@ from .endpoint import (
     endpoint_environment,
     parse_endpoint,
 )
+from .pi_auth import CONFIG_KEY as PI_CONFIG_KEY
+from .pi_auth import INPUT_KEY as PI_INPUT_KEY
+from .pi_auth import NativePiAuth, parse_native_auth
 
 
 @dataclass(frozen=True)
@@ -31,12 +34,13 @@ class ExecutionLaunch:
     generation: int
     endpoint: DirectEndpoint | None
     _child_environment: dict[str, str] = field(default_factory=dict, repr=False)
+    native_auth: NativePiAuth | None = None
 
     def bind(self, invocation: Invocation) -> Invocation:
         if invocation.scope.engine != self.engine:
             raise ValueError("Launch engine differs from invocation engine")
         environment = dict(invocation.environment)
-        for key in (CHILD_KEY, CONFIG_KEY, INPUT_KEY):
+        for key in (CHILD_KEY, CONFIG_KEY, INPUT_KEY, PI_CONFIG_KEY, PI_INPUT_KEY):
             environment.pop(key, None)
         environment.update(self._child_environment)
         # Bind both the caller's policy epoch and the server launch generation;
@@ -50,6 +54,7 @@ class ExecutionLaunch:
                         self.provider,
                         self.model,
                         asdict(self.endpoint) if self.endpoint else None,
+                        asdict(self.native_auth) if self.native_auth else None,
                     ],
                     sort_keys=True,
                     separators=(",", ":"),
@@ -62,6 +67,7 @@ class ExecutionLaunch:
             provider=self.provider,
             model=self.model,
             endpoint=self.endpoint,
+            native_auth=self.native_auth,
             environment=environment,
             scope=replace(invocation.scope, policy_epoch=epoch),
         )
@@ -76,6 +82,7 @@ def load_execution_launch(
     model: str | None,
     generation: int,
     endpoint_configured: bool = False,
+    pi_auth_configured: bool = False,
 ) -> ExecutionLaunch:
     if type(generation) is not int or generation < 0:
         raise ValueError("Invalid launch generation")
@@ -88,10 +95,21 @@ def load_execution_launch(
         raise ValueError("Direct endpoint configuration is missing from private stdin")
     endpoint = parse_endpoint(config, engine=engine)
     child_environment = endpoint_environment(endpoint, secrets.get(INPUT_KEY))
+    pi_config = secrets.get(PI_CONFIG_KEY)
+    pi_key = secrets.get(PI_INPUT_KEY)
+    if pi_auth_configured and not (pi_config and pi_key):
+        raise ValueError("Pi native credential is missing from private stdin")
+    native_auth = parse_native_auth(
+        pi_config, pi_key, provider=provider, engine=engine, endpoint=endpoint
+    )
+    if engine == "pi-cli" and endpoint is None and native_auth is None:
+        raise ValueError("Pi native provider credential is missing from private stdin")
+    if native_auth is not None:
+        child_environment[PI_INPUT_KEY] = pi_key
     if endpoint is not None and (
         endpoint.provider != provider or endpoint.model != model
     ):
         raise ValueError("Direct endpoint selection differs from launch provider/model")
     return ExecutionLaunch(
-        engine, provider, model, generation, endpoint, child_environment
+        engine, provider, model, generation, endpoint, child_environment, native_auth
     )
