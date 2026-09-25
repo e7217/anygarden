@@ -80,6 +80,13 @@ if prompt == "partial":
 if prompt == "failed":
     event({"type": "turn.failed", "error": {"message": "DO-NOT-PUBLISH"}})
     sys.exit(1)
+if prompt == "auth-failed":
+    event({"type": "turn.failed", "error": {"message": "401 Unauthorized: DO-NOT-PUBLISH"}})
+    sys.exit(1)
+if prompt == "mixed-failure":
+    event({"type": "turn.failed", "error": {"message": "401 Unauthorized: DO-NOT-PUBLISH"}})
+    event({"type": "turn.failed", "error": {"message": "model not found"}})
+    sys.exit(1)
 if prompt == "malformed":
     print("not json", flush=True)
     sys.exit(0)
@@ -167,6 +174,8 @@ async def test_partial_resume_failure_never_reexecutes(
     ("prompt", "outcome", "reason"),
     [
         ("failed", "failed", "ENGINE_ERROR"),
+        ("auth-failed", "failed", "ENGINE_AUTH_ERROR"),
+        ("mixed-failure", "failed", "ENGINE_ERROR"),
         ("malformed", "unknown", "missing_terminal_event"),
         ("huge", "unknown", "invalid_runtime_output"),
     ],
@@ -177,9 +186,10 @@ async def test_terminal_failure_categories(
     m = manager(tmp_path, executable)
     try:
         await m.start(replace(invocation, prompt=prompt))
-        receipt, _ = await done(m)
+        receipt, events = await done(m)
         assert receipt.outcome == outcome and receipt.reason == reason
         assert receipt.text is None
+        assert "DO-NOT-PUBLISH" not in str((receipt, events))
     finally:
         await m.close()
 

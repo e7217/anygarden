@@ -241,6 +241,8 @@ _QueueItem = Tuple[
 # them as system messages without leaking internal error detail.
 _TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
 _FAILED_NOTICE = "⚠️ 에이전트가 응답을 생성하지 못했습니다."
+_AUTH_NOTICE = "⚠️ 에이전트 인증을 확인해야 합니다. 관리자에게 로그인 또는 API 키 설정 확인을 요청하세요."
+_PI_PROVIDER_NOTICE = "⚠️ Pi 공급자 설정을 확인해야 합니다. 관리자에게 Provider 설정 확인을 요청하세요."
 _REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
 # #457 — a queued follow-up sat past its TTL before the queue drained;
 # answering it now would be a stale reply, so it is skipped with a notice
@@ -608,7 +610,11 @@ class RoomHandlerSupervisor:
             # for tracing/metrics, not in the user-facing text.
             await self._send_room_message(
                 room_id,
-                _FAILED_NOTICE,
+                (
+                    _AUTH_NOTICE if error == "ENGINE_AUTH_ERROR"
+                    else _PI_PROVIDER_NOTICE if error == "PI_PROVIDER_ERROR"
+                    else _FAILED_NOTICE
+                ),
                 metadata=send_metadata,
                 thread_root_id=thread_root_id,
             )

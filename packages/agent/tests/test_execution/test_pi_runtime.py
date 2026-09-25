@@ -91,6 +91,15 @@ if prompt == "failed":
     event({"type": "turn_end"})
     event({"type": "agent_settled"})
     sys.exit(1)
+if prompt == "provider-missing":
+    event({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "Unknown provider: DO-NOT-PUBLISH"}})
+    event({"type": "agent_settled"})
+    sys.exit(1)
+if prompt == "mixed-failure":
+    event({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "Unknown provider: DO-NOT-PUBLISH"}})
+    event({"type": "message_end", "message": {"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "model not found"}})
+    event({"type": "agent_settled"})
+    sys.exit(1)
 if prompt == "malformed":
     print("not json", flush=True)
     sys.exit(0)
@@ -156,19 +165,28 @@ async def test_second_execution_resumes_native_session(tmp_path, invocation, exe
         await m.close()
 
 
-async def test_provider_stop_reason_error_maps_to_engine_error(
-    tmp_path, invocation, executable
+@pytest.mark.parametrize(
+    ("prompt", "reason"),
+    [
+        ("failed", "ENGINE_AUTH_ERROR"),
+        ("provider-missing", "PI_PROVIDER_ERROR"),
+        ("mixed-failure", "ENGINE_ERROR"),
+    ],
+)
+async def test_provider_stop_reason_is_classified_without_raw_message(
+    tmp_path, invocation, executable, prompt, reason
 ):
-    invocation = replace(invocation, prompt="failed")
+    invocation = replace(invocation, prompt=prompt)
     m = manager(tmp_path, executable)
     try:
         await m.start(invocation)
         final, events = await done(m)
         assert final.outcome == "failed"
-        assert final.reason == "ENGINE_ERROR"
+        assert final.reason == reason
+        assert final.error_code == reason
         # The raw provider error message must not surface in text or events.
         assert final.text is None
-        assert "DO-NOT-PUBLISH" not in str(events)
+        assert "DO-NOT-PUBLISH" not in str((final, events))
     finally:
         await m.close()
 

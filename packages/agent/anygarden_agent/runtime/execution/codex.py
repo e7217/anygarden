@@ -16,6 +16,7 @@ import psutil
 
 from .contracts import Capabilities, Invocation, RuntimeResult
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
+from .failure_feedback import classify_failure
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
@@ -313,6 +314,8 @@ class CodexRuntime:
         texts: list[str] = []
         text_size = 0
         completed = failed = False
+        failure_count = 0
+        failure_code: str | None = None
         measured = _MEASURED_USAGE.get()
         usage = measured if measured is not None else {}
         while line := await proc.stdout.readline():
@@ -340,6 +343,14 @@ class CodexRuntime:
                     })
             elif kind == "turn.failed":
                 failed = True
+                failure_count += 1
+                if failure_count == 1:
+                    error = event.get("error")
+                    failure_code = classify_failure(
+                        ENGINE, error.get("message") if isinstance(error, dict) else None
+                    )
+                else:
+                    failure_code = None
             elif kind in {
                 "turn.started",
                 "item.started",
@@ -374,10 +385,10 @@ class CodexRuntime:
             return RuntimeResult(
                 "failed" if failed else "unknown",
                 "stopped",
-                "ENGINE_ERROR" if failed else "nonzero_exit",
+                (failure_code or "ENGINE_ERROR") if failed else "nonzero_exit",
             )
         if failed:
-            return RuntimeResult("failed", "stopped", "ENGINE_ERROR")
+            return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
         if not completed:
             return RuntimeResult("unknown", "stopped", "missing_terminal_event")
         text = "\n".join(texts)

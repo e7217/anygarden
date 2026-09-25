@@ -15,7 +15,14 @@ from .endpoint import DirectEndpoint, validate_endpoint_invocation
 Outcome = Literal["succeeded", "failed", "cancelled", "unknown"]
 ProcessState = Literal["not_started", "running", "finished", "stopped", "unknown"]
 FAILURE_CODES = frozenset(
-    {"ENGINE_ERROR", "TIMEOUT_STOPPED", "UNSUPPORTED_RUNTIME", "POLICY_DENIED"}
+    {
+        "ENGINE_ERROR",
+        "ENGINE_AUTH_ERROR",
+        "PI_PROVIDER_ERROR",
+        "TIMEOUT_STOPPED",
+        "UNSUPPORTED_RUNTIME",
+        "POLICY_DENIED",
+    }
 )
 
 

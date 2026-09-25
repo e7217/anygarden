@@ -59,6 +59,16 @@ function num(v: unknown): number | null {
   return typeof v === 'number' ? v : null
 }
 
+export function activityErrorMessage(error: string): string {
+  if (error === 'ENGINE_AUTH_ERROR') {
+    return '인증 설정을 확인하세요. 실행 머신의 Codex 로그인 또는 에이전트의 공급자/API 키 설정을 확인해야 합니다.'
+  }
+  if (error === 'PI_PROVIDER_ERROR') {
+    return 'Pi Provider 설정을 확인하세요. 에이전트에 지정한 공급자가 실제로 구성되어 있어야 합니다.'
+  }
+  return error
+}
+
 function deriveOutcome(events: ActivityLog[]): TurnOutcome {
   const kinds = new Set(events.map(e => e.event_type))
   if (kinds.has('handler_orphaned')) return 'orphaned'
@@ -204,7 +214,10 @@ function eventDetail(evt: ActivityLog): string {
   const outcome = str(d.outcome)
   if (outcome) parts.push(outcome)
   const err = str(d.error)
-  if (err) parts.push(err.length > 80 ? err.slice(0, 79) + '…' : err)
+  if (err) {
+    const label = activityErrorMessage(err)
+    parts.push(label.length > 80 ? label.slice(0, 79) + '…' : label)
+  }
   return parts.join(' · ')
 }
 
@@ -332,7 +345,7 @@ export default function ActivityPanel({ agentId }: Props) {
                       })}
                       {turn.error && (
                         <li className="text-[11px] text-[var(--color-destructive,#d74c4c)]">
-                          error: {turn.error}
+                          error: {activityErrorMessage(turn.error)}
                         </li>
                       )}
                     </ol>
