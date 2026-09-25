@@ -1076,8 +1076,8 @@ export default function AdminMachines() {
               <Input placeholder="Agent name" value={agentName} onChange={e => setAgentName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Engine</Label>
-              <select value={agentEngine} onChange={e => setAgentEngine(e.target.value)} className={selectCSS}>
+              <Label htmlFor="create-agent-engine">Engine</Label>
+              <select id="create-agent-engine" value={agentEngine} onChange={e => setAgentEngine(e.target.value)} className={selectCSS}>
                 <option value="" disabled>Select engine</option>
                 {sortedMachineEngines.map(e => {
                   const label = ENGINE_LABELS[e.engine] ?? e.engine

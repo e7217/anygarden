@@ -43,6 +43,8 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.calls.length = 0 })
 async function openPiDialog() {
   render(<AdminMachines />)
   fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await waitFor(() => expect(document.querySelector('option[value="pi-cli"]')).not.toBeNull())
+  fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'pi-cli' } })
   await screen.findByLabelText('Provider (required)')
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local qwen' } })
   fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'qwen-llm' } })
