@@ -2,16 +2,10 @@
 
 import asyncio
 import json
-import os
 import sys
 from dataclasses import replace
 
 import pytest
-
-from anygarden_agent.runtime.execution.pi_auth import (
-    NativePiAuth,
-    materialize_native_auth,
-)
 from anygarden_agent.runtime.execution.contracts import Invocation, SessionScope
 from anygarden_agent.runtime.execution.endpoint import (
     CHILD_KEY,
@@ -19,7 +13,11 @@ from anygarden_agent.runtime.execution.endpoint import (
     DirectEndpoint,
 )
 from anygarden_agent.runtime.execution.pi import PiRuntime
-from anygarden_agent.runtime.execution.pi_auth import INPUT_KEY
+from anygarden_agent.runtime.execution.pi_auth import (
+    INPUT_KEY,
+    NativePiAuth,
+    materialize_native_auth,
+)
 
 
 def test_native_auth_materializes_and_rotates_only_selected_provider(tmp_path):
@@ -32,6 +30,10 @@ def test_native_auth_materializes_and_rotates_only_selected_provider(tmp_path):
         "zai": {"type": "api_key", "key": "secret-one"}
     }
     assert path.stat().st_mode & 0o777 == 0o600
+    path.chmod(0o644)
+    with pytest.raises(ValueError, match="permissions are unsafe"):
+        materialize_native_auth(home, selected, "secret-one")
+    path.chmod(0o600)
     materialize_native_auth(home, NativePiAuth("zai", 2), "secret-two")
     assert json.loads(path.read_text())["zai"]["key"] == "secret-two"
     materialize_native_auth(home, None, None)

@@ -90,8 +90,13 @@ def materialize_native_auth(
             except FileNotFoundError:
                 return None
             with os.fdopen(fd, "rb") as stream:
-                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                    raise ValueError("Pi auth must be a regular file")
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError("Existing Pi auth must be a regular file")
+                if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    raise ValueError(
+                        "existing Pi auth file ownership or permissions are unsafe"
+                    )
                 data = stream.read(65537)
                 if len(data) > 65536:
                     raise ValueError("Pi auth file is too large")
