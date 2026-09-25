@@ -59,7 +59,7 @@ it('creates a keyless Pi agent with its endpoint in one request after loading mo
   expect(await screen.findByText(/2 models found · reachable from the AnyGarden server/)).toBeInTheDocument()
   expect(mocks.calls.find(c => c.path === '/api/v1/engine-endpoints/models')?.body).toEqual({ base_url: 'http://10.0.0.5:8000/v1' })
   expect(document.querySelector('#pi-models option[value="qwen3.8-27b-fp8"]')).not.toBeNull()
-  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'qwen3.8-27b-fp8' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'qwen3.8-27b-fp8' } })
   expect(submit).toBeEnabled()
   fireEvent.click(submit)
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
@@ -79,7 +79,7 @@ it('stores a new API key and binds it after creation', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Load models' }))
   await screen.findByText(/2 models found/)
   expect(mocks.calls.find(c => c.path === '/api/v1/engine-endpoints/models')?.body).toEqual({ base_url: 'http://10.0.0.5:8000/v1', api_key: 'sk-local-123' })
-  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'llama-local' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'llama-local' } })
   fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   await waitFor(() => expect(mocks.calls.some(c => c.method === 'PUT')).toBe(true))
   const createCall = mocks.createAgent.mock.calls[0][0]
@@ -95,7 +95,7 @@ it('stores a new API key and binds it after creation', async () => {
 it('blocks creation for an invalid base URL', async () => {
   await openPiDialog()
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://user:pw@10.0.0.5/v1' } })
-  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'm' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'm' } })
   expect(screen.getByRole('button', { name: 'Create Agent' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Load models' })).toBeDisabled()
   expect(screen.getByText(/HTTP\(S\) URL without credentials/)).toBeInTheDocument()

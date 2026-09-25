@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from .endpoint import DirectEndpoint, validate_endpoint_invocation
+from .pi_auth import NativePiAuth
 
 Outcome = Literal["succeeded", "failed", "cancelled", "unknown"]
 ProcessState = Literal["not_started", "running", "finished", "stopped", "unknown"]
@@ -22,6 +23,9 @@ FAILURE_CODES = frozenset(
         "TIMEOUT_STOPPED",
         "UNSUPPORTED_RUNTIME",
         "POLICY_DENIED",
+        "AUTH_MISSING",
+        "UNKNOWN_PROVIDER",
+        "AUTH_CHECK_FAILED",
     }
 )
 
@@ -103,6 +107,7 @@ class Invocation:
     environment: dict[str, str] = field(default_factory=dict, repr=False)
     external_workspace: bool = False
     endpoint: DirectEndpoint | None = None
+    native_auth: NativePiAuth | None = None
 
     def validate(self) -> None:
         validate_endpoint_invocation(self)

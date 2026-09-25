@@ -30,6 +30,7 @@ import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
 import DirectEndpointPanel from '@/components/agent-settings/DirectEndpointPanel'
+import PiNativeAuthPanel from '@/components/agent-settings/PiNativeAuthPanel'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
 // ``loading`` while the catalog fetch is in flight, ``unavailable``
@@ -265,13 +266,17 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       setConfigError('Provider is required: use letters, numbers, dots, underscores or hyphens; start with a letter or number.')
       return
     }
+    if (!piModelDraft.trim()) {
+      setConfigError('A model is required for Pi provider authentication.')
+      return
+    }
     if (providerDraft === agent.provider && (piModelDraft || null) === (agent.model ?? null)) return
     setConfigSaving(true)
     setConfigError(null)
     try {
       await updateAgent(agent.id, {
         provider: providerDraft, provider_set: true,
-        model: piModelDraft || null, model_set: true,
+        model: piModelDraft.trim(), model_set: true,
       })
     } catch (e) {
       setConfigError(e instanceof Error ? e.message : String(e))
@@ -483,6 +488,9 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       {(agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && (
         <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} onSaved={() => updateAgent(agent.id, {})} />
       )}
+      {agent.engine === 'pi-cli' && (
+        <PiNativeAuthPanel key={`${agent.id}-pi-auth`} agentId={agent.id} provider={agent.provider ?? null} onSaved={() => updateAgent(agent.id, {})} />
+      )}
 
       {/* Metadata grid */}
       <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-3 text-sm">
@@ -562,7 +570,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
                 <>
                   <Input aria-label="Agent model" value={piModelDraft} list="overview-pi-models"
                     onChange={e => setPiModelDraft(e.target.value)}
-                    disabled={configSaving} placeholder="Model ID for this provider (optional)" />
+                    disabled={configSaving} placeholder="Model ID for this provider (required for native Pi)" />
                   <Button className="mt-2" disabled={configSaving} onClick={() => void handleProviderCommit()}>
                     Apply provider and model
                   </Button>

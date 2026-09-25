@@ -243,6 +243,15 @@ _TIMEOUT_NOTICE = "⚠️ 응답이 타임아웃으로 중단되었습니다."
 _FAILED_NOTICE = "⚠️ 에이전트가 응답을 생성하지 못했습니다."
 _AUTH_NOTICE = "⚠️ 에이전트 인증을 확인해야 합니다. 관리자에게 로그인 또는 API 키 설정 확인을 요청하세요."
 _PI_PROVIDER_NOTICE = "⚠️ Pi 공급자 설정을 확인해야 합니다. 관리자에게 Provider 설정 확인을 요청하세요."
+_PI_NATIVE_AUTH_NOTICE = "⚠️ 이 Pi 에이전트의 공급자 API 키가 없습니다. 관리자에게 에이전트 설정에서 키 등록을 요청하세요."
+_PI_NATIVE_CONFIG_NOTICE = "⚠️ Pi 공급자 또는 모델 인증 확인에 실패했습니다. 관리자에게 에이전트 설정 확인을 요청하세요."
+_FAILURE_NOTICES = {
+    "ENGINE_AUTH_ERROR": _AUTH_NOTICE,
+    "PI_PROVIDER_ERROR": _PI_PROVIDER_NOTICE,
+    "AUTH_MISSING": _PI_NATIVE_AUTH_NOTICE,
+    "UNKNOWN_PROVIDER": _PI_NATIVE_CONFIG_NOTICE,
+    "AUTH_CHECK_FAILED": _PI_NATIVE_CONFIG_NOTICE,
+}
 _REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
 # #457 — a queued follow-up sat past its TTL before the queue drained;
 # answering it now would be a stale reply, so it is skipped with a notice
@@ -610,11 +619,7 @@ class RoomHandlerSupervisor:
             # for tracing/metrics, not in the user-facing text.
             await self._send_room_message(
                 room_id,
-                (
-                    _AUTH_NOTICE if error == "ENGINE_AUTH_ERROR"
-                    else _PI_PROVIDER_NOTICE if error == "PI_PROVIDER_ERROR"
-                    else _FAILED_NOTICE
-                ),
+                _FAILURE_NOTICES.get(error, _FAILED_NOTICE),
                 metadata=send_metadata,
                 thread_root_id=thread_root_id,
             )

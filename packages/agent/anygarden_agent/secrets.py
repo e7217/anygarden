@@ -76,7 +76,7 @@ def load_from_stdin() -> None:
         return
     if not isinstance(data, dict):
         return
-    for key in ("AG_ENGINE_ENDPOINT_CONFIG", "AG_ENGINE_ENDPOINT_KEY"):
+    for key in ("AG_ENGINE_ENDPOINT_CONFIG", "AG_ENGINE_ENDPOINT_KEY", "AG_PI_NATIVE_AUTH_CONFIG", "AG_PI_NATIVE_AUTH_KEY"):
         if key in data and not isinstance(data[key], str):
             _secrets = {}
             raise ValueError("Direct endpoint CONFIG and KEY must be JSON strings when present")

@@ -1023,6 +1023,23 @@ async def start_agent(
     if error:
         raise HTTPException(status_code=422, detail=error)
 
+    if agent.engine == "pi-cli" and not agent.base_url:
+        from anygarden.engines.pi_auth import CAPABILITY, build_pi_native_engine_secrets
+        from anygarden.scheduler.placement import (
+            NoSuitableMachineError,
+            select_machine_for,
+        )
+
+        try:
+            service = getattr(request.app.state, "mcp_template_service", None)
+            await build_pi_native_engine_secrets(db, agent, getattr(service, "_secrets", None))
+            await select_machine_for(
+                agent.engine, db, request.app.state.machine_bus,
+                required_control_capabilities={CAPABILITY},
+            )
+        except (ValueError, NoSuitableMachineError):
+            raise HTTPException(422, "Pi provider credential or compatible machine unavailable; add an API key in agent settings") from None
+
     if agent.base_url or agent.api_protocol or agent.credential_ref:
         from anygarden.engines.endpoints import build_direct_engine_secrets
         from anygarden.scheduler.placement import (

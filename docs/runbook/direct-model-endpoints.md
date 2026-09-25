@@ -2,6 +2,8 @@
 
 An administrator can connect an individual agent to a local or custom HTTP model server either when creating it (**Machines → New Agent → Connect to a local / custom model server**) or later from **Agent settings → Overview → Direct model connection** (always shown for Codex and Pi, with a status line).
 
+For Pi's built-in providers such as `zai`, use [Pi native provider authentication](pi-native-auth.md) instead.
+
 ## At creation (#685)
 
 Select Pi or Codex, tick **Connect to a local / custom model server**, and enter the base URL (for example `http://10.0.0.5:8000/v1`). Pi defaults to **Chat Completions**; Codex uses **Responses**. The provider name is entered once and is used only as this agent's name for the server. Click **Load models** to fill the model suggestions from `<base_url>/models`, then pick a model; a model is required for a direct endpoint.

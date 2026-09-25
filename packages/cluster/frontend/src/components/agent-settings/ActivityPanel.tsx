@@ -60,6 +60,15 @@ function num(v: unknown): number | null {
 }
 
 export function activityErrorMessage(error: string): string {
+  if (error === 'AUTH_MISSING') {
+    return '이 Pi 에이전트의 공급자 API 키가 없습니다. 에이전트 설정에서 키를 등록하세요.'
+  }
+  if (error === 'UNKNOWN_PROVIDER') {
+    return 'Pi 공급자를 찾을 수 없습니다. 에이전트의 공급자와 모델을 확인하세요.'
+  }
+  if (error === 'AUTH_CHECK_FAILED') {
+    return 'Pi 공급자 또는 모델 인증 확인에 실패했습니다. 에이전트 설정을 확인하세요.'
+  }
   if (error === 'ENGINE_AUTH_ERROR') {
     return '인증 설정을 확인하세요. 실행 머신의 Codex 로그인 또는 에이전트의 공급자/API 키 설정을 확인해야 합니다.'
   }

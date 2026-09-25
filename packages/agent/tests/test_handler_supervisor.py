@@ -221,6 +221,9 @@ async def test_failed_path_marks_failed_and_notifies_user():
     [
         ("ENGINE_AUTH_ERROR", "인증을 확인해야 합니다"),
         ("PI_PROVIDER_ERROR", "Pi 공급자 설정을 확인해야 합니다"),
+        ("AUTH_MISSING", "공급자 API 키가 없습니다"),
+        ("UNKNOWN_PROVIDER", "공급자 또는 모델 인증 확인에 실패했습니다"),
+        ("AUTH_CHECK_FAILED", "공급자 또는 모델 인증 확인에 실패했습니다"),
     ],
 )
 async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, notice):

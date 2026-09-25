@@ -66,6 +66,7 @@ _ENGINE_TIMEOUT_KEY: dict[str, str] = {
     is_flag=True,
     help="Require direct endpoint configuration from private stdin",
 )
+@click.option("--pi-auth-configured", is_flag=True, help="Require Pi native authentication from private stdin")
 @click.option("--model", default=None, help="LLM model name override")
 @click.option("--system-prompt", default=None, help="System prompt override")
 @click.option("--profile", default=None, help="Load agent profile from YAML file")
@@ -84,6 +85,7 @@ def agent_main(
     reasoning_effort: str | None,
     provider: str | None = None,
     endpoint_configured: bool = False,
+    pi_auth_configured: bool = False,
 ) -> None:
     """Run a Anygarden agent with the specified engine."""
     # Consume engine_secrets piped by the machine daemon over stdin
@@ -132,7 +134,7 @@ def agent_main(
         sys.exit(1)
 
     execution_launch = None
-    if engine in {"codex-cli", "pi-cli"} or endpoint_configured:
+    if engine in {"codex-cli", "pi-cli"} or endpoint_configured or pi_auth_configured:
         from anygarden_agent.runtime.execution.launch import load_execution_launch
 
         try:
@@ -142,6 +144,7 @@ def agent_main(
                 model=model,
                 generation=int(os.environ.get("ANYGARDEN_AGENT_GENERATION", "0")),
                 endpoint_configured=endpoint_configured,
+                pi_auth_configured=pi_auth_configured,
             )
         except ValueError as exc:
             raise click.ClickException(str(exc)) from None
@@ -204,7 +207,7 @@ async def _run_agent(
         )
         if (
             execution_launch is not None
-            and execution_launch.endpoint is not None
+            and (execution_launch.endpoint is not None or execution_launch.native_auth is not None)
             and not client.execution_launch_ready
         ):
             raise click.ClickException(

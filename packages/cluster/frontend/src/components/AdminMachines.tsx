@@ -398,6 +398,7 @@ export default function AdminMachines() {
   const handleCreateAgent = async () => {
     if (!agentName.trim() || !agentEngine || !selectedId) return
     if (providerRequired && !validPiProvider) return
+    if (agentEngine === 'pi-cli' && !endpointActive && !agentModel.trim()) return
     if (endpointActive && !endpointDraftReady(endpointDraft, agentModel)) return
     setCreateError(null)
     setCreating(true)
@@ -1115,13 +1116,14 @@ export default function AdminMachines() {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="pi-model">Model</Label>
+                  <Label htmlFor="pi-model">Model (required)</Label>
                   <Input id="pi-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
-                    list="pi-models" placeholder={endpointActive ? 'Model ID served by the endpoint (required)' : 'Model ID for this provider (optional)'} />
+                    list="pi-models" placeholder={endpointActive ? 'Model ID served by the endpoint (required)' : 'Model ID for this provider (required)'} />
                   <datalist id="pi-models">
                     {discoveredModels.map(m => <option key={`endpoint-${m.id}`} value={m.id}>{m.max_model_len ? `${m.id} (${m.max_model_len.toLocaleString()} tokens)` : m.id}</option>)}
                     {!endpointActive && agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </datalist>
+                  {!endpointActive && <p className="text-xs text-[var(--color-foreground-muted)]">After creating the agent, open its settings and save a Pi provider API key before starting it.</p>}
                 </div>
               </>
             )}
@@ -1238,7 +1240,7 @@ export default function AdminMachines() {
           </div>
           <DialogFooter>
             {createError && <p role="alert">{createError}</p>}
-            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (providerRequired && !validPiProvider) || (endpointActive && !endpointDraftReady(endpointDraft, agentModel))}>
+            <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (providerRequired && !validPiProvider) || (agentEngine === 'pi-cli' && !endpointActive && !agentModel.trim()) || (endpointActive && !endpointDraftReady(endpointDraft, agentModel))}>
               {creating ? 'Creating...' : 'Create Agent'}
             </Button>
           </DialogFooter>

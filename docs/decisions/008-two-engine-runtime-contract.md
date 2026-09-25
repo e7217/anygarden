@@ -7,6 +7,9 @@ date: 2026-09-22
 
 # 8. Two-engine Runtime contract and direct endpoint configuration
 
+The migration-head references below describe this decision at its adoption.
+Issue #696 subsequently added `076_pi_native_auth` for agent-specific Pi credentials.
+
 Supersedes [ADR-004](./004-embedded-litellm-gateway.md) and the historical
 OpenHands adoption plan in [ADR-005](./005-openhands-validation-plan.md).
 This records the implementation direction of [#652](https://github.com/e7217/anygarden/issues/652)
