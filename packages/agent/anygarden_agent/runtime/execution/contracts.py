@@ -101,8 +101,8 @@ class Invocation:
         validate_endpoint_invocation(self)
         if not self.execution_id or not self.prompt:
             raise ValueError("execution_id and prompt are required")
-        # Engine membership is central; version authority belongs to each
-        # adapter, which must fail closed on versions it has not verified.
+        # Engine membership is central. Each adapter handles CLI compatibility
+        # according to its own execution contract.
         if self.scope.engine not in SUPPORTED_ENGINES:
             raise ValueError("unsupported runtime")
         if self.scope.engine == "pi-cli" and not self.provider:

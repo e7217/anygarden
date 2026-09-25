@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -16,14 +17,16 @@ from typing import Any, Callable, Coroutine, Optional
 import psutil
 import structlog
 
-from anygarden_machine.engines.managed import (
-    EXECUTABLE_ENV as MANAGED_PI_EXECUTABLE_ENV,
-    managed_pi_executable,
-)
 from anygarden_machine.agent_dir import (
     AgentFilePathError,
     validate_agent_file_path,
     validate_agent_id,
+)
+from anygarden_machine.engines.managed import (
+    EXECUTABLE_ENV as MANAGED_PI_EXECUTABLE_ENV,
+)
+from anygarden_machine.engines.managed import (
+    managed_pi_executable,
 )
 from anygarden_machine.manifest_store import ManifestStore
 from anygarden_machine.proc_kill import (
@@ -1041,11 +1044,23 @@ class Spawner:
                     path=None,
                 )
         else:
-            # Default Python runtime — unchanged from pre-#73 behaviour.
-            anygarden_agent = (
-                shutil.which("anygarden-agent") if self._base_environment is None
-                else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
-            )
+            # An integrated node has the agent package installed beside its
+            # own interpreter. Prefer that binary even when its bin directory
+            # was omitted from PATH by the shell that launched the node.
+            sibling_agent = Path(sys.executable).parent / "anygarden-agent"
+            if (
+                self._base_environment is not None
+                and sibling_agent.is_file()
+                and os.access(sibling_agent, os.X_OK)
+            ):
+                anygarden_agent = str(sibling_agent)
+                binary_source = "interpreter_sibling"
+            else:
+                anygarden_agent = (
+                    shutil.which("anygarden-agent") if self._base_environment is None
+                    else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
+                )
+                binary_source = "path"
             if anygarden_agent:
                 cmd = [
                     anygarden_agent,
@@ -1060,7 +1075,7 @@ class Spawner:
                     "agent_binary_resolved",
                     agent_id=agent_id,
                     runtime="python",
-                    source="path",
+                    source=binary_source,
                     path=anygarden_agent,
                 )
             else:
@@ -1209,15 +1224,20 @@ class Spawner:
 
     async def _handle_stopped(self, agent_id: str, exit_code: int) -> None:
         """Handle normal agent stop, then delegate to callback."""
+        if not self._cleanup(agent_id, expected_watch_task=asyncio.current_task()):
+            return
         await self._on_stopped(agent_id, exit_code)
-        self._cleanup(agent_id)
 
     async def _handle_crashed(
         self, agent_id: str, exit_code: int, stderr_tail: str
     ) -> None:
         """Handle agent crash, then delegate to callback."""
+        # The callback may synchronously start a replacement. Retire the old
+        # process first so spawn cannot cancel this watcher or be cleaned up
+        # by a trailing cleanup after the replacement has been registered.
+        if not self._cleanup(agent_id, expected_watch_task=asyncio.current_task()):
+            return
         await self._on_crashed(agent_id, exit_code, stderr_tail)
-        self._cleanup(agent_id)
 
     async def kill(self, agent_id: str) -> dict[str, Any]:
         """Kill a running agent: terminate-tree (graceful) -> kill survivors.
@@ -1297,8 +1317,16 @@ class Spawner:
         """
         return self._agent_dirs_root / agent_id
 
-    def _cleanup(self, agent_id: str) -> None:
+    def _cleanup(
+        self, agent_id: str, *, expected_watch_task: asyncio.Task | None = None
+    ) -> bool:
         """Delete temp profile file and remove from internal state."""
+        tracked = self._agents.get(agent_id)
+        if expected_watch_task is not None and (
+            tracked is None or tracked.watch_task is not expected_watch_task
+        ):
+            # A delayed watcher must not retire a newer replacement.
+            return False
         agent = self._agents.pop(agent_id, None)
         # #451 — drop the persisted runtime record regardless of whether
         # the agent was still tracked in memory: once an agent's lifecycle
@@ -1306,9 +1334,13 @@ class Spawner:
         # daemon restart into adopting (or re-spawning over) a dead pid.
         self._manifest_store.clear_runtime(agent_id)
         if agent is None:
-            return
+            return False
         # Cancel watcher task if still running
-        if agent.watch_task and not agent.watch_task.done():
+        if (
+            agent.watch_task
+            and not agent.watch_task.done()
+            and agent.watch_task is not asyncio.current_task()
+        ):
             agent.watch_task.cancel()
         # Remove temp profile
         if agent.profile_path:
@@ -1316,6 +1348,7 @@ class Spawner:
             log.debug(
                 "profile_cleaned", agent_id=agent_id, path=str(agent.profile_path)
             )
+        return True
 
     async def drain(self) -> None:
         """Kill all running agents (drain mode)."""

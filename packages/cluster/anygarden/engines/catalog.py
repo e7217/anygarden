@@ -154,7 +154,9 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             "max",
             "ultra",
         ),
-        supported_versions=("0.154.0", "0.155.1"),
+        # Codex CLI versions are observed for session fencing, then tried.
+        # The subprocess protocol determines compatibility at execution time.
+        supported_versions=(),
     ),
     # Claude Code: ``--effort`` (session flag) accepts
     # ``low/medium/high/xhigh/max``. There is no ``disabled`` option at

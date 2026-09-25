@@ -459,12 +459,6 @@ async def test_manager_cancel_finishes_turn_without_cancelling_room_handler(
             "0.87.1",
             "UNSUPPORTED_RUNTIME: pi-cli 0.87.1 is not supported; this build requires 0.85.1",
         ),
-        (
-            "codex-cli",
-            "codex-cli 0.160.0",
-            "UNSUPPORTED_RUNTIME: codex-cli 0.160.0 is not supported; "
-            "this build requires one of 0.154.0, 0.155.1",
-        ),
     ],
 )
 async def test_version_mismatch_error_names_observed_and_expected(
@@ -481,6 +475,18 @@ async def test_version_mismatch_error_names_observed_and_expected(
         ]
         assert finished[0]["outcome"] == "failed"
         assert finished[0]["error"] == expected
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_codex_unlisted_version_executes_room_turn(setup_room, monkeypatch):
+    monkeypatch.setenv("TEST_VERSION", "codex-cli 0.160.0")
+    client = await client_for("codex-cli", monkeypatch)
+    try:
+        await client._message_handlers[0](message())
+        assert client.send.call_args.args[1] == "local answer"
+        assert client._execution_adapter._runtime_version == "0.160.0"
     finally:
         await client.close()
 

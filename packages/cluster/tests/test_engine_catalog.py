@@ -202,7 +202,7 @@ class TestEngineModelsEndpoint:
         # #506 — codex-cli is the recommended (non-deprecated) engine.
         assert data["deprecated"] is False
         assert data["deprecation_note"] is None
-        assert data["supported_versions"] == ["0.154.0", "0.155.1"]
+        assert data["supported_versions"] == []
 
     @pytest.mark.asyncio
     async def test_pi_cli_exposes_supported_versions(self, catalog_env) -> None:
@@ -255,7 +255,7 @@ class TestEngineModelsEndpoint:
 
 
 def test_supported_versions_match_agent_adapters() -> None:
-    """#687 — the catalog mirrors the adapters' exact version gates."""
+    """The catalog mirrors which adapters enforce exact version gates."""
     pi = pytest.importorskip("anygarden_agent.runtime.execution.pi")
     codex = pytest.importorskip("anygarden_agent.runtime.execution.codex")
     assert ENGINE_CATALOG["pi-cli"].supported_versions == pi.SUPPORTED_VERSIONS

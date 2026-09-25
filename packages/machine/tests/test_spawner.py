@@ -66,6 +66,38 @@ def _mock_proc(pid: int = 42) -> MagicMock:
     return proc
 
 
+async def test_crash_callback_keeps_new_replacement(spawner: Spawner) -> None:
+    """A crash watcher can restart its agent without cancelling itself."""
+    agent_id = "agent-crash-restart"
+    replacement = RunningAgent(agent_id, 2002, "codex-cli", 2.0, None)
+
+    async def restart(_agent_id: str, _exit_code: int, _stderr: str) -> None:
+        assert agent_id not in spawner._agents
+        await asyncio.sleep(0)
+        spawner._agents[agent_id] = replacement
+
+    spawner._on_crashed = restart
+
+    async def crash_watcher() -> None:
+        spawner._agents[agent_id] = RunningAgent(
+            agent_id, 1001, "codex-cli", 1.0, None,
+            watch_task=asyncio.current_task(),
+        )
+        await spawner._handle_crashed(agent_id, -9, "")
+
+    await asyncio.create_task(crash_watcher())
+    assert spawner._agents[agent_id] is replacement
+
+
+async def test_stale_crash_watcher_cannot_retire_replacement(spawner: Spawner) -> None:
+    agent_id = "agent-stale-watcher"
+    replacement = RunningAgent(agent_id, 2002, "codex-cli", 2.0, None)
+    spawner._agents[agent_id] = replacement
+    await spawner._handle_crashed(agent_id, -9, "")
+    assert spawner._agents[agent_id] is replacement
+    spawner._on_crashed.assert_not_awaited()
+
+
 class TestSpawnEnvSecrets:
     """#184 follow-up: engine_secrets must NOT end up in the agent
     process env (``/proc/self/environ``). They are delivered via
@@ -430,6 +462,38 @@ class TestSpawn:
             assert len(calls) == 1
             assert calls[0].kwargs["source"] == "path"
             assert calls[0].kwargs["path"] == "/usr/local/bin/anygarden-agent"
+
+    async def test_integrated_node_uses_agent_beside_interpreter(
+        self, tmp_path: Path, spawn_msg: SpawnManifest
+    ) -> None:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        agent_binary = bin_dir / "anygarden-agent"
+        agent_binary.write_text("#!/bin/sh\n")
+        agent_binary.chmod(0o755)
+        spawner = Spawner(
+            agent_dirs_root=tmp_path / "agents",
+            base_environment={"PATH": "/usr/bin"},
+        )
+        mock_proc = _mock_proc(62)
+        with patch(
+            "anygarden_machine.spawner.sys.executable", str(bin_dir / "python")
+        ), patch(
+            "anygarden_machine.spawner.shutil.which"
+        ) as which, patch(
+            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            return_value=mock_proc,
+        ) as create, patch("anygarden_machine.spawner.log") as mock_log:
+            result = await spawner.spawn(spawn_msg)
+
+        assert result.success is True
+        assert create.call_args.args[0] == str(agent_binary)
+        which.assert_not_called()
+        resolved = [
+            c for c in mock_log.info.call_args_list
+            if c.args and c.args[0] == "agent_binary_resolved"
+        ]
+        assert resolved[0].kwargs["source"] == "interpreter_sibling"
 
     async def test_spawn_logs_agent_binary_uvx_source(
         self, spawner: Spawner, spawn_msg: SpawnManifest

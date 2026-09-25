@@ -597,6 +597,9 @@ class ChatClient:
         if not lines:
             return ""
         suffix = (
+            f"Current room ID: {room_id}. Use this exact value for Anygarden "
+            "MCP tools that require room_id; the participant IDs below are "
+            "only for assignee_pid and routing tokens.\n\n"
             "Room participants. Refer to peers by display name in prose. "
             "Construct a routing token <@user:PARTICIPANT_ID> ONLY when "
             "intentionally calling a specific peer for a reply — never "
@@ -617,6 +620,8 @@ class ChatClient:
             "reply reaches the user directly — you only need to "
             "synthesize if the user explicitly asks (e.g. "
             "\"정리해줘\") or peer answers conflict.\n\n"
+            "Put an intentional routing token in the final reply; "
+            "intermediate commentary is not sent to the room.\n\n"
             "For recommendations, comparisons, status reports, or "
             "any descriptive reference to a peer, use only the "
             "display name. Never put a routing token in prose that "

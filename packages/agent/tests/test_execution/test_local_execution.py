@@ -54,6 +54,8 @@ def executable(tmp_path):
 import json, os, signal, subprocess, sys, time
 from pathlib import Path
 if sys.argv[1:] == ["--version"]:
+    if os.environ.get("FAKE_VERSION_EXIT"):
+        sys.exit(1)
     print("codex-cli " + os.environ.get("FAKE_VERSION", "0.154.0"))
     sys.exit(0)
 prompt = sys.stdin.read()
@@ -343,16 +345,31 @@ async def test_crash_after_intent_does_not_spawn(
         await m.close()
 
 
-async def test_single_owner_and_version_gate(tmp_path, executable, invocation):
+async def test_single_owner_and_unlisted_version_is_tried(tmp_path, executable, invocation):
     m = manager(tmp_path, executable)
     try:
         with pytest.raises(RuntimeError, match="already owned"):
             manager(tmp_path, executable)
         await m.start(replace(invocation, environment={"FAKE_VERSION": "0.146.0"}))
         receipt, _ = await done(m)
-        assert receipt.reason == "UNSUPPORTED_RUNTIME"
-        assert receipt.process_state == "not_started"
-        assert not (invocation.workspace / "calls.jsonl").exists()
+        assert receipt.outcome == "succeeded"
+        assert receipt.text == "answer"
+        assert len(calls(invocation)) == 1
+        assert m.capabilities().engine_version == "0.146.0"
+    finally:
+        await m.close()
+
+
+async def test_failed_version_probe_still_attempts_exec(
+    tmp_path, executable, invocation
+):
+    m = manager(tmp_path, executable)
+    try:
+        await m.start(replace(invocation, environment={"FAKE_VERSION_EXIT": "1"}))
+        receipt, _ = await done(m)
+        assert receipt.outcome == "succeeded"
+        assert m.capabilities().engine_version == "unknown"
+        assert len(calls(invocation)) == 1
     finally:
         await m.close()
 
@@ -461,19 +478,19 @@ async def test_new_materialization_requires_epoch_and_external_paths_rejected(
         await m.close()
 
 
-async def test_revocation_during_version_probe_prevents_spawn(
+async def test_revocation_during_version_observation_prevents_spawn(
     tmp_path, executable, invocation, monkeypatch
 ):
     allowed = True
-    original = CodexRuntime._version_matches
+    original = CodexRuntime.observe_version
 
-    async def check(self, inv, env):
+    async def check(self, cwd, env):
         nonlocal allowed
-        result = await original(self, inv, env)
+        result = await original(self, cwd, env)
         allowed = False
         return result
 
-    monkeypatch.setattr(CodexRuntime, "_version_matches", check)
+    monkeypatch.setattr(CodexRuntime, "observe_version", check)
     m = manager(tmp_path, executable, authorize=lambda _: allowed)
     try:
         await m.start(invocation)
