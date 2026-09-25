@@ -4,7 +4,15 @@
 // gets the grouping right, so we pin the pure function here.
 import { describe, it, expect } from 'vitest'
 
-import { splitLogs, turnLabel } from './ActivityPanel'
+import { activityErrorMessage, splitLogs, turnLabel } from './ActivityPanel'
+
+describe('activityErrorMessage', () => {
+  it('explains classified engine failures without exposing raw details', () => {
+    expect(activityErrorMessage('ENGINE_AUTH_ERROR')).toContain('인증 설정을 확인하세요')
+    expect(activityErrorMessage('PI_PROVIDER_ERROR')).toContain('Pi Provider 설정을 확인하세요')
+    expect(activityErrorMessage('ENGINE_ERROR')).toBe('ENGINE_ERROR')
+  })
+})
 
 interface Row {
   id: string

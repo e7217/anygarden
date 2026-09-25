@@ -216,6 +216,33 @@ async def test_failed_path_marks_failed_and_notifies_user():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "notice"),
+    [
+        ("ENGINE_AUTH_ERROR", "인증을 확인해야 합니다"),
+        ("PI_PROVIDER_ERROR", "Pi 공급자 설정을 확인해야 합니다"),
+    ],
+)
+async def test_classified_failure_keeps_code_in_activity_and_guides_user(code, notice):
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client=client, engine_name="codex-cli", engine_timeout=5.0)
+
+    async def failing_engine():
+        raise EngineError(code)
+
+    await sup.dispatch(room_id="r1", request_id="req-auth", run_engine=failing_engine)
+
+    finished = [
+        event for event in client.lifecycle_events
+        if event["event"] in {"engine_call_finished", "handler_finished"}
+    ]
+    assert len(finished) == 2
+    assert all(event["error"] == code and event["outcome"] == "failed" for event in finished)
+    assert notice in client.sends[0][1]
+    assert code not in client.sends[0][1]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["ok", "timeout", "failed"])
 async def test_thread_root_reaches_normal_and_failure_sends(outcome):
     client = _FakeClient()

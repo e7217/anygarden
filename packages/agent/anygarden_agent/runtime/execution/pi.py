@@ -26,13 +26,14 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from .codex import ProcessTree
-from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
 from .contracts import (
     Capabilities,
     Invocation,
     RuntimeResult,
     unsupported_version_detail,
 )
+from .endpoint import materialize_pi_endpoint, validate_endpoint_invocation
+from .failure_feedback import classify_failure
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
@@ -290,6 +291,8 @@ class PiRuntime:
         usage = measured if measured is not None else {}
         session_handle = session
         failed = False
+        failure_count = 0
+        failure_code: str | None = None
         settled = False
         while line := await proc.stdout.readline():
             try:
@@ -329,9 +332,12 @@ class PiRuntime:
                             texts.append(block["text"])
                 if message.get("stopReason") == "error":
                     failed = True
-                    # errorMessage is deliberately not captured: provider error
-                    # payloads never leave this boundary (audit gets the code,
-                    # not the payload).
+                    failure_count += 1
+                    if failure_count == 1:
+                        failure_code = classify_failure(ENGINE, message.get("errorMessage"))
+                    else:
+                        failure_code = None
+                    # Raw provider errors never leave this boundary.
             elif kind == "agent_end":
                 if event.get("willRetry") is True:
                     continue
@@ -341,9 +347,9 @@ class PiRuntime:
                 emit("progress", {"event": kind})
         await proc.wait()
         if proc.returncode != 0:
-            return RuntimeResult("failed", "stopped", "ENGINE_ERROR")
+            return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
         if failed:
-            return RuntimeResult("failed", "stopped", "ENGINE_ERROR")
+            return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")
         if not settled:
             return RuntimeResult("unknown", "stopped", "missing_terminal_event")
         text = "\n".join(texts)
@@ -358,4 +364,3 @@ class PiRuntime:
         return RuntimeResult(
             "succeeded", "finished", "completed", text, session_handle, usage
         )
-
