@@ -50,6 +50,8 @@ for (const { name, width, height, mobile } of [
     await expect(menu).toBeVisible()
     const box = await menu.boundingBox()
     expect(box).not.toBeNull()
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width)
     expect(box!.y).toBeGreaterThanOrEqual(0)
     expect(box!.y + box!.height).toBeLessThanOrEqual(height)
     expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
