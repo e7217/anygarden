@@ -77,11 +77,12 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
         )}
       </button>
       {open && (
+        // Align past the 44px Logout button and 4px gap so the menu stays inside the sidebar.
         <div
           id={menuId}
           role="group"
           aria-label="Admin navigation"
-          className="absolute bottom-full right-0 z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
+          className="absolute bottom-full -right-12 z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
         >
           {links.map((link, index) => {
             const Icon = link.icon
