@@ -10,7 +10,7 @@ files, and hand off work — Anygarden handles routing, context, permissions, an
 agent lifecycles.
 
 - **Two execution engines** — Codex and Pi share room execution, cancellation and usage accounting. See the [upgrade guide](docs/runbook/room-execution-upgrade.md) and [retired-engine migration guide](docs/runbook/retired-engines.md).
-- **Distributed machines** — run agents on any host; the server routes work to whichever is online.
+- **Distributed machines** — run agents on other hosts; the server assigns work to compatible online machines.
 - **Cloud or local models** — use engine providers or configure a [direct model endpoint](docs/runbook/direct-model-endpoints.md). Codex requires Responses; Pi supports Responses and Chat Completions.
 
 Administrators can inspect current and historical usage at `/admin/usage`.
@@ -23,18 +23,23 @@ usage API and preserved data; the embedded model gateway is removed.
 |---|---|---|
 | Python | 3.12+ | the workspace and CI; `anygarden` and `anygarden-machine` alone also run on 3.11 |
 | [uv](https://docs.astral.sh/uv/) | any current release | installing and running the Python packages |
-| Node.js | 20+ | building the web UI, and the TypeScript agent runtime |
+| Node.js | 20+ | building the web UI or TypeScript client, and installing the machine-managed Pi CLI |
 
-Node.js is not needed to *run* the server from PyPI — those packages ship a
-prebuilt web UI. It is needed from a checkout, and wherever the npm-distributed
-TypeScript agent runtime runs.
+Node.js is not needed to *run* the server from PyPI — the server package ships a
+prebuilt web UI. It is needed to build the UI or TypeScript client from a
+checkout. A machine installing the pinned Pi CLI also needs Node.js/npm.
 
-Each agent engine additionally needs **its own CLI installed and authenticated**
-on the host that runs the agent (`codex` or `pi`). Engines are detected at startup,
-so install them before starting the node or machine daemon. Codex/Pi execution
-requires the Python agent runtime; the TypeScript client does not provide these
-engine adapters. Pi creation requires an explicit provider; its model is optional.
-Direct endpoint configuration requires an explicit model.
+Codex agents need the `codex` CLI installed on their execution host; native
+provider use requires CLI authentication, while a direct endpoint uses its
+configured URL and optional credential. Pi uses a version-pinned CLI managed
+from **Admin settings (gear) → Machines → Update engine**; using a `pi` on
+`PATH` requires explicit opt-in. Built-in API-key Pi providers also need an
+agent-specific key.
+
+Engine availability is detected by the node or machine daemon. Both engines
+execute through the Python agent runtime; the TypeScript client has no engine
+adapters. Pi creation requires an explicit provider **and model**. Direct
+endpoint configuration also requires a model.
 
 ## Quick Start
 
@@ -50,7 +55,8 @@ anygarden start          # API + web UI + local agent execution, in the foregrou
 
 Open `http://localhost:8000` and register — the first user to sign up becomes the
 admin, and the host you started on is bound to that account as a machine
-automatically. Create a room, add an agent (engine + model), and @-mention it.
+automatically. Create a room, add a Codex agent, and @-mention it. For Pi,
+select a provider and model and configure its [provider authentication](docs/runbook/pi-native-auth.md).
 
 State lives in `~/.anygarden` by default (`--data-dir` to change it, `--port` to
 move off 8000). Shut the node down with `anygarden stop`, which waits for agent
@@ -74,15 +80,17 @@ anygarden server --host 0.0.0.0 --port 8000
 ```bash
 # 2. On any host that should run agents
 uv tool install "anygarden[machine]"
-anygarden machine register --server http://localhost:8000 --name my-laptop
+anygarden machine register --server http://SERVER_HOST:8000 --name my-laptop
 anygarden machine run
 ```
 
-The server routes each agent to whichever registered machine is online.
+Replace `SERVER_HOST` with the server address reachable from the machine host.
+Registration prompts for an Anygarden account's email and password.
+The server assigns compatible agents to registered online machines.
 
-Update a machine later from the web UI (**Admin → Machines → Update**) or on the
-host with `anygarden machine update`. The updater auto-detects the install method
-(`uv tool` or `pip`), so the same action works however the daemon was installed.
+Update a machine later from the web UI (**Admin settings (gear) → Machines →
+Update**) or on the host with `anygarden machine update`. The updater
+auto-detects the install method (`uv tool` or `pip`).
 
 ### Develop (from a checkout)
 
@@ -102,19 +110,32 @@ checkout, run the integrated node instead. See
 
 ## Packages
 
-Anygarden is a `uv` workspace of four packages:
+Anygarden has three Python distributions in a `uv` workspace and two private
+npm workspaces. The `anygarden` distribution is the unified CLI; its
+`[server]`, `[machine]`, and `[agent]` extras install the corresponding runtime
+dependencies.
 
-| Package | Path | What it is |
-|---|---|---|
-| `anygarden` | [`packages/cluster/`](packages/cluster) | server, REST/WebSocket API and web UI |
-| `anygarden-machine` | [`packages/machine/`](packages/machine) | per-host daemon that spawns and supervises agents |
-| `anygarden-agent` | [`packages/agent/`](packages/agent) | Python agent runtime and engine adapters |
-| `@anygarden/agent-ts` | [`packages/agent-ts/`](packages/agent-ts) | TypeScript agent runtime |
+| Workspace | Package | Path | What it is |
+|---|---|---|---|
+| `uv` | `anygarden` | [`packages/cluster/`](packages/cluster) | CLI, server, REST/WebSocket API, and bundled web UI |
+| `uv` | `anygarden-machine` | [`packages/machine/`](packages/machine) | per-host daemon that spawns and supervises agents |
+| `uv` | `anygarden-agent` | [`packages/agent/`](packages/agent) | Python agent runtime and Codex/Pi adapters |
+| npm | `anygarden-frontend` | [`packages/cluster/frontend/`](packages/cluster/frontend) | Vite web UI built into the server package |
+| npm | `@anygarden/agent-ts` | [`packages/agent-ts/`](packages/agent-ts) | TypeScript room transport client; it does not execute Codex/Pi |
+
+This table describes source packages, not five separate installation steps.
+For a single-host `anygarden start`, install `anygarden[server,agent]`: the
+`[server]` extra includes machine supervision code, which the node runs
+in-process, while `[agent]` supplies the Python agent runtime. No separate
+machine daemon is started. For remote hosts, install `anygarden[server]` on the
+server and `anygarden[machine]` on each worker; a worker launches
+`anygarden-agent` for an agent process, fetching it with `uvx` if it is not
+installed locally. Neither setup needs `@anygarden/agent-ts`.
 
 ## Docs
 
 - Integrated local node (`anygarden start`) — [`docs/runbook/local-node.md`](docs/runbook/local-node.md)
-- Local LLM (Ollama) setup — [`docs/runbook/openhands-ollama-setup.md`](docs/runbook/openhands-ollama-setup.md)
+- Direct/local model setup — [`docs/runbook/direct-model-endpoints.md`](docs/runbook/direct-model-endpoints.md) · Pi provider authentication — [`docs/runbook/pi-native-auth.md`](docs/runbook/pi-native-auth.md)
 - Architecture & design — [`docs/design/`](docs/design) · operational runbooks — [`docs/runbook/`](docs/runbook)
 - Environment variables — [`.env.example`](.env.example) · [`packages/cluster/README.md`](packages/cluster/README.md)
 - Contributing — [`CONTRIBUTING.md`](CONTRIBUTING.md)

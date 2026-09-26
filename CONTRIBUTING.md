@@ -49,9 +49,10 @@ stopping and restarting the node — `anygarden stop` takes the same `--data-dir
 
 ## Project layout
 
-Anygarden is a `uv` workspace of four packages — `cluster` (server + web UI),
-`machine` (per-host daemon), `agent` (Python runtime), and `agent-ts` (TypeScript
-runtime). See [Packages](README.md#packages) for paths and distribution names.
+Anygarden has three Python packages in a `uv` workspace (`cluster`, `machine`,
+and `agent`) and two private npm workspaces (the Vite frontend and the
+`agent-ts` room transport client). See [Packages](README.md#packages) for paths
+and distribution names.
 
 ## Workflow
 
@@ -114,10 +115,9 @@ the database the app will open.
 
 ## UI changes
 
-Any work under `packages/cluster/frontend/` must follow the design system documented
-in [`DESIGN.md`](DESIGN.md). Read the relevant section (color, typography, component
-styling, spacing) before adding or restyling components, and check how existing
-components apply it.
+For work under `packages/cluster/frontend/`, use the color, typography, and
+spacing tokens in [`src/index.css`](packages/cluster/frontend/src/index.css).
+Check how existing components apply those tokens before adding or restyling UI.
 
 ## License
 

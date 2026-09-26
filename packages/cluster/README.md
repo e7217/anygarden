@@ -23,14 +23,18 @@ uvx --from "anygarden[server]" anygarden server
 Other components share the same dispatcher:
 
 ```bash
-pip install "anygarden[machine]" && anygarden machine run
-pip install "anygarden[agent]"   && anygarden agent \
-  --engine claude-code \
-  --name demo-agent \
-  --server ws://localhost:8000 \
-  --room demo
-pip install "anygarden[agent]"   && anygarden client --server ws://localhost:8000 --user me --room room1
+pip install "anygarden[machine]"
+anygarden machine register --server https://anygarden.example.com --name my-machine
+anygarden machine run
+
+pip install "anygarden[agent]"
+anygarden agent --help
+anygarden client --help
 ```
+
+Machine registration prompts for an Anygarden account. See the repository
+[quick start](../../README.md#quick-start) for a single-host node and remote
+machine setup.
 
 ## CLI Option Reference
 
@@ -74,9 +78,11 @@ anygarden client --server ws://localhost:8000 \
 
 ## Development
 
+From the repository root:
+
 ```bash
-pip install -e ".[dev]"
-pytest
+make setup
+uv run pytest packages/cluster/tests
 ```
 
 ## Environment
