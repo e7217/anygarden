@@ -159,6 +159,8 @@ describe('useWebSocket typing stages', () => {
     receiveTyping(sockets[0], 'agent', true, 'preparing')
     view.rerender(<Harness roomId="room-2" />)
     expect(typingState()).toEqual({ users: [], stages: {} })
+    receiveTyping(sockets[0], 'agent', true, 'using_tool')
+    expect(typingState()).toEqual({ users: [], stages: {} })
 
     receiveTyping(sockets[1], 'agent', true, 'writing')
     act(() => sockets[1].onclose?.(closeEvent(1006)))

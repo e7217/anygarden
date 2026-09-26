@@ -52,13 +52,16 @@ export function useWebSocket(roomId: string | null) {
     const ws = new WebSocket(url, ['anygarden.v1', `bearer.${token}`]);
     wsRef.current = ws;
 
-    ws.onopen = () => { setConnected(true); reconnectRef.current = 1; };
+    ws.onopen = () => {
+      if (wsRef.current !== ws) return;
+      setConnected(true);
+      reconnectRef.current = 1;
+    };
     ws.onclose = (evt) => {
+      if (wsRef.current !== ws) return;
       setConnected(false);
-      if (wsRef.current === ws) {
-        wsRef.current = null;
-        clearTyping();
-      }
+      wsRef.current = null;
+      clearTyping();
 
       const authRejected = evt.code === 4001 || evt.code === 4003;
       if (authRejected) {
@@ -85,6 +88,7 @@ export function useWebSocket(roomId: string | null) {
       }, delay * 1000);
     };
     ws.onmessage = (evt) => {
+      if (wsRef.current !== ws) return;
       const data = JSON.parse(evt.data);
       if (data.type === 'message') {
         if (data.seq > seqRef.current) seqRef.current = data.seq;
