@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
+from uuid import uuid4
 
 from fastapi import WebSocket
 
@@ -26,6 +27,8 @@ class _Subscription:
     # on whichever room they happen to be looking at.
     user_id: Optional[str] = None
     generation: Optional[int] = None
+    execution_control: bool = False
+    socket_epoch: str = field(default_factory=lambda: str(uuid4()))
 
 
 class ConnectionManager:
@@ -84,6 +87,7 @@ class ConnectionManager:
         *,
         user_id: str | None = None,
         generation: int | None = None,
+        execution_control: bool = False,
     ) -> None:
         """Register *ws* as listening on *room_id*.
 
@@ -107,6 +111,7 @@ class ConnectionManager:
             ws=ws,
             user_id=user_id,
             generation=generation,
+            execution_control=execution_control,
         )
         superseded: _Subscription | None = None
         async with self._lock:
@@ -138,6 +143,9 @@ class ConnectionManager:
         # Best-effort: a socket that's already half-dead can throw on
         # close; we just need it to stop receiving frames.
         if superseded is not None:
+            transport = getattr(self, "execution_transport", None)
+            if transport is not None:
+                transport.disconnected(participant_id, superseded.socket_epoch)
             try:
                 await superseded.ws.close(code=4040, reason="superseded")
             except Exception:
@@ -154,12 +162,16 @@ class ConnectionManager:
                 last_seen_at=now,
             )
 
-    async def unsubscribe(self, participant_id: str) -> None:
+    async def unsubscribe(self, participant_id: str, *, websocket: WebSocket | None = None) -> None:
         """Remove the subscription for *participant_id*."""
         async with self._lock:
-            sub = self._by_participant.pop(participant_id, None)
-            if sub is None:
+            sub = self._by_participant.get(participant_id)
+            if sub is None or (websocket is not None and sub.ws is not websocket):
                 return
+            self._by_participant.pop(participant_id)
+            transport = getattr(self, "execution_transport", None)
+            if transport is not None:
+                transport.disconnected(participant_id, sub.socket_epoch)
             subs = self._rooms.get(sub.room_id, [])
             self._rooms[sub.room_id] = [
                 s for s in subs if s.participant_id != participant_id
@@ -324,12 +336,22 @@ class ConnectionManager:
             sub = self._by_participant.get(participant_id)
             return sub.generation if sub is not None else None
 
+    async def execution_connection(self, participant_id: str, *, websocket=None) -> tuple[int, str] | None:
+        """Return the advertised control fence for exactly this live socket."""
+        async with self._lock:
+            sub = self._by_participant.get(participant_id)
+            if (sub is None or not sub.execution_control or sub.generation is None
+                    or (websocket is not None and sub.ws is not websocket)):
+                return None
+            return sub.generation, sub.socket_epoch
+
     async def send_to(
         self,
         participant_id: str,
         frame: OutgoingFrame,
         *,
         expected_generation: int | None = None,
+        expected_socket_epoch: str | None = None,
     ) -> bool:
         """Send directly, optionally fencing against a process generation."""
         async with self._lock:
@@ -337,6 +359,8 @@ class ConnectionManager:
         if sub is None:
             return False
         if expected_generation is not None and sub.generation != expected_generation:
+            return False
+        if expected_socket_epoch is not None and sub.socket_epoch != expected_socket_epoch:
             return False
         try:
             await sub.ws.send_text(frame.model_dump_json())

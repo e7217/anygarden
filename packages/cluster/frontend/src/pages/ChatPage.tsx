@@ -34,10 +34,35 @@ import { MessageSquare, Menu, Plus } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import SharedRoomConversation from '@/components/SharedRoomConversation'
+import PageShell from '@/components/PageShell'
 
 export type { Participant } from '@/lib/participants'
 
 export default function ChatPage() {
+  const { roomId } = useParams<{ roomId: string }>()
+  const { rooms, agentDMs, status, refetch } = useRooms()
+  const { t } = useLocale()
+  const currentRoom = Object.values(rooms).flat().find(room => room.id === roomId)
+    ?? agentDMs.find(room => room.id === roomId)
+  if (currentRoom?.shared_channel) {
+    return <SharedRoomConversation key={`${currentRoom.id}:${currentRoom.shared_channel.authority_node_id}:${currentRoom.shared_channel.channel_id}`} currentRoom={currentRoom} channel={currentRoom.shared_channel} />
+  }
+  // Resolve the room's transport before mounting local hooks. A shared room
+  // must never briefly open the ordinary WS/files/tasks paths on first load.
+  if (roomId && !currentRoom && status !== 'ready') {
+    return (
+      <PageShell title="Anygarden">
+        <div className="p-4 text-sm">
+          {status === 'error' ? <><p role="alert">{t('federation.room.discoveryFailed')}</p><Button className="mt-2" variant="outline" onClick={() => void refetch()}>{t('federation.room.retry')}</Button></> : <p role="status">{t('common.loading')}</p>}
+        </div>
+      </PageShell>
+    )
+  }
+  return <LocalChatPage />
+}
+
+function LocalChatPage() {
   const { t } = useLocale()
   const { confirm, notify } = useFeedback()
   const { roomId } = useParams<{ roomId: string }>()

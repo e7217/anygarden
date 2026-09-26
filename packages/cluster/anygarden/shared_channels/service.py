@@ -782,10 +782,17 @@ class ChannelService:
             channel=envelope["channel_id"],
             write=True,
         )
-        if (
-            envelope["authority_node_id"] != self.node_id
-            or envelope["kind"] != "message.send"
-        ):
+        if envelope["authority_node_id"] != self.node_id or envelope["kind"] not in {
+            "message.send",
+            "task.request",
+            "task.cancel",
+            "task.accept",
+            "task.reject",
+            "task.started",
+            "task.result",
+            "task.cancelled",
+            "task.unknown",
+        }:
             raise ChannelError("KIND_UNSUPPORTED", 400)
         consent = await db.get(
             PublicationConsent,
@@ -798,28 +805,57 @@ class ChannelService:
         return await self._commit_authorized(db, envelope)
 
     async def snapshot(
-        self, db, *, identity, authority, channel, after_seq=0, limit=50
+        self,
+        db,
+        *,
+        identity,
+        authority,
+        channel,
+        after_seq=None,
+        before_seq=None,
+        limit=50,
     ):
-        stream = await self.local_access(
-            db, identity=identity, authority=authority, channel=channel
+        from anygarden.shared_channels.product import (
+            display_principal,
+            snapshot_access,
+            snapshot_extras,
         )
-        messages = (
-            await db.scalars(
-                select(Message)
-                .where(Message.room_id == stream.local_room_id, Message.seq > after_seq)
-                .order_by(Message.seq)
-                .limit(limit)
-            )
-        ).all()
-        participants = (
-            await db.scalars(
-                select(SharedParticipant).where(
-                    SharedParticipant.authority_node_id == authority,
-                    SharedParticipant.channel_id == channel,
+
+        stream = await snapshot_access(self, db, identity, authority, channel)
+        stmt = select(Message).where(Message.room_id == stream.local_room_id)
+        if after_seq is not None:
+            stmt = stmt.where(Message.seq > after_seq).order_by(Message.seq)
+        else:
+            if before_seq is not None:
+                stmt = stmt.where(Message.seq < before_seq)
+            stmt = stmt.order_by(Message.seq.desc())
+        messages = list((await db.scalars(stmt.limit(limit))).all())
+        if after_seq is None:
+            messages.reverse()
+        oldest = messages[0].seq if messages else None
+        newest = messages[-1].seq if messages else None
+        has_more = bool(
+            oldest is not None
+            and await db.scalar(
+                select(Message.id)
+                .where(
+                    Message.room_id == stream.local_room_id,
+                    Message.seq < oldest,
                 )
+                .limit(1)
             )
-        ).all()
-        return {
+        )
+        participants = list(
+            (
+                await db.scalars(
+                    select(SharedParticipant).where(
+                        SharedParticipant.authority_node_id == authority,
+                        SharedParticipant.channel_id == channel,
+                    )
+                )
+            ).all()
+        )
+        result = {
             "authority_node_id": authority,
             "channel_id": channel,
             "applied_seq": stream.applied_seq,
@@ -828,6 +864,10 @@ class ChannelService:
                     "message_id": m.extra_metadata["federation"]["message_id"],
                     "text": m.content,
                     **m.extra_metadata["federation"],
+                    "created_at": m.created_at.isoformat(),
+                    "actor_name": await display_principal(
+                        self, db, m.extra_metadata["federation"]["actor"]
+                    ),
                 }
                 for m in messages
             ],
@@ -844,4 +884,11 @@ class ChannelService:
                 }
                 for p in participants
             ],
+            "cursor": {
+                "oldest_seq": oldest,
+                "newest_seq": newest,
+                "has_more_before": has_more,
+            },
         }
+        result.update(await snapshot_extras(self, db, identity, stream))
+        return result

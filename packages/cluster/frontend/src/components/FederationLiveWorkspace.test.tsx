@@ -4,13 +4,16 @@
 // wiring, roster with tombstone revisions, submission tracking, and the
 // command-field gating on the task tab.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { cleanup, render, screen, fireEvent } from '@testing-library/react'
+import { cleanup, render as renderView, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import '@testing-library/jest-dom/vitest'
 import FederationLiveWorkspace from './FederationLiveWorkspace'
 import type { ParticipantView } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
 
 type Federation = ReturnType<typeof useFederation>
+
+const render = (ui: Parameters<typeof renderView>[0]) => renderView(<MemoryRouter>{ui}</MemoryRouter>)
 
 function baseFederation(overrides: Partial<Federation> = {}): Federation {
   return {

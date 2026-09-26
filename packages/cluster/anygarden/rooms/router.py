@@ -106,7 +106,13 @@ class WorkspaceAttachmentSummary(BaseModel):
     expires_at: datetime
 
 
+class SharedChannelBinding(BaseModel):
+    authority_node_id: str
+    channel_id: str
+
+
 class RoomOut(BaseModel):
+    shared_channel: SharedChannelBinding | None = None
     id: str
     # #179 — DM rooms live outside any project (``project_id=NULL``) so
     # they cannot be cascade-deleted alongside an arbitrary project.
@@ -347,12 +353,24 @@ async def list_rooms(
         ).all():
             attachments.setdefault(row.room_id, []).append(row)
 
+    from anygarden.shared_channels.models import ChannelStream
+
+    shared_bindings = {
+        row.local_room_id: SharedChannelBinding(
+            authority_node_id=row.authority_node_id, channel_id=row.channel_id
+        )
+        for row in (await db.scalars(select(ChannelStream).where(
+            ChannelStream.local_room_id.in_([room.id for room in rooms])
+        ))).all()
+    } if rooms else {}
+
     out: list[RoomOut] = []
     for r in rooms:
         pinned, sort_order = pin_state.get(r.id, (False, None))
         out.append(
             RoomOut(
                 id=r.id,
+                shared_channel=shared_bindings.get(r.id),
                 project_id=r.project_id,
                 name=r.name,
                 description=r.description,
@@ -389,6 +407,7 @@ async def list_rooms(
 @router.post("/{room_id}/read", response_model=MarkReadOut)
 async def mark_room_read_endpoint(
     room_id: str,
+    request: Request,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ) -> MarkReadOut:
@@ -401,6 +420,7 @@ async def mark_room_read_endpoint(
         room_id=room_id,
         identity=identity,
         capability=Capability.SELF_STATE_WRITE,
+        allow_shared=await _shared_self_state_access(db, request, identity, room_id),
     )
 
     seq = await mark_room_read(db, user_id=identity.id, room_id=room_id)
@@ -562,6 +582,7 @@ async def get_room(
         )
 
     return RoomDetailOut(
+        shared_channel=SharedChannelBinding(authority_node_id=stream.authority_node_id, channel_id=stream.channel_id) if stream else None,
         id=room.id,
         project_id=room.project_id,
         name=room.name,
@@ -1420,6 +1441,22 @@ async def _broadcast_pin_order_to_user(
 # ``Participant`` row keyed by ``user_id``.
 
 
+async def _shared_self_state_access(db, request, identity, room_id):
+    from anygarden.shared_channels.models import ChannelStream
+    from anygarden.shared_channels.visibility import visible_shared_room_ids
+
+    shared = await db.scalar(select(ChannelStream.channel_id).where(ChannelStream.local_room_id == room_id))
+    if shared is None:
+        return False
+    visible = await visible_shared_room_ids(
+        db, identity=identity, room_ids=frozenset({room_id}),
+        channel_service=getattr(request.app.state, "channel_service", None),
+    )
+    if room_id not in visible:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return True
+
+
 @router.patch("/{room_id}/pin", response_model=PinOrderOut)
 async def toggle_room_pin(
     room_id: str,
@@ -1436,6 +1473,7 @@ async def toggle_room_pin(
         room_id=room_id,
         identity=identity,
         capability=Capability.SELF_STATE_WRITE,
+        allow_shared=await _shared_self_state_access(db, request, identity, room_id),
     )
     pinned_ids = await set_room_pinned(
         db, user_id=identity.id, room_id=room_id, pinned=body.pinned
@@ -1466,6 +1504,7 @@ async def set_pin_order(
             room_id=room_id,
             identity=identity,
             capability=Capability.SELF_STATE_WRITE,
+            allow_shared=await _shared_self_state_access(db, request, identity, room_id),
         )
     pinned_ids = await reorder_pinned_rooms(
         db, user_id=identity.id, room_ids=body.room_ids

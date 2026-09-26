@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   Ban,
@@ -304,6 +305,17 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
         </TabsContent>
 
         <TabsContent value="task" className="mt-4">
+          {federation.channelRef?.localRoomId && (
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle>{t('federation.room.openConversation')}</CardTitle>
+                <CardDescription>{t('federation.room.adminHandoff')}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button asChild><Link to={`/rooms/${federation.channelRef.localRoomId}`}>{t('federation.room.openConversation')}</Link></Button>
+              </CardContent>
+            </Card>
+          )}
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
             <div className="space-y-4">
               <DelegationList delegations={delegations} />

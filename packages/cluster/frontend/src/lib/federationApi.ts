@@ -155,6 +155,64 @@ export interface FederationMessage {
   thread_root_id: string | null
   confirmed: boolean
   text: string
+  actor_name?: string | null
+  created_at?: string | null
+}
+
+export interface SharedChannelRef {
+  authority_node_id: string
+  channel_id: string
+}
+
+export interface SharedTarget {
+  node_id: string
+  agent_id: string
+  name: string | null
+  node_name: string | null
+  server_label: string | null
+  is_local: boolean
+  description: string | null
+  can_execute: boolean
+  unavailable_code: string | null
+}
+
+export interface SharedDelegation {
+  delegation_id: string
+  task_id: string
+  source_message_id: string
+  requester: Principal
+  executor: { node_id: string; agent_id: string }
+  revision: number
+  state: string
+  process_state: string
+  task_status: string
+  result_markdown: string | null
+  error: string | null
+  can_cancel: boolean
+}
+
+export interface SharedSubmission extends SubmissionView {
+  kind: string
+  source_message_id: string | null
+  message_id?: string | null
+  delegation_id: string | null
+  executor: { node_id: string; agent_id: string } | null
+  can_retry: boolean
+  text?: string | null
+  thread_root_id?: string | null
+}
+
+export interface SharedRoomSnapshot extends SnapshotView {
+  permissions: { can_send: boolean; can_delegate: boolean }
+  targets: SharedTarget[]
+  delegations: SharedDelegation[]
+  submissions: SharedSubmission[]
+  cursor: { oldest_seq: number | null; newest_seq: number | null; has_more_before: boolean }
+}
+
+export interface SharedCommandResult extends SubmissionView {
+  delegation_id?: string
+  task_id?: string
 }
 
 export interface SnapshotView {
@@ -349,6 +407,38 @@ export async function getSnapshot(
   )
 }
 
+function sharedChannelPath(ref: SharedChannelRef): string {
+  return `/api/v1/shared-channels/${encodeURIComponent(ref.authority_node_id)}/${encodeURIComponent(ref.channel_id)}`
+}
+
+export function getSharedRoomSnapshot(
+  ref: SharedChannelRef,
+  options: { after_seq?: number; before_seq?: number; signal?: AbortSignal } = {},
+): Promise<SharedRoomSnapshot> {
+  const params = new URLSearchParams({ limit: '100' })
+  if (options.after_seq !== undefined) params.set('after_seq', String(options.after_seq))
+  if (options.before_seq !== undefined) params.set('before_seq', String(options.before_seq))
+  return request(`${sharedChannelPath(ref)}?${params}`, { signal: options.signal })
+}
+
+export function sendSharedMessage(ref: SharedChannelRef, input: {
+  request_id: string; text: string; thread_root_id: string | null
+}): Promise<SharedCommandResult> {
+  return post(`${sharedChannelPath(ref)}/messages`, input) as Promise<SharedCommandResult>
+}
+
+export function delegateSharedMessage(ref: SharedChannelRef, input: {
+  request_id: string; source_message_id: string; executor: { node_id: string; agent_id: string }
+}): Promise<SharedCommandResult> {
+  return post(`${sharedChannelPath(ref)}/delegations`, input) as Promise<SharedCommandResult>
+}
+
+export function cancelSharedDelegation(ref: SharedChannelRef, delegationId: string, input: {
+  request_id: string; expected_revision: number
+}): Promise<SharedCommandResult> {
+  return post(`${sharedChannelPath(ref)}/delegations/${encodeURIComponent(delegationId)}/cancel`, input) as Promise<SharedCommandResult>
+}
+
 export async function getSubmission(
   authority: string,
   channel: string,
@@ -363,11 +453,11 @@ export async function retrySubmission(
   authority: string,
   channel: string,
   requestId: string,
-): Promise<unknown> {
+): Promise<SubmissionView> {
   return post(
     `/api/v1/shared-channels/${authority}/${channel}/submissions/${requestId}/retry`,
     {},
-  )
+  ) as Promise<SubmissionView>
 }
 
 export async function syncChannel(scope: {

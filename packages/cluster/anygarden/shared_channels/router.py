@@ -36,6 +36,28 @@ class Replay(ReadScope):
     limit: StrictInt = Field(default=50, ge=1, le=100)
 
 
+class ProductMessage(Closed):
+    request_id: UUID
+    text: str = Field(min_length=1, max_length=16384)
+    thread_root_id: UUID | None = None
+
+
+class ExecutorTarget(Closed):
+    node_id: UUID
+    agent_id: UUID
+
+
+class ProductDelegation(Closed):
+    request_id: UUID
+    source_message_id: UUID
+    executor: ExecutorTarget
+
+
+class ProductCancellation(Closed):
+    request_id: UUID
+    expected_revision: StrictInt = Field(ge=1)
+
+
 class Ack(ReadScope):
     seq: StrictInt = Field(ge=0)
 
@@ -91,6 +113,35 @@ async def command(
 ):
     body = await read_body(request)
     return await s.submit(body, tls=tls)
+
+
+@peer_router.post("/delegations/{delegation_id}/execution-context")
+async def execution_context(
+    delegation_id: UUID,
+    request: Request,
+    s=Depends(service),  # noqa: B008
+    tls=Depends(transport_identity),  # noqa: B008
+):
+    from anygarden.federation.execution_context import authority_execution_context
+
+    body = await read_body(request, ReadScope)
+    async with s.sessions.begin() as db:
+        return await authority_execution_context(
+            s, db, body, str(delegation_id), tls=tls
+        )
+
+
+@peer_router.post("/directory")
+async def directory(
+    request: Request,
+    s=Depends(service),  # noqa: B008
+    tls=Depends(transport_identity),  # noqa: B008
+):
+    from anygarden.shared_channels.directory import peer_directory
+
+    body = await read_body(request, ReadScope)
+    async with s.sessions.begin() as db:
+        return await peer_directory(s, db, body, tls)
 
 
 @peer_router.post("/replay")
@@ -177,26 +228,101 @@ async def local_command(
     return result
 
 
+@local_router.post("/{authority}/{channel}/messages")
+async def product_message(
+    authority: UUID,
+    channel: UUID,
+    request: Request,
+    s=Depends(service),  # noqa: B008
+    actor=Depends(get_current_identity),  # noqa: B008
+):
+    from anygarden.shared_channels.product import submit_product
+
+    body = await read_body(request, ProductMessage)
+    return await submit_product(
+        s,
+        identity=actor,
+        authority=str(authority),
+        channel=str(channel),
+        kind="message.send",
+        body=body,
+    )
+
+
+@local_router.post("/{authority}/{channel}/delegations")
+async def product_delegation(
+    authority: UUID,
+    channel: UUID,
+    request: Request,
+    s=Depends(service),  # noqa: B008
+    actor=Depends(get_current_identity),  # noqa: B008
+):
+    from anygarden.shared_channels.product import submit_product
+
+    body = await read_body(request, ProductDelegation)
+    return await submit_product(
+        s,
+        identity=actor,
+        authority=str(authority),
+        channel=str(channel),
+        kind="task.request",
+        body=body,
+    )
+
+
+@local_router.post("/{authority}/{channel}/delegations/{delegation_id}/cancel")
+async def product_cancel(
+    authority: UUID,
+    channel: UUID,
+    delegation_id: UUID,
+    request: Request,
+    s=Depends(service),  # noqa: B008
+    actor=Depends(get_current_identity),  # noqa: B008
+):
+    from anygarden.shared_channels.product import submit_product
+
+    body = await read_body(request, ProductCancellation)
+    return await submit_product(
+        s,
+        identity=actor,
+        authority=str(authority),
+        channel=str(channel),
+        kind="task.cancel",
+        body=body,
+        delegation_id=str(delegation_id),
+    )
+
+
 @local_router.get("/{authority}/{channel}")
 async def snapshot(
     authority: UUID,
     channel: UUID,
-    after_seq: int = 0,
+    after_seq: int | None = None,
+    before_seq: int | None = None,
     limit: int = 50,
     s=Depends(service),
     actor=Depends(get_current_identity),
 ):
-    if after_seq < 0 or not 1 <= limit <= 100:
+    if (
+        (after_seq is not None and after_seq < 0)
+        or (before_seq is not None and before_seq < 1)
+        or (after_seq is not None and before_seq is not None)
+        or not 1 <= limit <= 100
+    ):
         raise ChannelError("INVALID_CURSOR", 400)
     async with s.sessions.begin() as db:
-        return await s.snapshot(
+        result = await s.snapshot(
             db,
             identity=actor,
             authority=str(authority),
             channel=str(channel),
             after_seq=after_seq,
+            before_seq=before_seq,
             limit=limit,
         )
+    from anygarden.shared_channels.directory import enrich_remote_targets
+
+    return await enrich_remote_targets(s, actor, result)
 
 
 @local_router.get("/{authority}/{channel}/submissions/{request_id}")

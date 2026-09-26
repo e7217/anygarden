@@ -28,7 +28,7 @@ import SidebarPreferencesMenu from '@/components/SidebarPreferencesMenu'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
-  Pin, PinOff, GripVertical, PanelLeftClose,
+  Pin, PinOff, GripVertical, PanelLeftClose, Link2,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -853,7 +853,9 @@ function RoomTreeNodeView({
           }`}
           data-testid={`sidebar-room-${node.room.id}`}
         >
-          <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+          {node.room.shared_channel
+            ? <Link2 aria-label={t('federation.sharedChannel')} className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
+            : <Hash className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />}
           <span className="min-w-0 truncate">{node.room.name}</span>
           {node.room.has_updates && <UpdateDot className="ml-auto" />}
         </button>
@@ -869,7 +871,7 @@ function RoomTreeNodeView({
             <Pin className="h-3 w-3" />
           </button>
         )}
-        {isAdmin && (
+        {isAdmin && !node.room.shared_channel && (
           <SidebarRoomMenu
             roomId={node.room.id}
             onRename={() => onRename(node.room.id)}

@@ -24,9 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.db.models import Participant
 from anygarden.federation.delegation import DelegationService
 from anygarden.federation.delegation_projection import install_projections
+from anygarden.federation.errors import PeerError
 from anygarden.federation.models import PeerGrant
 from anygarden.federation.service import now
-from anygarden.shared_channels.models import SharedParticipant
+from anygarden.shared_channels.models import PublicationConsent, SharedParticipant
+from anygarden.shared_channels.schemas import ChannelError
 from anygarden.shared_channels.shadow import FENCED_ROLES, shadow_participant_id
 
 TASK_KINDS = (
@@ -153,7 +155,26 @@ def install_product_delegation(channel_service) -> DelegationService:
 
     async def executor_allowed(db, channel_id, executor):
         if executor["node_id"] != node_id:
-            return await _grant_allows(db, node_id, channel_id, executor)
+            if not await _grant_allows(db, node_id, channel_id, executor):
+                return False
+            # Requesters may select a different peer from their own transport.
+            # Recheck that executor peer's independent pin/consent/approver gate.
+            peers = channel_service.peers
+            if peers is None:
+                return False
+            from anygarden.federation.certificates import inspect_certificate
+
+            try:
+                peer = await peers.lock_peer(db, executor["node_id"])
+                await peers.authenticate(
+                    db, inspect_certificate(peer.certificate_pem), executor["node_id"]
+                )
+                key = (executor["node_id"], node_id, channel_id)
+                grant = await db.get(PeerGrant, key, populate_existing=True)
+                await peers._current_grant(db, key, grant.epoch)
+            except PeerError:
+                return False
+            return grant.role != "observer"
         # Local executor: real agent participant row + active roster entry.
         participant_ok = await _local_participant_id(
             db, channel_id, "agent", executor["agent_id"]
@@ -164,11 +185,25 @@ def install_product_delegation(channel_service) -> DelegationService:
             SharedParticipant,
             (node_id, channel_id, node_id, "agent", executor["agent_id"]),
         )
-        return roster is not None and roster.active
+        if roster is None or not roster.active or roster.role not in FENCED_ROLES:
+            return False
+        consent = await db.get(
+            PublicationConsent,
+            (node_id, channel_id, node_id, "agent", executor["agent_id"]),
+            populate_existing=True,
+        )
+        if consent is None or not consent.active:
+            return False
+        try:
+            await channel_service._admin(db, consent.approved_by)
+        except ChannelError:
+            return False
+        return True
 
     service = DelegationService(
         node_id, resolve_principal, executor_allowed=executor_allowed
     )
+    channel_service.delegation_service = service
     service.install_guards(channel_service)
     service.install_submitters(channel_service)
     install_projections(channel_service)
