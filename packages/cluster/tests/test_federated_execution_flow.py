@@ -517,3 +517,98 @@ async def test_control_request_loss_and_restart_retire_unstarted_prepare(
             await asyncio.sleep(0.05)
     assert len(records) == 1
     assert not (env.root / "workspace" / "calls.jsonl").exists()
+
+
+async def test_agent_authenticated_request_runs_once_on_remote_agent(execution_pair):
+    """#592: a real A agent credential initiates work executed by B's runtime."""
+    from anygarden.shared_channels.models import ChannelEvent
+
+    env = execution_pair
+    requester_id = uid()
+    token = generate_token()
+    token_hash, hint = hash_agent_token(token)
+    principal = {
+        "node_id": env.a.s.node_id,
+        "kind": "agent",
+        "principal_id": requester_id,
+    }
+    async with env.a.s.sessions.begin() as db:
+        db.add(Agent(id=requester_id, name="Requesting planner", engine="codex-cli"))
+        await db.flush()
+        db.add_all(
+            [
+                Participant(
+                    room_id=env.a.channel, agent_id=requester_id, role="member"
+                ),
+                AgentToken(
+                    agent_id=requester_id, token_hash=token_hash, lookup_hint=hint
+                ),
+            ]
+        )
+    async with env.a.s.sessions.begin() as db:
+        await env.a.c.publication(
+            db,
+            actor_id=env.a.admin,
+            channel_id=env.a.channel,
+            principal=principal,
+            active=True,
+        )
+    async with env.a.s.sessions.begin() as db:
+        await env.a.c.change_participant(
+            db,
+            actor_id=env.a.admin,
+            channel_id=env.a.channel,
+            operation_id=uid(),
+            expected_revision=0,
+            principal=principal,
+            role="member",
+            active=True,
+        )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=env.a.app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as agent_http:
+        agent_env = SimpleNamespace(**{**vars(env), "http": agent_http})
+        prompt = "Execute the A agent's chosen task on B"
+        delegation = await submit_task(agent_env, prompt)
+        result = await wait_state(env, delegation, {"completed"})
+        assert result.requester == principal
+        assert result.executor_node_id == env.b.s.node_id
+        assert result.executor_agent_id == env.b.actor
+        assert result.execution_id
+        response = await agent_http.get(env.base)
+        assert response.status_code == 200, response.text
+        view = response.json()
+        assert any(
+            message["actor"] == principal and message["text"] == prompt
+            for message in view["messages"]
+        )
+        completed = next(
+            row for row in view["delegations"] if row["delegation_id"] == delegation
+        )
+        assert completed["state"] == "completed"
+        assert completed["result_markdown"] == "Remote execution complete"
+
+    calls = [
+        json.loads(line)
+        for line in (env.root / "workspace" / "calls.jsonl").read_text().splitlines()
+    ]
+    assert len(calls) == 1 and calls[0]["prompt"] == prompt
+    async with env.a.s.sessions() as db:
+        task = await db.get(Task, result.task_id)
+        assert task.status == "done" and task.spec == prompt
+        events = await db.scalars(
+            select(ChannelEvent).where(
+                ChannelEvent.authority_node_id == env.a.s.node_id,
+                ChannelEvent.channel_id == env.a.channel,
+            )
+        )
+        commands = [json.loads(event.body).get("request", {}) for event in events]
+        completions = [
+            command for command in commands if command.get("kind") == "task.result"
+        ]
+        assert len(completions) == 1
+        assert completions[0]["payload"]["delegation_id"] == delegation
+        assert completions[0]["payload"]["execution_id"] == result.execution_id
