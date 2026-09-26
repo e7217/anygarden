@@ -853,7 +853,7 @@ def test_peer_migration_schema_matches_product_models(tmp_path):
         str(Path(__file__).resolve().parent.parent / "anygarden/db/migrations"),
     )
     cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{path}")
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["076_pi_native_auth"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["077_agent_creation_requests"]
     command.upgrade(cfg, "063")
     command.upgrade(cfg, "head")
     engine = create_engine(f"sqlite:///{path}")

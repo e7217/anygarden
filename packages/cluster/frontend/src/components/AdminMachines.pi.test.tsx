@@ -38,7 +38,9 @@ async function selectPiEngine() {
 
 it('requires an explicit provider and submits custom provider/model from Pi creation', async () => {
   render(<AdminMachines />)
-  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  const newAgent = await screen.findByRole('button', { name: 'New Agent' })
+  await waitFor(() => expect(newAgent).toBeEnabled())
+  fireEvent.click(newAgent)
   await selectPiEngine()
   const provider = await screen.findByLabelText('Provider (required)')
   expect(screen.getByText(/save a Pi provider API key before starting/)).toBeInTheDocument()
@@ -60,7 +62,9 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
 it('warns before creation when the machine Pi version fails the adapter gate (#687)', async () => {
   mocks.piVersion = '0.87.1'
   render(<AdminMachines />)
-  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  const newAgent = await screen.findByRole('button', { name: 'New Agent' })
+  await waitFor(() => expect(newAgent).toBeEnabled())
+  fireEvent.click(newAgent)
   await selectPiEngine()
   await screen.findByLabelText('Provider (required)')
   expect(await screen.findByText(/has pi-cli 0\.87\.1, but this build requires 0\.85\.1/)).toBeInTheDocument()
@@ -68,7 +72,9 @@ it('warns before creation when the machine Pi version fails the adapter gate (#6
 
 it('shows no version warning for the supported Pi version', async () => {
   render(<AdminMachines />)
-  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  const newAgent = await screen.findByRole('button', { name: 'New Agent' })
+  await waitFor(() => expect(newAgent).toBeEnabled())
+  fireEvent.click(newAgent)
   await selectPiEngine()
   await screen.findByLabelText('Provider (required)')
   expect(screen.queryByText(/but this build requires/)).not.toBeInTheDocument()

@@ -42,7 +42,9 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.calls.length = 0 })
 
 async function openPiDialog() {
   render(<AdminMachines />)
-  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  const newAgent = await screen.findByRole('button', { name: 'New Agent' })
+  await waitFor(() => expect(newAgent).toBeEnabled())
+  fireEvent.click(newAgent)
   await waitFor(() => expect(document.querySelector('option[value="pi-cli"]')).not.toBeNull())
   fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'pi-cli' } })
   await screen.findByLabelText('Provider (required)')
@@ -106,7 +108,9 @@ it('blocks creation for an invalid base URL', async () => {
 
 it('keeps direct server fields out of the Codex creation path', async () => {
   render(<AdminMachines />)
-  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  const newAgent = await screen.findByRole('button', { name: 'New Agent' })
+  await waitFor(() => expect(newAgent).toBeEnabled())
+  fireEvent.click(newAgent)
   fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'codex-cli' } })
   expect(screen.queryByLabelText('Connection type')).toBeNull()
   expect(screen.queryByLabelText('Base URL')).toBeNull()
