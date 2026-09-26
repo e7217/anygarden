@@ -11,7 +11,7 @@ redirect.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,11 +46,17 @@ class DelegationStatusOut(BaseModel):
     state: str
     process_state: str
     task_status: str
+    result_markdown: str | None = None
+    error: str | None = None
+    created_at: str | None = None
+    finished_at: str | None = None
+    can_cancel: bool = False
 
 
 @router.get("/{room_id}/delegations", response_model=list[DelegationStatusOut])
 async def list_room_delegations(
     room_id: str,
+    request: Request,
     identity: Identity = Depends(get_current_identity),  # noqa: B008
     db: AsyncSession = Depends(get_db),  # noqa: B008
 ):
@@ -77,6 +83,22 @@ async def list_room_delegations(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not a member of this room",
         )
+    service = getattr(request.app.state, "channel_service", None)
+    if service is not None:
+        stream = await db.scalar(
+            select(ChannelStream).where(ChannelStream.local_room_id == room_id)
+        )
+        if stream:
+            from anygarden.shared_channels.product import actor_policy, delegation_views
+
+            await service.local_access(
+                db,
+                identity=identity,
+                authority=stream.authority_node_id,
+                channel=stream.channel_id,
+            )
+            policy = await actor_policy(service, db, identity, stream)
+            return await delegation_views(service, db, stream, policy)
     rows = (
         await db.scalars(
             select(DelegationMirror)
@@ -89,4 +111,6 @@ async def list_room_delegations(
             .order_by(DelegationMirror.delegation_id)
         )
     ).all()
-    return [DelegationStatusOut.model_validate(row, from_attributes=True) for row in rows]
+    return [
+        DelegationStatusOut.model_validate(row, from_attributes=True) for row in rows
+    ]

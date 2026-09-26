@@ -182,6 +182,18 @@ class LocalExecutionManager:
         self._check_access(execution_id)
         return self._store.get(execution_id)
 
+    def owned_receipt(self, execution_id: str) -> Receipt:
+        """Trusted local owner can inspect stop proof after policy revocation.
+
+        Transport callers must independently validate the saved execution owner
+        and fingerprint. This never authorizes new execution or session access.
+        """
+        return self._store.get(execution_id)
+
+    async def owned_cancel(self, execution_id: str) -> Receipt:
+        """Trusted local owner can stop an execution after its grant is revoked."""
+        return await self._cancel(execution_id)
+
     async def revoke(self, scope: SessionScope) -> None:
         """Trusted local policy owner retires a binding and cancels its executions.
 

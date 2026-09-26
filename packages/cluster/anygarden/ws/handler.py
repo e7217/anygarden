@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import parse_qs
 from uuid import UUID, uuid4
 
 import structlog
@@ -62,6 +63,7 @@ from anygarden.orchestration.rules import (
 )
 from anygarden.ws.protocol import (
     ErrorOut,
+    ExecutionControlResultFrame,
     LifecycleFrame,
     MessageOut,
     ParticipantBrief,
@@ -1002,10 +1004,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     orchestrator_agent_id: str | None = None
     next_speaker_participant_id: str | None = None
     if identity and identity.kind == "agent":
+        from anygarden.shared_channels.models import ChannelStream
+
         async with session_factory() as db:
+            # Shared channels deliberately reject the ordinary room transport.
+            # Their executor uses the agent DM control channel, so advertising
+            # them here would cause a permanently denied auto-join loop.
             result = await db.execute(
                 select(Participant.id, Participant.room_id).where(
                     Participant.agent_id == identity.id,
+                    Participant.room_id.not_in(select(ChannelStream.local_room_id)),
                 )
             )
             pid_to_room = {row[0]: row[1] for row in result.all()}
@@ -1134,6 +1142,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         websocket,
         user_id=user_id,
         generation=runtime_generation,
+        execution_control=(
+            identity is not None and identity.kind == "agent"
+            and parse_qs(raw_query).get("execution_control") == ["1"]
+        ),
     )
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
 
@@ -1270,6 +1282,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 )
                 await websocket.close(code=4003, reason=str(exc.detail))
                 return
+
+            if isinstance(frame_in, ExecutionControlResultFrame):
+                transport = getattr(manager, "execution_transport", None)
+                if identity.kind == "agent" and transport is not None:
+                    await transport.resolve(
+                        agent_id=identity.id, participant_id=participant.id,
+                        room_id=room_id, websocket=websocket, frame=frame_in,
+                    )
+                continue
 
             if isinstance(frame_in, SendFrame):
                 is_guest = identity is not None and identity.kind == "guest"
@@ -2356,7 +2377,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     except Exception as exc:
         logger.error("ws.error", room_id=room_id, error=str(exc))
     finally:
-        await manager.unsubscribe(participant.id)
+        await manager.unsubscribe(participant.id, websocket=websocket)
         if guest_gauge_incremented:
             guest_active.dec()
 

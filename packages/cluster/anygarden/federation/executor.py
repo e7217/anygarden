@@ -64,16 +64,15 @@ class ExecutorBridge:
     def __init__(
         self,
         sessions,
-        directory: Path,
-        runtime: Runtime,
+        directory: Path | None = None,
+        runtime: Runtime | None = None,
         *,
         node_id: str,
         permits: Callable[[ExecutionFence], bool],
         reauthorize: Callable,
+        manager=None,
+        scope_factory=None,
     ):
-        # Lazy import: the cluster/core distribution need not install agent extras.
-        from anygarden_agent.runtime.execution import LocalExecutionManager
-
         self._closed = False
         self.sessions = sessions
         self.node_id = node_id
@@ -82,9 +81,19 @@ class ExecutorBridge:
         self._fences: dict[str, ExecutionFence] = {}
         self._disabled: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
-        self.manager = LocalExecutionManager(
-            directory, runtime, authorize=self._authorized_scope
-        )
+        if manager is None:
+            # Legacy in-process adapter, used by the runtime contract harness.
+            from anygarden_agent.runtime.execution import (
+                LocalExecutionManager,
+                SessionScope,
+            )
+
+            manager = LocalExecutionManager(directory, runtime, authorize=self._authorized_scope)
+            scope_factory = SessionScope
+        if scope_factory is None:
+            raise ValueError("Remote execution requires a scope factory")
+        self.manager = manager
+        self._scope_factory = scope_factory
 
     def _authorized_scope(self, scope: SessionScope) -> bool:
         fence = self._fences.get(scope.key)
@@ -101,9 +110,7 @@ class ExecutorBridge:
         )
 
     def _install(self, binding):
-        from anygarden_agent.runtime.execution import SessionScope
-
-        scope = SessionScope(**binding.scope)
+        scope = self._scope_factory(**binding.scope)
         fence = self._fence(binding)
         old = self._fences.get(scope.key)
         if old is not None and old != fence:
@@ -378,6 +385,12 @@ class ExecutorBridge:
                 )
                 if receipt["state"] == "accepted" and binding.local_state == "prepared":
                     binding.local_state = "accepted"
+            if receipt["revision"] >= binding.revision and receipt["state"] in {
+                "rejected", "completed", "failed", "cancelled"
+            }:
+                # Retire any remote prepare record even if this process crashes
+                # immediately after committing the terminal authority receipt.
+                binding.local_state = "cleanup_pending"
         return receipt
 
     @staticmethod
@@ -428,74 +441,88 @@ class ExecutorBridge:
             return await self.manager.start(invocation)
 
     async def observe(self, delegation_id: str) -> str | None:
-        """Translate durable runtime receipts to committed outbox intent only."""
-        async with (
-            self._locks.setdefault(delegation_id, asyncio.Lock()),
-            self._transaction() as db,
-        ):
-            binding = await self._binding(db, delegation_id)
-            if binding.authority_state not in {
-                "accepted",
-                "running",
-                "cancel_requested",
-            }:
-                return None
-            if binding.local_state in {"prepared", "accepted"}:
-                return None
+        """Read remote receipts outside SQL locks, then revalidate the binding."""
+        async with self._locks.setdefault(delegation_id, asyncio.Lock()):
+            async with self._transaction() as db:
+                binding = await self._binding(db, delegation_id)
+                if binding.authority_state not in {"accepted", "running", "cancel_requested"}:
+                    return None
+                if binding.local_state in {"prepared", "accepted"}:
+                    return None
+                expected = (binding.execution_id, binding.invocation_fingerprint,
+                            binding.revision, binding.generation, binding.local_state)
             try:
-                receipt = await self.manager.reconcile(binding.execution_id)
+                receipt = await self.manager.reconcile(expected[0])
             except KeyError:
-                # Could have crashed before or after spawn. Never fabricate stop.
-                binding.local_state = "unknown"
-                return await self._enqueue(db, binding, "task.unknown")
-            if receipt.outcome == "unknown":
-                binding.local_state = "unknown"
-                return await self._enqueue(db, binding, "task.unknown")
-            if binding.authority_state == "cancel_requested":
-                if receipt.outcome is not None and receipt.process_state in {
-                    "stopped",
-                    "not_started",
-                    "finished",
-                }:
+                receipt = None
+            if (
+                expected[-1] == "launch_intent"
+                and receipt is not None
+                and receipt.state == "prepared"
+                and receipt.process_state == "not_started"
+                and receipt.outcome is None
+            ):
+                # A crash or lost start request left only the durable prepare.
+                # Fence late starts before reporting an ambiguous attempt; never
+                # relaunch it or occupy an active worker slot indefinitely.
+                receipt = await self.manager.cancel(expected[0])
+            async with self._transaction() as db:
+                binding = await self._binding(db, delegation_id)
+                if expected != (binding.execution_id, binding.invocation_fingerprint,
+                                binding.revision, binding.generation, binding.local_state):
+                    return None
+                if receipt is None:
+                    binding.local_state = "unknown"
+                    return await self._enqueue(db, binding, "task.unknown")
+                if receipt.outcome == "unknown":
+                    binding.local_state = "unknown"
+                    return await self._enqueue(db, binding, "task.unknown")
+                if binding.authority_state == "cancel_requested":
+                    if receipt.outcome is not None and receipt.process_state in {
+                        "stopped",
+                        "not_started",
+                        "finished",
+                    }:
+                        return await self._enqueue(
+                            db,
+                            binding,
+                            "task.cancelled",
+                            process_state="not_started"
+                            if receipt.process_state == "not_started"
+                            else "stopped",
+                        )
+                    return None
+                if (
+                    receipt.outcome == "succeeded"
+                    and receipt.text
+                    and len(receipt.text) <= 16384
+                    and len(receipt.text.encode("utf-8")) <= 60000
+                ):
                     return await self._enqueue(
                         db,
                         binding,
-                        "task.cancelled",
-                        process_state="not_started"
-                        if receipt.process_state == "not_started"
-                        else "stopped",
+                        "task.result",
+                        outcome="succeeded",
+                        text=receipt.text,
                     )
+                if receipt.outcome == "failed" and receipt.error_code in FAILURE_CODES:
+                    return await self._enqueue(
+                        db,
+                        binding,
+                        "task.result",
+                        outcome="failed",
+                        error_code=receipt.error_code,
+                    )
+                if receipt.outcome is not None:
+                    # Empty/oversized success, spontaneous cancellation: no fabricated result.
+                    return await self._enqueue(db, binding, "task.unknown")
+                if (
+                    receipt.process_state == "running"
+                    and binding.authority_state == "accepted"
+                ):
+                    return await self._enqueue(db, binding, "task.started")
                 return None
-            if (
-                receipt.outcome == "succeeded"
-                and receipt.text
-                and len(receipt.text) <= 16384
-                and len(receipt.text.encode("utf-8")) <= 60000
-            ):
-                return await self._enqueue(
-                    db,
-                    binding,
-                    "task.result",
-                    outcome="succeeded",
-                    text=receipt.text,
-                )
-            if receipt.outcome == "failed" and receipt.error_code in FAILURE_CODES:
-                return await self._enqueue(
-                    db,
-                    binding,
-                    "task.result",
-                    outcome="failed",
-                    error_code=receipt.error_code,
-                )
-            if receipt.outcome is not None:
-                # Empty/oversized success, spontaneous cancellation: no fabricated result.
-                return await self._enqueue(db, binding, "task.unknown")
-            if (
-                receipt.process_state == "running"
-                and binding.authority_state == "accepted"
-            ):
-                return await self._enqueue(db, binding, "task.started")
-            return None
+
 
     async def cancel(
         self, delegation_id: str, snapshot: AuthoritySnapshot
@@ -512,20 +539,21 @@ class ExecutorBridge:
                     and binding.authority_state == "cancel_requested"
                 ):
                     pending = await self._pending(db, binding)
-                    if pending is not None:
+                    if pending is not None and binding.local_state != "cancel_pending_prepare":
                         return pending.id
                 binding.revision, binding.authority_state = (
                     snapshot.revision,
                     snapshot.state,
                 )
                 pending = await self._pending(db, binding)
-                if pending:
+                prepared_retry = binding.local_state == "cancel_pending_prepare"
+                if pending and not prepared_retry:
                     pending.state = "superseded"
-                unstarted = binding.local_state in {"prepared", "accepted"}
-                binding.local_state = "cancel_requested"
+                unstarted = binding.local_state in {"prepared", "accepted", "cancel_pending_prepare"}
+                binding.local_state = "cancel_pending_prepare" if unstarted else "cancel_requested"
                 execution_id = binding.execution_id
                 if unstarted:
-                    return await self._enqueue(
+                    pending_id = pending.id if prepared_retry and pending else await self._enqueue(
                         db, binding, "task.cancelled", process_state="not_started"
                     )
             try:
@@ -533,6 +561,11 @@ class ExecutorBridge:
             except KeyError:
                 # A launch_intent without runtime receipt remains ambiguous.
                 pass
+            if unstarted:
+                async with self._transaction() as db:
+                    binding = await self._binding(db, delegation_id)
+                    binding.local_state = "cancel_requested"
+                return pending_id
         return await self.observe(delegation_id)
 
     async def revoke(self, scope: SessionScope):

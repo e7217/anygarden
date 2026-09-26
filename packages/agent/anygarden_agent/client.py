@@ -131,6 +131,7 @@ class ChatClient:
         # Trusted startup snapshot; room wire messages never mutate this.
         self.execution_launch = execution_launch
         self.execution_launch_ready = False
+        self._execution_control = None
         self._server_url = server_url.rstrip("/")
         self._token = token
         self._agent_name = agent_name
@@ -537,6 +538,9 @@ class ChatClient:
                 pass
         self._connections.clear()
         self._ready_rooms.clear()
+        if self._execution_control is not None:
+            await self._execution_control.close()
+            self._execution_control = None
         adapter = getattr(self, "_execution_adapter", None)
         if adapter is not None:
             await adapter.stop()
@@ -734,7 +738,9 @@ class ChatClient:
     async def _process_frame(self, room_id: str, data: dict[str, Any], *, background_handlers: bool = False) -> None:
         """Handle a single incoming WS frame (called from _room_loop)."""
         msg_type = data.get("type")
-        if msg_type == "message":
+        if msg_type == "execution_control":
+            await self._handle_execution_control(room_id, data)
+        elif msg_type == "message":
             # Issue #157 Phase B — record the message for cycle detection
             # before any early-return filters fire. Self / nonce-echo
             # frames still count: the detector tracks (sender, hash)
@@ -1028,6 +1034,63 @@ class ChatClient:
                 logger.error("handler.message_error", error=str(exc))
                 metrics.client_handler_error_total.inc()
 
+    def _can_control_execution(self) -> bool:
+        adapter = getattr(self, "_execution_adapter", None)
+        return bool(
+            self.execution_launch_ready and adapter is not None
+            and self._generation is not None and os.name == "posix"
+            and (adapter._permission_level or "standard") in {"restricted", "standard"}
+        )
+
+    async def _handle_execution_control(self, room_id: str, data: dict[str, Any]) -> None:
+        from anygarden_agent.runtime.execution.control import AgentExecutionControl, ControlError
+        from anygarden_agent.runtime.execution.codex import CodexRuntime
+        from anygarden_agent.runtime.execution.pi import PiRuntime
+
+        request_id, action = data.get("request_id"), data.get("action")
+        if (
+            not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
+            or data.get("agent_id") != self._agent_id
+            or data.get("generation") != self._generation
+            or action not in {"prepare", "describe", "start", "reconcile", "cancel", "revoke"}
+            or not isinstance(data.get("payload"), dict)
+        ):
+            return
+        result, error = None, None
+        try:
+            if not self._can_control_execution():
+                raise ControlError("UNSUPPORTED_PERMISSION")
+            if self._execution_control is None:
+                adapter = self._execution_adapter
+                runtime_cls = PiRuntime if adapter._engine == "pi-cli" else CodexRuntime
+                runtime = runtime_cls(Path(adapter._codex_path).absolute())
+                if adapter._engine == "codex-cli":
+                    runtime.observed_version = adapter._runtime_version
+                auth_home = adapter._environment.get("CODEX_HOME")
+                self._execution_control = AgentExecutionControl(
+                    root=adapter._root, agent_id=self._agent_id,
+                    launch=lambda: adapter._launch, runtime=runtime,
+                    permission_level=adapter._permission_level or "standard",
+                    instructions=adapter._system_prompt or "",
+                    reasoning_effort=adapter._reasoning_effort,
+                    timeout_seconds=adapter._turn_timeout,
+                    codex_auth_source=Path(auth_home) / "auth.json" if auth_home else None,
+                )
+            self._execution_control.attach(room_id)
+            result = await self._execution_control.handle(action, data["payload"])
+        except ControlError as exc:
+            error = exc.code
+        except Exception:
+            # Never reflect private launch configuration or exception text.
+            error = "EXECUTION_UNAVAILABLE"
+        ws = self._connections.get(room_id)
+        if ws is not None:
+            await ws.send(json.dumps({
+                "type": "execution_control_result", "request_id": request_id,
+                "action": action, "generation": self._generation,
+                "result": result, "error_code": error,
+            }))
+
     async def _room_loop(self, room_id: str) -> None:
         """Reconnection loop with exponential backoff + since_seq recovery."""
         delay = 1.0
@@ -1051,6 +1114,8 @@ class ChatClient:
                     ws_base = "ws" + ws_base[len("http"):]
                 ws_url = f"{ws_base}/ws/rooms/{room_id}"
                 query: list[str] = ["ready=1"]
+                if self._can_control_execution():
+                    query.append("execution_control=1")
                 if since > 0:
                     query.append(f"since_seq={since}")
                 if self._generation is not None:
@@ -1152,6 +1217,8 @@ class ChatClient:
             except Exception as exc:
                 logger.error("ws.unexpected_error", room_id=room_id, error=str(exc))
             finally:
+                if self._execution_control is not None:
+                    await self._execution_control.disconnected(room_id)
                 self._connections.pop(room_id, None)
                 self._ready_rooms.discard(room_id)
 

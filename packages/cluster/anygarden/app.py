@@ -1050,6 +1050,32 @@ async def _startup_server(app: FastAPI) -> None:
                 name="delegation_sweeper",
             )
 
+    # Shared-channel sync and execution are owned by the application lifecycle.
+    # The server only coordinates the authenticated, placed agent runtime.
+    if (
+        getattr(app.state, "channel_service", None) is not None
+        and getattr(app.state, "federation_execution_worker", None) is None
+    ):
+        from anygarden.federation.execution_transport import ExecutionTransport
+        from anygarden.federation.execution_worker import FederationExecutionWorker
+
+        try:
+            execution_interval = float(
+                os.environ.get("ANYGARDEN_FEDERATION_EXECUTION_INTERVAL_SEC", "2")
+            )
+        except ValueError:
+            execution_interval = 2.0
+        if execution_interval > 0:
+            app.state.execution_transport = ExecutionTransport(
+                app.state.session_factory, app.state.connection_manager
+            )
+            app.state.federation_execution_worker = FederationExecutionWorker(
+                app.state.channel_service,
+                app.state.execution_transport,
+                interval=min(execution_interval, 5.0),
+            )
+            app.state.federation_execution_worker.start()
+
     # #302 — autonomous responsibility (Goal) scheduler. Single
     # in-process polling loop; multi-replica coordination lands in
     # Phase 3 with PostgreSQL advisory locks. Tests may pre-set
@@ -1088,6 +1114,10 @@ async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
+
+    execution_worker = getattr(app.state, "federation_execution_worker", None)
+    if execution_worker is not None:
+        await execution_worker.close()
 
     # #420 — flush buffered spans then close the tracer provider so the
     # BatchSpanProcessor's queue isn't dropped on shutdown.

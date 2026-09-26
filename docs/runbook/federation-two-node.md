@@ -1,38 +1,53 @@
 # Two-node federation operations runbook
 
 Operational sequence for two independent AnyGarden nodes exchanging agent
-tasks over a shared channel (issue #586 milestone; verified on real machines
-in task #50/#54, provider-free).
+tasks over a shared channel. For the message-to-agent product flow and supported
+execution conditions, see [federated delegation](../federated-delegation.md).
+The current product acceptance test runs two isolated local apps with real mTLS,
+agent WebSocket control and a provider-free subprocess fixture; it does not
+claim a new deployment verification on separate physical hosts.
 
 ## Prerequisites
 
-- Two hosts (different machines/CTs preferred) with independent storage; the
-  wheel installed on each with both extras: `pip install 'anygarden[server,agent]'`.
+- Two hosts (different machines/CTs preferred) with independent storage.
+  Install `anygarden[server]` on server hosts and the matching machine/agent
+  packages on execution hosts; an integrated node installs both server and
+  agent extras. Upgrade the protocol participants together.
 - Exactly **one** inbound TCP port per node allowed from the other node
   (the mTLS federation listener; deployments typically pin 8451/tcp on both).
   The listener mounts only `/api/v1/federation/*` plus the shared-channel peer
   routes over mutual TLS with pinned node certificates.
-- **Network isolation discipline (verified pattern)**: keep nodes on the
+- **Network isolation example**: keep nodes on the
   **existing LAN bridge** and enforce isolation with **node-local nftables** —
-  allow only the peer mTLS range (8443–8451/tcp) from the peer node and
+  allow only the configured peer mTLS port (for example 8451/tcp) from the peer node and
   management SSH; block internet and the wider LAN. Do **not** full-reload
   host firewall/bridge configuration: check which services depend on it
   before the change and verify connectivity after (a prior full reload
   severed agent/runner connectivity itself). A *dedicated* bridge pair is an
-  advanced option, not the default. Internet access is not required.
-- Deployment access (e.g. iac-manager SSH) and a built wheel
-  (`uv build --package anygarden`); nodes may be offline during deployment.
+  advanced option, not the default. Federation itself does not require internet
+  access; execution hosts using a cloud model must be able to reach their
+  configured provider. Browser and execution-host access to the ordinary
+  HTTP(S)/agent WebSocket endpoint must also remain available; that endpoint
+  is separate from the peer mTLS listener.
+- Deployment access (e.g. iac-manager SSH) and matching built server, machine and
+  agent wheels plus their dependency wheels. `uv build --package anygarden`
+  builds only the server/dispatcher distribution; build or collect the other
+  required wheels separately. Nodes may be offline during installation.
 
 ## Node bring-up
 
-1. Deploy the wheel offline and create the service user **before** placing
+1. For the integrated-node setup below, deploy the matching wheels offline and
+   create the service user **before** placing
    credentials — the systemd unit runs as `anygarden`, and credentials created
    by root would be unreadable to it:
 
    ```sh
    # on the operator host
    uv build --package anygarden
-   scp dist/anygarden-*.whl node:/tmp/wheels/
+   uv build --package anygarden-machine
+   uv build --package anygarden-agent
+   # Include the matching dependency wheels in dist/ before an offline install.
+   scp dist/*.whl node:/tmp/wheels/
    # on the node (root)
    useradd --system --home /var/lib/anygarden/alpha --shell /usr/sbin/nologin anygarden
    mkdir -p /var/lib/anygarden/alpha /opt/wheels
@@ -74,12 +89,17 @@ in task #50/#54, provider-free).
 2. Bind the shared channel on the authority (`POST /api/v1/shared-channels/bindings`)
    to an empty local room, approve publication for the participants, and add
    remote principals (roster).
-3. The mirror binds its own local room to the same
-   `{authority, channel}` pair, pulls the replay from the durable cursor, and
-   ACKs. From here `task.request` commands from the mirror run the delegation
-   loop: request → accept → started → result/cancel, with the remote executor
-   gated by the authority's local policy (current grant + `task.execute`).
-4. Disconnect recovery is pull-based: the mirror refetches from its durable
+3. The mirror binds its own local room to the same `{authority, channel}` pair.
+   App-owned workers pull from the durable cursor, ACK events, and retry
+   unconfirmed commands automatically. Publish the intended executor and grant
+   its current principal `channel.read` and `task.execute`; publish the requester
+   with the applicable read/message/task-request permissions.
+4. Open the shared room and delegate a confirmed root message to a named agent.
+   The API creates the source-backed Task and delegation atomically. After
+   authority acceptance, authenticated DM control starts the strict runtime on
+   the agent's placed machine. Results and confirmed cancellation return through
+   the durable channel log. The cluster host never substitutes a local CLI.
+5. Disconnect recovery is pull-based: the mirror refetches from its durable
    cursor after reconnect; lost ACKs and repeated deliveries are idempotent
    (receipt-keyed). Late results after cancellation are rejected.
 
@@ -100,10 +120,17 @@ in task #50/#54, provider-free).
 - Cleanup after restarts: `anygarden stop --data-dir <dir>` confirms owner
   release; a node that exits nonzero requires recovery before it will start
   again (ownership state machine).
-- Orphaned delegations (executor never picked up within the pickup timeout)
-  are finished by the delegation sweeper (follow-up backlog).
+- The pickup sweeper requests cancellation when an executor never accepts
+  within its configured timeout. It does not fabricate process termination;
+  the executor coordinator confirms not-started or stopped evidence.
+- `ANYGARDEN_FEDERATION_EXECUTION_INTERVAL_SEC=0` disables automatic shared
+  synchronization and execution processing. The default is two seconds; enabled
+  polling is capped at five seconds to retain the short agent control lease.
 
-## Homelab isolation pattern (field-tested)
+## Optional dedicated-network layout
+
+This is an alternative deployment layout, not a claim that the current change
+was deployed and verified on separate hosts.
 
 - One dedicated bridge per node network (independent /24s), CTs on different
   physical hosts to avoid a single failure domain.

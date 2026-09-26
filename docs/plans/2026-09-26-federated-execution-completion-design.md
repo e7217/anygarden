@@ -2,12 +2,12 @@
 
 사용자가 독립적으로 설치한 Anygarden 서버 간 위임까지 범위를 확인했다. 요청 저장만으로 완료하지 않고 사용자 조작에서 실제 배치된 에이전트 실행, 결과·실패·취소와 재시작 복구까지 연결한다. 외부 모델의 과금 호출 없이 격리된 실행기로 실제 앱·인증·전송·런타임 계약을 검증한다.
 
-## 기존 구성과 빠진 연결
+## 구현 전 확인한 구성과 빠진 연결
 
 - ChannelService의 mTLS·grant·동의·로스터·멱등 command/inbox/outbox 계약을 유지한다.
 - DelegationService는 요청/수락/실행/종료 상태와 Task 권위를 소유한다.
-- ExecutorBridge는 실제 실행 전에 durable intent를 남기는 구성이나 제품 startup에 연결되지 않았다.
-- sync.pull과 retry_submission은 수동 API에만 연결되어 있다.
+- 당시 ExecutorBridge는 실제 실행 전에 durable intent를 남기는 구성이었으나 제품 startup에 연결되지 않았다.
+- 당시 sync.pull과 retry_submission은 수동 API에만 연결되어 있었다.
 - 공유 방은 일반 Task 생성 API를 거부한다. 기존 테스트의 직접 Task 삽입으로는 사용자가 시작하는 흐름을 입증하지 못한다.
 - 서버 프로세스에서 임의 CLI를 실행하면 실행 머신 배치·인증·workspace 경계를 우회한다. 배치된 에이전트의 신뢰할 수 있는 로컬 실행 구성을 사용해야 한다.
 
@@ -27,15 +27,23 @@
 
 ## 구현 방향
 
-1. 메시지 기반 작업 생성과 위임을 하나의 권한 검증된 트랜잭션으로 연결한다. 기존 `task.request` wire를 보존할 수 있도록 authority/channel/source에서 유도한 Task ID를 사용하고, 해당 유도 ID의 요청만 원본 메시지에서 Task를 생성하는 방식을 우선 검토한다. 임의 기존 Task 참조와 충돌은 기존 거부 계약을 유지한다. local UI API는 UUID 입력 대신 메시지·대상을 받아 같은 command/submission 경로로 보낸다.
+1. 메시지 기반 작업 생성과 위임을 하나의 권한 검증된 트랜잭션으로 연결한다. 기존 `task.request` wire를 보존할 수 있도록 authority/channel/source에서 유도한 Task ID를 사용하고, 해당 유도 ID의 요청만 원본 메시지에서 Task를 생성한다. 임의 기존 Task 참조와 충돌은 기존 거부 계약을 유지한다. local UI API는 UUID 입력 대신 메시지·대상을 받아 같은 command/submission 경로로 보낸다.
 2. executor로 지정된 에이전트만 접근할 수 있는 인증된 peer 실행 문맥/상태 조회를 제공한다. 현재 grant·roster·executor를 매번 검증하며 모델 키·로컬 파일 경로·native session은 peer에 보내지 않는다.
 3. startup/shutdown이 소유하는 worker가 허용된 local principal로 공유 이벤트와 미확인 submission을 자동 동기화하고, mirror/outbox/미완료 binding을 회복한다. projection 함수 안에서는 프로세스를 실행하지 않는다.
-4. cluster의 조정 저장소와 실제 배치된 agent runtime 사이에 prepare/start/reconcile/cancel 경계를 둔다. 기존 agent DM의 인증된 WebSocket 직접 제어 프레임을 사용하는 방식을 조사한다. 에이전트는 항상 DM을 가지고 있으므로 별도 사용자 방을 만들 필요가 없다. 서버가 프롬프트와 scope만 전달하고, 실제 경로·모델·공급자·비밀은 agent의 신뢰할 수 있는 launch snapshot에서 결정한다. peer 입력이 실행 설정을 바꾸지 못하게 한다.
+4. cluster의 조정 저장소와 실제 배치된 agent runtime 사이에 prepare/start/reconcile/cancel 경계를 둔다. 제품 생성 흐름에서 마련한 agent DM의 인증된 WebSocket 직접 제어 프레임을 사용한다. 별도 사용자 방을 만들지 않으며, DM이나 현재 실행 제어 연결이 없는 에이전트는 실행 불가로 처리한다. 서버가 프롬프트와 scope만 전달하고, 실제 경로·모델·공급자·비밀은 agent의 신뢰할 수 있는 launch snapshot에서 결정한다. peer 입력이 실행 설정을 바꾸지 못하게 한다.
 5. 일반 room runtime의 ambient tool/MCP 설정을 원격 실행에 그대로 적용하지 않는다. 원격 실행은 기존 strict CodexRuntime/PiRuntime, 별도 runtime home, 로컬 허용 권한 및 workspace fence를 사용한다. Pi room self-tools extension과 서버 bearer는 원격 실행에 전달하지 않는다.
 6. 결과·실패·취소 상태와 원본 메시지를 사용자 화면에서 연결한다. 기존 원시 ID 기반 관리 기능은 저장 설정을 깨지 않으면서 일반 경로에서 숨긴다.
 
-4번의 실행 transport 세부 계약은 구현 전에 실제 manager/프로토콜 구조와 함께 확정한다. 이 문서는 미완료 경로를 완료로 선언하는 문서가 아니다.
+4번의 실행 transport 계약과 조건표는 [에이전트 실행 제어 설계](2026-09-26-agent-execution-control-design.md)에 기록했다. 아래 구현 결과는 로컬 격리 검증 범위이며 외부 호스트 배포 완료를 의미하지 않는다.
 
 ## 검증
 
 독립 앱 2개와 실제 mTLS, 별도 저장소/작업 공간, 과금 없는 실행기를 사용한다. 테스트가 ExecutorBridge를 직접 호출하지 않고 사용자 API→startup worker→실제 agent transport/runtime→authority 결과 경로를 통과해야 한다. 성공·엔진 실패·시작 전후 취소·재전송·ACK 유실·재시작·잘못된 대상/권한 철회를 확인한다. 서버 전용 배치와 통합 로컬 머신의 두 경로가 같은 실행 제어 계약을 따르는지도 검증한다.
+
+## 구현 결과
+
+공유 방 사용자 화면, 메시지 기반 Task 생성·위임·취소 API, 현재 권한을 검증하는 peer 실행 문맥, 앱 소유 동기화/실행 작업자, 에이전트 DM 실행 제어와 영속 prepare 기록을 연결했다. 제품 서버의 실행 조정 경로는 agent runtime을 import하거나 CLI를 실행하지 않는다.
+
+실행은 최대 8개 독립 작업으로 확인하고 공유 동기화의 대기와 분리한다. 취소 전 준비 기록과 종료 후 정리 의도도 영속 저장하며, 권한 철회·연결 상실에는 실행을 정지한다. 실행이 불확실하면 자동 재시작하지 않는다.
+
+같은 테스트 호스트에서 별도 저장소를 사용하는 제품 앱 두 개의 실제 mTLS·agent WS·strict subprocess 경로에서 사용자 API로 만든 작업의 성공, 실패, 실행 전후 취소, 준비 직후 취소, 결과 ACK 유실+작업자 재시작, 권한 철회 후 정지를 검증했다. 외부 모델 호출, 별도 외부 호스트 배포, 공개 패키지 배포는 수행하지 않았다. 사용 범위와 운영 절차는 [독립 서버 간 작업 위임](../federated-delegation.md)에 기록한다.

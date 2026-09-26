@@ -55,6 +55,18 @@ FAILURE_CODES = {
 }
 
 
+def source_task_id(
+    authority_node_id: str, channel_id: str, source_message_id: str
+) -> str:
+    """One source-backed Task, in a namespace distinct from execution IDs."""
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            f"anygarden:shared-source-task:v1:{authority_node_id}:{channel_id}:{source_message_id}",
+        )
+    )
+
+
 class DelegationError(ChannelError):
     def __init__(self, code: str):
         super().__init__(code, status=409)
@@ -124,7 +136,10 @@ class DelegationService:
             "task.unknown",
         ):
             old = channel_service.submitters.get(kind)
-            if old is not None and getattr(old, "__delegation_owner__", None) is not self:
+            if (
+                old is not None
+                and getattr(old, "__delegation_owner__", None) is not self
+            ):
                 raise DelegationError("SUBMITTER_CONFLICT")
             submit.__delegation_owner__ = self
             channel_service.submitters[kind] = submit
@@ -436,6 +451,44 @@ class DelegationService:
             DelegationReservation, p["task_id"]
         ):
             raise DelegationError("CLAIM_CONFLICT")
+        # The product facade requests this derived ID. Creation belongs in
+        # the same serialized authority transaction as claim/event/receipt;
+        # arbitrary task IDs retain the existing claim-only contract.
+        if (
+            p["task_id"]
+            == source_task_id(
+                self.authority_node_id, channel_id, p["source_message_id"]
+            )
+            and await db.get(Task, p["task_id"]) is None
+        ):
+            message = await db.get(Message, source.local_message_id)
+            existing_source = await db.scalar(
+                select(Task.id).where(Task.source_message_id == source.local_message_id)
+            )
+            if (
+                message is None
+                or message.room_id != channel_id
+                or message.parent_message_id is not None
+                or existing_source is not None
+            ):
+                raise DelegationError("CLAIM_CONFLICT")
+            text = message.content
+            db.add(
+                Task(
+                    id=p["task_id"],
+                    room_id=channel_id,
+                    source_message_id=source.local_message_id,
+                    title=(text.strip().splitlines() or ["Delegated task"])[0][:500],
+                    spec=text,
+                    status="todo",
+                    created_by=(
+                        actor.user_id
+                        if envelope["actor"]["node_id"] == self.authority_node_id
+                        else None
+                    ),
+                )
+            )
+            await db.flush()
         result = await db.execute(
             update(Task)
             .where(
@@ -699,7 +752,9 @@ class DelegationService:
                     Delegation.state.in_(("requested", "accepted", "running")),
                 )
             )
-            scored.append((int(active or 0), f"{entry.node_id}:{entry.principal_id}", executor))
+            scored.append(
+                (int(active or 0), f"{entry.node_id}:{entry.principal_id}", executor)
+            )
         if not scored:
             return None
         scored.sort(key=lambda item: (item[0], item[1]))
@@ -783,10 +838,7 @@ class DelegationService:
         """
         async with channel_service.sessions() as db:
             record = await db.get(Delegation, delegation_id)
-            if (
-                record is None
-                or record.authority_node_id != self.authority_node_id
-            ):
+            if record is None or record.authority_node_id != self.authority_node_id:
                 raise DelegationError("DELEGATION_MISSING")
             if record.state != "rejected":
                 raise DelegationError("STATE_CONFLICT")
@@ -852,8 +904,10 @@ class DelegationService:
                         delegation_id=delegation_id,
                         task_id=record.task_id,
                         target=dict(requester),
-                        payload={"reason": "NO_ALTERNATIVE_EXECUTOR",
-                                 "excluded": sorted(f"{n}:{a}" for n, a in excluded)},
+                        payload={
+                            "reason": "NO_ALTERNATIVE_EXECUTOR",
+                            "excluded": sorted(f"{n}:{a}" for n, a in excluded),
+                        },
                         state="pending",
                     )
                 )

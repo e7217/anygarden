@@ -8,10 +8,36 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Incoming (client -> server) ──────────────────────────────────────
+
+
+class ExecutionControlResultFrame(BaseModel):
+    """Only authenticated current agent control responses enter this frame."""
+    model_config = {"extra": "forbid"}
+    type: Literal["execution_control_result"] = "execution_control_result"
+    request_id: str = Field(min_length=1, max_length=128)
+    action: Literal["prepare", "describe", "start", "reconcile", "cancel", "revoke"]
+    generation: int = Field(ge=0, strict=True)
+    result: dict[str, Any] | None = None
+    error_code: Literal[
+        "EXECUTION_UNAVAILABLE", "UNSUPPORTED_PERMISSION", "AUTH_MISSING", "INVALID_REQUEST",
+        "EXECUTION_CONFLICT", "EXECUTION_UNKNOWN", "GENERATION_CHANGED", "CONFIGURATION_CHANGED",
+        "POLICY_DENIED", "EXECUTION_QUEUE_FULL", "CONTROL_DISCONNECTED", "LOCAL_STORAGE_UNSAFE",
+        "WRONG_CONTROL_ROOM",
+    ] | None = None
+
+
+class ExecutionControlOut(BaseModel):
+    model_config = {"extra": "forbid"}
+    type: Literal["execution_control"] = "execution_control"
+    request_id: str = Field(min_length=1, max_length=128)
+    agent_id: str
+    generation: int = Field(ge=0, strict=True)
+    action: Literal["prepare", "describe", "start", "reconcile", "cancel", "revoke"]
+    payload: dict[str, Any]
 
 
 class SendFrame(BaseModel):
@@ -121,7 +147,7 @@ class LifecycleFrame(BaseModel):
 
 
 IncomingFrame = (
-    SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame | LifecycleFrame
+    SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame | LifecycleFrame | ExecutionControlResultFrame
 )
 
 
@@ -129,6 +155,8 @@ def parse_incoming(data: dict[str, Any]) -> IncomingFrame:
     """Dispatch raw JSON to the correct frame model."""
     frame_type = data.get("type")
     match frame_type:
+        case "execution_control_result":
+            return ExecutionControlResultFrame.model_validate(data)
         case "send":
             return SendFrame.model_validate(data)
         case "typing":

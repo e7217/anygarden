@@ -30,6 +30,7 @@ export interface Room {
   // rooms always carry a project id.
   project_id: string | null;
   is_dm: boolean;
+  shared_channel?: { authority_node_id: string; channel_id: string } | null;
   // Self-referential FK into the same table. ``null`` means top-
   // level room (directly under its project); a non-null value
   // means this is a sub-room of the referenced parent. The

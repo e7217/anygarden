@@ -92,6 +92,8 @@ class PiRuntime:
             "--provider",
             invocation.provider,
         ]
+        if invocation.permission_level == "restricted":
+            cmd += ["--tools", "read,grep,find,ls"]
         if invocation.model:
             cmd += ["--model", invocation.model]
         if session:
