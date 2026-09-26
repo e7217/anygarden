@@ -1,5 +1,6 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Select } from '@/components/ui/select'
 import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search, PanelRight, ListTree } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
@@ -62,6 +63,7 @@ interface RoomHeaderProps {
   dmAgent?: DmAgent
   onSetRepresentative?: (agentId: string | null) => void
   onManageAgents?: () => void
+  onManageWorkspaces?: () => void
   onCreateSubRoom?: () => void
   onEditRoom?: () => void
   onManageInvites?: () => void
@@ -132,6 +134,7 @@ export default function RoomHeader({
   dmAgent,
   onSetRepresentative,
   onManageAgents,
+  onManageWorkspaces,
   onCreateSubRoom,
   onEditRoom,
   onManageInvites,
@@ -170,7 +173,7 @@ export default function RoomHeader({
             variant="ghost"
             size="icon"
             onClick={onOpenSidebar}
-            className="min-h-11 min-w-11 shrink-0 md:hidden"
+            className="shrink-0 md:hidden"
             aria-label={t('chat.openSidebar')}
           >
             <Menu className="h-5 w-5" />
@@ -179,7 +182,7 @@ export default function RoomHeader({
         {immediateParent && (
           <button
             onClick={() => navigate(`/rooms/${immediateParent.id}`)}
-            className="flex min-h-11 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+            className="flex h-[var(--control-icon-size)] shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
             title={t('chat.backToParent', { name: immediateParent.name })}
             data-testid="room-header-parent-link"
           >
@@ -205,7 +208,7 @@ export default function RoomHeader({
         ) : (
           <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
         )}
-        <h2 className="min-w-0 truncate text-base font-semibold text-[var(--color-foreground)] @[32rem]/header:text-heading" title={roomName}>{roomName}</h2>
+        <h2 className="min-w-0 truncate text-base font-semibold text-[var(--color-foreground)]" title={roomName}>{roomName}</h2>
       </div>
       <div className="col-span-2 row-start-2 flex min-w-0 items-center gap-2 overflow-hidden pl-1 @[54rem]/header:col-span-1 @[54rem]/header:col-start-2 @[54rem]/header:row-start-1 @[54rem]/header:pl-0">
         {participantCount !== undefined && (
@@ -216,7 +219,7 @@ export default function RoomHeader({
               // ``hover:bg-[var(--color-surface-hover)] cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
               // docs/history/STATUS.md (PR #31/#32).
-              className="text-caption text-[var(--color-foreground-muted)] flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer @[54rem]/header:min-h-9 @[54rem]/header:min-w-9"
+              className="text-caption text-[var(--color-foreground-muted)] flex h-[var(--control-icon-size)] min-w-[var(--control-icon-size)] shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
               aria-label={t('chat.showParticipants', { count: participantCount })}
               title={t('chat.showParticipantsTitle')}
               data-testid="room-header-participants-toggle"
@@ -236,10 +239,10 @@ export default function RoomHeader({
             to know the current representative without opening a
             menu. */}
         {onSetRepresentative && agentParticipants && agentParticipants.length > 0 && (
-          <select
+          <Select
             value={representativeAgentId ?? ''}
             onChange={(e) => onSetRepresentative(e.target.value || null)}
-            className="h-11 min-w-0 max-w-40 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-foreground)] @[54rem]/header:h-9 @[54rem]/header:w-40 @[54rem]/header:flex-none"
+            className="h-[var(--control-icon-size)] max-w-40 flex-1 border-[var(--color-border)] px-2 text-sm @[54rem]/header:w-36 @[54rem]/header:flex-none"
             title={t('chat.setRepresentative')}
             aria-label={t('chat.setRepresentative')}
           >
@@ -250,7 +253,7 @@ export default function RoomHeader({
                 {ap.online === false ? t('chat.offlineSuffix') : ''}
               </option>
             ))}
-          </select>
+          </Select>
         )}
         {isDm && onToggleEphemeral !== undefined && (
           /* #237 — active uses the design system's teal action token;
@@ -265,7 +268,7 @@ export default function RoomHeader({
             }
             aria-pressed={!!ephemeral}
             data-testid="room-header-ephemeral-toggle"
-            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors @[54rem]/header:h-9 @[54rem]/header:w-9 ${
+            className={`inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
               ephemeral
                 ? 'bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]'
                 : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
@@ -278,7 +281,7 @@ export default function RoomHeader({
             )}
           </button>
         )}
-        <Badge variant={connected ? 'default' : 'destructive'} aria-label={connected ? t('chat.connected') : t('chat.disconnected')}>
+        <Badge variant={connected ? 'success' : 'destructive'} aria-label={connected ? t('chat.connected') : t('chat.disconnected')}>
           <span className="hidden sm:inline">{connected ? t('chat.connected') : t('chat.disconnected')}</span>
           <span className="sm:hidden">{connected ? '●' : '○'}</span>
         </Badge>
@@ -307,7 +310,7 @@ export default function RoomHeader({
             title={t('chat.searchShortcut')}
             aria-label={t('chat.searchMessages')}
             data-testid="room-header-search"
-            className="hidden @[30rem]/header:inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[30rem]/header:inline-flex size-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
           >
             <Search className="h-4 w-4" />
           </button>
@@ -319,7 +322,7 @@ export default function RoomHeader({
             title={t('chat.threadModeTitle', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline') })}
             aria-label={t('chat.threadModeAction', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline'), next: t(threadDisplayMode === 'panel' ? 'chat.threadModeInline' : 'chat.threadModePanel') })}
             data-testid="thread-mode-toggle"
-            className="hidden @[34rem]/header:inline-flex h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[34rem]/header:inline-flex h-[var(--control-icon-size)] items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
           >
             {threadDisplayMode === 'panel' ? (
               <PanelRight className="h-4 w-4" />
@@ -334,7 +337,10 @@ export default function RoomHeader({
           onEditRoom={onEditRoom}
           onManageInvites={onManageInvites}
           onManageAgents={onManageAgents}
+          onManageWorkspaces={onManageWorkspaces}
           onSearch={onSearch}
+          threadDisplayMode={threadDisplayMode}
+          onToggleThreadDisplayMode={onToggleThreadDisplayMode}
           onShowArtifacts={onShowArtifacts}
           onShowRoomActivity={onShowRoomActivity}
           onStopAllAgents={onStopAllAgents}

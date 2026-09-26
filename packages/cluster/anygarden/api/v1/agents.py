@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.agent_availability import render_unavailable_message
+from anygarden.agent_availability import SPAWN_FAILED, render_unavailable_message
 from anygarden.agent_files import AgentFilePathError, validate_agent_file_path
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import (
@@ -43,6 +48,7 @@ if TYPE_CHECKING:
     from anygarden.scheduler.machine_bus import MachineBus
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+logger = logging.getLogger(__name__)
 
 
 # ── Request / Response schemas ───────────────────────────────────────
@@ -94,6 +100,10 @@ ProviderName = Annotated[
 class AgentCreate(BaseModel):
     engine: str
     name: str
+    # Optional initial placement. Omitted keeps automatic scheduling; normal
+    # restart/failover policy still applies after this initial placement.
+    machine_id: str | None = None
+    request_id: UUID | None = None
     rooms: list[str] = []
     profile_yaml: Optional[str] = None
     # Phase 0 file-manifest fields. Both optional — a caller that
@@ -120,6 +130,11 @@ class AgentCreate(BaseModel):
     # Capped at 200 chars to keep the per-turn token cost predictable
     # when the agent runtime appends it inline to every system prompt.
     description: Optional[str] = Field(default=None, max_length=200)
+    # Set permissions before the first spawn, using the same tier contract
+    # as the update endpoint. Agent creation is already admin-only.
+    permission_level: str | None = Field(
+        default=None, pattern="^(restricted|standard|trusted)$"
+    )
     # #685 — optional direct endpoint persisted with the agent in one
     # transaction: ``{"base_url": ..., "api_protocol": ...}``. Provider and
     # model come from the fields above. Kept loosely typed and validated in
@@ -384,6 +399,7 @@ async def _validated_create_endpoint(
             db,
             request.app.state.machine_bus,
             required_control_capabilities={"direct_endpoint_v1"},
+            machine_id=body.machine_id,
         )
     except NoSuitableMachineError:
         raise HTTPException(
@@ -391,6 +407,72 @@ async def _validated_create_endpoint(
             detail="No available machine supports direct endpoints; update or connect a machine with direct_endpoint_v1 capability",
         ) from None
     return config
+
+
+async def _validated_create_machine(
+    body: AgentCreate, db: AsyncSession, request: Request
+) -> str | None:
+    """Validate a selected machine before creating any agent or room rows."""
+    if body.machine_id is None:
+        return None
+    from anygarden.db.models import Machine, MachineEngine
+    from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
+    from anygarden.scheduler.placement import (
+        NoSuitableMachineError,
+        reserve_machine_for,
+    )
+
+    machine = await db.get(Machine, body.machine_id)
+    if machine is None:
+        raise HTTPException(404, "Selected machine not found")
+    bus = request.app.state.machine_bus
+    if machine.status != "online" or not bus.is_connected(machine.id):
+        raise HTTPException(409, "Selected machine must be online and connected")
+    supports_engine = await db.scalar(
+        select(MachineEngine.id).where(
+            MachineEngine.machine_id == machine.id,
+            MachineEngine.engine == body.engine,
+        )
+    )
+    if supports_engine is None:
+        raise HTTPException(409, "Selected machine does not support this engine")
+    capabilities = (
+        {"direct_endpoint_v1"} if body.endpoint is not None
+        else {PI_AUTH_CAPABILITY} if body.engine == "pi-cli"
+        else set()
+    )
+    if not capabilities.issubset(set(machine.control_capabilities or [])):
+        raise HTTPException(409, "Selected machine needs an update for this model connection")
+    try:
+        await reserve_machine_for(
+            body.engine, db, bus,
+            required_control_capabilities=capabilities,
+            machine_id=machine.id,
+        )
+    except NoSuitableMachineError:
+        raise HTTPException(409, "Selected machine has no capacity for another agent") from None
+    return machine.id
+
+
+def _validate_reasoning(engine: str, model: str | None, effort: str | None) -> None:
+    """Validate advertised constraints without rejecting custom model IDs."""
+    entry = get_engine_entry(engine)
+    if not entry or not effort:
+        return
+    effective_model = model or entry.default_model
+    selected = next((item for item in entry.models if item.id == effective_model), None)
+    levels = selected.reasoning_levels if selected and selected.reasoning_levels else entry.reasoning_levels
+    if levels and effort not in levels:
+        raise HTTPException(422, "Reasoning effort is not supported by the selected model")
+
+
+async def _existing_creation(db: AsyncSession, key: str | None, fingerprint: str | None) -> Agent | None:
+    if key is None:
+        return None
+    existing = await db.scalar(select(Agent).where(Agent.creation_request_key == key))
+    if existing and existing.creation_request_fingerprint != fingerprint:
+        raise HTTPException(409, "This creation request was already used with different settings")
+    return existing
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AgentOut)
@@ -408,6 +490,18 @@ async def create_agent(
     file path BEFORE writing anything so a single bad path fails
     the whole request cleanly (no half-materialized rows).
     """
+    creation_key = (
+        hashlib.sha256(f"{identity.id}:{body.request_id}".encode()).hexdigest()
+        if body.request_id else None
+    )
+    fingerprint = (
+        hashlib.sha256(json.dumps(body.model_dump(mode="json", exclude={"request_id"}), sort_keys=True).encode()).hexdigest()
+        if creation_key else None
+    )
+    existing = await _existing_creation(db, creation_key, fingerprint)
+    if existing is not None:
+        return _agent_to_out(existing, request.app.state.machine_bus)
+    _validate_reasoning(body.engine, body.model, body.reasoning_effort)
     # Reject invalid file paths up-front. Defense-in-depth: the
     # machine materializer also validates, but catching here lets
     # us return 400 with a clear reason instead of crashing the
@@ -433,11 +527,26 @@ async def create_agent(
             capability=Capability.MEMBER_MANAGE,
         )
 
-    endpoint = await _validated_create_endpoint(body, db, request)
+    try:
+        machine_id = await _validated_create_machine(body, db, request)
+        endpoint = await _validated_create_endpoint(body, db, request)
+    except HTTPException:
+        # A matching concurrent request may have committed while this request
+        # waited for its machine lock (and used the last available slot).
+        existing = await _existing_creation(db, creation_key, fingerprint)
+        if existing is not None:
+            return _agent_to_out(existing, request.app.state.machine_bus)
+        raise
 
     agent = Agent(
         name=body.name,
         engine=body.engine,
+        creation_request_key=creation_key,
+        creation_request_fingerprint=fingerprint,
+        placed_on_machine_id=machine_id,
+        # A selected first placement is not a retry of an earlier delivery.
+        # Mark it released so lifecycle claims a fresh generation and token.
+        lifecycle_delivery_state="released" if machine_id else None,
         desired_state="running",
         actual_state="pending",
         profile_yaml=body.profile_yaml,
@@ -449,11 +558,19 @@ async def create_agent(
         restart_policy=body.restart_policy,
         runtime=body.runtime,
         description=body.description,
+        permission_level=body.permission_level,
         base_url=endpoint.base_url if endpoint else None,
         api_protocol=endpoint.api_protocol if endpoint else None,
     )
     db.add(agent)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        existing = await _existing_creation(db, creation_key, fingerprint)
+        if existing is not None:
+            return _agent_to_out(existing, request.app.state.machine_bus)
+        raise
 
     # Seed AgentFile rows from the request manifest.
     if body.files:
@@ -488,13 +605,34 @@ async def create_agent(
 
     await db.commit()
     await db.refresh(agent)
+    created_out = _agent_to_out(agent, request.app.state.machine_bus)
 
     # Agent always has at least the DM room → start immediately.
     lifecycle = request.app.state.agent_lifecycle
-    await lifecycle.request_start(agent.id)
-    await db.refresh(agent)
-
-    return _agent_to_out(agent, request.app.state.machine_bus)
+    try:
+        await lifecycle.request_start(agent.id)
+        await db.refresh(agent)
+        return _agent_to_out(agent, request.app.state.machine_bus)
+    except Exception:
+        # Creation is durable; dispatch failure is a pending lifecycle state,
+        # never a failed create that invites a second Agent/DM. Do not clear
+        # placement or delivery leases: a lost acknowledgement can mean the
+        # machine already received the frame.
+        logger.exception("Agent created but initial dispatch needs reconciliation", extra={"agent_id": created_out.id})
+        try:
+            await db.rollback()
+            agent = await db.get(Agent, created_out.id)
+            if agent and agent.actual_state not in {"running", "starting"}:
+                agent.unavailable_code = SPAWN_FAILED
+                agent.unavailable_since = datetime.now(UTC)
+                agent.last_crash_reason = "Initial dispatch needs reconciliation; the agent was created"
+                db.add(ActivityLog(agent_id=agent.id, event_type="initial_dispatch_deferred"))
+                await db.commit()
+            if agent:
+                return _agent_to_out(agent, request.app.state.machine_bus)
+        except Exception:
+            logger.exception("Could not record deferred initial dispatch", extra={"agent_id": created_out.id})
+        return created_out
 
 
 @router.put("/{agent_id}", response_model=AgentOut)
@@ -515,6 +653,13 @@ async def update_agent(
     agent = result.scalar_one_or_none()
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    if body.model_set or body.reasoning_effort_set:
+        _validate_reasoning(
+            agent.engine,
+            body.model if body.model_set else agent.model,
+            body.reasoning_effort if body.reasoning_effort_set else agent.reasoning_effort,
+        )
 
     # Two change counters so peer-only metadata edits can skip the
     # ``bump_generation`` call: avatars and descriptions are read by
@@ -1036,6 +1181,7 @@ async def start_agent(
             await select_machine_for(
                 agent.engine, db, request.app.state.machine_bus,
                 required_control_capabilities={CAPABILITY},
+                exclude_agent_id=agent.id,
             )
         except (ValueError, NoSuitableMachineError):
             raise HTTPException(422, "Pi provider credential or compatible machine unavailable; add an API key in agent settings") from None
@@ -1057,6 +1203,7 @@ async def start_agent(
                 db,
                 request.app.state.machine_bus,
                 required_control_capabilities={"direct_endpoint_v1"},
+                exclude_agent_id=agent.id,
             )
         except (ValueError, NoSuitableMachineError):
             raise HTTPException(

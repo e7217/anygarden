@@ -22,6 +22,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Copy, Check, AlertCircle } from 'lucide-react'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
@@ -49,10 +51,6 @@ type CatalogState =
   | { kind: 'loading' }
   | { kind: 'ready'; catalog: EngineCatalog }
   | { kind: 'unavailable' }
-
-// Match AdminMachines.tsx so the two dialogs render identical selects.
-const SELECT_CSS =
-  'flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60'
 
 const DEPRECATED_BADGE_CSS =
   'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[10px] text-[var(--color-warning)]'
@@ -370,7 +368,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               200-char cap mirrors ``Field(max_length=200)`` on the
               server. Helper text follows DESIGN.md §3.3 secondary text
               tone. */}
-          <textarea
+          <Textarea
             value={descriptionDraft}
             onChange={e => setDescriptionDraft(e.target.value)}
             onBlur={() => void commitDescription()}
@@ -386,11 +384,11 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             placeholder={t('admin.overview.descriptionPlaceholder')}
             aria-label={t('admin.overview.agentDescription')}
             data-testid="overview-description-input"
-            className="flex w-full resize-none rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60"
+            className="min-h-20"
           />
-          <div className="flex items-center justify-between text-[11px] text-[var(--color-foreground-subtle)]">
+          <div className="flex items-start justify-between gap-3 text-xs text-[var(--color-foreground-subtle)]">
             <span>{t('admin.overview.descriptionVisibility')}</span>
-            <span data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
+            <span className="shrink-0" data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
           </div>
           {/* #644 — every agent now receives the room roster, so this
               line is what teammates' models read when deciding whom to
@@ -401,7 +399,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               error row below. */}
           {descriptionDraft.trim() === '' ? (
             <div
-              className="text-[11px] text-[var(--color-warning)]"
+              className="text-xs text-[var(--color-warning)]"
               data-testid="overview-description-empty-hint"
             >
               {t('admin.overview.descriptionEmpty')}
@@ -431,7 +429,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
       ) : null}
 
       {/* Metadata grid */}
-      <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-3 text-sm">
+      <dl className="grid grid-cols-[minmax(0,5rem)_minmax(0,1fr)] items-start gap-x-3 gap-y-4 sm:grid-cols-[6rem_minmax(0,1fr)] sm:gap-x-4 text-sm">
         <dt className="text-[var(--color-foreground-muted)]">ID</dt>
         <dd className="flex items-center gap-2 min-w-0">
           <span
@@ -498,7 +496,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             validated server-side and a 422 surfaces in ``turnTimeoutError``. */}
         <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.turnTimeout')}</dt>
         <dd>
-          <input
+          <Input
             type="number"
             inputMode="numeric"
             min={30}
@@ -510,7 +508,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             placeholder={t('admin.overview.default')}
             aria-label={t('admin.overview.timeoutLabel')}
             data-testid="overview-turn-timeout-input"
-            className={SELECT_CSS}
           />
           {turnTimeoutError ? (
             <div
@@ -521,7 +518,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               {turnTimeoutError}
             </div>
           ) : (
-            <p className="mt-1 text-[11px] text-[var(--color-foreground-muted)]">
+            <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
               {t('admin.overview.timeoutHelp')}
             </p>
           )}
@@ -536,23 +533,23 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             inline ⚠ to flag host access. */}
         <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.permission')}</dt>
         <dd>
-          <select
+          <Select
             value={agent.permission_level ?? ''}
             onChange={e => void handlePermissionLevelChange(e.target.value)}
             disabled={configSaving}
             aria-label={t('admin.overview.permissionTier')}
             data-testid="overview-permission-select"
-            className={SELECT_CSS}
           >
             <option value="">{t('admin.overview.permissionDefault')}</option>
             <option value="restricted">{t('admin.overview.permissionRestricted')}</option>
-            <option value="standard">{t('admin.overview.permissionStandard')}</option>
+            <option value="standard">{agent.engine === 'pi-cli' ? t('agentSetup.piStandardPermission') : t('admin.overview.permissionStandard')}</option>
             <option value="trusted">{t('admin.overview.permissionTrusted')}</option>
-          </select>
+          </Select>
+          {agent.engine === 'pi-cli' && <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">{t('agentSetup.piPermissionHint')}</p>}
           {configError && <p role="alert" data-testid="overview-config-error">{configError}</p>}
           {agent.permission_level === 'trusted' ? (
             <p
-              className="mt-1 text-[11px] text-[var(--color-foreground-muted)]"
+              className="mt-1 text-xs text-[var(--color-foreground-muted)]"
               data-testid="overview-permission-trusted-warning"
             >
               {t('admin.overview.trustedWarning')}

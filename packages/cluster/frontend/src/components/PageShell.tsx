@@ -38,7 +38,7 @@ export default function PageShell({ title, children, scroll = true }: PageShellP
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-background)]">
+    <div className="flex h-dvh overflow-hidden bg-[var(--color-background)]">
       <Sidebar selectedRoom={null} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <SidebarExpandButton />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">

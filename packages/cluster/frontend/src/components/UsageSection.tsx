@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { BarChart3, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Select } from '@/components/ui/select'
 import { useUsage, type UsageBucket } from '@/hooks/useUsage'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -44,16 +45,16 @@ export function UsageSection() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:shrink-0">
-          <select
+          <Select
             aria-label={t('admin.usage.period')}
             value={window}
             onChange={e => setWindow(e.target.value)}
-            className="h-9 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2.5 text-[13px]"
+            className="w-auto"
           >
             {WINDOWS.map(w => (
               <option key={w.value} value={w.value}>{t(w.label)}</option>
             ))}
-          </select>
+          </Select>
           <Button variant="ghost" size="sm" onClick={refresh}>
             <RefreshCw className={cn('mr-1 h-3.5 w-3.5', status === 'loading' && 'animate-spin')} />
             {t('common.refresh')}

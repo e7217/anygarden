@@ -12,6 +12,7 @@ interface RightRailToggleProps {
    *  mobile passes a separate handler so the host can manage the
    *  ``open`` overlay state. */
   onMobileOpen?: () => void
+  mobileOpen?: boolean
 }
 
 /**
@@ -21,7 +22,7 @@ interface RightRailToggleProps {
  * while the rail is closed). The dot is intentionally a single
  * boolean — not a counter — to fit the design's "feels-it" aesthetic.
  */
-export default function RightRailToggle({ roomId, onMobileOpen }: RightRailToggleProps) {
+export default function RightRailToggle({ roomId, onMobileOpen, mobileOpen = false }: RightRailToggleProps) {
   const { t } = useLocale()
   const { collapsed, toggleCollapsed } = useRightSidebarLayout()
   const hasNotice = useRightRailNotice(roomId)
@@ -46,16 +47,18 @@ export default function RightRailToggle({ roomId, onMobileOpen }: RightRailToggl
     else toggleCollapsed()
   }
 
-  const isClosed = compact || collapsed
+  const isClosed = compact ? !mobileOpen : collapsed
   const Icon = isClosed ? PanelRightOpen : PanelRightClose
   return (
     <button
       type="button"
       onClick={handleClick}
       data-testid="right-rail-toggle"
+      aria-controls="room-context-rail"
+      aria-expanded={!isClosed}
       aria-label={isClosed ? t('chat.openContext') : t('chat.closeContext')}
       title={isClosed ? t('chat.openContext') : t('chat.closeContext')}
-      className="relative inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+      className="relative inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
     >
       <Icon className="h-4 w-4" />
       {hasNotice && (

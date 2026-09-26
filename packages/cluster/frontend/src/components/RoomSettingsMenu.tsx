@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Activity, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
+import { Activity, FolderOpen, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, PanelRight, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -27,11 +27,14 @@ export interface RoomSettingsMenuProps {
   onEditRoom?: () => void
   onManageInvites?: () => void
   onManageAgents?: () => void
+  onManageWorkspaces?: () => void
   /** #329 Phase 4 — search trigger. Mirrors the header's direct
    *  search button for narrow viewports where the icon is hidden
    *  (sub-sm). Mobile users can't type ⌘K, so they need a menu
    *  fallback. */
   onSearch?: () => void
+  threadDisplayMode?: 'panel' | 'inline'
+  onToggleThreadDisplayMode?: () => void
   /** #329 Phase 3 — agent-produced artifacts viewer. Available to
    *  every room member (no admin gate); kept here in the overflow
    *  menu so the header strip doesn't grow another inline icon. */
@@ -49,7 +52,10 @@ export default function RoomSettingsMenu({
   onEditRoom,
   onManageInvites,
   onManageAgents,
+  onManageWorkspaces,
   onSearch,
+  threadDisplayMode,
+  onToggleThreadDisplayMode,
   onShowArtifacts,
   onShowRoomActivity,
   onStopAllAgents,
@@ -60,6 +66,15 @@ export default function RoomSettingsMenu({
   const rootRef = useRef<HTMLDivElement>(null)
 
   const safeActions = [
+    threadDisplayMode && onToggleThreadDisplayMode && {
+      label: t('chat.threadModeAction', {
+        mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline'),
+        next: t(threadDisplayMode === 'panel' ? 'chat.threadModeInline' : 'chat.threadModePanel'),
+      }),
+      icon: <PanelRight className="h-4 w-4" />,
+      onClick: onToggleThreadDisplayMode,
+      testId: 'room-menu-thread-mode',
+    },
     onSearch && {
       label: t('chat.searchMessages'),
       icon: <Search className="h-4 w-4" />,
@@ -89,6 +104,12 @@ export default function RoomSettingsMenu({
       icon: <UserPlus className="h-4 w-4" />,
       onClick: onManageAgents,
       testId: 'room-menu-agents',
+    },
+    onManageWorkspaces && {
+      label: t('workspace.roomTitle'),
+      icon: <FolderOpen className="h-4 w-4" />,
+      onClick: onManageWorkspaces,
+      testId: 'room-menu-workspaces',
     },
     onShowArtifacts && {
       label: t('chat.artifacts'),
@@ -153,7 +174,6 @@ export default function RoomSettingsMenu({
       <Button
         variant="ghost"
         size="icon"
-        className="min-h-11 min-w-11"
         onClick={() => setOpen((v) => !v)}
         title={t('chat.roomSettings')}
         aria-label={t('chat.roomSettings')}
@@ -175,7 +195,7 @@ export default function RoomSettingsMenu({
           // group and the button children stay naturally Tab-able.
           role="group"
           aria-label={t('chat.roomSettings')}
-          className="absolute right-0 top-full z-40 mt-1 w-52 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+          className="absolute right-0 top-full z-40 mt-1 w-64 max-w-[calc(100vw-2rem)] max-h-[70dvh] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
         >
           <ul className="py-1">
             {safeActions.map((a) => (
@@ -184,7 +204,7 @@ export default function RoomSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(a.onClick)}
                   data-testid={a.testId}
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                 >
                   {a.icon}
                   <span>{a.label}</span>
@@ -207,7 +227,7 @@ export default function RoomSettingsMenu({
                   // obvious. The divider above further separates it
                   // from the safe-action group so a stray click is
                   // less likely.
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <OctagonX className="h-4 w-4" />
                   <span>{t('chat.stopAllAgents')}</span>
@@ -225,7 +245,7 @@ export default function RoomSettingsMenu({
                   // this prop on the same admin/owner check the
                   // server enforces, and to prompt for confirmation
                   // before actually firing the DELETE.
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{t('chat.deleteRoom')}</span>

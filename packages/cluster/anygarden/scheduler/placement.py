@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Agent, Machine, MachineEngine
@@ -13,14 +13,21 @@ class NoSuitableMachineError(Exception):
     """Raised when no online machine can satisfy the placement request."""
 
 
+# A committed dispatch is a reservation until it stops, even before a machine
+# acknowledges it. Stopping processes also keep their slot until termination.
+CAPACITY_STATES = ("pending", "starting", "running", "stopping")
+
+
 async def select_machine_for(
     engine: str,
     db: AsyncSession,
     machine_bus: ExecutionBus,
     required_labels: dict | None = None,
     required_control_capabilities: set[str] | None = None,
+    machine_id: str | None = None,
+    exclude_agent_id: str | None = None,
 ) -> Machine:
-    """Bin-pack: select online machine with fewest running agents that supports *engine*.
+    """Select an online machine with the fewest occupied or reserved slots.
 
     Filter criteria:
     - Machine status = 'online'
@@ -28,19 +35,21 @@ async def select_machine_for(
     - Machine supports the requested engine (via ``machine_engines``)
     - Machine has not reached ``max_agents``
     - Machine labels match *required_labels* (if specified)
+    - Machine matches an explicit initial placement (if specified)
 
     Sorting:
-    - Fewest running agents first (bin-pack strategy)
+    - Fewest occupied or reserved slots first
 
     Raises :class:`NoSuitableMachineError` if no machine qualifies.
     """
-    # Sub-query: count running agents per machine
+    # Count both live processes and committed in-flight placements.
     running_count = (
         select(
             Agent.placed_on_machine_id.label("machine_id"),
             func.count(Agent.id).label("running_count"),
         )
-        .where(Agent.actual_state == "running")
+        .where(Agent.actual_state.in_(CAPACITY_STATES))
+        .where(Agent.id != exclude_agent_id if exclude_agent_id else True)
         .group_by(Agent.placed_on_machine_id)
         .subquery()
     )
@@ -55,7 +64,11 @@ async def select_machine_for(
             MachineEngine.engine == engine,
         )
         .order_by(func.coalesce(running_count.c.running_count, 0).asc())
+        .execution_options(populate_existing=True)
     )
+
+    if machine_id is not None:
+        stmt = stmt.where(Machine.id == machine_id)
 
     result = await db.execute(stmt)
     rows = result.all()
@@ -92,3 +105,51 @@ async def select_machine_for(
     raise NoSuitableMachineError(
         f"No suitable online machine found for engine={engine!r}"
     )
+
+
+async def reserve_machine_for(
+    engine: str,
+    db: AsyncSession,
+    machine_bus: ExecutionBus,
+    *,
+    required_control_capabilities: set[str] | None = None,
+    machine_id: str | None = None,
+    exclude_agent_id: str | None = None,
+) -> Machine:
+    """Hold a database write lock until the caller commits its placement.
+
+    Selection alone is a preflight check. Every writer that claims a new slot
+    must use this function and persist the agent's pending placement in this
+    same transaction. The no-op UPDATE is a row lock on PostgreSQL and a writer
+    lock on SQLite. A separate SELECT after acquiring it sees the preceding
+    holder's committed reservation instead of trusting an earlier count.
+    """
+    attempted: set[str] = set()
+    while True:
+        candidate = await select_machine_for(
+            engine, db, machine_bus,
+            required_control_capabilities=required_control_capabilities,
+            machine_id=machine_id,
+            exclude_agent_id=exclude_agent_id,
+        )
+        if candidate.id in attempted:
+            raise NoSuitableMachineError("No machine capacity remains")
+        attempted.add(candidate.id)
+        await db.execute(
+            update(Machine).where(Machine.id == candidate.id)
+            .values(max_agents=Machine.max_agents)
+            .execution_options(synchronize_session=False)
+        )
+        try:
+            return await select_machine_for(
+                engine, db, machine_bus,
+                required_control_capabilities=required_control_capabilities,
+                machine_id=candidate.id,
+                exclude_agent_id=exclude_agent_id,
+            )
+        except NoSuitableMachineError:
+            if machine_id is not None:
+                raise
+            # Another transaction claimed the last slot while we waited.
+            # Re-run automatic selection, retaining acquired locks until the
+            # caller finishes the transaction.

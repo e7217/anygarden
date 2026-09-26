@@ -43,18 +43,18 @@ export default function ThreadReplyAffordance({
 
   if (count === 0) {
     return (
-      <div className={`mt-1 flex ${align}`}>
+      <div className={`mt-1 flex ${align} md:pointer-fine:absolute md:pointer-fine:top-0 md:pointer-fine:mt-0 ${isMine ? 'md:pointer-fine:left-0' : 'md:pointer-fine:right-0'}`}>
         <button
           type="button"
           onClick={() => onOpen(root.id)}
           data-thread-trigger={root.id}
           aria-label={t('chat.replyInThread')}
           className={`
-            flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5
-            text-badge text-[var(--color-foreground-subtle)]
+            flex min-h-[var(--control-sm-height)] items-center gap-1 rounded-[var(--radius-sm)] px-2
+            text-badge text-[var(--color-foreground-subtle)] md:pointer-fine:bg-[var(--color-surface)]
             transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground-muted)]
             focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
-            ${active ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover/message:opacity-100'}
+            ${active ? 'opacity-100' : 'opacity-100 md:pointer-fine:opacity-0 md:group-hover/message:opacity-100'}
           `}
         >
           <MessageSquareReply className="h-3 w-3" />
@@ -78,7 +78,7 @@ export default function ThreadReplyAffordance({
         aria-label={t(count === 1 ? 'chat.openThreadReply' : 'chat.openThreadReplies', { count })}
         aria-expanded={active}
         className={`
-          flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
+          flex min-h-[var(--control-sm-height)] max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
           text-badge transition-colors
           focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
           ${active

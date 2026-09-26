@@ -66,7 +66,7 @@ it('creates a keyless Pi agent with its endpoint in one request after loading mo
   expect(submit).toBeEnabled()
   fireEvent.click(submit)
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
-    name: 'Local qwen', engine: 'pi-cli', provider: 'qwen-llm', model: 'qwen3.8-27b-fp8', rooms: [],
+    name: 'Local qwen', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'qwen-llm', model: 'qwen3.8-27b-fp8', rooms: [],
     endpoint: { base_url: 'http://10.0.0.5:8000/v1', api_protocol: 'chat-completions' },
   }))
   expect(mocks.calls.some(c => c.path.includes('/endpoint/credentials'))).toBe(false)
@@ -128,6 +128,6 @@ it('drops hidden Pi direct values when switching back to native', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalled())
   expect(mocks.createAgent.mock.calls[0][0]).toEqual({
-    name: 'Local qwen', engine: 'pi-cli', provider: 'zai', model: 'glm-5.3-flash', rooms: [],
+    name: 'Local qwen', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'zai', model: 'glm-5.3-flash', rooms: [],
   })
 })

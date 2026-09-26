@@ -5,6 +5,7 @@ import { useSystemVersion, useUpdateStatus } from '@/hooks/useSystemVersion'
 import { useAgents, type Agent } from '@/hooks/useAgents'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
+import { useModalDrawer } from '@/hooks/useModalDrawer'
 import { apiFetch } from '@/lib/api'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import { Button } from '@/components/ui/button'
@@ -23,8 +24,7 @@ import SidebarAdminMenu from '@/components/SidebarAdminMenu'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
-import { LocaleToggle } from '@/i18n/LocaleToggle'
-import { ThemeToggle } from '@/theme/ThemeToggle'
+import SidebarPreferencesMenu from '@/components/SidebarPreferencesMenu'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
@@ -164,6 +164,9 @@ export default function Sidebar({
   // without prop drilling. The hook throws when used outside the
   // provider, matching useRooms's discipline.
   const { collapsed, toggleCollapsed } = useSidebarLayout()
+  const panelRef = useRef<HTMLElement>(null)
+  const { desktop, active: drawerActive } = useModalDrawer({ open, onClose, panelRef, desktopMinWidth: 768 })
+  const hidden = desktop ? collapsed : !open
 
   // Ctrl/Cmd+B → toggle collapse (#106). Registered here so the
   // shortcut only binds on routes that actually render <Sidebar>
@@ -406,57 +409,64 @@ export default function Sidebar({
         <button
           type="button"
           aria-label={t('chat.closeSidebar')}
+          data-drawer-overlay="workspace-sidebar"
+          tabIndex={-1}
           className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
           onClick={onClose}
         />
       )}
 
       <aside
+        ref={panelRef}
         data-testid="sidebar-root"
-        aria-hidden={collapsed || undefined}
+        data-navigation-drawer
+        role={drawerActive ? 'dialog' : undefined}
+        aria-modal={drawerActive || undefined}
+        aria-label="Anygarden"
+        tabIndex={-1}
+        id="workspace-sidebar"
+        aria-hidden={hidden || undefined}
+        inert={hidden}
         className={`
-          fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-alt)]
+          fixed inset-y-0 left-0 z-40 flex h-full w-64 shrink-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-alt)]
           transform ${open ? 'transition-transform duration-200 ease-out' : 'transition-none'}
-          ${open ? 'translate-x-0 shadow-deep' : '-translate-x-full'}
+          ${open ? 'visible translate-x-0 shadow-deep' : 'invisible -translate-x-full'}
           ${collapsed
-            ? 'md:-translate-x-full md:w-0 md:overflow-hidden md:border-r-0'
-            : 'md:static md:z-auto md:translate-x-0 md:w-64'}
+            ? 'md:invisible md:-translate-x-full md:w-0 md:overflow-hidden md:border-r-0'
+            : 'md:visible md:static md:z-auto md:translate-x-0 md:w-64'}
         `}
       >
-      {/* A consistent home target anchors navigation even in an empty workspace. */}
-      <div className="flex h-14 items-center justify-between gap-2 px-3">
+      {/* The desktop control stays at x=12/y=12 in both rail states. */}
+      <div className="flex h-14 shrink-0 items-center gap-2 px-3">
+        <button
+          type="button"
+          className="hidden h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:inline-flex"
+          onClick={toggleCollapsed}
+          aria-label={t('chat.collapseSidebar')}
+          aria-expanded={true}
+          aria-controls="workspace-sidebar"
+          data-testid="sidebar-collapse"
+          title={t('chat.collapseSidebarShortcut')}
+        >
+          <PanelLeftClose className="h-4 w-4" />
+        </button>
         <button
           type="button"
           onClick={() => go('/')}
           aria-label={t('chat.goHome')}
-          className="flex min-h-11 min-w-0 items-center rounded-[var(--radius-sm)] px-2 text-left text-[15px] font-bold tracking-tight text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
+          className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center rounded-[var(--radius-sm)] px-1 text-left text-sm font-semibold tracking-tight text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
         >
           <span className="truncate">Anygarden</span>
         </button>
-        <div className="flex items-center gap-1">
-          {/* Desktop collapse trigger (#106). Paired with the
-              main-area floating expand button so users can toggle
-              from either side. Hidden below ``md:`` — mobile uses
-              the X close button to the right. */}
-          <button
-            type="button"
-            className="hidden h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors md:inline-flex"
-            onClick={toggleCollapsed}
-            aria-label={t('chat.collapseSidebar')}
-            data-testid="sidebar-collapse"
-            title={t('chat.collapseSidebarShortcut')}
-          >
-            <PanelLeftClose className="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] md:hidden"
-            onClick={onClose}
-            aria-label={t('chat.closeSidebar')}
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+        <button
+          type="button"
+          className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] md:hidden"
+          onClick={onClose}
+          data-drawer-close
+          aria-label={t('chat.closeSidebar')}
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Projects & Rooms */}
@@ -518,7 +528,8 @@ export default function Sidebar({
               <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
                 <button
                   onClick={() => toggleProject(project.id)}
-                  className="text-sm font-medium flex min-h-11 flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
+                  aria-expanded={expandedProjects.has(project.id)}
+                  className="text-sm font-medium flex min-h-[var(--control-sm-height)] flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
                 >
                   {expandedProjects.has(project.id)
                     ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
@@ -549,7 +560,7 @@ export default function Sidebar({
 
                   <button
                     onClick={() => openNewRoomDialog(project.id)}
-                    className="flex min-h-11 w-full items-center rounded-[var(--radius-sm)] px-2 text-[14px] font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+                    className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-[14px] font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
                     <span>{t('chat.newRoom')}</span>
@@ -565,13 +576,69 @@ export default function Sidebar({
             </p>
           )}
         </div>
+        {/* Agents DM section.
+            Admin users see presence dots next to each DM (driven by
+            ``useAgents()`` — an admin-gated endpoint). Non-admins
+            get the same DM list without dots, to avoid a 403 on the
+            agents fetch and to avoid a misleading "offline
+            everywhere" dot for guest sessions. See #71. */}
+        {agentDMs.length > 0 && (
+          <div className="border-t border-[var(--color-border)] px-2 py-2">
+            <button
+              onClick={() => setAgentsExpanded(prev => !prev)}
+              aria-expanded={agentsExpanded}
+              className="flex min-h-[var(--control-sm-height)] w-full items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+            >
+              {agentsExpanded
+                ? <ChevronDown className="h-3 w-3" />
+                : <ChevronRight className="h-3 w-3" />}
+              {t('chat.agents')}
+            </button>
+            {agentsExpanded && (
+              isAdmin ? (
+                <AgentDMListAdmin
+                  dms={agentDMs}
+                  selectedRoom={selectedRoom}
+                  onGo={go}
+                />
+              ) : (
+                <div className="flex flex-col gap-0.5">
+                  {agentDMs.map(dm => {
+                    const label = dm.name.replace(/^DM:\s*/, '')
+                    return (
+                      <button
+                        key={dm.id}
+                        onClick={() => go(`/rooms/${dm.id}`)}
+                        data-testid={`sidebar-dm-${dm.id}`}
+                        className={`flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-[14px] font-medium transition-colors ${
+                          selectedRoom === dm.id
+                            ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
+                            : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
+                        }`}
+                      >
+                        <EntityAvatar
+                          id={dm.representative_agent_id ?? dm.id}
+                          name={label}
+                          kind="agent"
+                          size="xs"
+                        />
+                        <span className="min-w-0 truncate">{label}</span>
+                        {dm.has_updates && <UpdateDot className="ml-auto" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            )}
+          </div>
+        )}
       </ScrollArea>
 
       {/* New Project button */}
       <div className="p-2">
         <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
           <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="min-h-11 w-full justify-start text-[var(--color-foreground-muted)]">
+            <Button variant="ghost" size="sm" className="min-h-[var(--control-sm-height)] w-full justify-start text-[var(--color-foreground-muted)]">
               <Plus className="mr-2 h-4 w-4" />
               {t('chat.newProject')}
             </Button>
@@ -630,7 +697,7 @@ export default function Sidebar({
                   id="sidebar-new-room-project"
                   value={roomProjectId}
                   onChange={(event) => setRoomProjectId(event.target.value)}
-                  className="h-11 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm"
+                  className="h-11 md:h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm"
                 >
                   <option value="">{t('chat.selectProject')}</option>
                   {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -694,77 +761,9 @@ export default function Sidebar({
         </DialogContent>
       </Dialog>
 
-      {/* Agents DM section.
-          Admin users see presence dots next to each DM (driven by
-          ``useAgents()`` — an admin-gated endpoint). Non-admins
-          get the same DM list without dots, to avoid a 403 on the
-          agents fetch and to avoid a misleading "offline
-          everywhere" dot for guest sessions. See #71. */}
-      {agentDMs.length > 0 && (
-        <div className="border-t border-[var(--color-border)] px-2 py-2">
-          <button
-            onClick={() => setAgentsExpanded(prev => !prev)}
-            className="flex min-h-11 w-full items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
-          >
-            {agentsExpanded
-              ? <ChevronDown className="h-3 w-3" />
-              : <ChevronRight className="h-3 w-3" />}
-            {t('chat.agents')}
-          </button>
-          {agentsExpanded && (
-            isAdmin ? (
-              <AgentDMListAdmin
-                dms={agentDMs}
-                selectedRoom={selectedRoom}
-                onGo={go}
-              />
-            ) : (
-              <div className="flex flex-col gap-0.5">
-                {agentDMs.map(dm => {
-                  const label = dm.name.replace(/^DM:\s*/, '')
-                  return (
-                    <button
-                      key={dm.id}
-                      onClick={() => go(`/rooms/${dm.id}`)}
-                      data-testid={`sidebar-dm-${dm.id}`}
-                      className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-[14px] font-medium transition-colors ${
-                        selectedRoom === dm.id
-                          ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
-                          : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
-                      }`}
-                    >
-                      <EntityAvatar
-                        id={dm.representative_agent_id ?? dm.id}
-                        name={label}
-                        kind="agent"
-                        size="xs"
-                      />
-                      <span className="min-w-0 truncate">{label}</span>
-                      {dm.has_updates && <UpdateDot className="ml-auto" />}
-                    </button>
-                  )
-                })}
-              </div>
-            )
-          )}
-        </div>
-      )}
-
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
-        <LocaleToggle compact />
-        <ThemeToggle className="min-h-11 min-w-11" />
-      </div>
-
       {/* User info */}
-      <div className="relative flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-xs text-[var(--color-foreground-muted)]">{user?.email}</span>
-          {serverVersion && (
-            <span className="truncate text-[11px] text-[var(--color-foreground-subtle)]" title={t('chat.serverVersion')}>
-              anygarden v{serverVersion}
-            </span>
-          )}
-        </div>
+      <div className="relative flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
+        <SidebarPreferencesMenu email={user?.email} serverVersion={serverVersion} />
         <div className="flex shrink-0 items-center gap-1">
           {isAdmin && (
             <SidebarAdminMenu
@@ -773,7 +772,7 @@ export default function Sidebar({
               onGo={go}
             />
           )}
-          <Button variant="ghost" size="icon" onClick={logout} title={t('chat.logout')} aria-label={t('chat.logout')} className="min-h-11 min-w-11">
+          <Button variant="ghost" size="icon" onClick={logout} title={t('chat.logout')} aria-label={t('chat.logout')} className="min-h-[var(--control-sm-height)] w-[var(--control-icon-size)]">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
@@ -847,7 +846,7 @@ function RoomTreeNodeView({
         <button
           onClick={() => onGo(`/rooms/${node.room.id}`)}
           style={{ paddingLeft: `${indentPx + 8}px` }}
-          className={`flex min-h-11 min-w-0 flex-1 items-center pr-2 text-[14px] font-medium transition-colors ${
+          className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center pr-2 text-[14px] font-medium transition-colors ${
             isSelected
               ? 'text-[var(--color-foreground)]'
               : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -865,7 +864,7 @@ function RoomTreeNodeView({
             title={t('chat.pinToTop')}
             aria-label={t('chat.pinRoom', { name: node.room.name })}
             data-testid={`sidebar-pin-${node.room.id}`}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
+            className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] shrink-0 items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
           >
             <Pin className="h-3 w-3" />
           </button>
@@ -1169,7 +1168,7 @@ function AgentDMListAdmin({
                     ? `sidebar-dm-${soloDM.id}`
                     : `sidebar-agent-${agent.id}`
                 }
-                className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
                   soloIsSelected
                     ? 'text-[var(--color-foreground)]'
                     : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1217,13 +1216,9 @@ function AgentDMListAdmin({
                 )}
               </button>
               <span
-                // #243 — ``inline-flex`` is load-bearing: without it
-                // ``AgentSettingsMenu``'s wrapping ``<div class="relative">``
-                // drops onto its own line (block-in-inline quirk),
-                // making the agent row appear twice as tall. Pairing
-                // with ``items-center gap-0.5`` keeps the ``+`` and
-                // ``⋯`` buttons side-by-side at 24×24 each.
-                className="mr-1 inline-flex shrink-0 items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
+                // Mouse users reveal actions over the row; names keep the full
+                // width at rest. Touch users retain visible, separate targets.
+                className="mr-1 inline-flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 transition-opacity md:pointer-fine:absolute md:pointer-fine:right-0 md:pointer-fine:pointer-events-none md:pointer-fine:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto has-[[aria-expanded=true]]:opacity-100"
                 data-testid={`sidebar-agent-actions-${agent.id}`}
               >
                 <button
@@ -1233,7 +1228,7 @@ function AgentDMListAdmin({
                   }}
                   title={t('chat.newConversation')}
                   aria-label={t('chat.newConversation')}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6"
+                  className="inline-flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]"
                   data-testid={`sidebar-new-dm-${agent.id}`}
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -1271,7 +1266,7 @@ function AgentDMListAdmin({
                       <button
                         onClick={() => onGo(`/rooms/${dm.id}`)}
                         data-testid={`sidebar-dm-${dm.id}`}
-                        className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1 text-[13px] font-medium transition-colors"
+                        className="flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1 text-sm font-medium transition-colors"
                       >
                         <MessageSquare className="h-3 w-3 shrink-0" />
                         <span className="min-w-0 truncate">{label}</span>
@@ -1306,7 +1301,7 @@ function AgentDMListAdmin({
             key={dm.id}
             onClick={() => onGo(`/rooms/${dm.id}`)}
             data-testid={`sidebar-dm-${dm.id}`}
-            className={`flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+            className={`flex min-h-[var(--control-sm-height)] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
               isSel
                 ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
                 : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
@@ -1430,13 +1425,13 @@ function PinnedRoomItem({
         title={t('chat.dragToReorder')}
         aria-label={t('chat.reorderRoom', { name: room.name })}
         data-testid={`sidebar-drag-${room.id}`}
-        className="flex h-11 w-11 cursor-grab touch-none items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] focus:opacity-100 active:cursor-grabbing md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
+        className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] cursor-grab touch-none items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] focus:opacity-100 active:cursor-grabbing md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
       >
         <GripVertical className="h-3 w-3" />
       </button>
       <button
         onClick={() => onGo(`/rooms/${room.id}`)}
-        className={`flex min-h-11 min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+        className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
           isSelected
             ? 'text-[var(--color-foreground)]'
             : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1453,7 +1448,7 @@ function PinnedRoomItem({
         title={t('chat.unpin')}
         aria-label={t('chat.unpinRoom', { name: room.name })}
         data-testid={`sidebar-unpin-${room.id}`}
-        className="mr-1 flex h-11 w-11 items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-opacity md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
+        className="mr-1 flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-opacity md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
       >
         <PinOff className="h-3 w-3" />
       </button>

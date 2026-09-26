@@ -99,6 +99,19 @@ describe('RoomHeader — undefined-prop hides the corresponding control', () => 
 })
 
 describe('RoomSettingsMenu — menu items follow the undefined-hide contract', () => {
+  it('opens workspace access only when the room grants a management handler', () => {
+    const onManageWorkspaces = vi.fn()
+    const { unmount } = renderHeader({ onManageWorkspaces })
+    openSettingsMenu()
+    fireEvent.click(screen.getByTestId('room-menu-workspaces'))
+    expect(onManageWorkspaces).toHaveBeenCalledOnce()
+    expect(screen.queryByTestId('room-menu-workspaces')).toBeNull()
+    unmount()
+    renderHeader()
+    openSettingsMenu()
+    expect(screen.queryByTestId('room-menu-workspaces')).toBeNull()
+  })
+
   it('omits non-applicable actions but keeps destructive ones when admin/owner', () => {
     // Mirrors what ChatPage will pass for an agent-DM (#116): no
     // sub-room / edit / invites / manage-agents, but still StopAll

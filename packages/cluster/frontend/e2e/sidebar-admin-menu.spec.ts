@@ -54,7 +54,7 @@ for (const { name, width, height, mobile } of [
     expect(box!.x + box!.width).toBeLessThanOrEqual(width)
     expect(box!.y).toBeGreaterThanOrEqual(0)
     expect(box!.y + box!.height).toBeLessThanOrEqual(height)
-    expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+    if (mobile) expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
 
     if (!mobile) {
       await expect(page.getByRole('button', { name: 'Machines' })).toBeFocused()

@@ -105,20 +105,22 @@ export default function GoalsSection({
           {t('chat.responsibilities')}
         </h3>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+          <span className="text-xs text-[var(--color-foreground-subtle)]">
             {goals.length}
           </span>
           {hasCandidates && (
-            <button
+            <Button
+              variant="ghost"
+              size="icon"
               type="button"
               onClick={() => setShowForm((v) => !v)}
               aria-label={showForm ? t('goals.cancelGoal') : t('goals.addGoal')}
-              className="flex min-h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+              className="text-[var(--color-foreground-muted)]"
             >
               <Plus
                 className={`h-3.5 w-3.5 transition-transform ${showForm ? 'rotate-45' : ''}`}
               />
-            </button>
+            </Button>
           )}
         </div>
       </header>
@@ -149,7 +151,7 @@ export default function GoalsSection({
           <div
             key={g.id}
             data-testid={`right-rail-goal-row-${g.id}`}
-            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 pb-10 pt-1.5 hover:bg-[var(--color-surface-hover)] lg:py-1.5"
+            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 pb-[calc(var(--control-icon-size)+.5rem)] pt-1.5 hover:bg-[var(--color-surface-hover)] md:pointer-fine:py-1.5"
           >
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
@@ -157,7 +159,7 @@ export default function GoalsSection({
             />
             <div className="min-w-0 flex-1">
               <p
-                className="truncate text-[13px] text-[var(--color-foreground)]"
+                className="truncate text-sm text-[var(--color-foreground)]"
                 title={g.title}
               >
                 {g.title}
@@ -169,7 +171,7 @@ export default function GoalsSection({
                   trigger label so the row never has a dead second
                   line. ``#312`` ordering preserved: assignee first. */}
               <p
-                className="truncate text-[10px] text-[var(--color-foreground-muted)]"
+                className="truncate text-xs text-[var(--color-foreground-muted)]"
                 data-testid={`right-rail-goal-assignee-${g.id}`}
                 title={
                   agentNameById[g.assignee_agent_id] ??
@@ -179,7 +181,7 @@ export default function GoalsSection({
                 {agentNameById[g.assignee_agent_id] ??
                   `${t('goals.agent')} ${g.assignee_agent_id.slice(0, 6)}`}
               </p>
-              <p className="truncate text-[10px] text-[var(--color-foreground-subtle)]">
+              <p className="truncate text-xs text-[var(--color-foreground-subtle)]">
                 {statusLabel(g.status)} ·{' '}
                 {t(g.trigger_type === 'cron' ? 'goals.cron' : g.trigger_type === 'interval' ? 'goals.interval' : 'goals.manual')}
                 {g.trigger_type !== 'manual' && (
@@ -200,14 +202,13 @@ export default function GoalsSection({
                 state paints the same surface, so the cluster blends
                 seamlessly. ``shadow-sm`` gives a faint lift so the
                 cluster reads as floating over the row, not glued. */}
-            <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 shadow-sm transition-opacity lg:bottom-auto lg:right-2 lg:top-1/2 lg:-translate-y-1/2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
+            <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 shadow-sm transition-opacity md:pointer-fine:bottom-auto md:pointer-fine:right-2 md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100">
               <Button
                 variant="ghost"
                 size="icon"
                 title={t('goals.runNow', { name: g.title })}
                 aria-label={t('goals.runNow', { name: g.title })}
                 onClick={() => void runAction(() => runNow(g.id))}
-                className="h-9 w-9"
               >
                 <Zap className="h-3 w-3" />
               </Button>
@@ -218,8 +219,7 @@ export default function GoalsSection({
                   title={t('goals.pause', { name: g.title })}
                   aria-label={t('goals.pause', { name: g.title })}
                   onClick={() => void runAction(() => pause(g.id))}
-                  className="h-9 w-9"
-                >
+                  >
                   <Pause className="h-3 w-3" />
                 </Button>
               ) : (
@@ -229,8 +229,7 @@ export default function GoalsSection({
                   title={t('goals.resume', { name: g.title })}
                   aria-label={t('goals.resume', { name: g.title })}
                   onClick={() => void runAction(() => resume(g.id))}
-                  className="h-9 w-9"
-                >
+                  >
                   <Play className="h-3 w-3" />
                 </Button>
               )}
@@ -242,7 +241,7 @@ export default function GoalsSection({
                 onClick={async () => {
                   if (await confirm({ title: t('goals.deleteTitle'), description: t('goals.deleteConfirm', { name: g.title }), confirmLabel: t('goals.deleteTitle'), destructive: true })) await runAction(() => remove(g.id))
                 }}
-                className="h-9 w-9 text-[var(--color-destructive)] hover:text-[var(--color-destructive)]"
+                className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)]"
               >
                 <Trash2 className="h-3 w-3" />
               </Button>

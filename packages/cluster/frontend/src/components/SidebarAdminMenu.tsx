@@ -73,7 +73,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
         aria-controls={open ? menuId : undefined}
         title={t('navigation.adminSettings')}
         onClick={() => setOpen(value => !value)}
-        className="relative flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+        className="relative flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
       >
         <Settings className="h-4 w-4" />
         {updateAvailable && (
@@ -81,12 +81,13 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
         )}
       </button>
       {open && (
-        // Align past the 44px Logout button and 4px gap so the menu stays inside the sidebar.
+        // Align past the Logout button (44px touch / 32px desktop) and 4px gap so the menu stays inside the sidebar.
         <div
           id={menuId}
           role="group"
+          data-drawer-popup
           aria-label={t('navigation.adminNavigation')}
-          className="absolute bottom-full -right-12 z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
+          className="absolute bottom-full -right-[calc(var(--control-icon-size)+0.25rem)] z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
         >
           {links.map((link, index) => {
             const Icon = link.icon
@@ -104,7 +105,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
                   setOpen(false)
                   onGo(link.path)
                 }}
-                className={`flex min-h-11 w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-sm font-medium transition-colors ${
+                className={`flex min-h-[var(--control-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-sm font-medium transition-colors ${
                   active
                     ? 'bg-[var(--color-surface-elevated)] shadow-whisper text-[var(--color-foreground)]'
                     : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'

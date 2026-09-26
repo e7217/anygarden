@@ -32,7 +32,7 @@ describe('SidebarExpandButton', () => {
     expect(screen.queryByTestId('sidebar-expand')).toBeNull()
   })
 
-  it('renders the floating button when the sidebar is collapsed', () => {
+  it('renders a navigation restore control when the sidebar is collapsed', () => {
     mockSidebarLayout.mockReturnValue({
       collapsed: true,
       toggleCollapsed: toggleCollapsedSpy,
@@ -41,6 +41,8 @@ describe('SidebarExpandButton', () => {
     render(<SidebarExpandButton />)
     const btn = screen.getByTestId('sidebar-expand')
     expect(btn).toHaveAttribute('aria-label', 'Expand sidebar')
+    expect(btn).toHaveAttribute('aria-expanded', 'false')
+    expect(btn).toHaveAttribute('aria-controls', 'workspace-sidebar')
   })
 
   it('invokes toggleCollapsed when clicked', () => {

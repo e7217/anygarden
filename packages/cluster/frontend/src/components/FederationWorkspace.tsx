@@ -269,7 +269,7 @@ export default function FederationWorkspace({
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.previewEyebrow')}</p>
-          <h1 className="mt-1 text-title">{t('federation.title')}</h1>
+          <h1 className="mt-1 text-heading">{t('federation.title')}</h1>
           <p className="mt-2 max-w-2xl text-sm text-[var(--color-foreground-muted)]">
             {t('federation.description')}
           </p>

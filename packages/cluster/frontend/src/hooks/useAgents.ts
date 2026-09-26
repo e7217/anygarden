@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '@/lib/api';
 
 export interface Agent {
@@ -133,6 +133,8 @@ const TRANSITIONAL_POLL_MS = 1500;
 
 export function useAgents() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const mutationRevision = useRef(0);
+  const listRequest = useRef(0);
   // Tracks agent ids whose start/stop mutation is still awaiting the
   // server response. Buttons consult this to render the disabled /
   // spinner state that closes the "I clicked — is anything happening?"
@@ -142,13 +144,22 @@ export function useAgents() {
   const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
 
   const fetchAgents = useCallback(async () => {
+    const revision = mutationRevision.current;
+    const request = ++listRequest.current;
     const resp = await apiFetch('/api/v1/agents');
-    if (resp.ok) setAgents(await resp.json());
+    if (resp.ok) {
+      const rows: Agent[] = await resp.json();
+      if (revision === mutationRevision.current && request === listRequest.current) setAgents(rows);
+    }
   }, []);
 
   const createAgent = useCallback(async (data: {
     name: string;
     engine: string;
+    machine_id?: string;
+    request_id?: string;
+    description?: string;
+    permission_level?: 'restricted' | 'standard' | 'trusted';
     rooms?: string[];
     agents_md?: string;
     files?: Record<string, string>;
@@ -162,7 +173,15 @@ export function useAgents() {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    if (resp.ok) { await fetchAgents(); return await resp.json(); }
+    if (resp.ok) {
+      const created: Agent = await resp.json();
+      mutationRevision.current += 1;
+      // The POST has committed. Keep the canonical response available even
+      // when a follow-up list request fails, so retry cannot duplicate it.
+      setAgents(previous => [...previous.filter(agent => agent.id !== created.id), created]);
+      void fetchAgents().catch(() => {});
+      return created;
+    }
     const body = await resp.json().catch(() => ({}));
     throw new Error(body.detail || 'Failed to create agent');
   }, [fetchAgents]);
@@ -268,6 +287,8 @@ export function useAgents() {
       // (turn_timeout_sec=null + turn_timeout_sec_set=true clears it).
       turn_timeout_sec?: number | null;
       turn_timeout_sec_set?: boolean;
+      permission_level?: 'restricted' | 'standard' | 'trusted' | null;
+      permission_level_set?: boolean;
       // Issue #271 — public-facing introduction. ``_set`` idiom lets
       // an admin clear the field (description=null + description_set=true).
       description?: string | null;
@@ -282,8 +303,13 @@ export function useAgents() {
       const body = await resp.json().catch(() => ({}));
       throw new Error(body.detail || 'Failed to update agent');
     }
-    await fetchAgents();
-    return await resp.json() as Agent;
+    const updated = await resp.json() as Agent;
+    mutationRevision.current += 1;
+    setAgents(previous => previous.map(agent => agent.id === id ? updated : agent));
+    // A successful mutation must not appear rolled back when reconciliation
+    // fails. In particular the displayed permission must match the PUT.
+    void fetchAgents().catch(() => {});
+    return updated;
   }, [fetchAgents]);
 
   const fetchAgentFiles = useCallback(async (id: string): Promise<AgentFile[]> => {
@@ -377,7 +403,7 @@ export function useAgents() {
     return null;
   }, []);
 
-  useEffect(() => { fetchAgents(); fetchAvailableEngines(); }, [fetchAgents, fetchAvailableEngines]);
+  useEffect(() => { void fetchAgents().catch(() => {}); void fetchAvailableEngines().catch(() => {}); }, [fetchAgents, fetchAvailableEngines]);
 
   // #219 — while any agent is visibly transitioning, refetch on a
   // short cadence so the badge catches up within a second or two of
@@ -394,7 +420,7 @@ export function useAgents() {
     });
     if (!hasTransitional) return;
     const timer = window.setInterval(() => {
-      fetchAgents();
+      void fetchAgents().catch(() => {});
     }, TRANSITIONAL_POLL_MS);
     return () => window.clearInterval(timer);
   }, [agents, fetchAgents]);

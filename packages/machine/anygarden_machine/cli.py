@@ -5,18 +5,25 @@ from __future__ import annotations
 import asyncio
 import getpass
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Iterable, MutableMapping
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import click
 import httpx
 import structlog
 
 from anygarden_machine import install_manifest
-from anygarden_machine.config import MachineConfig, load_token, save_token
+from anygarden_machine.config import (
+    MachineConfig,
+    load_token,
+    save_connection,
+    save_token,
+)
 from anygarden_machine.daemon import MachineDaemon
 from anygarden_machine.detector import detect_engines
 from anygarden_machine.updater import run_update
@@ -187,6 +194,86 @@ def register(server: str, name: str) -> None:
 
 @main.command()
 @click.option(
+    "--server", required=True, help="HTTP(S) URL of the existing Anygarden server"
+)
+@click.option(
+    "--machine-id", required=True, help="Existing machine ID shown in the web UI"
+)
+@click.option("--name", default="", help="Optional machine display name")
+@click.option(
+    "--replace",
+    is_flag=True,
+    help="Replace a different connection saved for this OS account",
+)
+def connect(server: str, machine_id: str, name: str, replace: bool) -> None:
+    """Save an existing web-issued machine connection; prompt privately for its token."""
+    try:
+        parsed = urlsplit(server.strip())
+        _ = parsed.port  # Validate malformed ports without connecting.
+    except ValueError as exc:
+        raise click.BadParameter("Invalid server port", param_hint="--server") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise click.BadParameter(
+            "Use an HTTP(S) base URL without credentials, query, or fragment",
+            param_hint="--server",
+        )
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", machine_id):
+        raise click.BadParameter("Invalid machine ID", param_hint="--machine-id")
+    ws_url = urlunsplit(
+        (
+            "wss" if parsed.scheme == "https" else "ws",
+            parsed.netloc,
+            f"{parsed.path.rstrip('/')}/ws/machines/{machine_id}",
+            "",
+            "",
+        )
+    )
+    try:
+        existing = MachineConfig.load()
+    except Exception as exc:
+        raise click.ClickException(
+            "The saved machine configuration could not be read; repair it before replacing the connection"
+        ) from exc
+    different = bool(
+        existing.machine_id
+        and (existing.machine_id != machine_id or existing.server_url != ws_url)
+    )
+    if different and not replace:
+        raise click.ClickException(
+            "A different machine connection is already saved. Use --replace only if this computer should replace that connection."
+        )
+    token = click.prompt("Machine token", hide_input=True).strip()
+    if not re.fullmatch(r"mch_[A-Za-z0-9_-]{8,}", token):
+        raise click.ClickException(
+            "Invalid machine token format. Paste the token issued by the web UI."
+        )
+    config = MachineConfig(
+        machine_id=machine_id,
+        name=name or machine_id,
+        server_url=ws_url,
+        labels=existing.labels if not different else {},
+    )
+    try:
+        save_connection(config, token)
+    except OSError as exc:
+        raise click.ClickException(
+            "Could not save the machine connection. Check local configuration directory permissions."
+        ) from exc
+    click.echo(
+        "Connection saved to ~/.anygarden/machine.toml and ~/.anygarden/machine.token (private files)."
+    )
+    click.echo("Start or restart with: anygarden-machine run")
+
+
+@main.command()
+@click.option(
     "--config",
     "config_path",
     type=click.Path(exists=True),
@@ -317,8 +404,24 @@ def status() -> None:
 
 
 @main.group("workspace")
-def workspace() -> None:
+@click.option(
+    "--node-data-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Integrated node data directory used by 'anygarden start --data-dir' (omit for a remote daemon)",
+)
+@click.pass_context
+def workspace(ctx: click.Context, node_data_dir: Path | None) -> None:
     """Manage machine-local external workspace registrations."""
+    ctx.ensure_object(dict)
+    ctx.obj["workspace_registry"] = (
+        node_data_dir / "workspace-registry.json" if node_data_dir else None
+    )
+
+
+def _workspace_registry(explicit: Path | None) -> WorkspaceRegistry:
+    context = click.get_current_context()
+    return WorkspaceRegistry(explicit or (context.obj or {}).get("workspace_registry"))
 
 
 @workspace.command("register")
@@ -350,7 +453,7 @@ def workspace_register(
     """Register ROOT locally and print its opaque workspace ID."""
 
     try:
-        row = WorkspaceRegistry(registry).register(
+        row = _workspace_registry(registry).register(
             root,
             label=label,
             max_mode=max_mode,  # type: ignore[arg-type]
@@ -368,7 +471,7 @@ def workspace_list(registry: Path | None) -> None:
     """List active redacted registrations; canonical paths are never printed."""
 
     try:
-        rows = WorkspaceRegistry(registry).list_descriptors()
+        rows = _workspace_registry(registry).list_descriptors()
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     for row in rows:
@@ -396,7 +499,7 @@ def workspace_consent(
     """Mint one scoped, short-lived one-way consent proof."""
 
     try:
-        proof = WorkspaceRegistry(registry).issue_consent(
+        proof = _workspace_registry(registry).issue_consent(
             workspace_id,
             agent_id=agent_id,
             room_id=room_id,
@@ -414,7 +517,7 @@ def workspace_consent(
 def workspace_revoke(workspace_id: str, registry: Path | None) -> None:
     """Revoke a local registration and all of its unused consents."""
 
-    if not WorkspaceRegistry(registry).revoke(workspace_id):
+    if not _workspace_registry(registry).revoke(workspace_id):
         raise click.ClickException(
             "workspace registration not found or already revoked"
         )

@@ -53,7 +53,7 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   expect(submit).toBeEnabled()
   fireEvent.click(submit)
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
-    name: 'Local worker', engine: 'pi-cli', provider: 'my-local', model: 'local-model-v2', rooms: [],
+    name: 'Local worker', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'my-local', model: 'local-model-v2', rooms: [],
   }))
 })
 

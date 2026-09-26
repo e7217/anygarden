@@ -32,9 +32,9 @@ from anygarden.scheduler.machine_bus import MachineBus
 
 
 @pytest_asyncio.fixture()
-async def agents_env():
+async def agents_env(request, tmp_path):
     config = AnygardenSettings(
-        db_url="sqlite+aiosqlite://",
+        db_url=(f"sqlite+aiosqlite:///{tmp_path / 'agents.db'}" if getattr(request, "param", None) == "file" else "sqlite+aiosqlite://"),
         jwt_secret=secrets.token_urlsafe(32),
         log_level="DEBUG",
     )
@@ -2137,3 +2137,107 @@ async def test_legacy_pi_automatic_start_and_reconnect_never_publish_running(age
             "type": "sync_desired_state", "agent_id": agent_id,
             "generation": agent.generation, "desired_state": "stopped",
         }
+
+
+class TestAgentInitialSetup:
+    """Initial placement and permissions must be correct before dispatch."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("permission", ["restricted", "standard", "trusted"])
+    async def test_permission_is_present_in_first_spawn(self, agents_env, permission):
+        env = agents_env
+        env["bus"].send = AsyncMock(return_value=True)
+        response = await env["client"].post(
+            "/api/v1/agents",
+            json={
+                "name": "Configured worker", "engine": "echo",
+                "machine_id": env["machine"].id,
+                "description": "Reviews proposed changes",
+                "agents_md": "Review changes before modifying files.",
+                "permission_level": permission,
+            },
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["permission_level"] == permission
+        assert response.json()["placed_on_machine_id"] == env["machine"].id
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, response.json()["id"])
+            assert agent.generation == 1
+            assert agent.description == "Reviews proposed changes"
+            assert agent.agents_md == "Review changes before modifying files."
+        frames = [call.args[1] for call in env["bus"].send.call_args_list]
+        spawn = next(frame for frame in frames if frame.get("agent_id") == response.json()["id"])
+        assert spawn["permission_level"] == permission
+        assert spawn["generation"] == 1
+
+    @pytest.mark.asyncio
+    async def test_selected_machine_overrides_automatic_preference(self, agents_env):
+        env = agents_env
+        async with env["factory"]() as db:
+            second = Machine(
+                name="Chosen machine", hostname="chosen", owner_user_id=env["admin"].id,
+                status="online", max_agents=10,
+            )
+            db.add(second)
+            await db.flush()
+            db.add(MachineEngine(machine_id=second.id, engine="echo"))
+            db.add(Agent(name="Existing worker", engine="echo", actual_state="running", placed_on_machine_id=second.id))
+            await db.commit()
+            second_id = second.id
+        websocket = type("FakeWS", (), {"send_text": AsyncMock()})()
+        await env["bus"].register(second_id, websocket)
+        response = await env["client"].post(
+            "/api/v1/agents",
+            json={"name": "Pinned worker", "engine": "echo", "machine_id": second_id},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["placed_on_machine_id"] == second_id
+        assert websocket.send_text.called
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("problem", ["missing", "offline", "disconnected", "engine", "capacity", "capability"])
+    async def test_invalid_machine_rejected_before_any_rows(self, agents_env, problem):
+        env = agents_env
+        machine_id = env["machine"].id
+        engine = "echo"
+        async with env["factory"]() as db:
+            machine = await db.get(Machine, machine_id)
+            if problem == "missing":
+                machine_id = "missing-machine"
+            elif problem == "offline":
+                machine.status = "offline"
+            elif problem == "engine":
+                engine = "unknown-engine"
+            elif problem == "capacity":
+                machine.max_agents = 0
+            elif problem == "capability":
+                engine = "pi-cli"
+                db.add(MachineEngine(machine_id=machine.id, engine=engine))
+            await db.commit()
+        if problem == "disconnected":
+            await env["bus"].unregister(machine_id)
+        response = await env["client"].post(
+            "/api/v1/agents",
+            json={"name": "Invalid worker", "engine": engine, "machine_id": machine_id,
+                  **({"provider": "zai"} if engine == "pi-cli" else {})},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert response.status_code == (404 if problem == "missing" else 409), response.text
+        async with env["factory"]() as db:
+            assert (await db.scalars(select(Agent))).all() == []
+            assert (await db.scalars(select(Room))).all() == []
+            assert (await db.scalars(select(Participant))).all() == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_initial_permission_rejected(self, agents_env):
+        env = agents_env
+        response = await env["client"].post(
+            "/api/v1/agents",
+            json={"name": "Invalid worker", "engine": "echo", "permission_level": "root"},
+            headers={"Authorization": f"Bearer {env['token']}"},
+        )
+        assert response.status_code == 422
+        async with env["factory"]() as db:
+            assert (await db.scalars(select(Agent))).all() == []

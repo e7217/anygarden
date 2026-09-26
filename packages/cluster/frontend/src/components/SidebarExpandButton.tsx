@@ -2,29 +2,30 @@ import { PanelLeftOpen } from 'lucide-react'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
 import { useLocale } from '@/i18n/LocaleProvider'
 
-/**
- * Floating expand button shown only when the desktop sidebar is
- * collapsed (#106/#115). Lives next to ``<Sidebar>`` in each page so
- * the page owns the visual z-stack — swapping it for a page-specific
- * placement later is a one-line edit at the call site.
- *
- * Hidden below ``md:`` — mobile uses the RoomHeader hamburger or
- * empty-state menu for off-canvas drawer control instead.
- */
+/** Reserve a narrow desktop rail so restoring navigation never covers page content. */
 export default function SidebarExpandButton() {
   const { t } = useLocale()
   const { collapsed, toggleCollapsed } = useSidebarLayout()
   if (!collapsed) return null
   return (
-    <button
-      type="button"
-      onClick={toggleCollapsed}
-      aria-label={t('chat.expandSidebar')}
-      data-testid="sidebar-expand"
-      title={t('chat.expandSidebarShortcut')}
-      className="hidden md:inline-flex fixed left-2 top-2 z-30 h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)] shadow-whisper hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+    <div
+      data-testid="sidebar-collapsed-rail"
+      className="hidden w-[calc(var(--control-icon-size)+1.5rem)] shrink-0 border-r border-[var(--color-border)] bg-[var(--color-surface-alt)] md:block"
     >
-      <PanelLeftOpen className="h-4 w-4" />
-    </button>
+      <div className="flex h-14 items-center pl-3">
+      <button
+        type="button"
+        onClick={toggleCollapsed}
+        aria-label={t('chat.expandSidebar')}
+        aria-expanded={false}
+        aria-controls="workspace-sidebar"
+        data-testid="sidebar-expand"
+        title={t('chat.expandSidebarShortcut')}
+        className="inline-flex shrink-0 h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+      >
+        <PanelLeftOpen className="h-4 w-4" />
+      </button>
+      </div>
+    </div>
   )
 }

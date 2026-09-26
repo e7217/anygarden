@@ -155,7 +155,7 @@ export default function AdminMCPTemplates() {
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             {t('common.refresh')}
           </Button>
-          <Button size="sm" className="order-first min-h-11 w-full sm:w-auto lg:order-last" onClick={() => setEditorTarget({
+          <Button size="sm" className="order-first w-full sm:w-auto lg:order-last" onClick={() => setEditorTarget({
             id: '',
             name: '',
             display_name: '',
@@ -187,7 +187,8 @@ export default function AdminMCPTemplates() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`rounded-[var(--radius-sm)] px-3 py-1.5 text-xs font-medium transition-colors ${
+            aria-pressed={activeTab === tab}
+            className={`h-[var(--control-sm-height)] rounded-[var(--radius-sm)] px-3 text-sm font-medium transition-colors ${
               activeTab === tab
                 ? 'bg-[var(--color-background)] text-[var(--color-foreground)]'
                 : 'text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'
@@ -258,7 +259,7 @@ export default function AdminMCPTemplates() {
                     {t('admin.mcp.instanceCount', { count: template.instance_count })}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:min-h-11 lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
+                <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
                   <Button
                     variant="ghost"
                     size="sm"

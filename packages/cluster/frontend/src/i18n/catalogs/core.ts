@@ -1,5 +1,9 @@
 /** Fixed interface copy. User content and server-supplied detail stay verbatim. */
 export const coreEn = {
+  'common.personalSettings': 'Personal settings',
+  'common.copy': 'Copy',
+  'common.retry': 'Try again',
+  'common.copied': 'Copied',
   'common.language': 'Language',
   'common.korean': '한국어',
   'common.english': 'English',
@@ -55,6 +59,10 @@ export const coreEn = {
 } as const
 
 export const coreKo: Record<keyof typeof coreEn, string> = {
+  'common.personalSettings': '개인 설정',
+  'common.copy': '복사',
+  'common.retry': '다시 시도',
+  'common.copied': '복사됨',
   'common.language': '언어',
   'common.korean': '한국어',
   'common.english': 'English',

@@ -1,5 +1,8 @@
 import { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import {
   createGoal,
   type Goal,
@@ -126,12 +129,11 @@ export default function GoalForm({
         <label htmlFor="goal-title" className="text-xs font-medium text-[var(--color-foreground-muted)]">
           {t('goals.title')}
         </label>
-        <input
+        <Input
           id="goal-title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t('goals.titlePlaceholder')}
-          className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)]"
         />
       </div>
 
@@ -139,7 +141,7 @@ export default function GoalForm({
         <label htmlFor="goal-assignee" className="text-xs font-medium text-[var(--color-foreground-muted)]">
           {t('goals.agent')}
         </label>
-        <select
+        <Select
           id="goal-assignee"
           value={assigneeAgentId}
           onChange={(e) => setAssigneeAgentId(e.target.value)}
@@ -147,7 +149,6 @@ export default function GoalForm({
           aria-label={t('goals.pickAgent')}
           aria-required="true"
           data-testid="goal-form-assignee-select"
-          className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] disabled:opacity-70"
         >
           {roomAgents.length === 0 && (
             <option value="" disabled>
@@ -159,7 +160,7 @@ export default function GoalForm({
               {a.name}
             </option>
           ))}
-        </select>
+        </Select>
         {roomAgents.length === 1 && (
           <p className="text-xs text-[var(--color-foreground-muted)]">
             {t('goals.singleAgent')}
@@ -171,13 +172,12 @@ export default function GoalForm({
         <label htmlFor="goal-spec" className="text-xs font-medium text-[var(--color-foreground-muted)]">
           {t('goals.instructions')}
         </label>
-        <textarea
+        <Textarea
           id="goal-spec"
           value={spec}
           onChange={(e) => setSpec(e.target.value)}
           placeholder={t('goals.instructionsPlaceholder')}
           rows={4}
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)]"
         />
       </div>
 
@@ -187,7 +187,7 @@ export default function GoalForm({
         </legend>
         <div className="flex flex-wrap gap-3 text-sm">
           {(['cron', 'interval', 'manual'] as const).map((choice) => (
-            <label key={choice} className="flex min-h-10 items-center gap-2">
+            <label key={choice} className="flex min-h-[var(--control-height)] items-center gap-2">
               <input
                 type="radio"
                 name="trigger"
@@ -200,48 +200,48 @@ export default function GoalForm({
           ))}
         </div>
         {triggerType === 'cron' && (
-          <input
+          <Input
             aria-label={t('goals.cron')}
             value={cronExpr}
             onChange={(e) => setCronExpr(e.target.value)}
             placeholder="0 9 * * *"
-            className="mt-1 min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
+            className="mt-1 font-mono"
           />
         )}
         {triggerType === 'interval' && (
-          <input
+          <Input
             aria-label={t('goals.interval')}
             type="number"
             value={intervalSecs}
             onChange={(e) => setIntervalSecs(Number(e.target.value))}
             min={60}
             placeholder="600"
-            className="mt-1 min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
+            className="mt-1 font-mono"
           />
         )}
       </fieldset>
 
       <details className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
-        <summary className="cursor-pointer text-sm font-medium text-[var(--color-foreground)]">{t('goals.advanced')}</summary>
+        <summary className="min-h-[var(--control-sm-height)] cursor-pointer content-center text-sm font-medium text-[var(--color-foreground)]">{t('goals.advanced')}</summary>
         <div className="mt-3 flex flex-col gap-3">
           <div className="flex flex-col gap-1">
             <label htmlFor="goal-report-room" className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('goals.reportRoom')}</label>
-            <input
+            <Input
               id="goal-report-room"
               value={reportRoomId}
               onChange={(e) => setReportRoomId(e.target.value)}
               placeholder={t('goals.reportRoomPlaceholder')}
-              className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
+              className="font-mono"
             />
             <p className="text-xs text-[var(--color-foreground-muted)]">{t('goals.reportRoomHelp')}</p>
           </div>
           <fieldset className="flex flex-col gap-1">
             <legend className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('goals.recording')}</legend>
-            <label className="flex min-h-10 items-start gap-2 py-1 text-sm">
+            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-sm">
               <input type="radio" name="materialize" value="interesting_only" checked={materialize === 'interesting_only'} onChange={() => setMaterialize('interesting_only')} />
               <span><span className="block font-medium">{t('goals.interestingOnly')}</span><span className="text-xs text-[var(--color-foreground-muted)]">{t('goals.interestingOnlyDescription')}</span></span>
             </label>
-            <label className="flex min-h-10 items-start gap-2 py-1 text-sm">
+            <label className="flex min-h-[var(--control-height)] items-start gap-2 py-1 text-sm">
               <input type="radio" name="materialize" value="full" checked={materialize === 'full'} onChange={() => setMaterialize('full')} />
               <span><span className="block font-medium">{t('goals.full')}</span><span className="text-xs text-[var(--color-foreground-muted)]">{t('goals.fullDescription')}</span></span>
             </label>

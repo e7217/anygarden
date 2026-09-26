@@ -33,9 +33,11 @@ import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
 import TasksPanel from '@/components/agent-settings/TasksPanel'
 import GoalsPanel from '@/components/agent-settings/GoalsPanel'
+import WorkspacePanel from '@/components/agent-settings/WorkspacePanel'
 import { ChevronRight, EyeOff, Trash2, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Select } from '@/components/ui/select'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 interface Props {
@@ -88,15 +90,15 @@ interface Props {
   onToggleContextWindowOptOut?: () => void | Promise<void>
 }
 
-// Shared heading label (11px uppercase muted). Same classes are
+// Shared section labels use the same readable form hierarchy. Same classes are
 // reused for the collapsible `<summary>` so both section types look
 // identical.
 const SECTION_HEADING_CLASS =
-  'text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]'
+  'text-sm font-semibold text-[var(--color-foreground)]'
 
 // Elevated cards sit on the alternate surface in both themes.
 const SECTION_CARD_CLASS =
-  'bg-[var(--color-surface-elevated)] rounded-[var(--radius-lg)] border border-[var(--color-border)] shadow-card p-5'
+  'scroll-mt-4 bg-[var(--color-surface-elevated)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-4'
 
 function Section({
   id,
@@ -109,6 +111,8 @@ function Section({
 }) {
   return (
     <section
+      id={`agent-settings-${id}`}
+      tabIndex={-1}
       aria-labelledby={`agent-settings-heading-${id}`}
       data-testid={`agent-settings-section-${id}`}
       className={`${SECTION_CARD_CLASS} space-y-3`}
@@ -140,19 +144,17 @@ function CollapsibleSection({
 }) {
   return (
     <details
+      id={`agent-settings-${id}`}
       data-testid={`agent-settings-section-${id}`}
       className={`${SECTION_CARD_CLASS} group`}
       open={defaultOpen}
     >
       <summary
-        className={`${SECTION_HEADING_CLASS} flex items-center gap-1.5 cursor-pointer list-none select-none`}
+        className={`${SECTION_HEADING_CLASS} flex min-h-[var(--control-sm-height)] items-center justify-between gap-3 cursor-pointer list-none select-none`}
         aria-labelledby={`agent-settings-heading-${id}`}
       >
-        <ChevronRight
-          className="h-3 w-3 shrink-0 transition-transform group-open:rotate-90"
-          aria-hidden="true"
-        />
         <span id={`agent-settings-heading-${id}`}>{title}</span>
+        <ChevronRight className="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" aria-hidden="true" />
       </summary>
       <div className="mt-3">{children}</div>
     </details>
@@ -176,10 +178,13 @@ export default function AgentSettingsDialog({
   onToggleContextWindowOptOut,
 }: Props) {
   const { t } = useLocale()
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [selectedSection, setSelectedSection] = useState('overview')
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null)
   const onConnectionChange = useCallback((next: ConnectionState) => setConnectionState(next), [])
   useEffect(() => {
     if (!open) setConnectionState(null)
+    if (open) setSelectedSection('overview')
   }, [open])
   const machineOffline = agent?.machine_online === false
   const agentOnline = deriveAgentOnline(agent?.actual_state, { machineOffline })
@@ -197,6 +202,26 @@ export default function AgentSettingsDialog({
     failed: t('admin.agentSettings.state.failed'),
   }
   const displayState = stateLabels[rawDisplayState] ?? rawDisplayState
+  const sections = [
+    { id: 'overview', label: t('admin.agentSettings.overview') },
+    ...(agent && (agent.engine === 'codex-cli' || agent.engine === 'pi-cli')
+      ? [{ id: 'model-connection', label: t('agentSetup.connectionNav') }] : []),
+    { id: 'workspace', label: t('agentSetup.workspace') },
+    { id: 'manifest', label: t('agentSetup.instructionsNav') },
+    { id: 'rooms', label: t('admin.agentSettings.rooms') },
+    { id: 'goals', label: t('admin.agentSettings.responsibilities') },
+    { id: 'tasks', label: t('admin.agentSettings.tasks') },
+    { id: 'activity', label: t('admin.agentSettings.activity') },
+  ]
+  function jumpToSection(id: string) {
+    const section = bodyRef.current?.querySelector<HTMLElement>(`#agent-settings-${id}`)
+    if (!section) return
+    setSelectedSection(id)
+    if (section instanceof HTMLDetailsElement) section.open = true
+    section.scrollIntoView?.({ block: 'start' })
+    const focusTarget = section instanceof HTMLDetailsElement ? section.querySelector('summary') : section
+    focusTarget?.focus({ preventScroll: true })
+  }
 
   // Footer option parity with AgentSettingsMenu (#435): the toggle row
   // appears only when both the value and its handler are supplied.
@@ -207,7 +232,7 @@ export default function AgentSettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90dvh] overflow-hidden flex flex-col p-0 gap-0">
-        <DialogHeader className="border-b border-[var(--color-border)] px-4 pb-3 pt-5 sm:px-6">
+        <DialogHeader className="border-b border-[var(--color-border)] px-4 pb-3 pt-5 pr-14 sm:px-6 sm:pr-14">
           <DialogTitle className="flex min-w-0 flex-col items-start gap-1.5 pr-8 text-left sm:flex-row sm:items-center sm:gap-2">
             <span className="shrink-0">{t('admin.agentSettings.title')}</span>
             {agent ? (
@@ -227,14 +252,22 @@ export default function AgentSettingsDialog({
               </span>
             ) : null}
           </DialogTitle>
-          <DialogDescription className="sr-only">
-            {t('admin.agentSettings.description')}
+          <DialogDescription className="text-left text-xs leading-relaxed">
+            {t('agentSetup.saveHint')}
           </DialogDescription>
         </DialogHeader>
+        <nav aria-label={t('agentSetup.settingsNavigation')} className="shrink-0 border-b border-[var(--color-border)] px-4 py-2 sm:px-6">
+          <Select className="md:hidden" aria-label={t('agentSetup.settingsNavigation')} value={selectedSection} onChange={event => jumpToSection(event.target.value)}>
+            {sections.map(section => <option key={section.id} value={section.id}>{section.label}</option>)}
+          </Select>
+          <div className="hidden flex-wrap gap-1 md:grid md:grid-cols-4 lg:flex">
+            {sections.map(section => <Button key={section.id} variant={selectedSection === section.id ? 'secondary' : 'ghost'} size="sm" aria-controls={`agent-settings-${section.id}`} onClick={() => jumpToSection(section.id)}>{section.label}</Button>)}
+          </div>
+        </nav>
 
         {/* A single scrollable body separates elevated section cards
             from the alternate surface in both light and dark themes. */}
-        <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
           <div className="px-3 py-4 space-y-3 sm:px-6 sm:py-5">
             <Section id="overview" title={t('admin.agentSettings.overview')}>
               <OverviewPanel
@@ -257,7 +290,11 @@ export default function AgentSettingsDialog({
               </Section>
             )}
 
-            <Section id="manifest" title={t('admin.agentSettings.manifest')}>
+            <Section id="workspace" title={t('agentSetup.workspace')}>
+              <WorkspacePanel agentId={agent?.id ?? null} onNavigateAway={() => onOpenChange(false)} />
+            </Section>
+
+            <Section id="manifest" title={t('agentSetup.filesInstructions')}>
               <ManifestPanel
                 agent={agent}
                 fetchAgentFiles={fetchAgentFiles}
@@ -313,7 +350,7 @@ export default function AgentSettingsDialog({
                 aria-checked={contextWindowOptOut}
                 onClick={() => void onToggleContextWindowOptOut!()}
                 data-testid="agent-settings-context-window-opt-out"
-                className="inline-flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer sm:w-auto"
+                className="inline-flex min-h-[var(--control-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer sm:w-auto"
               >
                 <EyeOff className="h-4 w-4" />
                 <span>{t('admin.agentSettings.contextOptOut')}</span>
@@ -330,7 +367,7 @@ export default function AgentSettingsDialog({
                 size="sm"
                 onClick={() => onDelete()}
                 data-testid="agent-settings-delete"
-                className="min-h-11 w-full justify-start text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 sm:w-auto"
+                className="w-full justify-start text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 sm:w-auto"
               >
                 <Trash2 className="h-4 w-4" />
                 {t('admin.agentSettings.deleteAgent')}

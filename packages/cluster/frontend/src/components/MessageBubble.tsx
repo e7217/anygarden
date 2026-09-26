@@ -175,7 +175,7 @@ export default memo(function MessageBubble({
   const bookmarkBtn = (
     <button
       onClick={toggleSave}
-      className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-surface-hover)]"
+      className="inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
       title={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
       aria-label={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
     >

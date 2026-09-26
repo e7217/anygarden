@@ -53,7 +53,11 @@ from anygarden.engines.validation import (
     removed_engine_error,
 )
 from anygarden.scheduler.execution import ExecutionBus
-from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
+from anygarden.scheduler.placement import (
+    CAPACITY_STATES,
+    NoSuitableMachineError,
+    reserve_machine_for,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -332,9 +336,17 @@ class AgentLifecycle:
                             reason="same_placement_not_connected",
                         )
                         return
+                    if agent.actual_state not in CAPACITY_STATES:
+                        try:
+                            machine = await reserve_machine_for(
+                                agent.engine, db, self._machine_bus,
+                                machine_id=machine.id, exclude_agent_id=agent.id,
+                            )
+                        except NoSuitableMachineError:
+                            machine = None
                 else:
                     try:
-                        machine = await select_machine_for(
+                        machine = await reserve_machine_for(
                             agent.engine,
                             db,
                             self._machine_bus,
@@ -345,6 +357,7 @@ class AgentLifecycle:
                                 if agent.engine == "pi-cli"
                                 else None
                             ),
+                            exclude_agent_id=agent.id,
                         )
                     except NoSuitableMachineError:
                         machine = None
@@ -370,6 +383,11 @@ class AgentLifecycle:
                     return
 
                 if machine is None:
+                    # The row lock may have waited for another worker that
+                    # already placed this same agent. Never erase that winner.
+                    await db.refresh(agent)
+                    if agent.placed_on_machine_id and agent.actual_state in CAPACITY_STATES:
+                        return
                     logger.warning(
                         "lifecycle.no_machine",
                         agent_id=agent_id,

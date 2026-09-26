@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import SidebarMenuPopover from '@/components/SidebarMenuPopover'
 import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import {
@@ -41,7 +42,7 @@ export interface AgentSettingsMenuProps {
   contextWindowOptOut?: boolean
   onToggleContextWindowOptOut?: () => void | Promise<void>
   /** Sidebar rows use a 44px touch target on phones and a compact
-   *  24px trigger beside the new-conversation button on desktop. */
+   *  32px trigger beside the new-conversation button on desktop. */
   compact?: boolean
 }
 
@@ -56,22 +57,7 @@ export default function AgentSettingsMenu({
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onOutside = (e: Event) => {
-      if (!rootRef.current) return
-      if (!rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('pointerdown', onOutside)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onOutside)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+
 
   const showContextToggle =
     typeof contextWindowOptOut === 'boolean' &&
@@ -94,7 +80,7 @@ export default function AgentSettingsMenu({
           aria-haspopup="dialog"
           aria-expanded={open}
           aria-label={t('admin.agentSettings.title')}
-          className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6"
+          className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]"
           data-testid="agent-settings-menu-trigger"
         >
           <MoreHorizontal className="h-4 w-4" />
@@ -113,10 +99,10 @@ export default function AgentSettingsMenu({
         </Button>
       )}
       {open && (
-        <div
-          role="group"
-          aria-label={t('admin.agentSettings.title')}
-          className="absolute right-0 top-full z-40 mt-1 w-52 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg"
+        <SidebarMenuPopover
+          anchorRef={rootRef}
+          label={t('admin.agentSettings.title')}
+          onClose={() => setOpen(false)}
         >
           <ul className="py-1">
             {onOpenSettings && (
@@ -125,7 +111,7 @@ export default function AgentSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onOpenSettings)}
                   data-testid="agent-menu-settings"
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                 >
                   <Settings className="h-4 w-4" />
                   <span>{t('admin.agentSettings.settingsAction')}</span>
@@ -149,7 +135,7 @@ export default function AgentSettingsMenu({
                       handleSelect(onToggleContextWindowOptOut!)
                     }
                     data-testid="agent-menu-context-window-opt-out"
-                    className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
+                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                   >
                     <EyeOff className="h-4 w-4" />
                     <span className="flex-1">{t('admin.agentSettings.contextOptOut')}</span>
@@ -175,7 +161,7 @@ export default function AgentSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(onDelete)}
                   data-testid="agent-menu-delete"
-                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
                   <span>{t('admin.agentSettings.deleteAgent')}</span>
@@ -183,7 +169,7 @@ export default function AgentSettingsMenu({
               </li>
             )}
           </ul>
-        </div>
+        </SidebarMenuPopover>
       )}
     </div>
   )

@@ -12,7 +12,7 @@ export function LocaleToggle({ compact = false }: { compact?: boolean }) {
           aria-label={value === 'ko' ? t('common.korean') : t('common.english')}
           aria-pressed={locale === value}
           onClick={() => setLocale(value)}
-          className={`min-h-11 min-w-11 rounded-[var(--radius-sm)] px-2 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-brand-focus)] ${
+          className={`h-[var(--control-height)] min-w-[var(--control-height)] rounded-[var(--radius-sm)] px-2 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-brand-focus)] ${
             locale === value
               ? 'bg-[var(--color-surface)] text-[var(--color-foreground)] shadow-whisper'
               : 'text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'

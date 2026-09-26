@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from pathlib import Path
 
-import yaml
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -44,7 +46,9 @@ class MachineConfig(BaseSettings):
 
         def _toml_escape(s: str) -> str:
             """Escape a string value for safe TOML embedding."""
-            return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            # JSON basic-string escapes are valid TOML too. Keep Unicode intact
+            # (JSON surrogate pairs are not TOML escapes) and escape DEL as well.
+            return json.dumps(s, ensure_ascii=False)[1:-1].replace("\x7f", "\\u007f")
 
         lines = [
             f'machine_id = "{_toml_escape(self.machine_id)}"',
@@ -58,7 +62,7 @@ class MachineConfig(BaseSettings):
                 for k, v in self.labels.items()
             ]
             lines.append(f"labels = {{ {', '.join(label_parts)} }}")
-        config_path.write_text("\n".join(lines) + "\n")
+        _write_private(config_path, "\n".join(lines) + "\n")
 
 
 def load_token(path: Path | None = None) -> str:
@@ -73,5 +77,41 @@ def save_token(token: str, path: Path | None = None) -> None:
     """Save machine token to file with chmod 600."""
     token_path = path or TOKEN_PATH
     token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(token + "\n")
-    secure_chmod(token_path, 0o600)
+    _write_private(token_path, token + "\n")
+
+
+def _write_private(path: Path, value: str) -> None:
+    """Create private contents before replacement; never truncate a token symlink."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp_path = Path(temporary)
+    try:
+        secure_chmod(temp_path, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            fd = -1
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if fd != -1:
+            os.close(fd)
+        temp_path.unlink(missing_ok=True)
+
+
+def save_connection(config: MachineConfig, token: str) -> None:
+    """Save a web-issued identity without creating another server machine.
+
+    Restore the previous token if saving the companion config fails. Each file
+    is replaced atomically and is private from the moment it is created.
+    """
+    previous_token = TOKEN_PATH.read_text() if TOKEN_PATH.exists() else None
+    save_token(token)
+    try:
+        config.save()
+    except Exception:
+        if previous_token is None:
+            TOKEN_PATH.unlink(missing_ok=True)
+        else:
+            _write_private(TOKEN_PATH, previous_token)
+        raise

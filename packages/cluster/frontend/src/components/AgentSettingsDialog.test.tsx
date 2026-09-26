@@ -110,6 +110,17 @@ describe('AgentSettingsDialog', () => {
     expect(activitySection.open).toBe(false)
   })
 
+  it('opens the activity log from the section navigation without unmounting edits', async () => {
+    setup()
+    const name = screen.getByTestId('overview-name-input') as HTMLInputElement
+    fireEvent.change(name, { target: { value: 'Draft name' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Activity' }))
+    expect((screen.getByTestId('agent-settings-section-activity') as HTMLDetailsElement).open).toBe(true)
+    expect(name).toHaveValue('Draft name')
+    expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-panel')).toBeInTheDocument()
+  })
+
   it('does not render any panel content when closed', () => {
     setup(false)
     expect(screen.queryByTestId('overview-panel')).toBeNull()
