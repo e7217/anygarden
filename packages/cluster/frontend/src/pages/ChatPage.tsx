@@ -77,7 +77,7 @@ export default function ChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(selectedRoom)
+  const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(selectedRoom)
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
   const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
   // Thread grouping is derived once here so the timeline and the side
@@ -631,6 +631,7 @@ export default function ChatPage() {
               participants={participants}
               myParticipantId={myParticipantId}
               typingUsers={typingUsers}
+              typingStages={typingStages}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
               // Re-clicking the open thread's trigger is a close like any
@@ -666,6 +667,7 @@ export default function ChatPage() {
             />
             <TypingIndicator
               typingUsers={typingUsers}
+              typingStages={typingStages}
               participants={participants}
               myParticipantId={myParticipantId}
             />

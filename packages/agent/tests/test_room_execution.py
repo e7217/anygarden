@@ -84,11 +84,17 @@ if os.environ.get('TEST_ENDPOINT'):
     with urllib.request.urlopen(request,timeout=2) as r:answer=json.load(r)['text']
 if pi:
     event({'type':'session','id':'native-session'})
+    if os.environ.get('TEST_PROGRESS'):
+        event({'type':'message_start','message':{'role':'assistant'}})
     event({'type':'message_end','message':{'role':'assistant','content':[{'type':'text','text':answer}],
         'usage':{'input':3,'output':1},'stopReason':'stop'}})
     event({'type':'turn_end'})
 else:
     event({'type':'thread.started','thread_id':'native-session'})
+    if os.environ.get('TEST_PROGRESS'):
+        event({'type':'item.started','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
+        event({'type':'item.completed','item':{'type':'command_execution','command':'DO-NOT-PUBLISH'}})
+        event({'type':'item.started','item':{'type':'agent_message'}})
     event({'type':'turn.completed','usage':{'input_tokens':3,'output_tokens':1}})
     event({'type':'item.started'})
 Path('measured').touch()
@@ -159,6 +165,28 @@ def message(request="req", thread=None):
         },
         "sender_kind": "human",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine,stages", [
+    ("codex-cli", ["preparing", "using_tool", "preparing", "writing"]),
+    ("pi-cli", ["preparing", "writing", "preparing"]),
+])
+async def test_room_typing_reports_observed_stages_only(setup_room, monkeypatch, engine, stages):
+    monkeypatch.setenv("TEST_PROGRESS", "1")
+    client = await client_for(engine, monkeypatch)
+    try:
+        await client._message_handlers[0](message())
+        sent = [call.args for call in client.sendTyping.call_args_list]
+        observed = [args[2] for args in sent if len(args) == 3]
+        transitions = [stage for index, stage in enumerate(observed)
+                       if index == 0 or stage != observed[index - 1]]
+        assert transitions == stages
+        assert sent[-1] == ("room", False)
+        assert "DO-NOT-PUBLISH" not in str(sent)
+        assert client._execution_adapter.progress_stage("room") is None
+    finally:
+        await client._execution_adapter.stop()
 
 
 @pytest.mark.asyncio

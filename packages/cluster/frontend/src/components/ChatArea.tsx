@@ -16,12 +16,14 @@ import { parseServerDate } from '@/lib/datetime'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
 import { canHostThread, type ThreadIndex } from '@/lib/threads'
+import { typingParticipantLabel, type AgentStage } from '@/lib/typingStage'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
   participants: Record<string, Participant>
   myParticipantId: string | null
   typingUsers?: Set<string>
+  typingStages?: Record<string, AgentStage>
   /** Grouped view of ``messages`` — replies are rendered in the
    *  thread panel, not inline in this timeline. Computed once by
    *  ``ChatPage`` so the panel and the timeline agree.
@@ -47,6 +49,7 @@ export default function ChatArea({
   participants,
   myParticipantId,
   typingUsers,
+  typingStages = {},
   threadIndex,
   activeThreadRootId,
   onOpenThread,
@@ -259,7 +262,9 @@ export default function ChatArea({
 
   const typingNames = Array.from(typingUsers ?? [])
     .filter(pid => pid !== myParticipantId)
-    .map(pid => participants[pid]?.display_name ?? pid.slice(0, 8))
+    .map(pid => typingParticipantLabel(
+      participants[pid]?.display_name ?? pid.slice(0, 8), typingStages[pid],
+    ))
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })

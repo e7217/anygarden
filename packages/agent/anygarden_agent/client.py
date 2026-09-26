@@ -362,13 +362,18 @@ class ChatClient:
         )
         await ws.send(frame.model_dump_json())
 
-    async def sendTyping(self, room_id: str, is_typing: bool) -> None:
+    async def sendTyping(
+        self, room_id: str, is_typing: bool, stage: str | None = None
+    ) -> None:
         """Send a typing indicator to a room."""
         ws = self._connections.get(room_id)
         if ws is None:
             return
         try:
-            await ws.send(json.dumps({"type": "typing", "is_typing": is_typing}))
+            frame = {"type": "typing", "is_typing": is_typing}
+            if is_typing and stage in {"preparing", "using_tool", "writing"}:
+                frame["stage"] = stage
+            await ws.send(json.dumps(frame))
         except Exception:
             pass
 

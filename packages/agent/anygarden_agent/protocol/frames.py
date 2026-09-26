@@ -24,6 +24,7 @@ class SendFrame(BaseModel):
 class TypingFrame(BaseModel):
     type: Literal["typing"] = "typing"
     is_typing: bool = True
+    stage: Optional[Literal["preparing", "using_tool", "writing"]] = None
 
 
 class CreateRoomFrame(BaseModel):
@@ -175,6 +176,7 @@ class TypingOut(BaseModel):
     room_id: str
     participant_id: str
     is_typing: bool
+    stage: Optional[Literal["preparing", "using_tool", "writing"]] = None
 
 
 class WelcomeOut(BaseModel):

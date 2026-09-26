@@ -121,6 +121,10 @@ class TestProtocolParsing:
         f = parse_incoming({"type": "typing", "is_typing": True})
         assert isinstance(f, TypingFrame)
         assert f.is_typing is True
+        assert f.stage is None
+        assert parse_incoming({"type": "typing", "stage": "writing"}).stage == "writing"
+        with pytest.raises(ValueError):
+            parse_incoming({"type": "typing", "stage": "raw_tool_output"})
 
     def test_parse_unknown_type_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown frame type"):
@@ -277,6 +281,11 @@ class TestWSEndpoint:
                 resp = json.loads(ws.receive_text())
                 assert resp["type"] == "typing"
                 assert resp["is_typing"] is True
+
+                # A human cannot advertise an agent execution stage.
+                ws.send_text(json.dumps({"type": "typing", "is_typing": True, "stage": "using_tool"}))
+                spoof = json.loads(ws.receive_text())
+                assert spoof["stage"] is None
 
     @pytest.mark.asyncio
     async def test_ws_bad_frame_returns_error(self, ws_env) -> None:
