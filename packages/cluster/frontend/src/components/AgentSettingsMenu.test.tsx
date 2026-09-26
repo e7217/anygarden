@@ -140,15 +140,16 @@ describe('AgentSettingsMenu', () => {
 
   // #241 — compact variant for sidebar agent rows.
   describe('compact variant', () => {
-    it('renders a 24×24 bare trigger when compact is true', () => {
+    it('renders a 44px touch trigger that becomes 24px on desktop', () => {
       render(<AgentSettingsMenu compact onOpenSettings={vi.fn()} />)
       const trigger = screen.getByTestId('agent-settings-menu-trigger')
       // Bare <button> element, not the shadcn Button wrapper.
       expect(trigger.tagName).toBe('BUTTON')
-      // h-6 w-6 geometry matches the sibling ``+`` (new DM) button
-      // so the two align vertically in the sidebar row.
-      expect(trigger.className).toMatch(/\bh-6\b/)
-      expect(trigger.className).toMatch(/\bw-6\b/)
+      // The sibling new-DM button uses the same responsive sizes.
+      expect(trigger.className).toMatch(/\bh-11\b/)
+      expect(trigger.className).toMatch(/\bw-11\b/)
+      expect(trigger.className).toMatch(/\bmd:h-6\b/)
+      expect(trigger.className).toMatch(/\bmd:w-6\b/)
     })
 
     it('defaults to the shadcn Button (h-9) when compact is omitted', () => {

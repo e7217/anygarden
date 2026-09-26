@@ -1,21 +1,16 @@
+import { useLocale } from '@/i18n/LocaleProvider'
+
 /**
  * PresenceDot — tiny liveness indicator (#54, #71).
  *
  * A 6px circle next to a participant's / agent's name:
- *   - ``online=true``  → muted sage green
- *     (``--color-status-online``). As of #71 we moved off the
- *     Notion Blue accent because blue was overloading the single
- *     accent semantic (interactive intent); sage keeps ``alive''
- *     semantically distinct without fighting the warm-neutral
- *     palette. Green too-saturated reads aggressive in this
- *     palette — the 0.56 luminance sage is deliberate.
- *   - ``online=false`` → warm neutral gray, same family as the
- *     ``--color-border`` whisper.
+ *   - ``online=true`` → semantic online green (``--color-status-online``).
+ *   - ``online=false`` → muted foreground (``--color-foreground-subtle``).
  *
  * ``variant`` switches the offline tooltip voice:
  *   - ``'user'``  (default) — uses the participant presence
  *     semantic: "오프라인 · 마지막 응답 ${formatAgo(lastSeenAt)}".
- *   - ``'agent'`` — renders the agent lifecycle state verbatim
+ *   - ``'agent'`` — renders a localized known agent lifecycle state
  *     (``stopped`` / ``crashed`` / ``unreachable`` / etc). Callers
  *     pass the raw ``actual_state`` via ``agentState``; the helper
  *     in ``lib/agent-liveness.ts`` prepares it (including the
@@ -41,33 +36,29 @@ export interface PresenceDotProps {
   agentState?: string
 }
 
-function formatAgo(iso: string | null | undefined): string {
-  if (!iso) return '알 수 없음'
-  const ts = new Date(iso)
-  if (Number.isNaN(ts.getTime())) return '알 수 없음'
-  const seconds = Math.floor((Date.now() - ts.getTime()) / 1000)
-  if (seconds < 60) return '방금 전'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}시간 전`
-  return `${Math.floor(seconds / 86400)}일 전`
-}
+const agentStateKeys = {
+  unreachable: 'admin.agentSettings.state.unreachable',
+  unknown: 'admin.agentSettings.state.unknown',
+  running: 'admin.agentSettings.state.running',
+  starting: 'admin.agentSettings.state.starting',
+  stopping: 'admin.agentSettings.state.stopping',
+  stopped: 'admin.agentSettings.state.stopped',
+  idle: 'admin.agentSettings.state.idle',
+  pending: 'admin.agentSettings.state.pending',
+  crashed: 'admin.agentSettings.state.crashed',
+  failed: 'admin.agentSettings.state.failed',
+} as const
 
-function buildTitle(
-  online: boolean,
-  variant: 'user' | 'agent',
-  lastSeenAt: string | null | undefined,
-  agentState: string | undefined,
-): string {
-  if (online) return '온라인'
-  if (variant === 'agent') {
-    // Agent variant — surface the lifecycle verbatim. Falls back
-    // to a neutral offline label when the caller didn't pass
-    // ``agentState`` (e.g. we don't know which agent powers this
-    // DM).
-    return agentState ? `오프라인 · ${agentState}` : '오프라인'
-  }
-  // User variant — "마지막 응답" phrasing for the WS presence path.
-  return `오프라인 · 마지막 응답 ${formatAgo(lastSeenAt)}`
+function formatAgo(iso: string | null | undefined, locale: 'ko' | 'en', unknown: string, justNow: string): string {
+  if (!iso) return unknown
+  const ts = new Date(iso)
+  if (Number.isNaN(ts.getTime())) return unknown
+  const seconds = Math.floor((Date.now() - ts.getTime()) / 1000)
+  if (seconds < 60) return justNow
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  if (seconds < 3600) return formatter.format(-Math.floor(seconds / 60), 'minute')
+  if (seconds < 86400) return formatter.format(-Math.floor(seconds / 3600), 'hour')
+  return formatter.format(-Math.floor(seconds / 86400), 'day')
 }
 
 export default function PresenceDot({
@@ -78,14 +69,22 @@ export default function PresenceDot({
   variant = 'user',
   agentState,
 }: PresenceDotProps) {
-  const title = buildTitle(online, variant, lastSeenAt, agentState)
+  const { locale, t } = useLocale()
+  const offline = t('common.offline')
+  const stateKey = agentState && agentStateKeys[agentState as keyof typeof agentStateKeys]
+  const stateLabel = stateKey ? t(stateKey) : agentState
+  const title = online
+    ? t('common.online')
+    : variant === 'agent'
+      ? stateLabel ? `${offline} · ${stateLabel}` : offline
+      : `${offline} · ${t('common.lastSeen', {
+        time: formatAgo(lastSeenAt, locale, t('common.unknown'), t('common.justNow')),
+      })}`
 
-  // Sage green for online (``--color-status-online``, #71), warm
-  // neutral gray for offline. Falling back via CSS var keeps
-  // PresenceDot theme-agnostic.
+  // Semantic colors follow the active light or dark theme.
   const bg = online
     ? 'var(--color-status-online, #5b9e6d)'
-    : 'rgba(0, 0, 0, 0.25)'
+    : 'var(--color-foreground-subtle)'
 
   return (
     <span

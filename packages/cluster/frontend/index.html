@@ -1,9 +1,21 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Anygarden</title>
+    <script>
+      try {
+        const storedTheme = localStorage.getItem('anygarden-theme')
+        const theme = storedTheme === 'dark' ? 'dark' : 'light'
+        document.documentElement.dataset.theme = theme
+        document.documentElement.classList.toggle('dark', theme === 'dark')
+        const storedLocale = localStorage.getItem('anygarden_locale')
+        document.documentElement.lang = storedLocale === 'ko' || storedLocale === 'en'
+          ? storedLocale
+          : navigator.language.toLowerCase().startsWith('ko') ? 'ko' : 'en'
+      } catch { /* Browser storage may be unavailable. */ }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

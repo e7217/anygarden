@@ -93,7 +93,7 @@ describe('OverviewPanel', () => {
       agent: makeAgent({ actual_state: 'running', machine_online: false }),
     })
     expect(screen.getByText('unreachable')).toBeInTheDocument()
-    expect(screen.getByLabelText('오프라인 · unreachable')).toBeInTheDocument()
+    expect(screen.getByLabelText('Offline · unreachable')).toBeInTheDocument()
   })
 
   it('renders Deprecated badge when the engine catalog flags deprecated', async () => {

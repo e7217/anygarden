@@ -4,6 +4,7 @@ import { Hash, Users, Menu, ChevronLeft, EyeOff, Eye, Search, PanelRight, ListTr
 import { useNavigate } from 'react-router-dom'
 import RoomSettingsMenu from '@/components/RoomSettingsMenu'
 import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ParentBreadcrumb {
   id: string
@@ -148,6 +149,7 @@ export default function RoomHeader({
   rightRailSlot,
 }: RoomHeaderProps) {
   const navigate = useNavigate()
+  const { t } = useLocale()
   const hasParent = parentBreadcrumb && parentBreadcrumb.length > 0
   const immediateParent = hasParent
     ? parentBreadcrumb![parentBreadcrumb!.length - 1]
@@ -157,20 +159,19 @@ export default function RoomHeader({
     // Container query, not a viewport breakpoint: opening the thread
     // panel narrows this column while the viewport is unchanged, so
     // ``sm:``/``lg:`` cannot see the squeeze that collapsed the title.
-    <div className="@container/header flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
-      {/* ``flex-1`` matters as much as ``min-w-0``: the control cluster
-          opposite is ``shrink-0``, so without a grow factor this group
-          sizes to content and then collapses to nothing when the thread
-          panel narrows the column — the title vanished to ~1.5px at
-          1024px. Growing first, then truncating, keeps it readable. */}
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div className="@container/header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+      {/* Use the chat column's width, which also changes when the context
+          rail or thread panel opens. On narrow columns, controls keep the
+          first row and status moves below the room title. */}
+      <div className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1 gap-y-1 px-2 py-1.5 md:px-4 @[54rem]/header:grid-cols-[minmax(0,1fr)_auto_auto]">
+      <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-2">
         {onOpenSidebar && (
           <Button
             variant="ghost"
             size="icon"
             onClick={onOpenSidebar}
-            className="md:hidden"
-            aria-label="Open sidebar"
+            className="min-h-11 min-w-11 shrink-0 md:hidden"
+            aria-label={t('chat.openSidebar')}
           >
             <Menu className="h-5 w-5" />
           </Button>
@@ -178,8 +179,8 @@ export default function RoomHeader({
         {immediateParent && (
           <button
             onClick={() => navigate(`/rooms/${immediateParent.id}`)}
-            className="flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-xs text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
-            title={`Back to ${immediateParent.name}`}
+            className="flex min-h-11 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+            title={t('chat.backToParent', { name: immediateParent.name })}
             data-testid="room-header-parent-link"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
@@ -204,26 +205,27 @@ export default function RoomHeader({
         ) : (
           <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
         )}
-        <h2 className="text-heading truncate text-[var(--color-foreground)]">{roomName}</h2>
+        <h2 className="min-w-0 truncate text-base font-semibold text-[var(--color-foreground)] @[32rem]/header:text-heading" title={roomName}>{roomName}</h2>
       </div>
-      <div className="flex shrink-0 items-center gap-2 md:gap-3">
+      <div className="col-span-2 row-start-2 flex min-w-0 items-center gap-2 overflow-hidden pl-1 @[54rem]/header:col-span-1 @[54rem]/header:col-start-2 @[54rem]/header:row-start-1 @[54rem]/header:pl-0">
         {participantCount !== undefined && (
           onToggleParticipants ? (
             <button
               type="button"
               onClick={onToggleParticipants}
-              // ``hover:bg-black/5 cursor-pointer`` matches the
+              // ``hover:bg-[var(--color-surface-hover)] cursor-pointer`` matches the
               // project-wide ghost-button convention recorded in
               // docs/history/STATUS.md (PR #31/#32).
-              className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
-              title="Show room participants"
+              className="text-caption text-[var(--color-foreground-muted)] flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1 rounded-[var(--radius-sm)] px-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer @[54rem]/header:min-h-9 @[54rem]/header:min-w-9"
+              aria-label={t('chat.showParticipants', { count: participantCount })}
+              title={t('chat.showParticipantsTitle')}
               data-testid="room-header-participants-toggle"
             >
               <Users className="h-4 w-4" />
               <span>{participantCount}</span>
             </button>
           ) : (
-            <div className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1">
+            <div className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 whitespace-nowrap">
               <Users className="h-4 w-4" />
               <span>{participantCount}</span>
             </div>
@@ -237,36 +239,36 @@ export default function RoomHeader({
           <select
             value={representativeAgentId ?? ''}
             onChange={(e) => onSetRepresentative(e.target.value || null)}
-            className="h-8 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 text-xs text-[var(--color-foreground)]"
-            title="Set representative agent"
+            className="h-11 min-w-0 max-w-40 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-foreground)] @[54rem]/header:h-9 @[54rem]/header:w-40 @[54rem]/header:flex-none"
+            title={t('chat.setRepresentative')}
+            aria-label={t('chat.setRepresentative')}
           >
-            <option value="">No representative</option>
+            <option value="">{t('chat.noRepresentative')}</option>
             {agentParticipants.map((ap) => (
               <option key={ap.agent_id} value={ap.agent_id}>
                 {ap.display_name}
-                {ap.online === false ? ' (offline)' : ''}
+                {ap.online === false ? t('chat.offlineSuffix') : ''}
               </option>
             ))}
           </select>
         )}
         {isDm && onToggleEphemeral !== undefined && (
-          /* #237 — ephemeral toggle. Active state uses the Notion
-             Blue accent per DESIGN.md §2; inactive stays near-black
-             ghost-button to match the surrounding icon buttons. */
+          /* #237 — active uses the design system's teal action token;
+             inactive uses the shared surface and border tokens. */
           <button
             type="button"
             onClick={() => onToggleEphemeral(!ephemeral)}
             title={
               ephemeral
-                ? '임시 세션: 장기 기억(memory/notes.md)에 기록하지 않습니다. 클릭으로 해제'
-                : '임시 세션으로 전환'
+                ? t('chat.disableTemporary')
+                : t('chat.enableTemporary')
             }
             aria-pressed={!!ephemeral}
             data-testid="room-header-ephemeral-toggle"
-            className={`inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
+            className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors @[54rem]/header:h-9 @[54rem]/header:w-9 ${
               ephemeral
                 ? 'bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]'
-                : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
             }`}
           >
             {ephemeral ? (
@@ -276,8 +278,8 @@ export default function RoomHeader({
             )}
           </button>
         )}
-        <Badge variant={connected ? 'default' : 'destructive'}>
-          <span className="hidden sm:inline">{connected ? 'Connected' : 'Disconnected'}</span>
+        <Badge variant={connected ? 'default' : 'destructive'} aria-label={connected ? t('chat.connected') : t('chat.disconnected')}>
+          <span className="hidden sm:inline">{connected ? t('chat.connected') : t('chat.disconnected')}</span>
           <span className="sm:hidden">{connected ? '●' : '○'}</span>
         </Badge>
         {agentsTotal !== undefined && agentsTotal > 0 && agentsOnline !== undefined && (
@@ -285,13 +287,15 @@ export default function RoomHeader({
              connection badge. Clamped in case of brief
              online>total reconnection races. */
           <span
-            className="text-caption rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-foreground-muted)]"
-            title={`${agentsOnline} of ${agentsTotal} agents online`}
+            className="text-caption shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0.5 text-[var(--color-foreground-muted)]"
+            title={t('chat.agentsOnlineTitle', { online: agentsOnline, total: agentsTotal })}
             data-testid="room-header-agent-liveness"
           >
-            agents {Math.min(agentsOnline, agentsTotal)}/{agentsTotal}
+            {t('chat.agentsOnline', { online: Math.min(agentsOnline, agentsTotal), total: agentsTotal })}
           </span>
         )}
+      </div>
+      <div className="col-start-2 row-start-1 flex shrink-0 items-center gap-0.5 @[54rem]/header:col-start-3">
         {onSearch && (
           /* #329 Phase 4 — direct search icon hidden below sm so the
              header strip stays uncluttered on phones. The same
@@ -300,10 +304,10 @@ export default function RoomHeader({
           <button
             type="button"
             onClick={onSearch}
-            title="Search messages (⌘K)"
-            aria-label="Search messages"
+            title={t('chat.searchShortcut')}
+            aria-label={t('chat.searchMessages')}
             data-testid="room-header-search"
-            className="hidden @[30rem]/header:inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[30rem]/header:inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
           >
             <Search className="h-4 w-4" />
           </button>
@@ -312,17 +316,17 @@ export default function RoomHeader({
           <button
             type="button"
             onClick={onToggleThreadDisplayMode}
-            title={`Threads: ${threadDisplayMode} — click to switch`}
-            aria-label={`Thread layout: ${threadDisplayMode}. Switch to ${threadDisplayMode === 'panel' ? 'inline' : 'panel'}.`}
+            title={t('chat.threadModeTitle', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline') })}
+            aria-label={t('chat.threadModeAction', { mode: t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline'), next: t(threadDisplayMode === 'panel' ? 'chat.threadModeInline' : 'chat.threadModePanel') })}
             data-testid="thread-mode-toggle"
-            className="hidden @[34rem]/header:inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden @[34rem]/header:inline-flex h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
           >
             {threadDisplayMode === 'panel' ? (
               <PanelRight className="h-4 w-4" />
             ) : (
               <ListTree className="h-4 w-4" />
             )}
-            {threadDisplayMode}
+            {t(threadDisplayMode === 'panel' ? 'chat.threadModePanel' : 'chat.threadModeInline')}
           </button>
         )}
         <RoomSettingsMenu
@@ -337,6 +341,7 @@ export default function RoomHeader({
           onDeleteRoom={onDeleteRoom}
         />
         {rightRailSlot}
+      </div>
       </div>
     </div>
   )

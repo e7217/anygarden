@@ -14,6 +14,7 @@ import {
   turnLabel,
   type ActivityLog,
 } from '@/components/agent-settings/ActivityPanel'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface RoomActivityDialogProps {
   roomId: string | null
@@ -31,6 +32,7 @@ export default function RoomActivityDialog({
   open,
   onOpenChange,
 }: RoomActivityDialogProps) {
+  const { t, formatDate } = useLocale()
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [loaded, setLoaded] = useState(false)
 
@@ -56,27 +58,39 @@ export default function RoomActivityDialog({
   // so the flow reads as A→B. Only turns whose parent is in this window
   // get the "↳" marker; an off-window parent degrades to no marker.
   const turnById = new Map(turns.map(t => [t.requestId, t]))
+  const localizedOutcome = (outcome: string) => {
+    const keys = {
+      responded: 'rooms.outcomeResponded',
+      'no response': 'rooms.outcomeSilent',
+      orphaned: 'rooms.outcomeOrphaned',
+      'in flight': 'rooms.outcomeInFlight',
+      failed: 'rooms.outcomeFailed',
+      timeout: 'rooms.outcomeTimeout',
+      cancelled: 'rooms.outcomeCancelled',
+      rejected: 'rooms.outcomeRejected',
+    } as const
+    return outcome in keys ? t(keys[outcome as keyof typeof keys]) : outcome
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Room activity</DialogTitle>
+          <DialogTitle>{t('rooms.activity')}</DialogTitle>
           <DialogDescription>
-            Every agent's turns in this room, newest first. Grouped by
-            request; each row shows the agent, outcome, and engine time.
+            {t('rooms.activityDescription')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="max-h-[60vh] overflow-y-auto space-y-1 py-1">
           {!loaded && (
             <p className="text-caption text-[var(--color-foreground-muted)]">
-              Loading…
+              {t('common.loading')}
             </p>
           )}
           {loaded && turns.length === 0 && (
             <p className="text-caption text-[var(--color-foreground-muted)]">
-              No activity in this room yet
+              {t('rooms.noActivity')}
             </p>
           )}
           {turns.map(turn => {
@@ -86,7 +100,7 @@ export default function RoomActivityDialog({
             const parentLabel = parent
               ? parent.agentId
                 ? parent.agentId.slice(0, 6)
-                : 'agent'
+                : t('rooms.agent')
               : null
             return (
             <div
@@ -96,25 +110,25 @@ export default function RoomActivityDialog({
             >
               <span
                 className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${turnDotClass(turn)}`}
-                aria-label={turnLabel(turn)}
+                aria-label={localizedOutcome(turnLabel(turn))}
               />
               {parentLabel && (
                 <span
                   className="text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
-                  title={`Triggered by ${parent?.agentId ?? 'an agent'} (${turn.parentRequestId})`}
+                  title={t('rooms.triggeredBy', { agent: parent?.agentId ?? t('rooms.agent'), request: turn.parentRequestId ?? '' })}
                   data-testid="room-activity-parent"
                 >
-                  ↳ from <span className="font-mono">{parentLabel}</span>
+                  ↳ {t('rooms.from')} <span className="font-mono">{parentLabel}</span>
                 </span>
               )}
               <span
                 className="font-mono text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
                 title={turn.agentId ?? undefined}
               >
-                {turn.agentId ? turn.agentId.slice(0, 6) : 'agent'}
+                {turn.agentId ? turn.agentId.slice(0, 6) : t('rooms.agent')}
               </span>
               <span className="font-medium text-[var(--color-foreground)]">
-                {new Date(turn.firstTs).toLocaleTimeString()}
+                {formatDate(new Date(turn.firstTs), { hour: 'numeric', minute: '2-digit', second: '2-digit' })}
               </span>
               <span className="text-[var(--color-foreground-muted)]">
                 · {formatDuration(turn.durationMs ?? turn.lastTs - turn.firstTs)}
@@ -125,7 +139,7 @@ export default function RoomActivityDialog({
                 </span>
               )}
               <span className="text-[var(--color-foreground-muted)]">
-                · {turnLabel(turn)}
+                · {localizedOutcome(turnLabel(turn))}
               </span>
               {turn.error && (
                 <span

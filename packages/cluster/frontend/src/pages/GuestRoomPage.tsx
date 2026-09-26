@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
@@ -10,7 +11,10 @@ import { clearAuthSession, getAuthToken, isGuestSession } from '@/lib/authStorag
 import { useWebSocket } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
-import { Hash, LogOut, Users } from 'lucide-react'
+import { Hash, LogOut, Settings2, Users } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { LocaleToggle } from '@/i18n/LocaleToggle'
+import { ThemeToggle } from '@/theme/ThemeToggle'
 
 /**
  * ``/g/:roomId``
@@ -28,6 +32,7 @@ import { Hash, LogOut, Users } from 'lucide-react'
  * login screen. §11.9 of the design doc.
  */
 export default function GuestRoomPage() {
+  const { t } = useLocale()
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
   const [participants, setParticipants] = useState<Record<string, Participant>>({})
@@ -72,8 +77,7 @@ export default function GuestRoomPage() {
           return
         }
         if (!resp.ok) {
-          const body = await resp.json().catch(() => ({}))
-          throw new Error(body.detail || `Unable to load room (${resp.status})`)
+          throw new Error(t('guest.loadFailed', { status: resp.status }))
         }
         const room = await resp.json()
         setRoomName(room.name ?? '')
@@ -108,7 +112,7 @@ export default function GuestRoomPage() {
     return () => {
       cancelled = true
     }
-  }, [roomId, displayName])
+  }, [roomId, displayName, t])
 
   const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(
     roomId ?? null,
@@ -142,12 +146,12 @@ export default function GuestRoomPage() {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="max-w-sm space-y-4 text-center">
-          <div className="text-lg font-semibold">Room unavailable</div>
+          <div className="text-lg font-semibold">{t('guest.unavailable')}</div>
           <div className="text-sm text-[var(--color-foreground-muted)]">
             {initError}
           </div>
           <Button onClick={handleLogout} variant="outline">
-            Leave
+            {t('guest.leave')}
           </Button>
         </div>
       </div>
@@ -155,18 +159,18 @@ export default function GuestRoomPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[var(--color-background)]">
+    <div className="flex h-dvh flex-col bg-[var(--color-background)]">
       {/* Minimal top bar. No sidebar toggle, no admin widgets. */}
       <div className="relative">
-        <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-white px-4 md:px-6">
+        <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 md:px-6">
           <div className="flex min-w-0 items-center gap-2">
-            <Hash className="h-5 w-5 text-[var(--color-foreground-muted)]" />
-            <div className="truncate text-sm font-medium">{roomName || 'Room'}</div>
-            <Badge variant="outline" className="ml-2">
-              Guest · {displayName}
+            <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-muted)]" />
+            <div className="truncate text-sm font-semibold" title={roomName}>{roomName || t('guest.room')}</div>
+            <Badge variant="outline" className="ml-2 hidden sm:inline-flex">
+              {t('guest.guest', { name: displayName })}
             </Badge>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-0.5 sm:gap-2">
             {/* Participant count + popover toggle. §11.9 doesn't
                 spell this out explicitly but hiding the roster from
                 guests felt strictly worse than letting them see who
@@ -178,8 +182,9 @@ export default function GuestRoomPage() {
               // Ghost-button hover convention (see
               // docs/history/STATUS.md — ``hover:bg-black/5
               // cursor-pointer`` applied globally to ghost buttons).
-              className="text-caption text-[var(--color-foreground-muted)] flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 hover:bg-black/5 cursor-pointer"
-              title="Show room participants"
+              className="text-caption flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] cursor-pointer"
+              title={t('guest.participants')}
+              aria-label={t('guest.participants')}
               data-testid="guest-header-participants-toggle"
             >
               <Users className="h-4 w-4" />
@@ -187,13 +192,30 @@ export default function GuestRoomPage() {
             </button>
             <Badge variant={connected ? 'default' : 'destructive'}>
               <span className="hidden sm:inline">
-                {connected ? 'Connected' : 'Disconnected'}
+                {connected ? t('guest.connected') : t('guest.disconnected')}
               </span>
-              <span className="sm:hidden">{connected ? '●' : '○'}</span>
+              <span className="sm:hidden" aria-label={connected ? t('guest.connected') : t('guest.disconnected')}>{connected ? '●' : '○'}</span>
             </Badge>
-            <Button variant="ghost" size="sm" onClick={handleLogout} title="Leave room">
-              <LogOut className="mr-1 h-4 w-4" />
-              <span className="hidden sm:inline">Leave</span>
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label={t('guest.preferences')} title={t('guest.preferences')}>
+                  <Settings2 className="h-4 w-4" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-sm">
+                <DialogHeader><DialogTitle>{t('guest.preferences')}</DialogTitle></DialogHeader>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-[var(--color-foreground-muted)]">{t('common.language')}</span>
+                  <LocaleToggle compact />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-[var(--color-foreground-muted)]">{t('common.theme')}</span>
+                  <ThemeToggle showLabel />
+                </div>
+              </DialogContent>
+            </Dialog>
+            <Button variant="ghost" size="icon" onClick={handleLogout} title={t('guest.leaveRoom')} aria-label={t('guest.leaveRoom')}>
+              <LogOut className="h-4 w-4" />
             </Button>
           </div>
         </div>

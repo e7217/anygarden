@@ -12,7 +12,7 @@ const badgeVariants = cva(
         secondary:
           "bg-[var(--color-surface-alt)] text-[var(--color-foreground-muted)]",
         destructive:
-          "bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]",
+          "bg-[var(--color-danger-soft)] text-[var(--color-danger)]",
         outline:
           "border border-[var(--color-border)] text-[var(--color-foreground)]",
       },

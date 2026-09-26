@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface Props {
   roomId: string
@@ -23,23 +24,23 @@ interface Props {
 // Strategy options exposed to the admin UI. Must stay in sync with
 // the server-side validator in ``anygarden/rooms/router.py`` —
 // bidding / llm_judge are deliberately absent (plan-159 §1).
-const STRATEGY_OPTIONS: { value: string; label: string; hint: string }[] = [
+const STRATEGY_OPTIONS = [
   {
     value: 'mentioned_only',
-    label: 'Mentioned only (default)',
-    hint: '멘션된 에이전트만 응답. 현재 동작과 동일.',
+    labelKey: 'rooms.mentionedOnly',
+    hintKey: 'rooms.mentionedOnlyHint',
   },
   {
     value: 'round_robin',
-    label: 'Round robin',
-    hint: '참여 에이전트를 순차로 발화시킵니다.',
+    labelKey: 'rooms.roundRobin',
+    hintKey: 'rooms.roundRobinHint',
   },
   {
     value: 'orchestrator',
-    label: 'Orchestrator',
-    hint: '지정된 오케스트레이터가 handoff_to 툴로 다음 화자를 선택.',
+    labelKey: 'rooms.orchestrator',
+    hintKey: 'rooms.orchestratorHint',
   },
-]
+] as const
 
 interface ParticipantLite {
   id: string
@@ -64,14 +65,15 @@ interface PerAgentStat {
  * spotting orchestrator rooms where one worker is burning the
  * token budget disproportionately.
  *
- * DESIGN.md conformance: whisper-weight borders, near-black text,
- * warm neutral placeholder rows — no accent color on raw numbers.
+ * Usage rows use semantic surfaces and text tokens so they remain readable
+ * in both themes. Raw numbers stay neutral rather than using an action color.
  */
 function PerAgentTokenPanel({
   stats,
 }: {
   stats: { window_1h: PerAgentStat[]; window_24h: PerAgentStat[] }
 }) {
+  const { t, formatNumber } = useLocale()
   // Merge 1h/24h on participant_id so a single row shows both
   // windows side-by-side. 24h is the union basis so an agent active
   // 2h ago still renders with a blank 1h column.
@@ -108,23 +110,23 @@ function PerAgentTokenPanel({
       data-testid="room-edit-token-panel"
     >
       <div className="flex items-baseline justify-between">
-        <Label>에이전트별 토큰 사용량</Label>
+        <Label>{t('rooms.tokenUsage')}</Label>
         <span className="text-caption text-[var(--color-foreground-muted)]">
-          추정치 (len // 4)
+          {t('rooms.tokenEstimate')}
         </span>
       </div>
       {rows.length === 0 ? (
         <p className="text-caption text-[var(--color-foreground-muted)]">
-          최근 24h 동안 기록된 에이전트 활동이 없습니다.
+          {t('rooms.noRecentTokens')}
         </p>
       ) : (
         <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]">
           <table className="w-full text-left text-sm">
-            <thead className="bg-[#f6f5f4] text-caption text-[var(--color-foreground-muted)]">
+            <thead className="bg-[var(--color-surface-alt)] text-caption text-[var(--color-foreground-muted)]">
               <tr>
-                <th className="px-3 py-1.5 font-medium">에이전트</th>
-                <th className="px-3 py-1.5 text-right font-medium">1h</th>
-                <th className="px-3 py-1.5 text-right font-medium">24h</th>
+                <th className="px-3 py-1.5 font-medium">{t('rooms.agent')}</th>
+                <th className="px-3 py-1.5 text-right font-medium">{t('rooms.oneHour')}</th>
+                <th className="px-3 py-1.5 text-right font-medium">{t('rooms.twentyFourHours')}</th>
               </tr>
             </thead>
             <tbody>
@@ -137,10 +139,10 @@ function PerAgentTokenPanel({
                     {r.name}
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-[var(--color-foreground)]">
-                    {r.tokens1h.toLocaleString()}
+                    {formatNumber(r.tokens1h)}
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums text-[var(--color-foreground)]">
-                    {r.tokens24h.toLocaleString()}
+                    {formatNumber(r.tokens24h)}
                   </td>
                 </tr>
               ))}
@@ -153,6 +155,7 @@ function PerAgentTokenPanel({
 }
 
 export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: Props) {
+  const { t } = useLocale()
   const { user } = useAuth()
   const isAdmin = Boolean(user?.is_admin)
 
@@ -267,10 +270,10 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
       })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || 'Failed to save')
+        throw new Error(body.detail || t('rooms.saveFailed'))
       }
       onSaved?.()
-      setSuccessFlash('설정이 저장되었습니다. 접속 중 에이전트에 실시간 전파됩니다.')
+      setSuccessFlash(t('rooms.saved'))
       // Brief flash before the dialog auto-closes so the admin sees
       // confirmation without needing a dedicated toast library.
       window.setTimeout(() => {
@@ -284,21 +287,24 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
   }
 
   const strategyHint = useMemo(
-    () => STRATEGY_OPTIONS.find(o => o.value === speakerStrategy)?.hint ?? '',
-    [speakerStrategy],
+    () => {
+      const key = STRATEGY_OPTIONS.find(o => o.value === speakerStrategy)?.hintKey
+      return key ? t(key) : ''
+    },
+    [speakerStrategy, t],
   )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[min(90dvh,52rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Edit room</DialogTitle>
-          <DialogDescription>Update the room name and description.</DialogDescription>
+          <DialogTitle>{t('rooms.edit')}</DialogTitle>
+          <DialogDescription>{t('rooms.editDescription')}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label htmlFor="room-edit-name">Name</Label>
+            <Label htmlFor="room-edit-name">{t('rooms.name')}</Label>
             <Input
               id="room-edit-name"
               value={name}
@@ -307,11 +313,11 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="room-edit-desc">Description</Label>
+            <Label htmlFor="room-edit-desc">{t('rooms.description')}</Label>
             <textarea
               id="room-edit-desc"
-              className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1 resize-none"
-              placeholder="이 룸의 목적을 설명하세요"
+              className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1 resize-none"
+              placeholder={t('rooms.descriptionPlaceholder')}
               rows={3}
               value={description}
               onChange={e => setDescription(e.target.value)}
@@ -345,12 +351,10 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
                   />
                   <span className="flex-1 space-y-0.5">
                     <span className="block text-sm font-medium text-[var(--color-foreground)]">
-                      대화 맥락 공유
+                      {t('rooms.context')}
                     </span>
                     <span className="block text-caption text-[var(--color-foreground-muted)]">
-                      다른 에이전트의 응답·잡담도 이 룸의 에이전트 컨텍스트에
-                      함께 전달합니다. 해제하면 각 에이전트가 자기에게
-                      직접 향한 메시지만 받아 토큰을 절약합니다.
+                      {t('rooms.contextDescription')}
                     </span>
                   </span>
                 </label>
@@ -358,18 +362,18 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
 
               <div className="space-y-1.5">
                 <Label htmlFor="room-edit-speaker-strategy">
-                  발화 전략
+                  {t('rooms.speakerStrategy')}
                 </Label>
                 <select
                   id="room-edit-speaker-strategy"
                   data-testid="room-edit-speaker-strategy"
                   value={speakerStrategy}
                   onChange={e => setSpeakerStrategy(e.target.value)}
-                  className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
+                  className="flex h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1"
                 >
                   {STRATEGY_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>
-                      {opt.label}
+                      {t(opt.labelKey)}
                     </option>
                   ))}
                 </select>
@@ -379,7 +383,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
 
                 {speakerStrategy === 'orchestrator' && (
                   <div className="space-y-1.5 pt-2">
-                    <Label htmlFor="room-edit-orchestrator">오케스트레이터</Label>
+                    <Label htmlFor="room-edit-orchestrator">{t('rooms.orchestrator')}</Label>
                     <select
                       id="room-edit-orchestrator"
                       data-testid="room-edit-orchestrator"
@@ -387,9 +391,9 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
                       onChange={e =>
                         setOrchestratorAgentId(e.target.value || null)
                       }
-                      className="flex h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1"
+                      className="flex h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1"
                     >
-                      <option value="">(선택 안 됨)</option>
+                      <option value="">{t('rooms.notSelected')}</option>
                       {agentParticipants.map(p => (
                         <option key={p.id} value={p.agent_id ?? ''}>
                           {p.display_name || p.agent_id}
@@ -398,7 +402,7 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
                     </select>
                     {agentParticipants.length === 0 && (
                       <p className="text-caption text-[var(--color-foreground-muted)]">
-                        이 룸에 에이전트가 없어 오케스트레이터를 지정할 수 없습니다.
+                        {t('rooms.noOrchestratorAgents')}
                       </p>
                     )}
                   </div>
@@ -432,9 +436,9 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         )}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>{t('common.cancel')}</Button>
           <Button onClick={handleSave} disabled={saving || !name.trim()}>
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? t('common.loading') : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

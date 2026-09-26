@@ -6,6 +6,7 @@ import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { threadDraftKey } from '@/lib/composerDrafts'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ThreadInlineProps {
   root: ChatMessage
@@ -45,6 +46,7 @@ export default function ThreadInline({
   onTyping,
   onCollapse,
 }: ThreadInlineProps) {
+  const { t } = useLocale()
   const { files: roomFiles } = useRoomFiles(roomId)
 
   return (
@@ -61,17 +63,17 @@ export default function ThreadInline({
       <div className="flex items-center justify-between pb-1.5">
         <span className="text-badge font-medium text-[var(--color-brand-tint-text)]">
           {replies.length === 0
-            ? 'No replies yet'
-            : `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}
+            ? t('chat.noReplies')
+            : t(replies.length === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count: replies.length })}
         </span>
         <button
           type="button"
           onClick={onCollapse}
-          aria-label="Collapse thread"
-          className="flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5 text-badge text-[var(--color-brand-tint-text)] hover:bg-black/5"
+          aria-label={t('chat.collapseThread')}
+          className="flex min-h-11 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-badge text-[var(--color-brand-tint-text)] hover:bg-[var(--color-surface-hover)]"
         >
           <ChevronUp className="h-3 w-3" />
-          Collapse
+          {t('chat.collapse')}
         </button>
       </div>
 
@@ -99,7 +101,7 @@ export default function ThreadInline({
           mentionUsers={mentionUsers}
           mentionRooms={mentionRooms}
           roomId={roomId}
-          placeholder="Reply to thread…"
+          placeholder={t('chat.replyPlaceholder')}
           autoFocus
           draftKey={threadDraftKey(root.id)}
         />

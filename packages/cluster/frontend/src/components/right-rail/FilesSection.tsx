@@ -2,6 +2,8 @@ import { useRef, useState } from 'react'
 import { FileText, Trash2, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 interface FilesSectionProps {
   roomId: string
@@ -20,6 +22,8 @@ function formatBytes(bytes: number): string {
  * dialog for the common case.
  */
 export default function FilesSection({ roomId }: FilesSectionProps) {
+  const { t } = useLocale()
+  const { confirm } = useFeedback()
   const { files, error, upload, remove } = useRoomFiles(roomId)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -36,16 +40,21 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
-  const handleDelete = async (fileId: string, filename: string) => {
-    if (!confirm(`'${filename}'을(를) 룸에서 제거할까요? 참여 에이전트의 복사본도 함께 삭제됩니다.`)) return
+  const handleDelete = async (fileId: string) => {
+    if (!await confirm({
+      title: t('guest.removeFileTitle'),
+      description: t('guest.deleteFileConfirm'),
+      confirmLabel: t('guest.removeFileTitle'),
+      destructive: true,
+    })) return
     await remove(fileId)
   }
 
   return (
     <section className="flex min-w-0 flex-col border-t border-[var(--color-border)]">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          Shared Files
+        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+          {t('guest.sharedFiles')}
         </h3>
         <span className="text-[11px] text-[var(--color-foreground-subtle)]">
           {files.length}
@@ -64,7 +73,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
       <div className="min-w-0 px-1">
         {files.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
-            No files yet
+            {t('files.empty')}
           </div>
         )}
         {files.map((f) => (
@@ -89,9 +98,9 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
                 the row's inner right edge at rest, aligning with the
                 section header's right-side counter. */}
             <button
-              onClick={() => handleDelete(f.id, f.filename)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
-              aria-label={`Delete ${f.filename}`}
+              onClick={() => handleDelete(f.id)}
+              className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-all hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+              aria-label={t('guest.deleteFile', { name: f.filename })}
             >
               <Trash2 className="h-3 w-3" />
             </button>
@@ -105,7 +114,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           type="file"
           className="hidden"
           onChange={handleFiles}
-          aria-label="Upload file to room"
+          aria-label={t('files.uploadToRoom')}
         />
         <Button
           variant="ghost"
@@ -115,7 +124,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           className="w-full justify-start"
         >
           <Upload className="h-3.5 w-3.5 mr-1.5" />
-          <span className="text-[13px]">{uploading ? 'Uploading…' : 'Upload file'}</span>
+          <span className="text-[13px]">{uploading ? t('files.uploading') : t('files.upload')}</span>
         </Button>
       </div>
     </section>

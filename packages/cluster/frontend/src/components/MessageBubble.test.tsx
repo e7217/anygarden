@@ -5,6 +5,7 @@ import '@testing-library/jest-dom/vitest'
 import MessageBubble from './MessageBubble'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
+import { LocaleProvider } from '@/i18n/LocaleProvider'
 
 afterEach(() => cleanup())
 
@@ -438,13 +439,16 @@ describe('MessageBubble — question pending badge', () => {
   }
 
   it('shows pending badge when query_id is in pendingQueryIds', () => {
+    localStorage.setItem('anygarden_locale', 'ko')
     render(
-      <MessageBubble
-        message={questionMsg()}
-        participants={participants}
-        isMine={true}
-        pendingQueryIds={new Set(['q1'])}
-      />,
+      <LocaleProvider>
+        <MessageBubble
+          message={questionMsg()}
+          participants={participants}
+          isMine={true}
+          pendingQueryIds={new Set(['q1'])}
+        />
+      </LocaleProvider>,
     )
     expect(screen.getByTestId('question-pending-badge')).toBeInTheDocument()
     expect(screen.getByTestId('question-pending-badge')).toHaveTextContent(

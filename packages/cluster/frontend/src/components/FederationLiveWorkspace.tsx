@@ -20,23 +20,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { BindingView, DelegationStatusView, ParticipantView } from '@/lib/federationApi'
 import { uuid } from '@/lib/federationApi'
 import type { useFederation } from '@/hooks/useFederation'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 type Federation = ReturnType<typeof useFederation>
 
 function ErrorLine({ error }: { error: string | null }) {
+  const { t } = useLocale()
   if (!error) return null
   return (
     <p role="alert" className="text-sm text-[var(--color-danger)]">
-      Last action failed · {error}
+      {t('federation.errorPrefix')} · {error}
     </p>
-  )
-}
-
-function Code({ children }: { children: string }) {
-  return (
-    <code className="rounded bg-[var(--color-surface-alt)] px-1.5 py-0.5 font-mono text-xs">
-      {children}
-    </code>
   )
 }
 
@@ -49,9 +43,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function principalLabel(participant: ParticipantView): string {
+function principalLabel(participant: ParticipantView, origin: string): string {
   const { principal } = participant
-  const origin = principal.kind === 'human' ? 'human' : 'agent'
   return `${origin} · ${principal.node_id.slice(0, 8)}… · ${principal.principal_id.slice(0, 8)}…`
 }
 
@@ -68,15 +61,13 @@ function principalLabel(participant: ParticipantView): string {
  *   with manual entry as fallback (task #34).
  */
 export default function FederationLiveWorkspace({ federation }: { federation: Federation }) {
+  const { t, formatDate } = useLocale()
   const [tab, setTab] = useState('nodes')
   const {
     isAdmin,
     invites,
     peers,
     nodesCapability,
-    channelRef,
-    setChannelRef,
-    bindings,
     snapshot,
     snapshotError,
     roster,
@@ -86,16 +77,15 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
     actionError,
   } = federation
 
-  const commandFieldsReady = Boolean(channelRef?.senderNodeId && channelRef?.grantEpoch)
   const pendingSubmissions = submissions.filter((item) => item.state === 'unconfirmed')
 
   const statusLine = useMemo(() => {
     if (nodesCapability === 'disabled') {
-      return 'Sharing is not enabled on this node yet — the federation services are not wired into this server build.'
+      return t('federation.statusDisabled')
     }
-    if (nodesCapability === 'ready') return 'Node API reachable.'
-    return 'Node API state unknown — retry after refreshing.'
-  }, [nodesCapability])
+    if (nodesCapability === 'ready') return t('federation.statusReady')
+    return t('federation.statusUnknown')
+  }, [nodesCapability, t])
 
   return (
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
@@ -105,67 +95,63 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
       >
         <Radio className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div>
-          <span className="font-semibold">Live federation view · real API</span>
+          <span className="font-semibold">{t('federation.liveNotice')}</span>
           <span className="ml-2">
-            Actions on this page call this node over HTTP with your admin session.
+            {t('federation.liveNoticeBody')}
           </span>
         </div>
       </div>
 
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="text-caption text-[var(--color-foreground-muted)]">Federated collaboration</p>
-          <h1 className="mt-1 text-title">Work together across trusted nodes</h1>
+          <p className="text-caption text-[var(--color-foreground-muted)]">{t('federation.eyebrow')}</p>
+          <h1 className="mt-1 text-title">{t('federation.title')}</h1>
           <p className="mt-2 max-w-2xl text-sm text-[var(--color-foreground-muted)]">
-            Connect one node, choose exactly what to share, and keep task ownership separate from execution.
+            {t('federation.description')}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2" aria-label="Node capability">
-          <Badge variant={nodesCapability === 'ready' ? 'default' : 'outline'}>{statusLine.split(' — ')[0]}</Badge>
+        <div className="flex flex-wrap items-center gap-2" aria-label={t('federation.nodeCapability')}>
+          <Badge variant={nodesCapability === 'ready' ? 'default' : 'outline'}>{statusLine}</Badge>
           <Button
             size="sm"
             variant="outline"
             onClick={() => void federation.refreshNodes()}
             disabled={busy || !isAdmin}
           >
-            <RefreshCw className="mr-1 size-3" aria-hidden="true" /> Refresh
+            <RefreshCw className="mr-1 size-3" aria-hidden="true" /> {t('common.refresh')}
           </Button>
         </div>
       </header>
 
       {nodesCapability === 'disabled' && (
-        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-orange-300 bg-orange-50 p-4 text-sm text-orange-950">
+        <div role="alert" className="flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <div>
-            <strong>Sharing disabled on this node.</strong>{' '}
-            <span>
-              The product build does not mount the federation services yet (app wiring is tracked
-              separately). Everything below will start working the moment this node exposes{' '}
-              <Code>/api/v1/node</Code> and <Code>/api/v1/shared-channels</Code>.
-            </span>
+            <strong>{t('federation.sharingDisabledTitle')}</strong>{' '}
+            <span>{t('federation.sharingDisabledBody')}</span>
           </div>
         </div>
       )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="grid h-auto w-full grid-cols-3 sm:w-fit">
-          <TabsTrigger value="nodes">1. Connection</TabsTrigger>
-          <TabsTrigger value="channel">2. Shared channel</TabsTrigger>
-          <TabsTrigger value="task">3. Task handoff</TabsTrigger>
+          <TabsTrigger className="min-w-0 whitespace-normal px-1.5 text-center leading-tight sm:whitespace-nowrap sm:px-3" value="nodes">{t('federation.tabConnection')}</TabsTrigger>
+          <TabsTrigger className="min-w-0 whitespace-normal px-1.5 text-center leading-tight sm:whitespace-nowrap sm:px-3" value="channel">{t('federation.tabChannel')}</TabsTrigger>
+          <TabsTrigger className="min-w-0 whitespace-normal px-1.5 text-center leading-tight sm:whitespace-nowrap sm:px-3" value="task">{t('federation.tabTask')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="nodes" className="mt-4">
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Trusted peers</CardTitle>
+                <CardTitle>{t('federation.trustedPeers')}</CardTitle>
                 <CardDescription>
-                  Nodes that completed the two-part invitation handshake with this node.
+                  {t('federation.trustedPeersDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {peers.length === 0 && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">No peers yet.</p>
+                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noPeers')}</p>
                 )}
                 {peers.map((peer) => (
                   <div key={peer.node_id} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border p-4">
@@ -175,7 +161,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         <span className="truncate font-mono text-sm">{peer.node_id}</span>
                       </p>
                       <p className="mt-1 truncate text-xs text-[var(--color-foreground-muted)]">
-                        pin {peer.fingerprint.slice(0, 16)}… · epoch {peer.certificate_epoch} · {peer.state}
+                        {t('federation.pin')} {peer.fingerprint.slice(0, 16)}… · {t('federation.epoch')} {peer.certificate_epoch} · {peer.state}
                       </p>
                     </div>
                     <Button
@@ -184,7 +170,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                       disabled={busy}
                       onClick={() => void federation.revokePeer(peer.node_id)}
                     >
-                      Revoke
+                      {t('federation.revoke')}
                     </Button>
                   </div>
                 ))}
@@ -193,23 +179,25 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
 
             <Card>
               <CardHeader>
-                <CardTitle>Invitations</CardTitle>
+                <CardTitle>{t('federation.invitations')}</CardTitle>
                 <CardDescription>
-                  One-time bundles. A pending invitation grants nothing until the invited node
-                  redeems it.
+                  {t('federation.invitationsDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {invites.length === 0 && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">No invitations.</p>
+                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noInvitations')}</p>
                 )}
                 {invites.map((invite) => (
                   <div key={invite.id} className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border p-4">
                     <div className="min-w-0">
                       <p className="truncate font-mono text-sm">{invite.id}</p>
                       <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
-                        for {invite.intended_node_id} · {invite.state} · expires{' '}
-                        {new Date(invite.expires_at).toLocaleString()}
+                        {t('federation.invitationFor', {
+                          node: invite.intended_node_id,
+                          state: invite.state,
+                          date: formatDate(new Date(invite.expires_at), { dateStyle: 'medium', timeStyle: 'short' }),
+                        })}
                       </p>
                     </div>
                     {invite.state === 'pending' && (
@@ -219,7 +207,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         disabled={busy}
                         onClick={() => void federation.revokeInvite(invite.id)}
                       >
-                        Revoke
+                        {t('federation.revoke')}
                       </Button>
                     )}
                   </div>
@@ -239,14 +227,17 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
               <CardHeader>
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <CardTitle>Shared channel roster</CardTitle>
+                    <CardTitle>{t('federation.roster')}</CardTitle>
                     <CardDescription>
-                      Authority {snapshot.authority_node_id} · applied seq {snapshot.applied_seq} ·{' '}
-                      {snapshot.messages.length} recent messages
+                      {t('federation.rosterSummary', {
+                        authority: snapshot.authority_node_id,
+                        sequence: snapshot.applied_seq,
+                        count: snapshot.messages.length,
+                      })}
                     </CardDescription>
                   </div>
                   <Badge variant="outline">
-                    <Link2 className="mr-1 size-3" aria-hidden="true" /> Shared
+                    <Link2 className="mr-1 size-3" aria-hidden="true" /> {t('federation.shared')}
                   </Badge>
                 </div>
               </CardHeader>
@@ -264,13 +255,15 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                         <div className="min-w-0">
                           <p className="truncate font-medium">{participant.role}</p>
                           <p className="truncate text-xs text-[var(--color-foreground-muted)]">
-                            {principalLabel(participant)}
+                            {principalLabel(participant, t(participant.principal.kind === 'human' ? 'federation.human' : 'federation.agent'))}
                           </p>
                         </div>
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
                         <Badge variant={participant.active ? 'secondary' : 'destructive'}>
-                          {participant.active ? `rev ${participant.revision}` : `tombstone · rev ${participant.revision}`}
+                          {participant.active
+                            ? t('federation.revision', { revision: participant.revision })
+                            : t('federation.tombstoneRevision', { revision: participant.revision })}
                         </Badge>
                         {participant.active && (
                           <Button
@@ -286,7 +279,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                               )
                             }
                           >
-                            Remove
+                            {t('federation.remove')}
                           </Button>
                         )}
                       </div>
@@ -295,18 +288,16 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
                 </div>
                 <p className="mt-4 flex items-start gap-2 text-sm text-[var(--color-foreground-muted)]">
                   <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                  Roster is the authority&apos;s projection. Removing a participant hides them here
-                  and keeps the tombstone revision; grants and execution permission are separate.
+                  {t('federation.rosterNote')}
                 </p>
               </CardContent>
             </Card>
           )}
           {snapshotError && (
-            <div role="alert" className="mt-4 flex gap-3 rounded-[var(--radius-md)] border border-orange-300 bg-orange-50 p-4 text-sm text-orange-950">
+            <div role="alert" className="mt-4 flex gap-3 rounded-[var(--radius-md)] border border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] p-4 text-sm text-[var(--color-warning)]">
               <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <div>
-                Channel read failed · <Code>{snapshotError.code}</Code> ({snapshotError.status}).
-                Check the UUIDs, and that your account can read the bound room.
+                {t('federation.channelReadFailed', { code: snapshotError.code, status: snapshotError.status })}
               </div>
             </div>
           )}
@@ -320,35 +311,38 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
             </div>
             <Card>
               <CardHeader>
-                <CardTitle className="text-lead">Submissions</CardTitle>
+                <CardTitle className="text-lead">{t('federation.submissions')}</CardTitle>
                 <CardDescription>
-                  Durable local queue. “unconfirmed” means the channel owner has not committed it
-                  yet.
+                  {t('federation.submissionsDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {submissions.length === 0 && (
-                  <p className="text-sm text-[var(--color-foreground-muted)]">Nothing submitted.</p>
+                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('federation.noSubmissions')}</p>
                 )}
                 {submissions.map((submission) => (
                   <div key={submission.request_id} className="rounded-[var(--radius-md)] border p-3 text-sm">
-                    <p className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-xs">{submission.kind}</span>
                       <Badge variant={submission.state === 'confirmed' ? 'default' : submission.state === 'failed' ? 'destructive' : 'outline'}>
                         {submission.state}
                       </Badge>
-                    </p>
+                    </div>
                     <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
                       {submission.receipt
-                        ? `receipt ${submission.receipt.state} · task ${submission.receipt.task_status} · process ${submission.receipt.process_state}`
-                        : 'no receipt yet'}
+                        ? t('federation.receiptSummary', {
+                          state: submission.receipt.state,
+                          task: submission.receipt.task_status,
+                          process: submission.receipt.process_state,
+                        })
+                        : t('federation.noReceipt')}
                       {submission.error_code ? ` · ${submission.error_code}` : ''}
                     </p>
                   </div>
                 ))}
                 {pendingSubmissions.length > 0 && (
                   <Button size="sm" variant="outline" className="w-full" disabled={busy} onClick={() => void federation.sync()}>
-                    <RefreshCw className="mr-1 size-3" aria-hidden="true" /> Sync now
+                    <RefreshCw className="mr-1 size-3" aria-hidden="true" /> {t('federation.syncNow')}
                   </Button>
                 )}
               </CardContent>
@@ -357,9 +351,7 @@ export default function FederationLiveWorkspace({ federation }: { federation: Fe
           <ErrorLine error={actionError} />
           <p className="mt-4 flex items-start gap-2 text-xs text-[var(--color-foreground-muted)]">
             <CircleDashed className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-            Remote accept / start / result arrive from the executor node over peer transport.
-            Delegation states above are the channel owner&apos;s confirmed projection, polled
-            through the bound local room.
+            {t('federation.remoteEventNote')}
           </p>
         </TabsContent>
       </Tabs>
@@ -384,14 +376,15 @@ const delegationStateTone: Record<string, 'default' | 'secondary' | 'destructive
  * wire vocabulary untouched so the UI never re-derives transitions.
  */
 function DelegationList({ delegations }: { delegations: DelegationStatusView[] }) {
+  const { t } = useLocale()
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>Delegations</CardTitle>
+            <CardTitle>{t('federation.delegations')}</CardTitle>
             <CardDescription>
-              Authority-confirmed state for this channel, polled through the bound local room.
+              {t('federation.delegationsDescription')}
             </CardDescription>
           </div>
           <Badge variant="outline">{delegations.length}</Badge>
@@ -400,7 +393,7 @@ function DelegationList({ delegations }: { delegations: DelegationStatusView[] }
       <CardContent className="space-y-3">
         {delegations.length === 0 && (
           <p className="text-sm text-[var(--color-foreground-muted)]">
-            No delegations for this channel.
+            {t('federation.noDelegations')}
           </p>
         )}
         {delegations.map((delegation) => (
@@ -412,16 +405,19 @@ function DelegationList({ delegations }: { delegations: DelegationStatusView[] }
               </Badge>
             </div>
             <p className="mt-2 text-[var(--color-foreground-muted)]">
-              executor {delegation.executor.node_id.slice(0, 8)}… / {delegation.executor.agent_id.slice(0, 8)}…
-              {' · '}process {delegation.process_state.replace('_', ' ')}
-              {' · '}task {delegation.task_status.replace('_', ' ')}
-              {' · '}rev {delegation.revision}
+              {t('federation.delegationSummary', {
+                node: `${delegation.executor.node_id.slice(0, 8)}…`,
+                agent: `${delegation.executor.agent_id.slice(0, 8)}…`,
+                process: delegation.process_state.replace('_', ' '),
+                task: delegation.task_status.replace('_', ' '),
+                revision: delegation.revision,
+              })}
             </p>
             {(delegation.state === 'cancel_requested' || delegation.state === 'unknown') && (
               <p className="mt-2 rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-2 text-xs">
                 {delegation.state === 'cancel_requested'
-                  ? 'Stop requested — execution may still be active until the executor confirms.'
-                  : 'Outcome unknown — the executor node must be checked before retrying. Automatic retry stays blocked.'}
+                  ? t('federation.stopPending')
+                  : t('federation.outcomeUnknown')}
               </p>
             )}
           </div>
@@ -432,6 +428,7 @@ function DelegationList({ delegations }: { delegations: DelegationStatusView[] }
 }
 
 function InviteComposer({ federation }: { federation: Federation }) {
+  const { t } = useLocale()
   const [bundle, setBundle] = useState<string | null>(null)
   const [form, setForm] = useState({
     intendedNode: '',
@@ -487,45 +484,45 @@ function InviteComposer({ federation }: { federation: Federation }) {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Create invitation</CardTitle>
+        <CardTitle>{t('federation.createInvitation')}</CardTitle>
         <CardDescription>
-          Generates a one-time bundle for the intended node&apos;s admin. The token is shown once.
+          {t('federation.createInvitationDescription')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Intended node ID (UUID)">
+          <Field label={t('federation.intendedNodeId')}>
             <Input value={form.intendedNode} onChange={(e) => setForm({ ...form, intendedNode: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Channel ID (UUID)">
+          <Field label={t('federation.channelId')}>
             <Input value={form.channelId} onChange={(e) => setForm({ ...form, channelId: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Peer endpoint URL">
+          <Field label={t('federation.peerEndpointUrl')}>
             <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} placeholder="https://peer.example:port" />
           </Field>
-          <Field label="Approved IPs (comma separated)">
+          <Field label={t('federation.approvedIps')}>
             <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} placeholder="203.0.113.10" />
           </Field>
         </div>
-        <Field label="Intended node certificate (PEM)">
+        <Field label={t('federation.intendedCertificate')}>
           <textarea
-            className="min-h-20 w-full rounded-[var(--radius-md)] border p-2 font-mono text-xs"
+            className="min-h-20 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-xs text-[var(--color-foreground)]"
             value={form.certificatePem}
             onChange={(e) => setForm({ ...form, certificatePem: e.target.value })}
             placeholder="-----BEGIN CERTIFICATE-----"
           />
         </Field>
-        <Field label="Capabilities (comma separated)">
+        <Field label={t('federation.capabilities')}>
           <Input value={form.capabilities} onChange={(e) => setForm({ ...form, capabilities: e.target.value })} />
         </Field>
         <div className="flex justify-end">
           <Button disabled={disabled || federation.busy} onClick={() => void submit()}>
-            Create invitation
+            {t('federation.createInvitation')}
           </Button>
         </div>
         {bundle && (
           <div className="space-y-2">
-            <p className="text-sm font-semibold">Bundle — copy now, it will not be shown again</p>
+            <p className="text-sm font-semibold">{t('federation.bundleCopyNow')}</p>
             <pre className="max-h-64 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-3 font-mono text-xs">{bundle}</pre>
           </div>
         )}
@@ -535,6 +532,7 @@ function InviteComposer({ federation }: { federation: Federation }) {
 }
 
 function InviteAcceptor({ federation }: { federation: Federation }) {
+  const { t } = useLocale()
   const [form, setForm] = useState({ bundleJson: '', endpointUrl: '', endpointIps: '' })
   const [accepted, setAccepted] = useState(false)
   const disabled = !form.bundleJson || !form.endpointUrl || !form.endpointIps
@@ -561,33 +559,32 @@ function InviteAcceptor({ federation }: { federation: Federation }) {
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle>Accept invitation</CardTitle>
+        <CardTitle>{t('federation.acceptInvitation')}</CardTitle>
         <CardDescription>
-          Paste a bundle you received from another node plus your independently approved endpoint
-          for that node.
+          {t('federation.acceptInvitationDescription')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Field label="Bundle JSON">
+        <Field label={t('federation.bundleJson')}>
           <textarea
-            className="min-h-24 w-full rounded-[var(--radius-md)] border p-2 font-mono text-xs"
+            className="min-h-24 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-xs text-[var(--color-foreground)]"
             value={form.bundleJson}
             onChange={(e) => setForm({ ...form, bundleJson: e.target.value })}
             placeholder='{"protocol_version":1,"invite_id":…}'
           />
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Issuer endpoint URL">
+          <Field label={t('federation.issuerEndpointUrl')}>
             <Input value={form.endpointUrl} onChange={(e) => setForm({ ...form, endpointUrl: e.target.value })} />
           </Field>
-          <Field label="Approved IPs (comma separated)">
+          <Field label={t('federation.approvedIps')}>
             <Input value={form.endpointIps} onChange={(e) => setForm({ ...form, endpointIps: e.target.value })} />
           </Field>
         </div>
         <div className="flex items-center justify-between">
-          {accepted && <p className="flex items-center gap-1 text-sm text-[var(--color-success)]"><Check className="size-4" aria-hidden="true" /> Accepted — grants are now active.</p>}
+          {accepted && <p className="flex items-center gap-1 text-sm text-[var(--color-success)]"><Check className="size-4" aria-hidden="true" /> {t('federation.acceptedGrants')}</p>}
           <Button className="ml-auto" variant="outline" disabled={disabled || federation.busy} onClick={() => void submit()}>
-            Accept invitation
+            {t('federation.acceptInvitation')}
           </Button>
         </div>
       </CardContent>
@@ -596,6 +593,7 @@ function InviteAcceptor({ federation }: { federation: Federation }) {
 }
 
 function ChannelSelector({ federation }: { federation: Federation }) {
+  const { t } = useLocale()
   const { channelRef, setChannelRef, bindings } = federation
   const [form, setForm] = useState({
     authority: channelRef?.authority ?? '',
@@ -637,36 +635,36 @@ function ChannelSelector({ federation }: { federation: Federation }) {
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <CardTitle>Select shared channel</CardTitle>
+            <CardTitle>{t('federation.selectChannel')}</CardTitle>
             <CardDescription>
               {bindings.length > 0
-                ? 'Pick a binding below, or enter UUIDs manually (follower command fields stay manual).'
-                : 'This node lists no bindings — enter the UUIDs you received from the channel owner.'}
+                ? t('federation.selectChannelWithBindings')
+                : t('federation.selectChannelManual')}
             </CardDescription>
           </div>
           <Button size="sm" variant="outline" disabled={federation.busy} onClick={() => void federation.sync()}>
-            <RefreshCw className="mr-1 size-3" aria-hidden="true" /> Sync
+            <RefreshCw className="mr-1 size-3" aria-hidden="true" /> {t('federation.sync')}
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Authority node ID (UUID)">
+          <Field label={t('federation.authorityNodeId')}>
             <Input value={form.authority} onChange={(e) => setForm({ ...form, authority: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Channel ID (UUID)">
+          <Field label={t('federation.channelId')}>
             <Input value={form.channel} onChange={(e) => setForm({ ...form, channel: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="This node&apos;s ID — for task commands (follower side)">
+          <Field label={t('federation.thisNodeId')}>
             <Input value={form.senderNodeId} onChange={(e) => setForm({ ...form, senderNodeId: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Grant epoch — for task commands">
+          <Field label={t('federation.grantEpoch')}>
             <Input value={form.grantEpoch} onChange={(e) => setForm({ ...form, grantEpoch: e.target.value })} placeholder="1" inputMode="numeric" />
           </Field>
         </div>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-          <Field label="Bind a local room (authority side)">
-            <Input value={form.localRoomId} onChange={(e) => setForm({ ...form, localRoomId: e.target.value })} placeholder="local room uuid — optional" />
+          <Field label={t('federation.bindLocalRoom')}>
+            <Input value={form.localRoomId} onChange={(e) => setForm({ ...form, localRoomId: e.target.value })} placeholder={t('federation.localRoomOptional')} />
           </Field>
           <Button
             variant="outline"
@@ -679,12 +677,12 @@ function ChannelSelector({ federation }: { federation: Federation }) {
               })
             }
           >
-            Bind
+            {t('federation.bind')}
           </Button>
         </div>
         {bindings.length > 0 && (
           <div className="space-y-2">
-            <p className="text-sm font-medium">Bindings on this node</p>
+            <p className="text-sm font-medium">{t('federation.bindingsOnNode')}</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {bindings.map((binding) => {
                 const active =
@@ -696,14 +694,14 @@ function ChannelSelector({ federation }: { federation: Federation }) {
                     type="button"
                     onClick={() => selectBinding(binding)}
                     className={`flex items-center justify-between gap-2 rounded-[var(--radius-md)] border p-3 text-left text-sm transition-colors ${
-                      active ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)]' : 'hover:bg-black/5'
+                      active ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)]' : 'hover:bg-[var(--color-surface-hover)]'
                     }`}
                   >
                     <span className="min-w-0 truncate font-mono text-xs">
                       {binding.authority_node_id.slice(0, 8)}… / {binding.channel_id.slice(0, 8)}…
                     </span>
                     <span className="shrink-0 text-xs text-[var(--color-foreground-muted)]">
-                      seq {binding.applied_seq}
+                      {t('federation.sequence', { sequence: binding.applied_seq })}
                     </span>
                   </button>
                 )
@@ -714,11 +712,14 @@ function ChannelSelector({ federation }: { federation: Federation }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-[var(--color-foreground-muted)]">
             {federation.channelRef
-              ? `Selected ${federation.channelRef.authority.slice(0, 8)}… / ${federation.channelRef.channel.slice(0, 8)}…`
-              : 'No channel selected.'}
+              ? t('federation.selectedChannel', {
+                authority: `${federation.channelRef.authority.slice(0, 8)}…`,
+                channel: `${federation.channelRef.channel.slice(0, 8)}…`,
+              })
+              : t('federation.noChannel')}
           </p>
           <Button disabled={disabled || federation.busy} onClick={apply}>
-            Use channel
+            {t('federation.useChannel')}
           </Button>
         </div>
       </CardContent>
@@ -733,6 +734,7 @@ function TaskComposer({
   federation: Federation
   messages: { message_id: string; text: string }[]
 }) {
+  const { t } = useLocale()
   const { channelRef } = federation
   const [form, setForm] = useState({
     executorNodeId: '',
@@ -748,40 +750,38 @@ function TaskComposer({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Request remote execution</CardTitle>
+        <CardTitle>{t('federation.requestExecution')}</CardTitle>
         <CardDescription>
-          Submit a <code className="font-mono text-xs">task.request</code> to the channel owner.
-          It is queued durably and stays “unconfirmed” until the owner commits it.
+          {t('federation.requestExecutionDescription')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {!commandFieldsReady && (
           <div role="status" className="rounded-[var(--radius-md)] border bg-[var(--color-surface-alt)] p-3 text-sm">
-            Set <strong>this node ID</strong> and <strong>grant epoch</strong> in the Shared
-            channel tab first — the command path needs both.
+            {t('federation.commandFieldsRequired')}
           </div>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Executor node ID (UUID)">
+          <Field label={t('federation.executorNodeId')}>
             <Input value={form.executorNodeId} onChange={(e) => setForm({ ...form, executorNodeId: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Executor agent ID (UUID)">
+          <Field label={t('federation.executorAgentId')}>
             <Input value={form.executorAgentId} onChange={(e) => setForm({ ...form, executorAgentId: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Task ID (UUID)">
+          <Field label={t('federation.taskId')}>
             <Input value={form.taskId} onChange={(e) => setForm({ ...form, taskId: e.target.value })} placeholder="uuid" />
           </Field>
-          <Field label="Delegation ID (UUID — blank to generate)">
-            <Input value={form.delegationId} onChange={(e) => setForm({ ...form, delegationId: e.target.value })} placeholder="auto" />
+          <Field label={t('federation.delegationIdAuto')}>
+            <Input value={form.delegationId} onChange={(e) => setForm({ ...form, delegationId: e.target.value })} placeholder={t('federation.auto')} />
           </Field>
         </div>
-        <Field label="Source message">
+        <Field label={t('federation.sourceMessage')}>
           <select
-            className="w-full rounded-[var(--radius-md)] border bg-white p-2 text-sm"
+            className="w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 text-sm text-[var(--color-foreground)]"
             value={form.sourceMessageId}
             onChange={(e) => setForm({ ...form, sourceMessageId: e.target.value })}
           >
-            <option value="">— select a channel message —</option>
+            <option value="">{t('federation.selectMessage')}</option>
             {messages.map((message) => (
               <option key={message.message_id} value={message.message_id}>
                 {message.text.slice(0, 60)}
@@ -809,18 +809,18 @@ function TaskComposer({
               })
             }
           >
-            Submit task request
+            {t('federation.submitTask')}
           </Button>
         </div>
         <div className="rounded-[var(--radius-md)] border p-3">
           <p className="flex items-center gap-2 text-sm font-medium">
-            <Ban className="size-4" aria-hidden="true" /> Request cancellation
+            <Ban className="size-4" aria-hidden="true" /> {t('federation.requestCancellation')}
           </p>
           <div className="mt-2 grid gap-3 sm:grid-cols-[minmax(0,1fr)_110px_auto] sm:items-end">
-            <Field label="Delegation ID (UUID)">
+            <Field label={t('federation.delegationId')}>
               <Input value={form.cancelDelegationId} onChange={(e) => setForm({ ...form, cancelDelegationId: e.target.value })} />
             </Field>
-            <Field label="Expected revision">
+            <Field label={t('federation.expectedRevision')}>
               <Input value={form.cancelRevision} onChange={(e) => setForm({ ...form, cancelRevision: e.target.value })} inputMode="numeric" />
             </Field>
             <Button
@@ -833,7 +833,7 @@ function TaskComposer({
                 })
               }
             >
-              Request stop
+              {t('federation.requestStop')}
             </Button>
           </div>
         </div>

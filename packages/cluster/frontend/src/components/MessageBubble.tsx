@@ -19,6 +19,7 @@ import { parseHandoff, stripHandoffToTrailer } from '@/lib/handoff'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import { formatMessageTimestamp } from '@/lib/datetime'
+import { useLocale } from '@/i18n/LocaleProvider'
 import {
   buildFileReferenceCandidates,
   extractSharedFileReferencesFromMetadata,
@@ -58,7 +59,7 @@ function MessageReferences({
       {refs.map(r => (
         <span
           key={r.id}
-          className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-xs text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
+          className="inline-flex max-w-[180px] items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-foreground-muted)] sm:max-w-[240px] md:max-w-[320px]"
           title={r.name}
         >
           {r.origin === 'inline' ? (
@@ -83,6 +84,7 @@ export default memo(function MessageBubble({
   roomFiles = [],
 }: MessageBubbleProps) {
   const [saved, setSaved] = useState(false)
+  const { locale, t } = useLocale()
   const { rooms } = useRooms()
   const fileReferenceCandidates = useMemo(
     () => buildFileReferenceCandidates(message.metadata, roomFiles),
@@ -114,7 +116,7 @@ export default memo(function MessageBubble({
   // #512 — today's messages show the time only; older messages are
   // prefixed with their date. Formatting lives in ``lib/datetime`` so
   // it is unit-tested independently of this component.
-  const formatTime = (iso: string) => formatMessageTimestamp(iso)
+  const formatTime = (iso: string) => formatMessageTimestamp(iso, new Date(), locale)
 
   // ---------- Issue #55: room_query result / forward variants ----------
   // Result variant delegates entirely to RoomQueryResultCard. The
@@ -145,7 +147,7 @@ export default memo(function MessageBubble({
       className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)]"
     >
       <BrailleSpinner />
-      <span>응답 대기 중</span>
+      <span>{t('chat.awaitingResponse')}</span>
     </span>
   ) : null
 
@@ -173,11 +175,12 @@ export default memo(function MessageBubble({
   const bookmarkBtn = (
     <button
       onClick={toggleSave}
-      className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-black/5"
-      title={saved ? 'Remove bookmark' : 'Bookmark this message'}
+      className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-[var(--color-surface-hover)]"
+      title={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
+      aria-label={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
     >
       {saved
-        ? <BookmarkCheck className="h-3.5 w-3.5 text-[var(--color-brand)]" />
+        ? <BookmarkCheck className="h-3.5 w-3.5 text-[var(--color-brand-text)]" />
         : <Bookmark className="h-3.5 w-3.5 text-[var(--color-foreground-subtle)]" />}
     </button>
   )
@@ -229,7 +232,7 @@ export default memo(function MessageBubble({
       <div className="group flex flex-col items-start">
         <TaskAssignmentCard
           meta={taskAssignmentMeta}
-          title={title || '(untitled task)'}
+          title={title || t('chat.untitledTask')}
           assignee={assignee}
         />
         <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
@@ -334,7 +337,7 @@ export default memo(function MessageBubble({
           {bookmarkBtn}
         </div>
         <div
-          className="relative w-full rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] border border-[var(--color-border)] bg-white pl-4 pr-3 py-2"
+          className="relative w-full rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface)] pl-4 pr-3 py-2"
           data-testid="room-query-forward"
         >
           <div
@@ -376,7 +379,7 @@ export default memo(function MessageBubble({
       <div className="group flex flex-col items-end">
         <div className="flex items-center gap-1.5 mb-1 pr-1">
           {bookmarkBtn}
-          <span className="text-badge text-[var(--color-foreground-muted)]">나</span>
+          <span className="text-badge text-[var(--color-foreground-muted)]">{t('chat.me')}</span>
           {avatar}
         </div>
         <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tr-[var(--radius-xs)] bg-[var(--color-brand-tint-bg)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%]">
@@ -400,9 +403,9 @@ export default memo(function MessageBubble({
 
   // 다른 참여자 = 왼쪽
   const bubbleClass = isOrphan
-    ? 'bg-white border border-dashed border-[var(--color-border)] opacity-80'
+    ? 'bg-[var(--color-surface)] border border-dashed border-[var(--color-border)] opacity-80'
     : isAgent
-      ? 'bg-white border border-[var(--color-border)]'
+      ? 'bg-[var(--color-surface)] border border-[var(--color-border)]'
       : 'bg-[var(--color-surface-alt)]'
 
   // Issue #238 — strip any trailing ``handoff_to: ...`` directive the

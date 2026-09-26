@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react'
 import {
   BookOpen, Network, Package, Plug, Server, Settings, Share2, Waypoints,
 } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
 
 interface SidebarAdminMenuProps {
   pathname: string
@@ -9,29 +11,31 @@ interface SidebarAdminMenuProps {
   onGo: (path: string) => void
 }
 
-const links = [
-  { label: 'Machines', path: '/admin/machines', icon: Server },
-  { label: 'System', path: '/admin/system', icon: Package },
-  { label: 'Skills', path: '/admin/skills', icon: BookOpen },
-  { label: 'MCP Servers', path: '/admin/mcp-templates', icon: Plug },
-  { label: 'Usage', path: '/admin/usage', icon: Waypoints, children: true },
-  { label: 'Federation', path: '/admin/federation', icon: Network, children: true, experimental: true },
-  { label: 'Topology', path: '/topology', icon: Share2, experimental: true },
+const links: { labelKey: MessageKey; path: string; icon: typeof Server; children?: boolean; experimental?: boolean }[] = [
+  { labelKey: 'navigation.machines', path: '/admin/machines', icon: Server },
+  { labelKey: 'navigation.system', path: '/admin/system', icon: Package },
+  { labelKey: 'navigation.skills', path: '/admin/skills', icon: BookOpen },
+  { labelKey: 'navigation.mcpServers', path: '/admin/mcp-templates', icon: Plug },
+  { labelKey: 'navigation.usage', path: '/admin/usage', icon: Waypoints, children: true },
+  { labelKey: 'navigation.federation', path: '/admin/federation', icon: Network, children: true, experimental: true },
+  { labelKey: 'navigation.topology', path: '/topology', icon: Share2, experimental: true },
 ]
 
 function ExperimentalNavBadge() {
+  const { t } = useLocale()
   return (
     <span
       aria-hidden="true"
-      title="Experimental feature"
+      title={t('navigation.experimentalFeature')}
       className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-[10px] font-semibold leading-4 text-[var(--color-brand-tint-text)]"
     >
-      Experimental
+      {t('navigation.experimental')}
     </span>
   )
 }
 
 export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: SidebarAdminMenuProps) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const menuId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -64,16 +68,16 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
       <button
         ref={triggerRef}
         type="button"
-        aria-label={updateAvailable ? 'Admin settings, update available' : 'Admin settings'}
+        aria-label={updateAvailable ? t('navigation.adminUpdate') : t('navigation.adminSettings')}
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        title="Admin settings"
+        title={t('navigation.adminSettings')}
         onClick={() => setOpen(value => !value)}
-        className="relative flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-black/5 hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
+        className="relative flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
       >
         <Settings className="h-4 w-4" />
         {updateAvailable && (
-          <span aria-hidden="true" className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full border border-[var(--color-surface-alt)] bg-[#097fe8]" />
+          <span aria-hidden="true" className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full border border-[var(--color-surface-alt)] bg-[var(--color-brand)]" />
         )}
       </button>
       {open && (
@@ -81,7 +85,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
         <div
           id={menuId}
           role="group"
-          aria-label="Admin navigation"
+          aria-label={t('navigation.adminNavigation')}
           className="absolute bottom-full -right-12 z-50 mb-1 max-h-[calc(100dvh-5rem)] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-1 shadow-lg"
         >
           {links.map((link, index) => {
@@ -94,7 +98,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
                 key={link.path}
                 ref={index === 0 ? firstLinkRef : undefined}
                 type="button"
-                aria-label={link.experimental ? `${link.label}, experimental feature` : undefined}
+                aria-label={link.experimental ? `${t(link.labelKey)}, ${t('navigation.experimentalFeature')}` : undefined}
                 aria-current={active ? 'page' : undefined}
                 onClick={() => {
                   setOpen(false)
@@ -102,15 +106,15 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
                 }}
                 className={`flex min-h-11 w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-sm font-medium transition-colors ${
                   active
-                    ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                    : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                    ? 'bg-[var(--color-surface-elevated)] shadow-whisper text-[var(--color-foreground)]'
+                    : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
                 }`}
               >
                 <Icon className="mr-2 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
-                <span className="min-w-0 truncate">{link.label}</span>
-                {link.label === 'System' && updateAvailable && (
-                  <span className="ml-auto rounded-full bg-[#f2f9ff] px-2 py-0.5 text-[11px] font-semibold text-[#097fe8]" title="Update available">
-                    update
+                <span className="min-w-0 truncate">{t(link.labelKey)}</span>
+                {link.path === '/admin/system' && updateAvailable && (
+                  <span className="ml-auto rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-tint-text)]" title={t('navigation.updateAvailable')}>
+                    {t('navigation.update')}
                   </span>
                 )}
                 {link.experimental && <ExperimentalNavBadge />}

@@ -4,6 +4,8 @@ import type { Participant } from '@/pages/ChatPage'
 import PresenceDot from '@/components/PresenceDot'
 import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/EntityAvatar'
 import type { PresenceMap } from '@/hooks/useParticipantPresence'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 interface Props {
   participants: Record<string, Participant>
@@ -49,6 +51,8 @@ export default function ParticipantListPopover({
   anchorRight = true,
   onRemove,
 }: Props) {
+  const { t } = useLocale()
+  const { confirm } = useFeedback()
   const rootRef = useRef<HTMLDivElement>(null)
 
   // Stable ordering: agents first (they drive the room), then
@@ -92,7 +96,7 @@ export default function ParticipantListPopover({
     <div
       ref={rootRef}
       className={
-        'absolute top-12 z-40 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white shadow-lg ' +
+        'absolute top-12 z-40 w-64 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-lg ' +
         (anchorRight ? 'right-4' : 'left-4')
       }
       // ``role="dialog"`` would contract us into the APG-specified
@@ -102,10 +106,10 @@ export default function ParticipantListPopover({
       // group and keyboard users can Tab through without getting
       // trapped.
       role="group"
-      aria-label="Room participants"
+      aria-label={t('participants.title')}
     >
       <div className="border-b border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-foreground-muted)]">
-        {sorted.length} participant{sorted.length === 1 ? '' : 's'}
+        {t(sorted.length === 1 ? 'participants.countOne' : 'participants.countMany', { count: sorted.length })}
       </div>
       <ul className="max-h-80 overflow-y-auto py-1">
         {sorted.map((p) => {
@@ -160,7 +164,7 @@ export default function ParticipantListPopover({
                   {p.display_name || p.id.slice(0, 8)}
                   {isMe && (
                     <span className="ml-1 text-[var(--color-foreground-muted)]">
-                      (you)
+                      {t('participants.you')}
                     </span>
                   )}
                 </span>
@@ -179,12 +183,12 @@ export default function ParticipantListPopover({
               <span className="ml-auto flex shrink-0 items-center gap-1">
                 {p.kind === 'agent' && (
                   <span className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-foreground-muted)]">
-                    agent
+                    {t('participants.agent')}
                   </span>
                 )}
                 {p.is_anonymous && (
-                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-brand)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand)]">
-                    guest
+                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-brand)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand-text)]">
+                    {t('participants.guest')}
                   </span>
                 )}
                 {/* Show the role badge only for registered users —
@@ -194,22 +198,23 @@ export default function ParticipantListPopover({
                     today, but the guard keeps it that way if the
                     data ever slips. */}
                 {!p.is_anonymous && (p.role === 'owner' || p.role === 'admin') && (
-                  <span className="rounded-[var(--radius-sm)] bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand)]">
-                    {p.role}
+                  <span className="rounded-[var(--radius-sm)] bg-[var(--color-brand-tint-bg)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand-tint-text)]">
+                    {t(p.role === 'owner' ? 'participants.owner' : 'participants.admin')}
                   </span>
                 )}
                 {canRemoveThis && (
                   <button
                     type="button"
-                    aria-label={`Remove ${p.display_name || 'participant'} from this room`}
-                    className="ml-1 rounded-[var(--radius-sm)] p-1 text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10"
-                    onClick={() => {
-                      // A native confirm keeps the component low-
-                      // dependency; this is a rare destructive
-                      // operation and the prompt is enough of a speed
-                      // bump to prevent slips.
-                      const name = p.display_name || 'this participant'
-                      if (!window.confirm(`Remove ${name} from this room?`)) {
+                    aria-label={t('participants.remove', { name: p.display_name || t('participants.fallback') })}
+                    className="ml-1 flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-destructive)] hover:bg-[var(--color-danger-soft)]"
+                    onClick={async () => {
+                      const name = p.display_name || t('participants.fallback')
+                      if (!await confirm({
+                        title: t('participants.removeTitle'),
+                        description: t('participants.removeConfirm', { name }),
+                        confirmLabel: t('participants.removeTitle'),
+                        destructive: true,
+                      })) {
                         return
                       }
                       void onRemove!(p.id)

@@ -8,6 +8,7 @@ import {
 import { Bot, Plus, Minus, Loader2 } from 'lucide-react'
 import PresenceDot from '@/components/PresenceDot'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ManageRoomAgentsDialogProps {
   open: boolean
@@ -37,6 +38,7 @@ function stateBadgeClass(state: string) {
 export default function ManageRoomAgentsDialog({
   open, onOpenChange, roomId, participantAgentIds, onChange,
 }: ManageRoomAgentsDialogProps) {
+  const { t } = useLocale()
   const { agents, addAgentToRoom, removeAgentFromRoom } = useAgents()
   const [busyAgentId, setBusyAgentId] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -67,14 +69,27 @@ export default function ManageRoomAgentsDialog({
 
   const inRoom = agents.filter(a => participantAgentIds.has(a.id))
   const available = agents.filter(a => !participantAgentIds.has(a.id))
+  const stateKeys = {
+    unreachable: 'admin.agentSettings.state.unreachable',
+    unknown: 'admin.agentSettings.state.unknown',
+    running: 'admin.agentSettings.state.running',
+    starting: 'admin.agentSettings.state.starting',
+    stopping: 'admin.agentSettings.state.stopping',
+    stopped: 'admin.agentSettings.state.stopped',
+    idle: 'admin.agentSettings.state.idle',
+    pending: 'admin.agentSettings.state.pending',
+    crashed: 'admin.agentSettings.state.crashed',
+    failed: 'admin.agentSettings.state.failed',
+  } as const
+  const localizedState = (state: string) => state in stateKeys ? t(stateKeys[state as keyof typeof stateKeys]) : state
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Manage Agents in Room</DialogTitle>
+          <DialogTitle>{t('rooms.manageAgents')}</DialogTitle>
           <DialogDescription>
-            Add or remove agents from this room. Agents auto-start when added and stop when they have no rooms left.
+            {t('rooms.manageAgentsDescription')}
           </DialogDescription>
         </DialogHeader>
 
@@ -87,7 +102,7 @@ export default function ManageRoomAgentsDialog({
         {agents.length === 0 ? (
           <div className="bg-[var(--color-surface-alt)] rounded-[var(--radius-lg)] py-8 text-center">
             <p className="text-caption text-[var(--color-foreground-muted)]">
-              No agents exist yet. Create one from the Agents admin page.
+              {t('rooms.noAgents')}
             </p>
           </div>
         ) : (
@@ -95,11 +110,11 @@ export default function ManageRoomAgentsDialog({
             {/* Agents currently in room */}
             <div>
               <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
-                In this room ({inRoom.length})
+                {t('rooms.inRoom', { count: inRoom.length })}
               </h3>
               {inRoom.length === 0 ? (
                 <p className="text-caption text-[var(--color-foreground-subtle)] italic px-1">
-                  No agents in this room yet.
+                  {t('rooms.noAgentsInRoom')}
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -117,12 +132,12 @@ export default function ManageRoomAgentsDialog({
                           <PresenceDot
                             variant="agent"
                             online={online}
-                            agentState={displayState}
+                            agentState={localizedState(displayState)}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                           <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
                           <Badge variant="outline" className={stateBadgeClass(displayState)}>
-                            {displayState}
+                            {localizedState(displayState)}
                           </Badge>
                         </div>
                         <Button
@@ -131,7 +146,8 @@ export default function ManageRoomAgentsDialog({
                           className="text-[var(--color-warning)] hover:text-[var(--color-warning)]"
                           onClick={() => handleRemove(agent.id)}
                           disabled={busyAgentId === agent.id}
-                          title="Remove from room"
+                          title={t('rooms.removeAgent')}
+                          aria-label={`${t('rooms.removeAgent')}: ${agent.name}`}
                         >
                           {busyAgentId === agent.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -149,11 +165,11 @@ export default function ManageRoomAgentsDialog({
             {/* Available agents */}
             <div>
               <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
-                Available ({available.length})
+                {t('rooms.available', { count: available.length })}
               </h3>
               {available.length === 0 ? (
                 <p className="text-caption text-[var(--color-foreground-subtle)] italic px-1">
-                  All agents are already in this room.
+                  {t('rooms.allAgentsInRoom')}
                 </p>
               ) : (
                 <ul className="space-y-2">
@@ -171,12 +187,12 @@ export default function ManageRoomAgentsDialog({
                           <PresenceDot
                             variant="agent"
                             online={online}
-                            agentState={displayState}
+                            agentState={localizedState(displayState)}
                           />
                           <span className="truncate font-medium text-[var(--color-foreground)]">{agent.name}</span>
                           <span className="text-caption text-[var(--color-foreground-muted)]">{agent.engine}</span>
                           <Badge variant="outline" className={stateBadgeClass(displayState)}>
-                            {displayState}
+                            {localizedState(displayState)}
                           </Badge>
                         </div>
                         <Button
@@ -185,7 +201,8 @@ export default function ManageRoomAgentsDialog({
                           className="text-[var(--color-success)] hover:text-[var(--color-success)]"
                           onClick={() => handleAdd(agent.id)}
                           disabled={busyAgentId === agent.id}
-                          title="Add to room"
+                          title={t('rooms.addAgent')}
+                          aria-label={`${t('rooms.addAgent')}: ${agent.name}`}
                         >
                           {busyAgentId === agent.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -203,7 +220,7 @@ export default function ManageRoomAgentsDialog({
         )}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>{t('common.close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

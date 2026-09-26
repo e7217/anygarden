@@ -4,8 +4,14 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import RoomQueryResultCard from './RoomQueryResultCard'
 import type { RoomQueryResultMeta } from '@/lib/room-query'
+import { LocaleProvider } from '@/i18n/LocaleProvider'
 
 afterEach(() => cleanup())
+
+function renderKo(ui: Parameters<typeof render>[0]) {
+  localStorage.setItem('anygarden_locale', 'ko')
+  return render(<LocaleProvider>{ui}</LocaleProvider>)
+}
 
 function makeResult(overrides: Partial<RoomQueryResultMeta> = {}): RoomQueryResultMeta {
   return {
@@ -28,7 +34,7 @@ describe('RoomQueryResultCard', () => {
       ['agent-1', 'Alice'],
       ['agent-2', 'Bob'],
     ])
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult()}
         participantNames={names}
@@ -47,7 +53,7 @@ describe('RoomQueryResultCard', () => {
 
   it('toggles a response card collapse on header click', () => {
     const names = new Map([['agent-1', 'Alice']])
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({
           responses: [{ participant_id: 'agent-1', content: 'Answer A' }],
@@ -67,7 +73,7 @@ describe('RoomQueryResultCard', () => {
   })
 
   it('renders timeout header with K명 미응답 tail', () => {
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({ status: 'timeout', responded: 1, expected: 3 })}
         participantNames={new Map()}
@@ -81,7 +87,7 @@ describe('RoomQueryResultCard', () => {
   })
 
   it('renders solo header and fallback empty-state text', () => {
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({ status: 'solo', responded: 0, expected: 0, responses: [] })}
         participantNames={new Map()}
@@ -97,7 +103,7 @@ describe('RoomQueryResultCard', () => {
   })
 
   it('falls back to last-6 of participant_id when name is missing', () => {
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({
           responses: [
@@ -119,7 +125,7 @@ describe('RoomQueryResultCard', () => {
     // representative agent's server-side snapshot. The source-room
     // participants map won't contain the replying agent, so
     // ``r.name`` must take priority to avoid the @hex fallback.
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({
           responses: [
@@ -144,7 +150,7 @@ describe('RoomQueryResultCard', () => {
     // still try the source-room ``participantNames`` map before
     // falling through to the last-6 hex — empty strings must be
     // treated as "no name", not as a valid display.
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({
           responses: [
@@ -161,7 +167,7 @@ describe('RoomQueryResultCard', () => {
   })
 
   it('falls back to #id-slice when targetRoomName is missing', () => {
-    render(
+    renderKo(
       <RoomQueryResultCard
         result={makeResult({ target_room_id: '11112222' })}
         participantNames={new Map([['agent-1', 'A'], ['agent-2', 'B']])}

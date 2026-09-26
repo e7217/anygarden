@@ -38,8 +38,10 @@ describe('formatMessageTimestamp', () => {
   // comparison is stable regardless of the test runner's timezone: both
   // ``d`` and ``now`` convert to local time with the same offset, so a
   // fixed instant delta shifts the local calendar date predictably.
-  const timeOf = (iso: string) =>
-    parseServerDate(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const timeOf = (iso: string, locale: 'ko' | 'en' = 'ko') =>
+    new Intl.DateTimeFormat(locale === 'ko' ? 'ko-KR' : 'en-US', {
+      hour: 'numeric', minute: '2-digit',
+    }).format(parseServerDate(iso))
 
   it('shows only the time for a message earlier on the same calendar day', () => {
     const iso = '2026-07-03T12:00:00Z'
@@ -73,5 +75,13 @@ describe('formatMessageTimestamp', () => {
 
   it('returns an empty string for unparseable input', () => {
     expect(formatMessageTimestamp('not-a-date', new Date())).toBe('')
+  })
+
+  it('formats English month and time when English is selected', () => {
+    const iso = '2026-03-10T12:00:00Z'
+    const date = parseServerDate(iso)
+    const now = new Date(date.getTime() + 5 * 86_400_000)
+    const expectedDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date)
+    expect(formatMessageTimestamp(iso, now, 'en')).toBe(`${expectedDate} ${timeOf(iso, 'en')}`)
   })
 })

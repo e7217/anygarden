@@ -7,6 +7,7 @@ import {
   type GoalMaterialize,
   type GoalTriggerType,
 } from '@/lib/goals'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /** #312 — minimal shape needed to render the Agent picker. We only
  *  need ``id`` for the value and ``name`` for the label; any
@@ -55,6 +56,7 @@ export default function GoalForm({
   onCreated,
   onCancel,
 }: GoalFormProps) {
+  const { t } = useLocale()
   const [title, setTitle] = useState('')
   const [spec, setSpec] = useState('')
   // #312 — explicit assignee field. Defaults to ``defaultAgentId`` if
@@ -88,7 +90,7 @@ export default function GoalForm({
   const submit = async () => {
     setError(null)
     if (!title.trim() || !spec.trim()) {
-      setError('제목과 spec은 필수입니다.')
+      setError(t('goals.required'))
       return
     }
     if (!assigneeAgentId) {
@@ -96,7 +98,7 @@ export default function GoalForm({
       // (``agent_goals.assignee_agent_id`` is NOT NULL). Catch the
       // empty case here so the error is actionable rather than a
       // server 422.
-      setError('Agent 를 선택해 주세요.')
+      setError(t('goals.agentRequired'))
       return
     }
     setSubmitting(true)
@@ -121,33 +123,35 @@ export default function GoalForm({
   return (
     <div className="flex flex-col gap-3 p-3">
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          제목
+        <label htmlFor="goal-title" className="text-xs font-medium text-[var(--color-foreground-muted)]">
+          {t('goals.title')}
         </label>
         <input
+          id="goal-title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="예: 매일 호스트 리소스 점검"
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm"
+          placeholder={t('goals.titlePlaceholder')}
+          className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)]"
         />
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          Agent
+        <label htmlFor="goal-assignee" className="text-xs font-medium text-[var(--color-foreground-muted)]">
+          {t('goals.agent')}
         </label>
         <select
+          id="goal-assignee"
           value={assigneeAgentId}
           onChange={(e) => setAssigneeAgentId(e.target.value)}
           disabled={roomAgents.length <= 1}
-          aria-label="Pick assignee agent"
+          aria-label={t('goals.pickAgent')}
           aria-required="true"
           data-testid="goal-form-assignee-select"
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm disabled:opacity-70"
+          className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] disabled:opacity-70"
         >
           {roomAgents.length === 0 && (
             <option value="" disabled>
-              (no agents available)
+              {t('goals.noAgents')}
             </option>
           )}
           {roomAgents.map((a) => (
@@ -157,115 +161,93 @@ export default function GoalForm({
           ))}
         </select>
         {roomAgents.length === 1 && (
-          <p className="text-[10px] text-[var(--color-foreground-subtle)]">
-            룸에 에이전트가 한 명이라 자동 선택됩니다.
+          <p className="text-xs text-[var(--color-foreground-muted)]">
+            {t('goals.singleAgent')}
           </p>
         )}
       </div>
 
       <div className="flex flex-col gap-1">
-        <label className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          Spec (markdown)
+        <label htmlFor="goal-spec" className="text-xs font-medium text-[var(--color-foreground-muted)]">
+          {t('goals.instructions')}
         </label>
         <textarea
+          id="goal-spec"
           value={spec}
           onChange={(e) => setSpec(e.target.value)}
-          placeholder="에이전트가 매 트리거마다 받을 지시문…"
+          placeholder={t('goals.instructionsPlaceholder')}
           rows={4}
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm font-mono"
+          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)]"
         />
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          보고 룸 (Room ID)
-        </label>
-        <input
-          value={reportRoomId}
-          onChange={(e) => setReportRoomId(e.target.value)}
-          placeholder="비우면 silent goal"
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm font-mono"
-        />
-        <p className="text-[10px] text-[var(--color-foreground-subtle)]">
-          에이전트는 이 룸의 참여자여야 합니다.
-        </p>
       </div>
 
       <fieldset className="flex flex-col gap-1">
-        <legend className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          트리거
+        <legend className="text-xs font-medium text-[var(--color-foreground-muted)]">
+          {t('goals.schedule')}
         </legend>
-        <div className="flex gap-3 text-sm">
-          {(['cron', 'interval', 'manual'] as const).map((t) => (
-            <label key={t} className="flex items-center gap-1">
+        <div className="flex flex-wrap gap-3 text-sm">
+          {(['cron', 'interval', 'manual'] as const).map((choice) => (
+            <label key={choice} className="flex min-h-10 items-center gap-2">
               <input
                 type="radio"
                 name="trigger"
-                value={t}
-                checked={triggerType === t}
-                onChange={() => setTriggerType(t)}
+                value={choice}
+                checked={triggerType === choice}
+                onChange={() => setTriggerType(choice)}
               />
-              {t}
+              {t(choice === 'cron' ? 'goals.cron' : choice === 'interval' ? 'goals.interval' : 'goals.manual')}
             </label>
           ))}
         </div>
         {triggerType === 'cron' && (
           <input
+            aria-label={t('goals.cron')}
             value={cronExpr}
             onChange={(e) => setCronExpr(e.target.value)}
             placeholder="0 9 * * *"
-            className="mt-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm font-mono"
+            className="mt-1 min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
           />
         )}
         {triggerType === 'interval' && (
           <input
+            aria-label={t('goals.interval')}
             type="number"
             value={intervalSecs}
             onChange={(e) => setIntervalSecs(Number(e.target.value))}
             min={60}
             placeholder="600"
-            className="mt-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 text-sm font-mono"
+            className="mt-1 min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
           />
         )}
       </fieldset>
 
-      <fieldset className="flex flex-col gap-1">
-        <legend className="text-[11px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          기록 정책 (materialize)
-        </legend>
-        <div className="flex flex-col gap-1 text-sm">
-          <label className="flex items-start gap-2">
+      <details className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3">
+        <summary className="cursor-pointer text-sm font-medium text-[var(--color-foreground)]">{t('goals.advanced')}</summary>
+        <div className="mt-3 flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="goal-report-room" className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('goals.reportRoom')}</label>
             <input
-              type="radio"
-              name="materialize"
-              value="interesting_only"
-              checked={materialize === 'interesting_only'}
-              onChange={() => setMaterialize('interesting_only')}
+              id="goal-report-room"
+              value={reportRoomId}
+              onChange={(e) => setReportRoomId(e.target.value)}
+              placeholder={t('goals.reportRoomPlaceholder')}
+              className="min-h-10 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] font-mono"
             />
-            <span>
-              <span className="font-medium">interesting_only</span>
-              <span className="ml-1 text-[12px] text-[var(--color-foreground-subtle)]">
-                실패/주목할 결과만 Task로 남김 (조용)
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2">
-            <input
-              type="radio"
-              name="materialize"
-              value="full"
-              checked={materialize === 'full'}
-              onChange={() => setMaterialize('full')}
-            />
-            <span>
-              <span className="font-medium">full</span>
-              <span className="ml-1 text-[12px] text-[var(--color-foreground-subtle)]">
-                매 실행을 Task로 남김 (자세)
-              </span>
-            </span>
-          </label>
+            <p className="text-xs text-[var(--color-foreground-muted)]">{t('goals.reportRoomHelp')}</p>
+          </div>
+          <fieldset className="flex flex-col gap-1">
+            <legend className="text-xs font-medium text-[var(--color-foreground-muted)]">{t('goals.recording')}</legend>
+            <label className="flex min-h-10 items-start gap-2 py-1 text-sm">
+              <input type="radio" name="materialize" value="interesting_only" checked={materialize === 'interesting_only'} onChange={() => setMaterialize('interesting_only')} />
+              <span><span className="block font-medium">{t('goals.interestingOnly')}</span><span className="text-xs text-[var(--color-foreground-muted)]">{t('goals.interestingOnlyDescription')}</span></span>
+            </label>
+            <label className="flex min-h-10 items-start gap-2 py-1 text-sm">
+              <input type="radio" name="materialize" value="full" checked={materialize === 'full'} onChange={() => setMaterialize('full')} />
+              <span><span className="block font-medium">{t('goals.full')}</span><span className="text-xs text-[var(--color-foreground-muted)]">{t('goals.fullDescription')}</span></span>
+            </label>
+          </fieldset>
         </div>
-      </fieldset>
+      </details>
 
       {error && (
         <p role="alert" className="text-[12px] text-[var(--color-destructive)]">
@@ -275,10 +257,10 @@ export default function GoalForm({
 
       <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-2">
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>
-          취소
+          {t('common.cancel')}
         </Button>
         <Button size="sm" onClick={submit} disabled={submitting}>
-          {submitting ? '저장 중…' : '책임 추가'}
+          {submitting ? t('goals.saving') : t('goals.add')}
         </Button>
       </div>
     </div>

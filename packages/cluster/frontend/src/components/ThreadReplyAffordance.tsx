@@ -3,6 +3,7 @@ import { EntityAvatar, type EntityKind } from '@/components/EntityAvatar'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import { formatMessageTimestamp } from '@/lib/datetime'
+import { useLocale } from '@/i18n/LocaleProvider'
 import { replyCount, lastReplyAt, threadParticipantIds, type ThreadIndex } from '@/lib/threads'
 
 /** Avatars shown before the count collapses into "+N". */
@@ -36,6 +37,7 @@ export default function ThreadReplyAffordance({
   active,
   onOpen,
 }: ThreadReplyAffordanceProps) {
+  const { locale, t } = useLocale()
   const count = replyCount(index, root.id)
   const align = isMine ? 'justify-end' : 'justify-start'
 
@@ -46,17 +48,17 @@ export default function ThreadReplyAffordance({
           type="button"
           onClick={() => onOpen(root.id)}
           data-thread-trigger={root.id}
-          aria-label="Reply in thread"
+          aria-label={t('chat.replyInThread')}
           className={`
             flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-0.5
             text-badge text-[var(--color-foreground-subtle)]
-            transition-opacity hover:bg-black/5 hover:text-[var(--color-foreground-muted)]
+            transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground-muted)]
             focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
-            ${active ? 'opacity-100' : 'opacity-0 group-hover/message:opacity-100'}
+            ${active ? 'opacity-100' : 'opacity-100 md:opacity-0 md:group-hover/message:opacity-100'}
           `}
         >
           <MessageSquareReply className="h-3 w-3" />
-          Reply in thread
+          {t('chat.replyInThread')}
         </button>
       </div>
     )
@@ -73,7 +75,7 @@ export default function ThreadReplyAffordance({
         type="button"
         onClick={() => onOpen(root.id)}
         data-thread-trigger={root.id}
-        aria-label={`Open thread, ${count} ${count === 1 ? 'reply' : 'replies'}`}
+        aria-label={t(count === 1 ? 'chat.openThreadReply' : 'chat.openThreadReplies', { count })}
         aria-expanded={active}
         className={`
           flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-2 py-1
@@ -81,14 +83,14 @@ export default function ThreadReplyAffordance({
           focus-visible:outline-2 focus-visible:outline-[var(--color-brand)]
           ${active
             ? 'border-[var(--color-brand)] bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
-            : 'border-[var(--color-border)] bg-white text-[var(--color-foreground-muted)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]'}
+            : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-alt)]'}
         `}
       >
         <span className="flex -space-x-1.5">
           {shown.map(pid => {
             const p = participants[pid]
             return (
-              <span key={pid} className="ring-2 ring-white rounded-full">
+              <span key={pid} className="ring-2 ring-[var(--color-surface)] rounded-full">
                 <EntityAvatar
                   id={pid}
                   name={p?.display_name ?? pid.slice(0, 8)}
@@ -99,8 +101,8 @@ export default function ThreadReplyAffordance({
             )
           })}
         </span>
-        <span className="font-medium text-[var(--color-brand)]">
-          {count} {count === 1 ? 'reply' : 'replies'}
+        <span className="font-medium text-[var(--color-brand-text)]">
+          {t(count === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count })}
         </span>
         {overflow > 0 && (
           <span className="text-[var(--color-foreground-subtle)]">
@@ -109,7 +111,7 @@ export default function ThreadReplyAffordance({
         )}
         {last && (
           <span className="truncate text-[var(--color-foreground-subtle)]">
-            {formatMessageTimestamp(last)}
+            {formatMessageTimestamp(last, new Date(), locale)}
           </span>
         )}
       </button>

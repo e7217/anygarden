@@ -26,6 +26,7 @@ import { RoomNode } from './nodes/RoomNode'
 import { UserNode } from './nodes/UserNode'
 import { ProjectGroup } from './nodes/ProjectGroup'
 import { RelationEdge } from './edges/RelationEdge'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 const nodeTypes: NodeTypes = {
   machine: MachineNode,
@@ -74,10 +75,25 @@ function CanvasInner({
   onResetLayout,
   hasOverrides,
 }: CanvasProps) {
+  const { t } = useLocale()
   const navigate = useNavigate()
   const rf = useReactFlow()
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [miniMapOn, setMiniMapOn] = useState(false)
+  const [compact, setCompact] = useState(() => window.innerWidth < 768)
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)')
+    const onChange = () => setCompact(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+
+  const initialFit = useMemo(() => ({ padding: 0.2, minZoom: compact ? 0.65 : 0.3 }), [compact])
+
+  useEffect(() => {
+    requestAnimationFrame(() => void rf.fitView(initialFit))
+  }, [compact, rf, initialFit])
 
   // Local React-Flow-friendly node state. ``useNodesState`` hands us
   // the ``applyNodeChanges`` plumbing for free, which we want so
@@ -168,8 +184,8 @@ function CanvasInner({
     onResetLayout()
     // Let React flush the reset, then refit so the user immediately
     // sees the restored dagre layout.
-    requestAnimationFrame(() => rf.fitView({ padding: 0.2, duration: 280 }))
-  }, [onResetLayout, rf])
+    requestAnimationFrame(() => rf.fitView({ ...initialFit, duration: 280 }))
+  }, [onResetLayout, rf, initialFit])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -207,6 +223,7 @@ function CanvasInner({
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView
+        fitViewOptions={initialFit}
         minZoom={0.3}
         maxZoom={2}
         onlyRenderVisibleElements
@@ -221,13 +238,13 @@ function CanvasInner({
         onPaneClick={onPaneClick}
         defaultEdgeOptions={{ type: 'relation' }}
       >
-        <Background color="rgba(0,0,0,0.04)" gap={16} size={1} />
+        <Background color="var(--color-border-subtle)" gap={16} size={1} />
         <Controls
           showInteractive={false}
           style={{
             borderRadius: 8,
-            border: '1px solid rgba(0,0,0,0.08)',
-            background: '#ffffff',
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-surface-elevated)',
             boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
           }}
         />
@@ -235,16 +252,22 @@ function CanvasInner({
           <MiniMap
             pannable
             zoomable
-            nodeStrokeColor="#0075de"
-            maskColor="rgba(0,0,0,0.04)"
+            nodeStrokeColor="var(--color-brand-text)"
+            maskColor="var(--color-topology-mask)"
             style={{
               borderRadius: 8,
-              border: '1px solid rgba(0,0,0,0.08)',
-              background: '#ffffff',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-surface-elevated)',
             }}
           />
         )}
       </ReactFlow>
+
+      {!miniMapOn && (
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)]/90 px-3 py-1.5 text-center text-xs text-[var(--color-foreground-muted)] shadow-card md:hidden">
+          {t('topology.panHint')}
+        </div>
+      )}
 
       {/* Top-right floating actions: reset layout + toggle minimap + fit view */}
       <div
@@ -260,21 +283,21 @@ function CanvasInner({
         {onResetLayout && (
           <button
             type="button"
-            aria-label="Reset layout"
+            aria-label={t('topology.resetLayout')}
             title={
               hasOverrides
-                ? 'Reset layout to the auto-computed arrangement'
-                : 'No custom positions to reset'
+                ? t('topology.resetLayoutAvailable')
+                : t('topology.noPositions')
             }
             onClick={onResetClick}
             disabled={!hasOverrides}
             style={{
-              width: 32,
-              height: 32,
+              width: 44,
+              height: 44,
               borderRadius: 8,
-              border: '1px solid rgba(0,0,0,0.08)',
-              background: '#ffffff',
-              color: hasOverrides ? 'rgba(0,0,0,0.95)' : 'rgba(0,0,0,0.25)',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-surface-elevated)',
+              color: hasOverrides ? 'var(--color-foreground)' : 'var(--color-foreground-subtle)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -287,16 +310,16 @@ function CanvasInner({
         )}
         <button
           type="button"
-          aria-label="Toggle minimap"
-          title="Toggle minimap"
+          aria-label={t('topology.toggleMinimap')}
+          title={t('topology.toggleMinimap')}
           onClick={() => setMiniMapOn(v => !v)}
           style={{
-            width: 32,
-            height: 32,
+            width: 44,
+            height: 44,
             borderRadius: 8,
-            border: '1px solid rgba(0,0,0,0.08)',
-            background: miniMapOn ? '#f2f9ff' : '#ffffff',
-            color: miniMapOn ? '#097fe8' : 'rgba(0,0,0,0.95)',
+            border: '1px solid var(--color-border)',
+            background: miniMapOn ? 'var(--color-brand-tint-bg)' : 'var(--color-surface-elevated)',
+            color: miniMapOn ? 'var(--color-brand-tint-text)' : 'var(--color-foreground)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -308,16 +331,16 @@ function CanvasInner({
         </button>
         <button
           type="button"
-          aria-label="Fit view"
-          title="Fit view"
+          aria-label={t('topology.fitView')}
+          title={t('topology.fitView')}
           onClick={() => rf.fitView({ padding: 0.2, duration: 280 })}
           style={{
-            width: 32,
-            height: 32,
+            width: 44,
+            height: 44,
             borderRadius: 8,
-            border: '1px solid rgba(0,0,0,0.08)',
-            background: '#ffffff',
-            color: 'rgba(0,0,0,0.95)',
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-surface-elevated)',
+            color: 'var(--color-foreground)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

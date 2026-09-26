@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface Props {
   open: boolean
@@ -35,18 +36,19 @@ interface Props {
 }
 
 export default function AgentRoomsDialog({ open, onOpenChange, agentId, onChange }: Props) {
+  const { t } = useLocale()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Manage Rooms</DialogTitle>
-          <DialogDescription>Assign or remove this agent from rooms.</DialogDescription>
+          <DialogTitle>{t('agentRooms.title')}</DialogTitle>
+          <DialogDescription>{t('agentRooms.description')}</DialogDescription>
         </DialogHeader>
         {open ? (
           <RoomsPanel agentId={agentId} onChange={onChange} />
         ) : null}
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Close</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>{t('common.close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -9,6 +9,7 @@ import ChatPage from '@/pages/ChatPage'
 import GuestInvitePage from '@/pages/GuestInvitePage'
 import GuestRoomPage from '@/pages/GuestRoomPage'
 import FederationPreviewPage from '@/pages/FederationPreviewPage'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 // Topology view is code-split. Pulls in @xyflow/react + dagre
 // (~110KB gzip combined) only when the route is actually visited.
@@ -37,22 +38,25 @@ function RouteFallback({ label }: { label: string }) {
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
-  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>
+  const { t } = useLocale()
+  if (loading) return <div className="flex items-center justify-center h-screen">{t('common.loading')}</div>
   if (!user) return <Navigate to="/login" />
   return <>{children}</>
 }
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
-  if (loading) return <div className="flex items-center justify-center h-screen">Loading...</div>
+  const { t } = useLocale()
+  if (loading) return <div className="flex items-center justify-center h-screen">{t('common.loading')}</div>
   if (!user) return <Navigate to="/login" />
   if (!user.is_admin) return <Navigate to="/" />
   // Boundary lives after the auth gates so a non-admin is redirected
   // without ever requesting an admin chunk.
-  return <Suspense fallback={<RouteFallback label="Loading…" />}>{children}</Suspense>
+  return <Suspense fallback={<RouteFallback label={t('common.loading')} />}>{children}</Suspense>
 }
 
 export default function App() {
+  const { t } = useLocale()
   // #593 — keep the fixture-only preview outside all product providers so
   // opening it cannot trigger room fetches, auth checks, or WebSockets.
   if (import.meta.env.DEV && window.location.pathname === '/__preview/federation') {
@@ -109,7 +113,7 @@ export default function App() {
               path="/topology"
               element={
                 <ProtectedRoute>
-                  <Suspense fallback={<RouteFallback label="Loading topology…" />}>
+                  <Suspense fallback={<RouteFallback label={t('navigation.loadingTopology')} />}>
                     <TopologyPage />
                   </Suspense>
                 </ProtectedRoute>

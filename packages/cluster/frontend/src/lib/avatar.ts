@@ -4,78 +4,62 @@
  * Given an entity's id (or any stable seed) we pick a tone from a
  * fixed palette so the same entity renders the same background
  * across every view that mounts an ``<EntityAvatar/>``. The palette
- * is drawn from ``DESIGN.md`` (§2) — warm-neutral + semantic soft
- * accents — and intentionally stops at 8 slots: more would force
- * us to reach for saturated colors that don't belong in the Notion
- * warm-neutral aesthetic.
+ * uses the paired, theme-aware avatar tokens in ``index.css`` and
+ * intentionally stops at eight distinguishable slots.
  */
 
 export interface AvatarTone {
-  /** Background color (soft tint over white). */
+  /** Theme-aware background tone. */
   bg: string
   /** Foreground (text/glyph) color. */
   fg: string
-  /** Translucent hue for focus rings / presence accents. */
-  ring: string
 }
 
 // Tone bg/fg now read the ``--color-tone-N`` / ``--color-tone-N-fg``
 // tokens defined in ``index.css`` ``@theme`` (#435), so the palette has
-// a single source of truth in the theme layer and the previously
-// orphaned ``--color-accent-*`` tokens are retired. ``avatar.ts`` keeps
-// only the seed→slot mapping; the colors themselves live as tokens. The
-// translucent ``ring`` stays inline (no token in the proposed diff) — it
-// is a derived focus/presence accent, not a surface color.
+// a single source of truth in the theme layer. ``avatar.ts`` keeps only
+// the seed→slot mapping; the colors themselves live as tokens.
 const PALETTE: readonly AvatarTone[] = Object.freeze([
-  // 1. warm-neutral — the "default" tone. Closest to surface-alt.
+  // 1. Neutral default.
   {
     bg: 'var(--color-tone-1)',
     fg: 'var(--color-tone-1-fg)',
-    ring: 'rgba(97,93,89,0.20)',
   },
-  // 2. teal (success-soft)
+  // 2. Teal.
   {
     bg: 'var(--color-tone-2)',
     fg: 'var(--color-tone-2-fg)',
-    ring: 'rgba(42,157,153,0.25)',
   },
   // 3. green
   {
     bg: 'var(--color-tone-3)',
     fg: 'var(--color-tone-3-fg)',
-    ring: 'rgba(26,174,57,0.25)',
   },
   // 4. orange (warning accent — tinted enough that it does not
   //    read as a warning badge on its own)
   {
     bg: 'var(--color-tone-4)',
     fg: 'var(--color-tone-4-fg)',
-    ring: 'rgba(221,91,0,0.25)',
   },
   // 5. pink (decorative)
   {
     bg: 'var(--color-tone-5)',
     fg: 'var(--color-tone-5-fg)',
-    ring: 'rgba(255,100,200,0.25)',
   },
   // 6. purple (premium)
   {
     bg: 'var(--color-tone-6)',
     fg: 'var(--color-tone-6-fg)',
-    ring: 'rgba(57,28,87,0.25)',
   },
   // 7. brown (earthy)
   {
     bg: 'var(--color-tone-7)',
     fg: 'var(--color-tone-7-fg)',
-    ring: 'rgba(82,52,16,0.25)',
   },
-  // 8. notion-blue — reuses the app's primary accent. Shows up
-  //    roughly 1 in 8 picks so it stays special without dominating.
+  // 8. Muted blue, distinct from interactive teal.
   {
     bg: 'var(--color-tone-8)',
     fg: 'var(--color-tone-8-fg)',
-    ring: 'rgba(0,117,222,0.25)',
   },
 ])
 

@@ -3,6 +3,7 @@ import Sidebar from '@/components/Sidebar'
 import SidebarExpandButton from '@/components/SidebarExpandButton'
 import { Button } from '@/components/ui/button'
 import { Menu } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * PageShell — the shared application frame for full-page surfaces
@@ -33,6 +34,7 @@ interface PageShellProps {
 }
 
 export default function PageShell({ title, children, scroll = true }: PageShellProps) {
+  const { t } = useLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
@@ -41,12 +43,12 @@ export default function PageShell({ title, children, scroll = true }: PageShellP
       <SidebarExpandButton />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background)]">
         {/* Mobile top bar — hidden on desktop where the rail is pinned. */}
-        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">
+        <div className="flex h-14 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 md:hidden">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setSidebarOpen(true)}
-            aria-label="Open sidebar"
+            aria-label={t('workspace.openSidebar')}
           >
             <Menu className="h-5 w-5" />
           </Button>

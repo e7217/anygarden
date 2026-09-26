@@ -1,12 +1,9 @@
 /**
  * AgentSettingsDialog — unified agent settings (#158, restructured #165).
  *
- * Renders all four sections (Overview / Manifest / Rooms / Activity)
- * stacked vertically inside a single scrollable dialog body. The
- * earlier left-rail nav was removed in #165: with only four
- * destinations, the nav hid three of them behind a click without
- * much payoff. Stacking the sections lets the admin scan the whole
- * agent at a glance and scroll to whichever section matters.
+ * Renders overview, connection, manifest, rooms, responsibilities,
+ * tasks, and activity in a single scrollable dialog body. Stacking
+ * the sections lets the admin scan the agent and scroll to a section.
  *
  * Panel lifecycle: every panel is always mounted when the dialog is
  * open. Unsaved Manifest edits therefore survive scrolling to other
@@ -17,8 +14,7 @@
  * read-only, Manifest keeps its own bulk Save button. The dialog
  * itself has no footer bar.
  *
- * Style: follows DESIGN.md (warm neutral palette, whisper borders,
- * single-accent brand color).
+ * Style: follows DESIGN.md's teal tokens and light/dark surfaces.
  */
 import {
   Dialog,
@@ -40,6 +36,7 @@ import GoalsPanel from '@/components/agent-settings/GoalsPanel'
 import { ChevronRight, EyeOff, Trash2, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface Props {
   agent: Agent | null
@@ -97,12 +94,9 @@ interface Props {
 const SECTION_HEADING_CLASS =
   'text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-foreground-muted)]'
 
-// Card chrome per DESIGN.md §4 "Cards & Containers": white surface,
-// whisper-weight border, 12px radius, 4-layer soft shadow, 20px
-// padding. The dialog body sits on warm-white
-// (`--color-surface-alt`) so these white cards visibly lift.
+// Elevated cards sit on the alternate surface in both themes.
 const SECTION_CARD_CLASS =
-  'bg-white rounded-[var(--radius-lg)] border border-[var(--color-border)] shadow-card p-5'
+  'bg-[var(--color-surface-elevated)] rounded-[var(--radius-lg)] border border-[var(--color-border)] shadow-card p-5'
 
 function Section({
   id,
@@ -181,6 +175,7 @@ export default function AgentSettingsDialog({
   contextWindowOptOut,
   onToggleContextWindowOptOut,
 }: Props) {
+  const { t } = useLocale()
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null)
   const onConnectionChange = useCallback((next: ConnectionState) => setConnectionState(next), [])
   useEffect(() => {
@@ -188,7 +183,20 @@ export default function AgentSettingsDialog({
   }, [open])
   const machineOffline = agent?.machine_online === false
   const agentOnline = deriveAgentOnline(agent?.actual_state, { machineOffline })
-  const displayState = agentStatusLabel(agent?.actual_state, { machineOffline })
+  const rawDisplayState = agentStatusLabel(agent?.actual_state, { machineOffline })
+  const stateLabels: Record<string, string> = {
+    unreachable: t('admin.agentSettings.state.unreachable'),
+    unknown: t('admin.agentSettings.state.unknown'),
+    running: t('admin.agentSettings.state.running'),
+    starting: t('admin.agentSettings.state.starting'),
+    stopping: t('admin.agentSettings.state.stopping'),
+    stopped: t('admin.agentSettings.state.stopped'),
+    idle: t('admin.agentSettings.state.idle'),
+    pending: t('admin.agentSettings.state.pending'),
+    crashed: t('admin.agentSettings.state.crashed'),
+    failed: t('admin.agentSettings.state.failed'),
+  }
+  const displayState = stateLabels[rawDisplayState] ?? rawDisplayState
 
   // Footer option parity with AgentSettingsMenu (#435): the toggle row
   // appears only when both the value and its handler are supplied.
@@ -199,40 +207,36 @@ export default function AgentSettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90dvh] overflow-hidden flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-5 pb-3 border-b border-[var(--color-border)]">
-          <DialogTitle className="flex items-center gap-2">
-            <span>Agent settings</span>
+        <DialogHeader className="border-b border-[var(--color-border)] px-4 pb-3 pt-5 sm:px-6">
+          <DialogTitle className="flex min-w-0 flex-col items-start gap-1.5 pr-8 text-left sm:flex-row sm:items-center sm:gap-2">
+            <span className="shrink-0">{t('admin.agentSettings.title')}</span>
             {agent ? (
-              <span className="inline-flex items-center gap-1.5 text-sm font-normal text-[var(--color-foreground-muted)]">
-                <span className="text-[var(--color-foreground-subtle)]">—</span>
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-sm font-normal text-[var(--color-foreground-muted)]">
+                <span className="hidden text-[var(--color-foreground-subtle)] sm:inline">—</span>
                 <PresenceDot
                   variant="agent"
                   online={agentOnline}
                   agentState={displayState}
                 />
-                <span className="truncate max-w-[20rem]">
+                <span className="min-w-0 max-w-[20rem] truncate">
                   {agent.name}
                 </span>
-                <span className="text-[var(--color-foreground-subtle)]">
+                <span className="shrink-0 text-[var(--color-foreground-subtle)]">
                   ({agent.engine})
                 </span>
               </span>
             ) : null}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            View and edit agent identity, manifest, rooms, and activity.
+            {t('admin.agentSettings.description')}
           </DialogDescription>
         </DialogHeader>
 
-        {/* Single scrollable body — each section is a standalone
-            card (DESIGN.md §4) floating on a warm-white body
-            (DESIGN.md §5.3 "Warm alternation"). The color step
-            between white cards and the `#f6f5f4` body does the heavy
-            lifting for section separation; the 1px whisper seam tried
-            in #170 was too subtle on its own. */}
+        {/* A single scrollable body separates elevated section cards
+            from the alternate surface in both light and dark themes. */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
           <div className="px-3 py-4 space-y-3 sm:px-6 sm:py-5">
-            <Section id="overview" title="Overview">
+            <Section id="overview" title={t('admin.agentSettings.overview')}>
               <OverviewPanel
                 agent={agent}
                 updateAgent={updateAgent}
@@ -242,7 +246,7 @@ export default function AgentSettingsDialog({
             </Section>
 
             {agent && (agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && (
-              <Section id="model-connection" title="Model connection">
+              <Section id="model-connection" title={t('admin.agentSettings.modelConnection')}>
                 <ModelConnectionPanel
                   key={agent.id}
                   agent={agent}
@@ -253,7 +257,7 @@ export default function AgentSettingsDialog({
               </Section>
             )}
 
-            <Section id="manifest" title="Manifest">
+            <Section id="manifest" title={t('admin.agentSettings.manifest')}>
               <ManifestPanel
                 agent={agent}
                 fetchAgentFiles={fetchAgentFiles}
@@ -266,7 +270,7 @@ export default function AgentSettingsDialog({
               />
             </Section>
 
-            <Section id="rooms" title="Rooms">
+            <Section id="rooms" title={t('admin.agentSettings.rooms')}>
               <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
             </Section>
 
@@ -274,7 +278,7 @@ export default function AgentSettingsDialog({
                 owns. Above Tasks because "what is this agent committed
                 to over time" is a higher-level question than "what's
                 open right now". */}
-            <Section id="goals" title="Responsibilities">
+            <Section id="goals" title={t('admin.agentSettings.responsibilities')}>
               <GoalsPanel
                 agentId={agent?.id ?? null}
                 agentName={agent?.name ?? ''}
@@ -284,14 +288,14 @@ export default function AgentSettingsDialog({
             {/* Tasks (#266) — cross-room aggregation of work currently
                 assigned to this agent. Sits next to Rooms because both
                 answer "what is this agent doing right now". */}
-            <Section id="tasks" title="Tasks">
+            <Section id="tasks" title={t('admin.agentSettings.tasks')}>
               <TasksPanel agentId={agent?.id ?? null} />
             </Section>
 
             {/* Activity is a lifecycle log — least-often consulted of
                 the four sections. Collapsed by default keeps Manifest
                 and Rooms closer to the top of the scroll. */}
-            <CollapsibleSection id="activity" title="Activity">
+            <CollapsibleSection id="activity" title={t('admin.agentSettings.activity')}>
               <ActivityPanel agentId={agent?.id ?? null} />
             </CollapsibleSection>
           </div>
@@ -301,7 +305,7 @@ export default function AgentSettingsDialog({
             row menu so the action set no longer depends on entry point.
             Renders only when at least one handler is supplied. */}
         {(showContextToggle || onDelete) && (
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-white px-6 py-3">
+          <div className="flex shrink-0 flex-col gap-1 border-t border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-4 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-6 sm:py-3">
             {showContextToggle ? (
               <button
                 type="button"
@@ -309,16 +313,16 @@ export default function AgentSettingsDialog({
                 aria-checked={contextWindowOptOut}
                 onClick={() => void onToggleContextWindowOptOut!()}
                 data-testid="agent-settings-context-window-opt-out"
-                className="inline-flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-sm text-[var(--color-foreground)] hover:bg-black/5 cursor-pointer"
+                className="inline-flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer sm:w-auto"
               >
                 <EyeOff className="h-4 w-4" />
-                <span>대화 맥락 공유 제외</span>
+                <span>{t('admin.agentSettings.contextOptOut')}</span>
                 {contextWindowOptOut ? (
-                  <Check className="h-4 w-4 text-[var(--color-brand)]" aria-hidden="true" />
+                  <Check className="h-4 w-4 text-[var(--color-brand-text)]" aria-hidden="true" />
                 ) : null}
               </button>
             ) : (
-              <span aria-hidden="true" />
+              <span aria-hidden="true" className="hidden sm:block" />
             )}
             {onDelete ? (
               <Button
@@ -326,10 +330,10 @@ export default function AgentSettingsDialog({
                 size="sm"
                 onClick={() => onDelete()}
                 data-testid="agent-settings-delete"
-                className="text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10"
+                className="min-h-11 w-full justify-start text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 sm:w-auto"
               >
                 <Trash2 className="h-4 w-4" />
-                Delete agent
+                {t('admin.agentSettings.deleteAgent')}
               </Button>
             ) : null}
           </div>

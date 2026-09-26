@@ -21,6 +21,7 @@ import {
 } from '@/lib/avatar-options'
 import type { Agent } from '@/hooks/useAgents'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface Props {
   agent: Agent | null
@@ -58,6 +59,7 @@ const SWATCH_SELECTED =
   'bg-[var(--color-brand-tint-bg)] border-[color:color-mix(in_srgb,var(--color-brand)_30%,transparent)]'
 
 export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props) {
+  const { t } = useLocale()
   const [draft, setDraft] = useState<DraftAvatar>(() => asDraft(agent))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -114,13 +116,13 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
       <Tabs defaultValue={initialTab} className="w-full">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="emoji" data-testid="avatar-picker-tab-emoji">
-            Emoji
+            {t('admin.avatar.emoji')}
           </TabsTrigger>
           <TabsTrigger value="lucide" data-testid="avatar-picker-tab-lucide">
-            Icon
+            {t('admin.avatar.icon')}
           </TabsTrigger>
           <TabsTrigger value="reset" data-testid="avatar-picker-tab-reset">
-            Reset
+            {t('admin.avatar.reset')}
           </TabsTrigger>
         </TabsList>
 
@@ -128,7 +130,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
           <div
             className="grid grid-cols-8 gap-1"
             role="radiogroup"
-            aria-label="Pick an emoji"
+            aria-label={t('admin.avatar.pickEmoji')}
           >
             {CURATED_EMOJIS.map(e => {
               const selected = draft.kind === 'emoji' && draft.value === e
@@ -154,7 +156,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
           <div
             className="grid grid-cols-8 gap-1"
             role="radiogroup"
-            aria-label="Pick an icon"
+            aria-label={t('admin.avatar.pickIcon')}
           >
             {CURATED_LUCIDE_NAMES.map(name => {
               const Icon = lookupLucideIcon(name)
@@ -180,9 +182,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
         <TabsContent value="reset" className="pt-3">
           <div className="flex flex-col items-start gap-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)] p-3">
             <p className="text-sm text-[var(--color-foreground-muted)]">
-              Removes the custom avatar and restores the seed-driven
-              initial. The agent's tone (background color) stays the
-              same.
+              {t('admin.avatar.resetDescription')}
             </p>
             <Button
               variant="outline"
@@ -190,7 +190,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
               onClick={() => setDraft({ kind: null, value: null })}
               data-testid="avatar-picker-reset"
             >
-              Remove custom avatar
+              {t('admin.avatar.removeCustom')}
             </Button>
           </div>
         </TabsContent>
@@ -209,7 +209,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
           onClick={() => onDone?.()}
           disabled={saving}
         >
-          Cancel
+          {t('common.cancel')}
         </Button>
         <Button
           size="sm"
@@ -217,7 +217,7 @@ export default function AvatarPickerPanel({ agent, updateAgent, onDone }: Props)
           disabled={!hasChanges || saving || !agent}
           data-testid="avatar-picker-save"
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? t('admin.avatar.saving') : t('common.save')}
         </Button>
       </div>
     </div>

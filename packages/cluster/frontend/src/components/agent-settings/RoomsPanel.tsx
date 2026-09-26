@@ -11,6 +11,7 @@ import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Plus, X } from 'lucide-react'
 import { EntityAvatar } from '@/components/EntityAvatar'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface RoomInfo { id: string; name: string; project_id: string }
 
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export default function RoomsPanel({ agentId, onChange }: Props) {
+  const { t } = useLocale()
   const [assignedRooms, setAssignedRooms] = useState<RoomInfo[]>([])
   const [availableRooms, setAvailableRooms] = useState<RoomInfo[]>([])
   const [loading, setLoading] = useState(false)
@@ -89,7 +91,7 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
   if (loading) {
     return (
       <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
-        Loading rooms...
+        {t('admin.rooms.loading')}
       </div>
     )
   }
@@ -98,10 +100,10 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
     <div className="space-y-5 py-2" data-testid="rooms-panel">
       <div>
         <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
-          Assigned Rooms
+          {t('admin.rooms.assigned')}
         </h3>
         {assignedRooms.length === 0 ? (
-          <p className="text-caption text-[var(--color-foreground-subtle)]">No rooms assigned</p>
+          <p className="text-caption text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAssigned')}</p>
         ) : (
           <div className="space-y-2">
             {assignedRooms.map(room => (
@@ -115,7 +117,7 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
                   size="icon"
                   className="h-7 w-7"
                   onClick={() => removeRoom(room.id)}
-                  title="Remove room"
+                  title={t('admin.rooms.remove')}
                 >
                   <X className="h-4 w-4 text-[var(--color-warning)]" />
                 </Button>
@@ -126,10 +128,10 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
       </div>
       <div>
         <h3 className="text-badge uppercase text-[var(--color-foreground-muted)] mb-2 tracking-wider">
-          Available Rooms
+          {t('admin.rooms.available')}
         </h3>
         {availableRooms.length === 0 ? (
-          <p className="text-caption text-[var(--color-foreground-subtle)]">No available rooms</p>
+          <p className="text-caption text-[var(--color-foreground-subtle)]">{t('admin.rooms.noneAvailable')}</p>
         ) : (
           <div className="space-y-2">
             {availableRooms.map(room => (
@@ -143,7 +145,7 @@ export default function RoomsPanel({ agentId, onChange }: Props) {
                   size="icon"
                   className="h-7 w-7"
                   onClick={() => addRoom(room.id)}
-                  title="Add room"
+                  title={t('admin.rooms.add')}
                 >
                   <Plus className="h-4 w-4 text-[var(--color-success)]" />
                 </Button>

@@ -8,6 +8,7 @@ import { uploadRoomFile, type RoomSharedFile } from '@/lib/roomFiles'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { parseSlashCommand } from '@/lib/slashCommands'
 import { apiFetch } from '@/lib/api'
+import { useLocale } from '@/i18n/LocaleProvider'
 import {
   buildSharedFileReference,
   dedupeSharedFileReferences,
@@ -67,6 +68,7 @@ export default function MessageInput({
   mentionUsers = [], mentionRooms = [],
   roomId, placeholder, autoFocus, draftKey,
 }: MessageInputProps) {
+  const { t } = useLocale()
   const [value, setValue] = useState(() => readDraft(draftKey))
   // #269 — inline error from a malformed slash command (e.g. ``/task``
   // without an assignee, or a server-side 4xx). Cleared whenever the
@@ -235,7 +237,7 @@ export default function MessageInput({
             .then(async r => {
               if (!r.ok) {
                 const detail = await r.text().catch(() => '')
-                setSlashError(`task 생성 실패 (${r.status}) ${detail}`)
+                setSlashError(t('chat.taskCreateFailed', { status: r.status, detail }))
               } else {
                 setSlashError(null)
               }
@@ -261,7 +263,7 @@ export default function MessageInput({
     if (!content && attachments.length > 0) {
       content = attachments.length === 1
         ? `📎 ${attachments[0].filename}`
-        : `📎 ${attachments.length} files`
+        : `📎 ${t('chat.filesCount', { count: attachments.length })}`
     }
     const mentions = extractMentionsMetadata(content)
     const references = dedupeSharedFileReferences([
@@ -404,7 +406,7 @@ export default function MessageInput({
   }
 
   return (
-    <div className="border-t border-[var(--color-border)] bg-white px-4 py-3">
+    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
       <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
         {slashError && (
           <div
@@ -419,7 +421,7 @@ export default function MessageInput({
             {attachments.map(a => (
               <span
                 key={a.id}
-                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-white px-2.5 py-0.5 text-xs text-[var(--color-foreground)]"
+                className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-0.5 text-xs text-[var(--color-foreground)]"
               >
                 <Paperclip className="h-3 w-3 text-[var(--color-foreground-subtle)]" />
                 <span className="max-w-[200px] truncate" title={a.filename}>
@@ -428,9 +430,9 @@ export default function MessageInput({
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.id)}
-                  className="text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
-                  aria-label={`Remove ${a.filename}`}
-                  title="Remove"
+                  className="flex h-8 w-8 items-center justify-center text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
+                  aria-label={t('chat.removeAttachment', { name: a.filename })}
+                  title={t('chat.remove')}
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -465,8 +467,9 @@ export default function MessageInput({
                 size="icon"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={disabled || uploading}
-                title="Attach file"
-                aria-label="Attach file"
+                title={t('chat.attachFile')}
+                aria-label={t('chat.attachFile')}
+                className="min-h-11 min-w-11"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
@@ -480,11 +483,11 @@ export default function MessageInput({
             disabled={disabled}
             placeholder={
               disabled
-                ? 'Connecting...'
-                : placeholder ?? 'Type a message... (@ to mention, # for rooms)'
+                ? t('chat.connecting')
+                : placeholder ?? t('chat.messagePlaceholder')
             }
             rows={1}
-            className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
           />
           <Button
             size="icon"
@@ -492,7 +495,9 @@ export default function MessageInput({
             disabled={
               disabled || uploading || (!value.trim() && attachments.length === 0)
             }
-            title="Send message"
+            title={t('chat.sendMessage')}
+            aria-label={t('chat.sendMessage')}
+            className="min-h-11 min-w-11"
           >
             <Send className="h-4 w-4" />
           </Button>
