@@ -2101,6 +2101,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     room_id=room_id,
                     participant_id=participant.id,
                     is_typing=frame_in.is_typing,
+                    stage=(
+                        frame_in.stage
+                        if frame_in.is_typing and identity and identity.kind == "agent"
+                        else None
+                    ),
                 )
                 await manager.broadcast(room_id, out_typing)
 

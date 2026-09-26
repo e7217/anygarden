@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { clearAuthSession, getAuthToken } from '@/lib/authStorage';
+import { isAgentStage, type AgentStage } from '@/lib/typingStage';
 
 export interface ChatMessage {
   type: string; id: string; room_id: string;
@@ -16,6 +17,7 @@ export function useWebSocket(roomId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [connected, setConnected] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const [typingStages, setTypingStages] = useState<Record<string, AgentStage>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const seqRef = useRef(0);
   const reconnectRef = useRef(1);
@@ -24,6 +26,13 @@ export function useWebSocket(roomId: string | null) {
   // Debounced typing expire timers — one per participant.
   // Each new typing=true RESETS the timer instead of stacking.
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const clearTyping = useCallback(() => {
+    Object.values(typingTimers.current).forEach(clearTimeout);
+    typingTimers.current = {};
+    setTypingUsers(new Set());
+    setTypingStages({});
+  }, []);
 
   const connect = useCallback(() => {
     if (!roomId) return;
@@ -43,10 +52,16 @@ export function useWebSocket(roomId: string | null) {
     const ws = new WebSocket(url, ['anygarden.v1', `bearer.${token}`]);
     wsRef.current = ws;
 
-    ws.onopen = () => { setConnected(true); reconnectRef.current = 1; };
+    ws.onopen = () => {
+      if (wsRef.current !== ws) return;
+      setConnected(true);
+      reconnectRef.current = 1;
+    };
     ws.onclose = (evt) => {
+      if (wsRef.current !== ws) return;
       setConnected(false);
-      if (wsRef.current === ws) wsRef.current = null;
+      wsRef.current = null;
+      clearTyping();
 
       const authRejected = evt.code === 4001 || evt.code === 4003;
       if (authRejected) {
@@ -73,6 +88,7 @@ export function useWebSocket(roomId: string | null) {
       }, delay * 1000);
     };
     ws.onmessage = (evt) => {
+      if (wsRef.current !== ws) return;
       const data = JSON.parse(evt.data);
       if (data.type === 'message') {
         if (data.seq > seqRef.current) seqRef.current = data.seq;
@@ -152,11 +168,20 @@ export function useWebSocket(roomId: string | null) {
         const pid = data.participant_id;
         if (data.is_typing) {
           setTypingUsers(prev => new Set(prev).add(pid));
+          setTypingStages(prev => {
+            const next = { ...prev };
+            if (isAgentStage(data.stage)) next[pid] = data.stage;
+            else delete next[pid];
+            return next;
+          });
           // Reset the expire timer — don't stack multiple timeouts
           if (typingTimers.current[pid]) clearTimeout(typingTimers.current[pid]);
           typingTimers.current[pid] = setTimeout(() => {
             setTypingUsers(prev => {
               const next = new Set(prev); next.delete(pid); return next;
+            });
+            setTypingStages(prev => {
+              const next = { ...prev }; delete next[pid]; return next;
             });
             delete typingTimers.current[pid];
           }, 5000);
@@ -168,13 +193,17 @@ export function useWebSocket(roomId: string | null) {
           setTypingUsers(prev => {
             const next = new Set(prev); next.delete(pid); return next;
           });
+          setTypingStages(prev => {
+            const next = { ...prev }; delete next[pid]; return next;
+          });
         }
       }
     };
-  }, [roomId]);
+  }, [roomId, clearTyping]);
 
   useEffect(() => {
     setMessages([]);
+    clearTyping();
     seqRef.current = 0;
     suppressReconnectRef.current = false;
     if (reconnectTimerRef.current) {
@@ -189,8 +218,9 @@ export function useWebSocket(roomId: string | null) {
         reconnectTimerRef.current = null;
       }
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+      clearTyping();
     };
-  }, [roomId, connect]);
+  }, [roomId, connect, clearTyping]);
 
   const send = useCallback((
     content: string,
@@ -242,5 +272,5 @@ export function useWebSocket(roomId: string | null) {
     }).catch(() => {});
   }, [roomId]);
 
-  return { messages, connected, typingUsers, send, sendTyping };
+  return { messages, connected, typingUsers, typingStages, send, sendTyping };
 }

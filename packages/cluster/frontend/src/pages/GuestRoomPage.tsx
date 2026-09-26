@@ -110,7 +110,7 @@ export default function GuestRoomPage() {
     }
   }, [roomId, displayName])
 
-  const { messages, connected, typingUsers, send, sendTyping } = useWebSocket(
+  const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(
     roomId ?? null,
   )
 
@@ -211,6 +211,7 @@ export default function GuestRoomPage() {
           participants={participants}
           myParticipantId={myParticipantId}
           typingUsers={typingUsers}
+          typingStages={typingStages}
         />
         <MessageInput
           onSend={send}

@@ -439,7 +439,12 @@ class PiRuntime:
             elif kind == "agent_settled":
                 settled = True
             elif kind in {"agent_start", "turn_start", "message_start", "turn_end"}:
-                emit("progress", {"event": kind})
+                payload = {"event": kind}
+                if kind == "message_start":
+                    message = event.get("message")
+                    if isinstance(message, dict) and message.get("role") == "assistant":
+                        payload["role"] = "assistant"
+                emit("progress", payload)
         await proc.wait()
         if proc.returncode != 0:
             return RuntimeResult("failed", "stopped", failure_code or "ENGINE_ERROR")

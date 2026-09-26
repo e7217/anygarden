@@ -1,13 +1,16 @@
 import type { Participant } from '@/pages/ChatPage'
+import { typingParticipantLabel, type AgentStage } from '@/lib/typingStage'
 
 interface TypingIndicatorProps {
   typingUsers: Set<string>
+  typingStages?: Record<string, AgentStage>
   participants: Record<string, Participant>
   myParticipantId: string | null
 }
 
 export default function TypingIndicator({
   typingUsers,
+  typingStages = {},
   participants,
   myParticipantId,
 }: TypingIndicatorProps) {
@@ -22,6 +25,11 @@ export default function TypingIndicator({
       const p = participants[pid]
       return p?.display_name ?? pid.slice(0, 8)
     })
+    if (others.some(pid => typingStages[pid])) {
+      return others.map((pid, index) => typingStages[pid]
+        ? typingParticipantLabel(names[index], typingStages[pid])
+        : `${names[index]} is typing…`).join(', ')
+    }
     if (names.length === 1) return `${names[0]} is typing…`
     if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`
     return `${names[0]}, ${names[1]}, and ${names.length - 2} others are typing…`

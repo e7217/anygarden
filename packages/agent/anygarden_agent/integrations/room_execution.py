@@ -20,6 +20,10 @@ from anygarden_agent.integrations.engine_session_store import load_sessions
 from anygarden_agent.runtime.execution.contracts import SessionScope
 from anygarden_agent.runtime.execution.launch import load_execution_launch
 from anygarden_agent.runtime.execution.manager import LocalExecutionManager
+from anygarden_agent.runtime.execution.progress_stage import (
+    ProgressStage,
+    stage_for_progress,
+)
 from anygarden_agent.runtime.execution.room import (
     RoomCodexRuntime,
     RoomInvocation,
@@ -81,6 +85,8 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._turn_metadata = ContextVar("room_execution_metadata", default=None)
         self._usage = ContextVar("room_execution_usage", default=None)
         self._manager = None
+        self._progress_by_room: dict[str, tuple[str, ProgressStage]] = {}
+        self._active_execution_by_room: dict[str, str] = {}
         self._turn_timeout = resolve_turn_timeout(
             "pi" if engine == "pi-cli" else "codex"
         )
@@ -214,12 +220,21 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 legacy if self._legacy_compatible(legacy, invocation) else None,
                 room_id,
             )
-        await self._manager.start(invocation)
+        self._active_execution_by_room[room_id] = invocation.execution_id
+        started = False
         try:
-            async for _ in self._manager.events(invocation.execution_id):
-                pass
+            await self._set_progress(room_id, invocation.execution_id, "preparing")
+            await self._manager.start(invocation)
+            started = True
+            async for event in self._manager.events(invocation.execution_id):
+                if event.kind == "progress":
+                    stage = stage_for_progress(event.payload)
+                    if stage is not None:
+                        await self._set_progress(room_id, invocation.execution_id, stage)
             receipt = await self._manager.reconcile(invocation.execution_id)
         except asyncio.CancelledError:
+            if not started:
+                raise
 
             async def finish_cancel():
                 await self._manager.cancel(invocation.execution_id)
@@ -235,6 +250,10 @@ class RoomExecutionAdapter(CodexCliAdapter):
             raise EngineTaskCancelledError(
                 self._telemetry(receipt, invocation.model)
             ) from None
+        finally:
+            if self._active_execution_by_room.get(room_id) == invocation.execution_id:
+                self._active_execution_by_room.pop(room_id, None)
+                self._progress_by_room.pop(room_id, None)
         turn = self._telemetry(receipt, invocation.model)
         self._usage.set(
             {
@@ -271,6 +290,21 @@ class RoomExecutionAdapter(CodexCliAdapter):
             model=invocation.model or self._model,
             provider=invocation.provider,
         )
+
+    def progress_stage(self, room_id: str) -> ProgressStage | None:
+        current = self._progress_by_room.get(room_id)
+        return current[1] if current else None
+
+    async def _set_progress(
+        self, room_id: str, execution_id: str, stage: ProgressStage
+    ) -> None:
+        if self._active_execution_by_room.get(room_id) != execution_id:
+            return
+        current = self._progress_by_room.get(room_id)
+        if current == (execution_id, stage):
+            return
+        self._progress_by_room[room_id] = (execution_id, stage)
+        await self._client.sendTyping(room_id, True, stage)
 
     @staticmethod
     def _telemetry(receipt, model):

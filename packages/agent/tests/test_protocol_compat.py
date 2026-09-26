@@ -41,6 +41,11 @@ class TestProtocolCompat:
         """parse_incoming correctly dispatches a typing frame."""
         f = sdk_frames.parse_incoming({"type": "typing", "is_typing": True})
         assert isinstance(f, sdk_frames.TypingFrame)
+        assert f.stage is None
+        staged = sdk_frames.parse_incoming({"type": "typing", "is_typing": True, "stage": "writing"})
+        assert staged.stage == "writing"
+        with pytest.raises(ValueError):
+            sdk_frames.parse_incoming({"type": "typing", "is_typing": True, "stage": "secret"})
 
     def test_parse_incoming_unknown_raises(self) -> None:
         """parse_incoming raises ValueError for unknown types."""

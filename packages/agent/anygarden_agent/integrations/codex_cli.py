@@ -534,7 +534,11 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
 
             async def _typing_loop() -> None:
                 while typing_active:
-                    await client.sendTyping(room_id, True)
+                    stage = getattr(adapter, "progress_stage", lambda _room: None)(room_id)
+                    if stage is None:
+                        await client.sendTyping(room_id, True)
+                    else:
+                        await client.sendTyping(room_id, True, stage)
                     await asyncio.sleep(2)
 
             typing_task = asyncio.create_task(_typing_loop())

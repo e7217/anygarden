@@ -145,6 +145,9 @@ async def test_success_extracts_text_usage_and_events(tmp_path, invocation, exec
         assert receipt.text is None  # start returns the queued receipt only
         kinds = [event.kind for event in events]
         assert "progress" in kinds
+        assert {"event": "message_start", "role": "assistant"} in [
+            event.payload for event in events if event.kind == "progress"
+        ]
     finally:
         await m.close()
 

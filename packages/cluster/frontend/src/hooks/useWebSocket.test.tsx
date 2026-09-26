@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 
 import { useWebSocket } from './useWebSocket'
 
@@ -22,8 +22,18 @@ class FakeWebSocket {
 let sockets: FakeWebSocket[] = []
 
 function Harness({ roomId = 'room-1' }: { roomId?: string | null }) {
-  useWebSocket(roomId)
-  return <div />
+  const { typingUsers, typingStages } = useWebSocket(roomId)
+  return <div data-testid="typing">{JSON.stringify({ users: [...typingUsers], stages: typingStages })}</div>
+}
+
+function typingState() {
+  return JSON.parse(screen.getByTestId('typing').textContent || '{}')
+}
+
+function receiveTyping(socket: FakeWebSocket, participantId: string, isTyping: boolean, stage?: string) {
+  act(() => socket.onmessage?.({ data: JSON.stringify({
+    type: 'typing', participant_id: participantId, is_typing: isTyping, stage,
+  }) } as MessageEvent))
 }
 
 function closeEvent(code: number): CloseEvent {
@@ -127,5 +137,33 @@ describe('useWebSocket reconnect guards', () => {
     })
 
     expect(sockets).toHaveLength(1)
+  })
+})
+
+describe('useWebSocket typing stages', () => {
+  it('tracks each participant and clears stages on stop, expiry, room change and close', () => {
+    const view = render(<Harness />)
+    receiveTyping(sockets[0], 'agent', true, 'using_tool')
+    receiveTyping(sockets[0], 'human', true)
+    expect(typingState()).toEqual({ users: ['agent', 'human'], stages: { agent: 'using_tool' } })
+
+    receiveTyping(sockets[0], 'agent', true, 'unknown')
+    expect(typingState().stages).toEqual({})
+    receiveTyping(sockets[0], 'agent', true, 'writing')
+    receiveTyping(sockets[0], 'human', false)
+    expect(typingState()).toEqual({ users: ['agent'], stages: { agent: 'writing' } })
+
+    act(() => vi.advanceTimersByTime(5000))
+    expect(typingState()).toEqual({ users: [], stages: {} })
+
+    receiveTyping(sockets[0], 'agent', true, 'preparing')
+    view.rerender(<Harness roomId="room-2" />)
+    expect(typingState()).toEqual({ users: [], stages: {} })
+    receiveTyping(sockets[0], 'agent', true, 'using_tool')
+    expect(typingState()).toEqual({ users: [], stages: {} })
+
+    receiveTyping(sockets[1], 'agent', true, 'writing')
+    act(() => sockets[1].onclose?.(closeEvent(1006)))
+    expect(typingState()).toEqual({ users: [], stages: {} })
   })
 })
