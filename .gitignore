@@ -35,6 +35,7 @@ test-results/
 
 # Anygarden runtime
 .anygarden/
+/.anygarden-engine-sessions.json
 *.db
 *.db-journal
 
@@ -47,6 +48,7 @@ test-results/
 .claude/
 .playwright-mcp/
 .tmp/
+/worktrees/
 
 # Local-only AI agent instruction files
 AGENTS.md
