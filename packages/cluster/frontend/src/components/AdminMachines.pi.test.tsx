@@ -31,9 +31,15 @@ vi.mock('@/components/EntityAvatar', () => ({ EntityAvatar: () => null }))
 import AdminMachines from './AdminMachines'
 afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.piVersion = '0.85.1' })
 
+async function selectPiEngine() {
+  await waitFor(() => expect(document.querySelector('option[value="pi-cli"]')).not.toBeNull())
+  fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'pi-cli' } })
+}
+
 it('requires an explicit provider and submits custom provider/model from Pi creation', async () => {
   render(<AdminMachines />)
   fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await selectPiEngine()
   const provider = await screen.findByLabelText('Provider (required)')
   expect(screen.getByText(/save a Pi provider API key before starting/)).toBeInTheDocument()
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local worker' } })
@@ -55,6 +61,7 @@ it('warns before creation when the machine Pi version fails the adapter gate (#6
   mocks.piVersion = '0.87.1'
   render(<AdminMachines />)
   fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await selectPiEngine()
   await screen.findByLabelText('Provider (required)')
   expect(await screen.findByText(/has pi-cli 0\.87\.1, but this build requires 0\.85\.1/)).toBeInTheDocument()
 })
@@ -62,6 +69,7 @@ it('warns before creation when the machine Pi version fails the adapter gate (#6
 it('shows no version warning for the supported Pi version', async () => {
   render(<AdminMachines />)
   fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  await selectPiEngine()
   await screen.findByLabelText('Provider (required)')
   expect(screen.queryByText(/but this build requires/)).not.toBeInTheDocument()
 })
