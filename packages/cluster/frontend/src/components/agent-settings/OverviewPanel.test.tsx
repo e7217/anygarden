@@ -305,93 +305,15 @@ describe('OverviewPanel', () => {
     })
   })
 
-  describe('model / reasoning dropdowns', () => {
-    it('populates options from the fetched catalog and preselects the current model', async () => {
-      setup({ agent: makeAgent({ model: 'claude-sonnet-4-6' }) })
-      const select = (await screen.findByTestId(
-        'overview-model-select',
-      )) as HTMLSelectElement
-      expect(select.value).toBe('claude-sonnet-4-6')
-      // default + 3 catalog entries
-      expect(select.querySelectorAll('option').length).toBe(4)
-    })
-
-    it('saves with model_set: true when the admin picks a new model', async () => {
-      const { updateAgent } = setup({ agent: makeAgent({ model: 'claude-opus-4-7' }) })
-      const select = (await screen.findByTestId(
-        'overview-model-select',
-      )) as HTMLSelectElement
-      fireEvent.change(select, { target: { value: 'claude-sonnet-4-6' } })
-      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
-      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-        model: 'claude-sonnet-4-6',
-        model_set: true,
-      })
-    })
-
-    it('clears the model to null when the admin picks Default', async () => {
-      const { updateAgent } = setup({ agent: makeAgent({ model: 'claude-opus-4-7' }) })
-      const select = (await screen.findByTestId(
-        'overview-model-select',
-      )) as HTMLSelectElement
-      fireEvent.change(select, { target: { value: '' } })
-      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
-      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-        model: null,
-        model_set: true,
-      })
-    })
-
-    it('saves reasoning_effort with reasoning_effort_set: true', async () => {
-      const { updateAgent } = setup({
-        agent: makeAgent({ reasoning_effort: 'low' }),
-      })
-      const select = (await screen.findByTestId(
-        'overview-reasoning-select',
-      )) as HTMLSelectElement
-      fireEvent.change(select, { target: { value: 'high' } })
-      await waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
-      expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-        reasoning_effort: 'high',
-        reasoning_effort_set: true,
-      })
-    })
-
-    it('preserves a legacy model value with a disabled option', async () => {
-      setup({ agent: makeAgent({ model: 'claude-opus-4-6-fast' }) })
-      const select = (await screen.findByTestId(
-        'overview-model-select',
-      )) as HTMLSelectElement
-      expect(select.value).toBe('claude-opus-4-6-fast')
-      const legacy = screen.getByText(
-        /Current: claude-opus-4-6-fast \(no longer in catalog\)/,
-      )
-      expect(legacy.tagName).toBe('OPTION')
-      expect((legacy as HTMLOptionElement).disabled).toBe(true)
-    })
-
-    it('hides the dropdown rows when the catalog is unavailable', async () => {
-      setup({ catalog: null })
-      // Wait a microtask for the catalog promise to resolve, then confirm.
-      await waitFor(() =>
-        expect(screen.queryByTestId('overview-model-select')).toBeNull(),
-      )
-      expect(screen.queryByTestId('overview-reasoning-select')).toBeNull()
-    })
-
-    it('shows an inline error when updateAgent rejects', async () => {
-      const updateAgent = vi.fn().mockRejectedValue(new Error('PUT failed'))
-      setup({ agent: makeAgent({ model: 'claude-opus-4-7' }), updateAgent })
-      const select = (await screen.findByTestId(
-        'overview-model-select',
-      )) as HTMLSelectElement
-      fireEvent.change(select, { target: { value: 'claude-sonnet-4-6' } })
-      await waitFor(() =>
-        expect(screen.getByTestId('overview-config-error')).toHaveTextContent(
-          'PUT failed',
-        ),
-      )
-    })
+  it('shows the confirmed connection and never guesses on lookup failure', () => {
+    const agent = makeAgent({ engine: 'codex-cli', model: 'gpt-5.3-codex' })
+    const view = render(<OverviewPanel agent={agent} updateAgent={vi.fn()} connectionState={{ agentId: agent.id, status: 'ready', config: {
+      provider: 'local', model: 'local-model', base_url: 'http://local/v1', api_protocol: 'responses', credential_ref: null,
+    } }} />)
+    expect(screen.getByTestId('overview-connection-summary')).toHaveTextContent('Direct model server · local-model')
+    view.rerender(<OverviewPanel agent={agent} updateAgent={vi.fn()} connectionState={{ agentId: agent.id, status: 'error' }} />)
+    expect(screen.getByTestId('overview-connection-summary')).toHaveTextContent('Connection unavailable')
+    expect(screen.queryByLabelText('Endpoint base URL')).toBeNull()
   })
 
   describe('copy id', () => {
@@ -425,43 +347,5 @@ describe('OverviewPanel', () => {
         /Clipboard unavailable/i,
       )
     })
-  })
-})
-
-
-describe('Pi provider configuration', () => {
-  const catalog: EngineCatalog = { engine: 'pi-cli', default_model: '', models: [], reasoning_levels: [] }
-  it('shows missing provider guidance and saves a custom name', async () => {
-    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: null }), catalog })
-    expect(screen.getByText('Set an explicit provider before starting this Pi agent.')).toBeInTheDocument()
-    const provider = screen.getByLabelText('Agent provider')
-    fireEvent.change(provider, { target: { value: 'my-local' } })
-    fireEvent.change(await screen.findByLabelText('Agent model'), { target: { value: 'local-model' } })
-    fireEvent.blur(provider)
-    expect(updateAgent).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply provider and model' }))
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-      provider: 'my-local', provider_set: true, model: 'local-model', model_set: true,
-    }))
-  })
-  it('refuses blank and option-looking providers', async () => {
-    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: 'zai' }), catalog })
-    await screen.findByLabelText('Agent model')
-    const provider = screen.getByLabelText('Agent provider')
-    for (const value of ['', '--help', 'bad name']) {
-      fireEvent.change(provider, { target: { value } })
-      fireEvent.click(await screen.findByRole('button', { name: 'Apply provider and model' }))
-    }
-    expect(updateAgent).not.toHaveBeenCalled()
-    expect(screen.getByTestId('overview-config-error')).toHaveTextContent('Provider is required')
-  })
-  it('accepts a custom model ID without a closed catalog', async () => {
-    const { updateAgent } = setup({ agent: makeAgent({ engine: 'pi-cli', provider: 'my-local' }), catalog })
-    const model = await screen.findByLabelText('Agent model')
-    fireEvent.change(model, { target: { value: 'local-model-v2' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Apply provider and model' }))
-    await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('agent_abc123', {
-      model: 'local-model-v2', model_set: true, provider: 'my-local', provider_set: true,
-    }))
   })
 })

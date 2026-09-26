@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
     models: [{ id: 'glm-5.3-flash', label: 'GLM 5.3 Flash (zai)', reasoning_levels: [] }],
   }),
   machines: [{ id: 'm1', name: 'Test machine', hostname: 'test', status: 'online' }],
-  agents: [], availableEngines: [{ engine: 'pi-cli', machine_count: 1 }],
+  agents: [], availableEngines: [{ engine: 'pi-cli', machine_count: 1 }, { engine: 'codex-cli', machine_count: 1 }],
   calls: [] as Array<{ path: string; method: string; body: unknown }>,
 }))
 vi.mock('@/hooks/useMachines', () => ({ useMachines: () => ({ machines: mocks.machines }) }))
@@ -31,7 +31,7 @@ vi.mock('@/lib/api', () => ({ apiFetch: vi.fn(async (path: string, init?: Reques
   }
   if (path.endsWith('/endpoint/credentials') && method === 'POST') return json({ id: 'cred-1' }, 201)
   if (path.endsWith('/endpoint') && method === 'PUT') return json(body)
-  return json(path.endsWith('/engines') ? [{ engine: 'pi-cli', version: '0.85.1' }] : [])
+  return json(path.endsWith('/engines') ? [{ engine: 'pi-cli', version: '0.85.1' }, { engine: 'codex-cli', version: '0.1.0' }] : [])
 }) }))
 vi.mock('@/components/AgentSettingsDialog', () => ({ default: () => null }))
 vi.mock('@/components/AgentSettingsMenu', () => ({ default: () => null }))
@@ -48,7 +48,8 @@ async function openPiDialog() {
   await screen.findByLabelText('Provider (required)')
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local qwen' } })
   fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'qwen-llm' } })
-  fireEvent.click(screen.getByLabelText('Connect to a local / custom model server'))
+  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'direct' } })
+  fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'qwen-llm' } })
 }
 
 it('creates a keyless Pi agent with its endpoint in one request after loading models', async () => {
@@ -101,4 +102,32 @@ it('blocks creation for an invalid base URL', async () => {
   expect(screen.getByRole('button', { name: 'Create Agent' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Load models' })).toBeDisabled()
   expect(screen.getByText(/HTTP\(S\) URL without credentials/)).toBeInTheDocument()
+})
+
+it('keeps direct server fields out of the Codex creation path', async () => {
+  render(<AdminMachines />)
+  fireEvent.click(await screen.findByRole('button', { name: 'New Agent' }))
+  fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'codex-cli' } })
+  expect(screen.queryByLabelText('Connection type')).toBeNull()
+  expect(screen.queryByLabelText('Base URL')).toBeNull()
+  expect(screen.queryByLabelText('Provider (required)')).toBeNull()
+  fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Codex worker' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  await waitFor(() => expect(mocks.createAgent).toHaveBeenCalled())
+  expect(mocks.createAgent.mock.calls[0][0]).not.toHaveProperty('endpoint')
+})
+
+it('drops hidden Pi direct values when switching back to native', async () => {
+  await openPiDialog()
+  fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://10.0.0.5:8000/v1' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'old-direct-model' } })
+  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'native' } })
+  expect(screen.queryByLabelText('Base URL')).toBeNull()
+  fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'zai' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'glm-5.3-flash' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  await waitFor(() => expect(mocks.createAgent).toHaveBeenCalled())
+  expect(mocks.createAgent.mock.calls[0][0]).toEqual({
+    name: 'Local qwen', engine: 'pi-cli', provider: 'zai', model: 'glm-5.3-flash', rooms: [],
+  })
 })

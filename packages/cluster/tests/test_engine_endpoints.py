@@ -60,6 +60,71 @@ def config(**kwargs):
     )
 
 
+async def test_pi_direct_to_native_switch_is_atomic(endpoint_env):
+    e = endpoint_env
+    client, path, headers = e["client"], e["path"], e["headers"]
+    assert (await client.put(path, headers=headers, json=config())).status_code == 200
+    e["app"].state.agent_lifecycle.bump_generation.reset_mock()
+
+    invalid = await client.put(
+        path, headers=headers,
+        json={"base_url": None, "provider": "bad provider", "model": "native-model"},
+    )
+    assert invalid.status_code == 422
+    assert (await client.get(path, headers=headers)).json()["base_url"] == config()["base_url"]
+    e["app"].state.agent_lifecycle.bump_generation.assert_not_awaited()
+
+    switched = await client.put(
+        path, headers=headers,
+        json={"base_url": None, "provider": "zai", "model": "glm-5.3-flash"},
+    )
+    assert switched.status_code == 200, switched.text
+    assert switched.json() == {
+        "provider": "zai", "model": "glm-5.3-flash", "base_url": None,
+        "api_protocol": None, "credential_ref": None,
+    }
+    e["app"].state.agent_lifecycle.bump_generation.assert_awaited_once_with(e["agent_id"])
+
+
+async def test_legacy_disable_and_codex_native_switch_rejected(endpoint_env):
+    e = endpoint_env
+    client, path, headers = e["client"], e["path"], e["headers"]
+    assert (await client.put(path, headers=headers, json=config())).status_code == 200
+    disabled = await client.put(path, headers=headers, json={"base_url": None})
+    assert disabled.status_code == 200
+    assert disabled.json()["provider"] == "local"
+    assert disabled.json()["model"] == "model-a"
+
+    async with e["factory"]() as db:
+        agent = await db.get(Agent, e["agent_id"])
+        agent.engine = "codex-cli"
+        await db.commit()
+    rejected = await client.put(
+        path, headers=headers,
+        json={"base_url": None, "provider": "zai", "model": "glm-5.3-flash"},
+    )
+    assert rejected.status_code == 422
+
+
+async def test_codex_direct_can_return_to_default_model_atomically(endpoint_env):
+    e = endpoint_env
+    client, path, headers = e["client"], e["path"], e["headers"]
+    async with e["factory"]() as db:
+        agent = await db.get(Agent, e["agent_id"])
+        agent.engine = "codex-cli"
+        await db.commit()
+    direct = dict(config(), api_protocol="responses")
+    assert (await client.put(path, headers=headers, json=direct)).status_code == 200
+    e["app"].state.agent_lifecycle.bump_generation.reset_mock()
+    reset = await client.put(path, headers=headers, json={"base_url": None, "model": None})
+    assert reset.status_code == 200, reset.text
+    assert reset.json() == {
+        "provider": None, "model": None, "base_url": None,
+        "api_protocol": None, "credential_ref": None,
+    }
+    e["app"].state.agent_lifecycle.bump_generation.assert_awaited_once_with(e["agent_id"])
+
+
 async def test_credential_lifecycle_and_dispatch(endpoint_env):
     e = endpoint_env
     c = e["client"]

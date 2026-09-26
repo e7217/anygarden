@@ -257,10 +257,8 @@ export default function AdminMachines() {
   // #685 — optional direct endpoint (local / custom OpenAI-compatible server).
   const [endpointDraft, setEndpointDraft] = useState<EndpointDraft>(() => emptyEndpointDraft(''))
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([])
-  const endpointCapable = agentEngine === 'pi-cli' || agentEngine === 'codex-cli'
-  const endpointActive = endpointCapable && endpointDraft.enabled
-  // Pi always needs an explicit provider; Codex only as the endpoint's ID.
-  const providerRequired = agentEngine === 'pi-cli' || endpointActive
+  const endpointActive = agentEngine === 'pi-cli' && endpointDraft.enabled
+  const providerRequired = agentEngine === 'pi-cli'
   const [agentRooms, setAgentRooms] = useState<Set<string>>(new Set())
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -1065,7 +1063,7 @@ export default function AdminMachines() {
 
       {/* ── Create Agent on Machine Dialog ── */}
       <Dialog open={createAgentOpen} onOpenChange={setCreateAgentOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create Agent on {selectedMachine?.name}</DialogTitle>
             <DialogDescription>The agent will be placed on this machine.</DialogDescription>
@@ -1104,6 +1102,20 @@ export default function AdminMachines() {
               )}
             </div>
             {agentEngine === 'pi-cli' && (
+              <div className="space-y-2">
+                <Label htmlFor="create-pi-connection-type">Connection type</Label>
+                <select id="create-pi-connection-type" className={selectCSS}
+                  value={endpointActive ? 'direct' : 'native'}
+                  onChange={e => {
+                    setEndpointDraft({ ...emptyEndpointDraft('pi-cli'), enabled: e.target.value === 'direct' })
+                    setAgentProvider(''); setAgentModel(''); setDiscoveredModels([])
+                  }}>
+                  <option value="native">Pi provider</option>
+                  <option value="direct">Direct model server</option>
+                </select>
+              </div>
+            )}
+            {agentEngine === 'pi-cli' && (
               <>
                 <div className="space-y-2">
                   <Label htmlFor="pi-provider">Provider (required)</Label>
@@ -1111,7 +1123,7 @@ export default function AdminMachines() {
                     placeholder="zai or my-local" maxLength={64} required aria-invalid={!validPiProvider} />
                   <p className="text-xs text-[var(--color-foreground-muted)]">
                     {endpointActive
-                      ? 'A name for this model server (e.g. my-local). It is used only by this agent.'
+                      ? 'Provider ID for this model server (e.g. my-local).'
                       : 'Enter a built-in or configured custom provider name. No provider is selected automatically.'}
                   </p>
                 </div>
@@ -1124,21 +1136,6 @@ export default function AdminMachines() {
                     {!endpointActive && agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </datalist>
                   {!endpointActive && <p className="text-xs text-[var(--color-foreground-muted)]">After creating the agent, open its settings and save a Pi provider API key before starting it.</p>}
-                </div>
-              </>
-            )}
-            {agentEngine === 'codex-cli' && endpointActive && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="endpoint-provider">Provider ID</Label>
-                  <Input id="endpoint-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
-                    placeholder="local" maxLength={64} aria-invalid={!validPiProvider} />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="endpoint-model">Model</Label>
-                  <Input id="endpoint-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
-                    list="endpoint-models" placeholder="Model ID served by the endpoint (required)" />
-                  <datalist id="endpoint-models">{discoveredModels.map(m => <option key={m.id} value={m.id} />)}</datalist>
                 </div>
               </>
             )}
@@ -1177,15 +1174,11 @@ export default function AdminMachines() {
                 </select>
               </div>
             )}
-            {endpointCapable && (
+            {endpointActive && (
               <CreateAgentEndpointSection
                 engine={agentEngine}
                 draft={endpointDraft}
-                onChange={next => {
-                  // Codex needs a provider ID only for the endpoint; seed one.
-                  if (next.enabled && !endpointDraft.enabled && agentEngine === 'codex-cli' && !agentProvider) setAgentProvider('local')
-                  setEndpointDraft(next)
-                }}
+                onChange={setEndpointDraft}
                 onModelsLoaded={models => {
                   setDiscoveredModels(models)
                   if (models.length === 1 && !agentModel) setAgentModel(models[0].id)

@@ -1,12 +1,12 @@
 # Direct model endpoints (Codex and Pi)
 
-An administrator can connect an individual agent to a local or custom HTTP model server either when creating it (**Machines → New Agent → Connect to a local / custom model server**) or later from **Agent settings → Overview → Direct model connection** (always shown for Codex and Pi, with a status line).
+An administrator can connect a Pi agent to a local or custom HTTP model server when creating it (**Machines → New Agent → Pi → Connection type → Direct model server**) or later from **Agent settings → Model connection**. New Codex agents use the Codex CLI model connection in the normal UI. Existing Codex direct connections remain editable in **Model connection** and can be disabled there.
 
 For Pi's built-in providers such as `zai`, use [Pi native provider authentication](pi-native-auth.md) instead.
 
 ## At creation (#685)
 
-Select Pi or Codex, tick **Connect to a local / custom model server**, and enter the base URL (for example `http://10.0.0.5:8000/v1`). Pi defaults to **Chat Completions**; Codex uses **Responses**. The provider name is entered once and is used only as this agent's name for the server. Click **Load models** to fill the model suggestions from `<base_url>/models`, then pick a model; a model is required for a direct endpoint.
+Select Pi, then **Direct model server**, and enter the base URL (for example `http://10.0.0.5:8000/v1`). Pi defaults to **Chat Completions**. The provider name is entered once and is used only as this agent's name for the server. Click **Load models** to fill the model suggestions from `<base_url>/models`, then pick a model; a model is required for a direct endpoint. The API and runtime still support previously configured Codex direct connections.
 
 Without authentication, the endpoint is saved in the same request that creates the agent, so the first start already uses it. With **API key**, the agent is created first, then the key is stored through the write-only credential endpoint and bound to the endpoint (one extra restart). The key never appears in the create request.
 
@@ -14,10 +14,10 @@ Without authentication, the endpoint is saved in the same request that creates t
 
 ## In agent settings
 
-1. Connect an updated machine that advertises `direct_endpoint_v1` and supports the agent's engine. A configured agent's currently assigned machine must support this capability; the form refuses incompatible placement before saving.
+1. Connect an updated machine that advertises `direct_endpoint_v1` and supports the agent's engine. A configured agent's currently assigned machine must support this capability; the form refuses incompatible placement before saving. Open **Agent settings → Model connection**; Overview shows a short summary of the active connection.
 2. Enter an explicit provider ID, model ID and base URL (for example `http://localhost:8000/v1`). `localhost` refers to the machine running the agent, not the web browser or cluster server. Use a URL reachable from that machine.
 3. Choose **Responses** for Codex. Pi supports **Responses** and **Chat Completions**. The server must implement the chosen protocol; OpenAI-compatible Chat Completions alone is insufficient for Codex.
-4. Choose **No authentication**, or store a new API key and select its stored reference. Click **Apply connection** to save the provider, model, URL, protocol and credential reference together. Configuration changes restart the agent.
+4. Choose **No authentication**, or store a new API key and select its stored reference. Click **Apply connection** to save the provider, model, URL, protocol and credential reference together. Configuration changes restart the agent. Pi switches back to a native provider through the **Connection type** selector, which requires a native provider, model and matching native key. A key save failure attempts to restore the previous direct connection and displays the current state for retry. Codex's **Disable direct connection** action clears the direct provider/model override and returns it to the CLI default.
 
 The default engine connection remains available when direct connection is disabled. Direct endpoint settings are local administrator policy; remote delegation messages cannot select an endpoint or supply credentials.
 

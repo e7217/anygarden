@@ -19,7 +19,7 @@
  * ID text so the admin can copy it manually, and shows "Clipboard
  * unavailable" in place of "Copied".
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -28,11 +28,18 @@ import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
+import type { ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
-import DirectEndpointPanel from '@/components/agent-settings/DirectEndpointPanel'
-import PiNativeAuthPanel from '@/components/agent-settings/PiNativeAuthPanel'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
+
+function connectionSummary(agent: Agent, state?: ConnectionState | null, defaultModel?: string): string {
+  if (!state || state.agentId !== agent.id || state.status === 'loading') return 'Loading connection…'
+  if (state.status === 'error') return 'Connection unavailable'
+  if (state.config.base_url) return `Direct model server · ${state.config.model ?? 'Unknown model'}`
+  if (agent.engine === 'pi-cli') return `Pi provider · ${state.config.provider ?? 'No provider'} · ${state.config.model ?? 'No model'}`
+  return `Codex CLI · ${state.config.model ?? defaultModel ?? 'Default model'}`
+}
 // ``loading`` while the catalog fetch is in flight, ``unavailable``
 // once it resolves with ``null`` (engine not in the static catalog or
 // fetch errored) — lets us hide the dropdowns without flashing an
@@ -88,9 +95,10 @@ interface Props {
    *  so existing tests that don't care about config editing keep
    *  passing; when absent, the rows render in read-only fallback. */
   fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
+  connectionState?: ConnectionState | null
 }
 
-export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }: Props) {
+export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, connectionState }: Props) {
   const [showPicker, setShowPicker] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
@@ -109,12 +117,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
   // updateAgent so a fat-fingered double-click can't race two PUTs.
   const [catalogState, setCatalogState] = useState<CatalogState>({ kind: 'loading' })
   const [configSaving, setConfigSaving] = useState(false)
-  const [providerDraft, setProviderDraft] = useState(agent?.provider ?? '')
-  const [piModelDraft, setPiModelDraft] = useState(agent?.model ?? '')
-  useEffect(() => {
-    setProviderDraft(agent?.provider ?? '')
-    setPiModelDraft(agent?.model ?? '')
-  }, [agent?.id, agent?.provider, agent?.model])
   const [configError, setConfigError] = useState<string | null>(null)
   // Issue #493 — per-agent turn timeout (seconds). Blur-commit like
   // ``nameDraft``; empty clears back to the global default. A dedicated
@@ -170,20 +172,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       cancelled = true
     }
   }, [agentEngine, fetchEngineCatalog])
-
-  // Per-model reasoning narrowing, mirroring AdminMachines.tsx so the
-  // create and edit dialogs agree on which effort levels apply to
-  // which model. Engine-level list is the fallback.
-  const currentModel = agent?.model ?? ''
-  const reasoningLevels = useMemo<readonly string[]>(() => {
-    if (catalogState.kind !== 'ready') return []
-    const { catalog } = catalogState
-    if (currentModel) {
-      const m = catalog.models.find(x => x.id === currentModel)
-      if (m && m.reasoning_levels.length > 0) return m.reasoning_levels
-    }
-    return catalog.reasoning_levels
-  }, [catalogState, currentModel])
 
   if (!agent) {
     return (
@@ -242,62 +230,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
       setDescriptionDraft(agent.description ?? '') // rollback on failure
     }
     setDescriptionSaving(false)
-  }
-
-  // #217 — onChange commits (avatar-picker pattern). Sending ``null``
-  // for an empty selection asks the server to clear the column and
-  // fall back to the adapter's built-in default. ``*_set: true`` is
-  // required so an unrelated PUT doesn't wipe the field.
-  const handleModelChange = async (raw: string) => {
-    const nextVal = raw === '' ? null : raw
-    if ((agent.model ?? null) === nextVal) return
-    setConfigSaving(true)
-    setConfigError(null)
-    try {
-      await updateAgent(agent.id, { model: nextVal, model_set: true })
-    } catch (e) {
-      setConfigError(e instanceof Error ? e.message : String(e))
-    }
-    setConfigSaving(false)
-  }
-
-  const handleProviderCommit = async () => {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(providerDraft)) {
-      setConfigError('Provider is required: use letters, numbers, dots, underscores or hyphens; start with a letter or number.')
-      return
-    }
-    if (!piModelDraft.trim()) {
-      setConfigError('A model is required for Pi provider authentication.')
-      return
-    }
-    if (providerDraft === agent.provider && (piModelDraft || null) === (agent.model ?? null)) return
-    setConfigSaving(true)
-    setConfigError(null)
-    try {
-      await updateAgent(agent.id, {
-        provider: providerDraft, provider_set: true,
-        model: piModelDraft.trim(), model_set: true,
-      })
-    } catch (e) {
-      setConfigError(e instanceof Error ? e.message : String(e))
-    }
-    setConfigSaving(false)
-  }
-
-  const handleReasoningChange = async (raw: string) => {
-    const nextVal = raw === '' ? null : raw
-    if ((agent.reasoning_effort ?? null) === nextVal) return
-    setConfigSaving(true)
-    setConfigError(null)
-    try {
-      await updateAgent(agent.id, {
-        reasoning_effort: nextVal,
-        reasoning_effort_set: true,
-      })
-    } catch (e) {
-      setConfigError(e instanceof Error ? e.message : String(e))
-    }
-    setConfigSaving(false)
   }
 
   // #493 — commit the turn timeout on blur. Empty input clears the
@@ -484,14 +416,6 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
         />
       ) : null}
 
-      {/* #685 — always visible so operators can find the Base URL field. */}
-      {(agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && (
-        <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} onSaved={() => updateAgent(agent.id, {})} />
-      )}
-      {agent.engine === 'pi-cli' && (
-        <PiNativeAuthPanel key={`${agent.id}-pi-auth`} agentId={agent.id} provider={agent.provider ?? null} onSaved={() => updateAgent(agent.id, {})} />
-      )}
-
       {/* Metadata grid */}
       <dl className="grid grid-cols-[6rem_1fr] gap-x-4 gap-y-3 text-sm">
         <dt className="text-[var(--color-foreground-muted)]">ID</dt>
@@ -547,98 +471,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
           ) : null}
         </dd>
 
-        {agent.engine === 'pi-cli' && (
+        {(agent.engine === 'pi-cli' || agent.engine === 'codex-cli') && (
           <>
-            <dt className="text-[var(--color-foreground-muted)]">Provider</dt>
-            <dd>
-              <Input aria-label="Agent provider" value={providerDraft} maxLength={64} required
-                onChange={e => setProviderDraft(e.target.value)}
-                disabled={configSaving} placeholder="zai or my-local" />
-              {!agent.provider && <p role="alert">Set an explicit provider before starting this Pi agent.</p>}
-            </dd>
+            <dt className="text-[var(--color-foreground-muted)]">Connection</dt>
+            <dd data-testid="overview-connection-summary">{connectionSummary(agent, connectionState, catalogState.kind === 'ready' ? catalogState.catalog.default_model : undefined)}</dd>
           </>
         )}
-
-        {/* #217 — Model + Reasoning editing. Rows only render when
-            the catalog resolved successfully; unknown/loading engines
-            fall back to the name-only metadata we had before. */}
-        {catalogState.kind === 'ready' ? (
-          <>
-            <dt className="text-[var(--color-foreground-muted)]">Model</dt>
-            <dd>
-              {agent.engine === 'pi-cli' ? (
-                <>
-                  <Input aria-label="Agent model" value={piModelDraft} list="overview-pi-models"
-                    onChange={e => setPiModelDraft(e.target.value)}
-                    disabled={configSaving} placeholder="Model ID for this provider (required for native Pi)" />
-                  <Button className="mt-2" disabled={configSaving} onClick={() => void handleProviderCommit()}>
-                    Apply provider and model
-                  </Button>
-                  <datalist id="overview-pi-models">{catalogState.catalog.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}</datalist>
-                </>
-              ) : <select
-                value={agent.model ?? ''}
-                onChange={e => void handleModelChange(e.target.value)}
-                disabled={configSaving}
-                aria-label="Agent model"
-                data-testid="overview-model-select"
-                className={SELECT_CSS}
-              >
-                <option value="">
-                  Default ({catalogState.catalog.default_model})
-                </option>
-                {catalogState.catalog.models.map(m => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-                {/* Preserve a legacy value that's no longer listed in
-                    the catalog so admins can see what's actually stored
-                    instead of the UI silently collapsing to "Default". */}
-                {agent.model &&
-                !catalogState.catalog.models.some(m => m.id === agent.model) ? (
-                  <option value={agent.model} disabled>
-                    Current: {agent.model} (no longer in catalog)
-                  </option>
-                ) : null}
-              </select>}
-            </dd>
-
-            <dt className="text-[var(--color-foreground-muted)]">Reasoning</dt>
-            <dd>
-              <select
-                value={agent.reasoning_effort ?? ''}
-                onChange={e => void handleReasoningChange(e.target.value)}
-                disabled={configSaving || reasoningLevels.length === 0}
-                aria-label="Reasoning effort"
-                data-testid="overview-reasoning-select"
-                className={SELECT_CSS}
-              >
-                <option value="">Default</option>
-                {reasoningLevels.map(level => (
-                  <option key={level} value={level}>
-                    {level.charAt(0).toUpperCase() + level.slice(1)}
-                  </option>
-                ))}
-                {agent.reasoning_effort &&
-                !reasoningLevels.includes(agent.reasoning_effort) ? (
-                  <option value={agent.reasoning_effort} disabled>
-                    Current: {agent.reasoning_effort} (no longer in catalog)
-                  </option>
-                ) : null}
-              </select>
-              {configError ? (
-                <div
-                  className="mt-1 flex items-center gap-1 text-xs text-[var(--color-warning)]"
-                  data-testid="overview-config-error"
-                >
-                  <AlertCircle className="h-3 w-3" aria-hidden="true" />
-                  {configError}
-                </div>
-              ) : null}
-            </dd>
-          </>
-        ) : null}
 
         {/* #493 — Per-agent turn timeout (seconds). Blank = global default.
             Engine-agnostic, so it renders for every agent (outside the
@@ -697,6 +535,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog }
             <option value="standard">Standard — workspace only</option>
             <option value="trusted">⚠ Trusted — host access</option>
           </select>
+          {configError && <p role="alert" data-testid="overview-config-error">{configError}</p>}
           {agent.permission_level === 'trusted' ? (
             <p
               className="mt-1 text-[11px] text-[var(--color-foreground-muted)]"

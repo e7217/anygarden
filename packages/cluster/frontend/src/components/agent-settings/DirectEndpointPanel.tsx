@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { type DiscoveredModel, discoverEndpointModels, isValidEndpointUrl } from '@/lib/engineEndpoints'
+import { type DiscoveredModel, defaultEndpointProtocol, discoverEndpointModels, isValidEndpointUrl } from '@/lib/engineEndpoints'
 
 interface Configuration {
   provider: string | null
@@ -20,8 +20,8 @@ function connectionSummary(saved: Configuration | null): string {
   return `Direct connection: ${saved.base_url} · ${PROTOCOL_LABELS[saved.api_protocol ?? ''] ?? saved.api_protocol}`
 }
 
-export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
-  agentId: string; engine: string; onSaved: () => Promise<unknown>
+export default function DirectEndpointPanel({ agentId, engine, onSaved, nativeCredentialProvider }: {
+  agentId: string; engine: string; onSaved: () => Promise<unknown>; nativeCredentialProvider?: string | null
 }) {
   const path = `/api/v1/agents/${agentId}/endpoint`
   const [config, setConfig] = useState<Configuration | null>(null)
@@ -48,7 +48,13 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
   useEffect(() => {
     let active = true
     Promise.all([request(path), request(`${path}/credentials`)]).then(([next, rows]) => {
-      if (active) { setConfig(next); setSaved(next); setCredentials(rows) }
+      if (active) {
+        setConfig({ ...next,
+          provider: next.base_url ? next.provider : '', model: next.base_url ? next.model : '',
+          api_protocol: next.api_protocol ?? defaultEndpointProtocol(engine),
+        })
+        setSaved(next); setCredentials(rows)
+      }
     }).catch(e => { if (active) setError(e.message) })
     return () => { active = false }
   }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -60,7 +66,7 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
   }
   async function save(enabled: boolean) {
     await action(async () => {
-      const next = await request(path, 'PUT', enabled ? config : { base_url: null })
+      const next = await request(path, 'PUT', enabled ? config : engine === 'codex-cli' ? { base_url: null, model: null } : { base_url: null })
       setConfig(next); setSaved(next); await onSaved()
       setStatus('Connection settings saved. The agent will restart with the new settings.')
     })
@@ -97,10 +103,13 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
     {status && <p role="status">{status}</p>}
     {!config ? (!error && <p>Loading connection settings…</p>) : <fieldset disabled={busy} className="space-y-3">
       <label className="block">Provider ID<Input aria-label="Endpoint provider" value={config.provider ?? ''} onChange={e => setConfig({ ...config, provider: e.target.value })} /></label>
+      {engine === 'pi-cli' && nativeCredentialProvider && config.provider === nativeCredentialProvider && (
+        <p role="alert" className="text-sm text-[var(--color-warning)]">This provider ID has a stored native Pi key. Choose a different ID for the direct server to avoid an auth.json conflict.</p>
+      )}
       <label className="block">Base URL<Input aria-label="Endpoint base URL" placeholder="http://localhost:8000/v1" value={config.base_url ?? ''} onChange={e => { setConfig({ ...config, base_url: e.target.value }); setModels(null); setModelsStatus('') }} /></label>
       <label className="block">Model ID<Input aria-label="Endpoint model" list="direct-endpoint-models" value={config.model ?? ''} onChange={e => setConfig({ ...config, model: e.target.value })} /></label>
       <datalist id="direct-endpoint-models">{models?.map(m => <option key={m.id} value={m.id} />)}</datalist>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" disabled={!isValidEndpointUrl(config.base_url ?? '')} onClick={() => void loadModels()}>Load models</Button>
         {modelsStatus && <span className="text-xs text-[var(--color-foreground-muted)]">{modelsStatus}</span>}
       </div>
@@ -111,12 +120,12 @@ export default function DirectEndpointPanel({ agentId, engine, onSaved }: {
       <label className="block">Authentication<select aria-label="Endpoint credential" value={config.credential_ref ?? ''} onChange={e => setConfig({ ...config, credential_ref: e.target.value || null })}>
         <option value="">No authentication</option>{credentials.map(row => <option key={row.id} value={row.id}>{row.label} — stored (revision {row.revision})</option>)}
       </select></label>
-      <div className="flex gap-2"><Button onClick={() => void save(true)} disabled={!config.base_url || !config.provider || !config.model || !config.api_protocol}>Apply connection</Button>
-        <Button variant="outline" onClick={() => void save(false)}>Disable direct connection</Button></div>
+      <div className="flex flex-wrap gap-2"><Button className="min-h-11" onClick={() => void save(true)} disabled={!isValidEndpointUrl(config.base_url ?? '') || !config.provider || !config.model || !config.api_protocol}>Apply connection</Button>
+        {saved?.base_url && engine === 'codex-cli' && <Button className="min-h-11" variant="outline" onClick={() => void save(false)}>Disable direct connection</Button>}</div>
       <p className="text-sm">Credentials belong to this agent and engine. Stored values cannot be read back.</p>
       <label className="block">Credential label<Input aria-label="Credential label" value={label} onChange={e => setLabel(e.target.value)} /></label>
       <label className="block">New API key<Input aria-label="New endpoint API key" type="password" autoComplete="new-password" value={value} onChange={e => setValue(e.target.value)} /></label>
-      <div className="flex gap-2"><Button variant="outline" disabled={!value} onClick={() => void store(false)}>Store new credential</Button>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!value} onClick={() => void store(false)}>Store new credential</Button>
         <Button variant="outline" disabled={!value || !config.credential_ref} onClick={() => void store(true)}>Replace selected credential</Button></div>
       <ul>{credentials.map(row => <li key={row.id} className="flex items-center gap-2">{row.label}<Button variant="ghost" onClick={() => void action(async () => {
         await request(`${path}/credentials/${row.id}`, 'DELETE'); setCredentials(await request(`${path}/credentials`))

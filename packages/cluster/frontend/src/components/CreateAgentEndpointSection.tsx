@@ -1,4 +1,4 @@
-// #685 — "Connect to a local / custom model server" section of the Create
+// Direct model server fields for Pi in the Create
 // Agent dialog. Owns only presentation and the model probe; the dialog owns
 // the draft state and the create → credential → endpoint sequence.
 import { useState } from 'react'
@@ -64,12 +64,7 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
 
   return (
     <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
-      <label className="flex items-center gap-2 text-sm text-[var(--color-foreground)] cursor-pointer">
-        <input type="checkbox" checked={draft.enabled} onChange={e => update({ enabled: e.target.checked })} />
-        Connect to a local / custom model server
-      </label>
-      {draft.enabled && (
-        <>
+      <>
           <p className="text-xs text-[var(--color-foreground-muted)]">
             OpenAI-compatible server such as vLLM, llama.cpp or Ollama (<code>/v1</code>). The agent calls it from its machine.
           </p>
@@ -106,15 +101,14 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
             </div>
           )}
           <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
+            <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
               onClick={() => void loadModels()}>
               {loading ? 'Loading…' : 'Load models'}
             </Button>
             {status && <span role="status" className="text-xs text-[var(--color-foreground-muted)]">{status}</span>}
           </div>
           {error && <p role="alert" className="text-xs text-[var(--color-warning)]">{error}</p>}
-        </>
-      )}
+      </>
     </div>
   )
 }
