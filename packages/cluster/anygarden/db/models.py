@@ -273,6 +273,7 @@ class Agent(Base):
         Index("ix_agents_placed_state", "placed_on_machine_id", "actual_state"),
         # #516 — admin query "which agents are unavailable, and why".
         Index("ix_agents_unavailable_code", "unavailable_code"),
+        Index("uq_agents_creation_request_key", "creation_request_key", unique=True),
         # PR #581 — durable ownership for lifecycle dispatch/recovery. The
         # expiry makes abandoned worker claims discoverable without turning a
         # failed websocket write into proof that the machine never received it.
@@ -291,6 +292,13 @@ class Agent(Base):
     base_url: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     api_protocol: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     credential_ref: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    # Actor-scoped creation idempotency. Never returned in AgentOut.
+    creation_request_key: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    creation_request_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
 
     placed_on_machine_id: Mapped[Optional[str]] = mapped_column(
         String(36),

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Literal
+from datetime import UTC, datetime, timedelta, timezone
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +42,7 @@ from anygarden.workspaces.service import (
     normalize_workspace_signing_public_key,
     policy_hash,
     required_capabilities,
+    workspace_mode_support,
 )
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["workspace-attachments"])
@@ -95,6 +103,32 @@ class AttachmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WorkspaceModeSupport(BaseModel):
+    supported: bool
+    reason: str | None = None
+
+
+class WorkspaceOption(BaseModel):
+    workspace_id: str
+    label: str
+    max_mode: Literal["read", "write"]
+    expires_at: datetime
+
+
+class WorkspaceOptions(BaseModel):
+    agent_id: str
+    participant_id: str
+    machine_id: str | None
+    machine_name: str | None
+    execution_kind: Literal["integrated", "remote"] | None
+    node_data_dir: str | None
+    can_approve_room: bool
+    can_approve_global: bool
+    read: WorkspaceModeSupport
+    write: WorkspaceModeSupport
+    workspaces: list[WorkspaceOption]
+
+
 class WorkspaceAuditOut(BaseModel):
     id: str
     attachment_id: str
@@ -126,6 +160,74 @@ async def _attachment_or_404(
     if row is None or row.room_id != room_id:
         raise HTTPException(status_code=404, detail="Workspace attachment not found")
     return row
+
+
+@router.get("/{room_id}/workspace-attachments/options", response_model=WorkspaceOptions)
+async def workspace_options(
+    room_id: str,
+    agent_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_current_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WorkspaceOptions:
+    """Room-scoped, redacted inventory and server-authoritative support limits."""
+    access = await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.WORKSPACE_ATTACH_MANAGE,
+    )
+    participant = (
+        await db.scalars(
+            select(Participant).where(
+                Participant.room_id == room_id,
+                Participant.agent_id == agent_id,
+                Participant.role.in_({"member", "admin", "owner"}),
+            )
+        )
+    ).first()
+    agent = await db.get(Agent, agent_id)
+    if participant is None or agent is None:
+        raise HTTPException(status_code=404, detail="Room agent participant not found")
+    machine = (
+        await db.get(Machine, agent.placed_on_machine_id)
+        if agent.placed_on_machine_id
+        else None
+    )
+    read_ok, read_reason = workspace_mode_support(machine, agent, "read")
+    write_ok, write_reason = workspace_mode_support(machine, agent, "write")
+    entries = []
+    for entry in machine.workspace_catalog or [] if machine else []:
+        try:
+            option = WorkspaceOption.model_validate(entry)
+        except ValidationError:
+            continue
+        if option.expires_at.replace(tzinfo=option.expires_at.tzinfo or UTC) > _now():
+            entries.append(option)
+    integrated = bool(
+        machine and machine.id == getattr(request.app.state, "local_machine_id", None)
+    )
+    node_data_dir = getattr(
+        getattr(request.app.state, "config", None), "local_node_data_dir", None
+    )
+    return WorkspaceOptions(
+        agent_id=agent.id,
+        participant_id=participant.id,
+        machine_id=machine.id if machine else None,
+        machine_name=machine.name if machine else None,
+        execution_kind=("integrated" if integrated else "remote") if machine else None,
+        # Only system administrators receive a local filesystem path for CLI use.
+        node_data_dir=str(node_data_dir)
+        if integrated and is_global_admin(identity) and node_data_dir is not None
+        else None,
+        can_approve_room=bool(
+            access.participant and access.effective_role in {"admin", "owner"}
+        ),
+        can_approve_global=is_global_admin(identity),
+        read=WorkspaceModeSupport(supported=read_ok, reason=read_reason),
+        write=WorkspaceModeSupport(supported=write_ok, reason=write_reason),
+        workspaces=entries,
+    )
 
 
 @router.post(
@@ -162,6 +264,15 @@ async def create_attachment(
     machine = await db.get(Machine, agent.placed_on_machine_id)
     if machine is None:
         raise HTTPException(status_code=409, detail="Agent machine not found")
+    supported, reason = workspace_mode_support(machine, agent, body.mode)
+    if not supported:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": reason,
+                "message": "This agent and machine do not support the requested external workspace access.",
+            },
+        )
     catalog = _catalog_entry(machine, body.workspace_id)
     if catalog is None:
         raise HTTPException(

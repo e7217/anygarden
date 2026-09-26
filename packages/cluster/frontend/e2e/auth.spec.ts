@@ -71,7 +71,7 @@ test.describe('authentication browser smoke', () => {
 
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { name: 'Welcome to Anygarden' })).toBeVisible()
-    await expect(page.getByTitle('Server version')).toHaveText('anygarden v0.18.0')
+    await expect(page.getByTitle('Server version')).toHaveText('v0.18.0')
     await page.getByRole('button', { name: 'Create Project' }).click()
     await expect(page.getByRole('dialog', { name: 'Create Project' })).toBeVisible()
     await expect

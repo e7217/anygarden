@@ -170,7 +170,7 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => cleanup())
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 function CurrentPath() {
   const location = useLocation()
@@ -365,12 +365,31 @@ describe('Sidebar — collapse/expand (#106, hook-backed #115)', () => {
     expect(aside.className).toMatch(/md:w-0/)
     expect(aside.className).toMatch(/md:overflow-hidden/)
     expect(aside).toHaveAttribute('aria-hidden', 'true')
+    expect(aside).toHaveAttribute('inert')
+  })
+
+  it('keeps a mobile drawer usable after the desktop sidebar was collapsed', () => {
+    vi.stubGlobal('innerWidth', 375)
+    mockSidebarLayout.mockReturnValue({
+      collapsed: true,
+      toggleCollapsed: toggleCollapsedSpy,
+      setCollapsed: vi.fn(),
+    })
+    const onClose = vi.fn()
+    renderSidebar('/', onClose)
+    const aside = screen.getByTestId('sidebar-root')
+    expect(aside).not.toHaveAttribute('aria-hidden')
+    expect(aside).not.toHaveAttribute('inert')
+    fireEvent.click(screen.getByRole('button', { name: 'Personal settings' }))
+    expect(screen.getByRole('group', { name: 'Language' })).toBeInTheDocument()
   })
 
   it('always renders the desktop collapse trigger and wires it to the hook toggle', () => {
     renderSidebar()
     const trigger = screen.getByTestId('sidebar-collapse')
     expect(trigger).toHaveAttribute('aria-label', 'Collapse sidebar')
+    expect(trigger).toHaveAttribute('aria-controls', 'workspace-sidebar')
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(trigger)
     expect(toggleCollapsedSpy).toHaveBeenCalledTimes(1)
   })

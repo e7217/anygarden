@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import SidebarMenuPopover from '@/components/SidebarMenuPopover'
 import { MoreHorizontal, Trash2 } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -31,22 +32,7 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onOutside = (e: Event) => {
-      if (!rootRef.current) return
-      if (!rootRef.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('pointerdown', onOutside)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onOutside)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+
 
   const pick = (run: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -59,7 +45,7 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
       ref={rootRef}
       className={`
         ml-1 shrink-0
-        opacity-100 md:opacity-0 md:group-hover:opacity-100
+        opacity-100 md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100
         ${open ? 'md:opacity-100' : ''}
         transition-opacity
       `}
@@ -72,7 +58,7 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
           e.stopPropagation()
           setOpen((v) => !v)
         }}
-        className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6"
+        className="flex h-[var(--control-icon-size)] w-[var(--control-icon-size)] items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={t('chat.projectActions')}
@@ -82,10 +68,11 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
         <MoreHorizontal className="h-4 w-4" />
       </button>
       {open && (
-        <div
-          role="group"
-          aria-label={t('chat.projectActions')}
-          className="absolute right-2 z-40 mt-1 w-40 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
+        <SidebarMenuPopover
+          anchorRef={rootRef}
+          label={t('chat.projectActions')}
+          onClose={() => setOpen(false)}
+          width="narrow"
         >
           <ul className="py-1">
             <li>
@@ -93,14 +80,14 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
                 type="button"
                 onClick={pick(onDelete)}
                 data-testid={`sidebar-project-menu-delete-${projectId}`}
-                className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
                 <span>{t('chat.deleteProject')}</span>
               </button>
             </li>
           </ul>
-        </div>
+        </SidebarMenuPopover>
       )}
     </div>
   )

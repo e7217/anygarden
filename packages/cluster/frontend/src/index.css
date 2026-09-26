@@ -119,6 +119,25 @@
 
 :root {
   color-scheme: light;
+  --dialog-padding: 1rem;
+  --control-height: 2.75rem;
+  --control-sm-height: 2.75rem;
+  --control-lg-height: 2.75rem;
+  --control-icon-size: 2.75rem;
+}
+
+@media (min-width: 640px) {
+  :root { --dialog-padding: 1.5rem; }
+}
+
+/* Explicit heights keep text + padding from growing a small control. */
+@media (min-width: 768px) and (pointer: fine) {
+  :root {
+    --control-height: 2.25rem;
+    --control-sm-height: 2rem;
+    --control-lg-height: 2.5rem;
+    --control-icon-size: 2rem;
+  }
 }
 
 :root[data-theme="dark"] {
@@ -202,10 +221,6 @@
    Base element styles
    ========================================================================== */
 
-* {
-  border-color: var(--color-border);
-}
-
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -223,6 +238,8 @@ body {
 
 /* Base heading defaults yield to Tailwind utilities on product-specific views. */
 @layer base {
+  * { border-color: var(--color-border); }
+
   h1, h2, h3, .display {
     font-feature-settings: "lnum", "locl";
     font-weight: 700;

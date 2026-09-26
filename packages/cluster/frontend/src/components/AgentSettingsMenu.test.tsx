@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import AgentSettingsMenu from './AgentSettingsMenu'
 
@@ -24,6 +24,9 @@ describe('AgentSettingsMenu', () => {
     const onOpenSettings = vi.fn()
     render(<AgentSettingsMenu onOpenSettings={onOpenSettings} />)
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+    // A portalled row menu is outside its anchor, but remains an inside click.
+    fireEvent.pointerDown(screen.getByTestId('agent-menu-settings'))
+    expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('agent-menu-settings'))
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('agent-menu-settings')).toBeNull()
@@ -41,12 +44,21 @@ describe('AgentSettingsMenu', () => {
     expect(del.className).toMatch(/text-\[var\(--color-destructive\)\]/)
   })
 
-  it('closes on Escape', () => {
+  it('closes on Escape and returns focus to the row action', () => {
     render(<AgentSettingsMenu onOpenSettings={vi.fn()} />)
     fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
     expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByTestId('agent-menu-settings')).toBeNull()
+    expect(screen.getByTestId('agent-settings-menu-trigger')).toHaveFocus()
+  })
+
+  it('closes a portalled row menu when its navigation drawer becomes hidden', async () => {
+    const { rerender } = render(<aside id="sidebar-test" data-navigation-drawer><AgentSettingsMenu onOpenSettings={vi.fn()} /></aside>)
+    fireEvent.click(screen.getByTestId('agent-settings-menu-trigger'))
+    expect(screen.getByTestId('agent-menu-settings')).toBeInTheDocument()
+    rerender(<aside id="sidebar-test" data-navigation-drawer aria-hidden="true" inert><AgentSettingsMenu onOpenSettings={vi.fn()} /></aside>)
+    await waitFor(() => expect(screen.queryByTestId('agent-menu-settings')).not.toBeInTheDocument())
   })
 
   it('closes on outside pointer click', () => {
@@ -140,16 +152,13 @@ describe('AgentSettingsMenu', () => {
 
   // #241 — compact variant for sidebar agent rows.
   describe('compact variant', () => {
-    it('renders a 44px touch trigger that becomes 24px on desktop', () => {
+    it('uses the shared responsive icon size for the compact trigger', () => {
       render(<AgentSettingsMenu compact onOpenSettings={vi.fn()} />)
       const trigger = screen.getByTestId('agent-settings-menu-trigger')
       // Bare <button> element, not the shadcn Button wrapper.
       expect(trigger.tagName).toBe('BUTTON')
       // The sibling new-DM button uses the same responsive sizes.
-      expect(trigger.className).toMatch(/\bh-11\b/)
-      expect(trigger.className).toMatch(/\bw-11\b/)
-      expect(trigger.className).toMatch(/\bmd:h-6\b/)
-      expect(trigger.className).toMatch(/\bmd:w-6\b/)
+      expect(trigger).toHaveClass('h-[var(--control-icon-size)]', 'w-[var(--control-icon-size)]')
     })
 
     it('defaults to the shadcn Button (h-9) when compact is omitted', () => {

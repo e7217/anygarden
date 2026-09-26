@@ -11,7 +11,7 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex min-h-11 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-1 text-[var(--color-foreground-muted)] md:min-h-9",
+      "inline-flex items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-alt)] p-1 text-[var(--color-foreground-muted)]",
       className
     )}
     {...props}
@@ -26,7 +26,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex min-h-11 items-center justify-center whitespace-nowrap rounded-[var(--radius-sm)] px-3 py-1 text-sm font-medium transition-[background-color,color,box-shadow] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[var(--color-surface-elevated)] data-[state=active]:text-[var(--color-foreground)] data-[state=active]:shadow-whisper md:min-h-7",
+      "inline-flex h-[var(--control-sm-height)] items-center justify-center whitespace-nowrap rounded-[var(--radius-sm)] px-3 py-1 text-sm font-medium transition-[background-color,color,box-shadow] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[var(--color-surface-elevated)] data-[state=active]:text-[var(--color-foreground)] data-[state=active]:shadow-whisper",
       className
     )}
     {...props}

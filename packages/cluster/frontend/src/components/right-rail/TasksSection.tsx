@@ -11,6 +11,8 @@ import {
   Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import { autoRouteUnassigned } from '@/lib/routing'
 import type { Participant } from '@/pages/ChatPage'
@@ -228,9 +230,11 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       <div
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
-        className={`group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-hover)] ${task.source_message_id ? '' : 'pr-10 lg:pr-2'}`}
+        className="group relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-hover)] md:pointer-fine:flex-nowrap"
       >
-        <button
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={() => cycleStatus(task)}
           aria-label={t('tasks.cycle', { status: statusLabel(task.status) })}
           className="shrink-0"
@@ -248,9 +252,9 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
                       : 'text-[var(--color-foreground-subtle)]'
             }`}
           />
-        </button>
+        </Button>
         <span
-          className={`min-w-0 flex-1 truncate text-[13px] ${
+          className={`min-w-0 flex-1 truncate text-sm ${
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
               : task.status === 'failed'
@@ -261,27 +265,22 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         >
           {task.title}
         </span>
-        {/* Assignee slot (#323/#325) — last flex child so its right
-            edge is the row's inner right (px-2 inset). Chip is
-            ``text-right`` so the resting visual right edge matches the
-            section header's right-aligned counter/action button. The
-            ``<select>`` shares the same box via ``absolute inset-0``;
-            its ``pr-5`` carves a clean column for the absolute-anchored
-            delete button below to land in without overlapping live
-            text. ``""`` value = Unassigned (Tasks tolerate NULL). */}
-        <div className="relative min-w-[5rem] max-w-[8rem] flex-[0_1_8rem]">
+        {/* Keep the native picker usable on touch; desktop hover replaces
+            the assignee label without reserving another row. The delete
+            action has its own target beside the picker. */}
+        <div className={`relative ml-[calc(var(--control-icon-size)+.5rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.5rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_8rem] ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
           <span
             aria-hidden="true"
-            className="block min-w-0 max-w-full truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
+            className="invisible block w-full min-w-0 max-w-full truncate text-right text-xs text-[var(--color-foreground-subtle)] md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible"
             title={assignee?.display_name ?? t('tasks.unassigned')}
           >
             {assignee?.display_name ?? '—'}
           </span>
-          <select
+          <Select
             value={task.assignee_participant_id ?? ''}
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
-            className="absolute inset-0 min-w-0 max-w-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity appearance-none bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
+            className={`absolute inset-y-0 left-0 h-[var(--control-sm-height)] min-w-0 max-w-full truncate px-1 text-base opacity-100 transition-opacity md:pointer-fine:text-xs md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100 ${task.source_message_id ? 'w-full' : 'w-[calc(100%-var(--control-icon-size)-.25rem)]'}`}
             aria-label={t('tasks.reassign', { name: task.title })}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >
@@ -291,23 +290,20 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
                 {p.display_name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
-        {/* #325 — delete is absolute so it doesn't reserve a hidden
-            24px gutter at rest. On hover it lands at ``right-2`` which
-            is the row's inner right edge, exactly where the section
-            header's action button sits — keeping the rail's right
-            column visually aligned. */}
         {!task.source_message_id ? (
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={async () => {
               if (await confirm({ title: t('tasks.deleteTitle'), description: t('tasks.deleteConfirm', { name: task.title }), confirmLabel: t('tasks.deleteTitle'), destructive: true })) await remove(task.id)
             }}
-            className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-all hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+            className="absolute bottom-1.5 right-2 text-[var(--color-destructive)] opacity-100 transition-opacity hover:bg-[var(--color-danger-soft)] md:pointer-fine:bottom-auto md:pointer-fine:top-1/2 md:pointer-fine:-translate-y-1/2 md:pointer-fine:opacity-0 md:pointer-fine:group-hover:opacity-100 md:pointer-fine:group-focus-within:opacity-100"
             aria-label={t('tasks.delete', { name: task.title })}
           >
             <Trash2 className="h-3 w-3" />
-          </button>
+          </Button>
         ) : null}
       </div>
     )
@@ -320,13 +316,15 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           {t('chat.tasks')}
         </h3>
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+          <span className="text-xs text-[var(--color-foreground-subtle)]">
             {tasks.length}
           </span>
           {/* #313 — Auto-route via room representative. Disabled
               when nothing is unassigned (avoids a wasted LLM
               roundtrip) or while a request is in flight. */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             type="button"
             onClick={handleAutoRoute}
             disabled={routing || unassignedCount === 0}
@@ -337,19 +335,19 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
                 : t('tasks.autoRouteCount', { count: unassignedCount })
             }
             data-testid="right-rail-auto-route-button"
-            className="flex min-h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-[var(--color-foreground-muted)]"
           >
             {routing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
               <Wand2 className="h-3.5 w-3.5" />
             )}
-          </button>
+          </Button>
         </div>
       </header>
       {routeMessage && (
         <p
-          className="break-words px-3 pb-1 text-[11px] text-[var(--color-foreground-muted)]"
+          className="break-words px-3 pb-1 text-xs text-[var(--color-foreground-muted)]"
           role="status"
           data-testid="right-rail-route-toast"
         >
@@ -369,7 +367,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           if (items.length === 0) return null
           return (
             <div key={status} className="mb-1 min-w-0">
-              <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
+              <div className="px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider text-[var(--color-foreground-subtle)]">
                 {statusLabel(status)}
               </div>
               {items.map(renderRow)}
@@ -383,19 +381,20 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           assigned to <name>") rather than feeling like an empty
           dropdown the user has to deal with. */}
       <div className="min-w-0 space-y-2 border-t border-[var(--color-border)] px-3 py-2">
-        <input
+        <Input
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submitNew()}
           placeholder={t('tasks.addPlaceholder')}
-          className="min-w-0 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--color-foreground-subtle)]"
+          aria-label={t('tasks.addPlaceholder')}
+          className="min-w-0"
         />
         <div className="flex min-w-0 items-center gap-2">
-          <select
+          <Select
             value={newAssignee}
             onChange={(e) => setNewAssignee(e.target.value)}
             disabled={singleAgentRoom || agentParticipants.length === 0}
-            className="min-w-0 flex-1 bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border border-[var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 truncate disabled:opacity-70"
+            className="min-w-0 flex-1 truncate"
             aria-label={t('tasks.pickAssignee')}
             data-testid="right-rail-task-create-assignee"
           >
@@ -405,10 +404,10 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
                 {p.display_name}
               </option>
             ))}
-          </select>
+          </Select>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
             onClick={submitNew}
             disabled={adding || !newTitle.trim()}
             aria-label={t('tasks.create')}

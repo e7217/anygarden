@@ -112,3 +112,18 @@ it('does not treat an endpoint lookup failure as a native connection', async () 
   expect(screen.queryByLabelText('Pi provider authentication')).toBeNull()
   expect(onConnectionChange).toHaveBeenCalledWith({ agentId: 'a1', status: 'error' })
 })
+
+it.each(['ultra', 'high'])('updates model and any incompatible reasoning atomically: %s', async effort => {
+  mocks.endpoint = { provider: null, model: 'gpt-6-sol', base_url: null, api_protocol: null, credential_ref: null }
+  const choices = { ...catalog, default_model: 'gpt-6-sol', reasoning_levels: ['high', 'ultra'], models: [
+    { id: 'gpt-6-sol', label: 'Sol', reasoning_levels: ['high', 'ultra'] },
+    { id: 'gpt-6-luna', label: 'Luna', reasoning_levels: ['high'] },
+  ] }
+  render(<ModelConnectionPanel agent={{ ...codex, model: 'gpt-6-sol', reasoning_effort: effort }} updateAgent={updateAgent}
+    fetchEngineCatalog={vi.fn().mockResolvedValue(choices)} onConnectionChange={onConnectionChange} />)
+  fireEvent.change(await screen.findByLabelText('Agent model'), { target: { value: 'gpt-6-luna' } })
+  await waitFor(() => expect(updateAgent).toHaveBeenCalledWith('a1', {
+    model: 'gpt-6-luna', model_set: true,
+    ...(effort === 'ultra' ? { reasoning_effort: null, reasoning_effort_set: true } : {}),
+  }))
+})

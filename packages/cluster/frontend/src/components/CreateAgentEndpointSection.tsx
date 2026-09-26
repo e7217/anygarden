@@ -1,10 +1,11 @@
 // Direct model server fields for Pi in the Create
 // Agent dialog. Owns only presentation and the model probe; the dialog owns
 // the draft state and the create → credential → endpoint sequence.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import { useLocale } from '@/i18n/LocaleProvider'
 import {
   type DiscoveredModel,
@@ -43,23 +44,32 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<{ count: number; reachableFrom: string } | null>(null)
   const [error, setError] = useState('')
+  const probeRevision = useRef(0)
+  useEffect(() => {
+    probeRevision.current += 1
+    setLoading(false); setStatus(null); setError('')
+    return () => { probeRevision.current += 1 }
+  }, [engine, draft.baseUrl, draft.auth, draft.apiKey])
   const urlValid = isValidEndpointUrl(draft.baseUrl)
   const update = (patch: Partial<EndpointDraft>) => onChange({ ...draft, ...patch })
 
   async function loadModels() {
+    const revision = ++probeRevision.current
     setLoading(true); setError(''); setStatus(null)
     try {
       const result = await discoverEndpointModels({
         base_url: draft.baseUrl,
         ...(draft.auth === 'key' && draft.apiKey ? { api_key: draft.apiKey } : {}),
       })
+      if (revision !== probeRevision.current) return
       onModelsLoaded(result.models)
       setStatus({ count: result.models.length, reachableFrom: result.reachable_from })
     } catch (e) {
+      if (revision !== probeRevision.current) return
       onModelsLoaded([])
       setError(e instanceof Error ? e.message : t('admin.endpoint.loadFailed'))
     } finally {
-      setLoading(false)
+      if (revision === probeRevision.current) setLoading(false)
     }
   }
 
@@ -79,19 +89,19 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
           </div>
           <div className="space-y-2">
             <Label htmlFor="endpoint-protocol">{t('admin.endpoint.apiProtocol')}</Label>
-            <select id="endpoint-protocol" className={selectClassName} value={draft.protocol}
+            <Select id="endpoint-protocol" className={selectClassName} value={draft.protocol}
               onChange={e => update({ protocol: e.target.value as EndpointProtocol })}>
               {engine === 'pi-cli' && <option value="chat-completions">Chat Completions</option>}
               <option value="responses">Responses</option>
-            </select>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="endpoint-auth">{t('admin.endpoint.authentication')}</Label>
-            <select id="endpoint-auth" className={selectClassName} value={draft.auth}
+            <Select id="endpoint-auth" className={selectClassName} value={draft.auth}
               onChange={e => update({ auth: e.target.value as EndpointDraft['auth'], apiKey: '' })}>
               <option value="none">{t('admin.endpoint.noAuthentication')}</option>
               <option value="key">{t('admin.endpoint.apiKey')}</option>
-            </select>
+            </Select>
           </div>
           {draft.auth === 'key' && (
             <div className="space-y-2">
@@ -102,7 +112,7 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
             </div>
           )}
           <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
+            <Button type="button" variant="outline" size="sm"  disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
               onClick={() => void loadModels()}>
               {loading ? t('admin.endpoint.loading') : t('admin.endpoint.loadModels')}
             </Button>

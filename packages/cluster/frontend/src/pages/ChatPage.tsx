@@ -12,6 +12,7 @@ import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import RoomInviteDialog from '@/components/RoomInviteDialog'
+import RoomWorkspaceDialog from '@/components/RoomWorkspaceDialog'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
 import SearchDialog from '@/components/SearchDialog'
 import RightContextRail from '@/components/RightContextRail'
@@ -137,6 +138,7 @@ export default function ChatPage() {
   const [roomActivityOpen, setRoomActivityOpen] = useState(false)
   const [roomEditOpen, setRoomEditOpen] = useState(false)
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
+  const [workspaceRoomId, setWorkspaceRoomId] = useState<string | null>(null)
   const [participantsOpen, setParticipantsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [createProjectRequest, requestCreateProject] = useState(0)
@@ -544,6 +546,11 @@ export default function ChatPage() {
                 onCreateSubRoom={
                   isDm ? undefined : () => setSubRoomDialogOpen(true)
                 }
+                onManageWorkspaces={
+                  !isDm && (user?.is_admin || (myParticipantId && ['admin', 'owner'].includes(participants[myParticipantId]?.role ?? '')))
+                    ? () => setWorkspaceRoomId(selectedRoom)
+                    : undefined
+                }
                 onEditRoom={isDm ? undefined : () => setRoomEditOpen(true)}
                 onManageInvites={
                   isDm
@@ -605,7 +612,8 @@ export default function ChatPage() {
                 rightRailSlot={
                   <RightRailToggle
                     roomId={selectedRoom}
-                    onMobileOpen={() => setRightRailOpen(true)}
+                    mobileOpen={rightRailOpen}
+                    onMobileOpen={() => setRightRailOpen(value => !value)}
                   />
                 }
               />
@@ -732,6 +740,13 @@ export default function ChatPage() {
               roomId={selectedRoom}
               open={roomInvitesOpen}
               onOpenChange={setRoomInvitesOpen}
+            />
+            <RoomWorkspaceDialog
+              key={selectedRoom}
+              roomId={selectedRoom}
+              roomName={currentRoom.name}
+              open={workspaceRoomId === selectedRoom}
+              onOpenChange={open => setWorkspaceRoomId(open ? selectedRoom : null)}
             />
           </>
         ) : (

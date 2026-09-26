@@ -29,19 +29,23 @@ The same file defines foreground variants, strong borders, focus, message surfac
 
 ## 3. Typography and spacing
 
-Use the `Inter` system stack. The named scale is display 48px, title 32px, heading 24px, lead 20px, body 16px, caption 14px and badge 12px. Reserve 12px for compact metadata; forms, descriptions and empty states should normally use at least 14px. Headings use tight tracking and regular body text uses a 1.5 line height.
+The named typography utilities must be registered as font sizes in `lib/utils.ts` (tailwind-merge); otherwise semantic text colours can silently remove them. Use the `Inter` system stack. The named scale is display 48px, title 32px, heading 24px, lead 20px, body 16px, caption 14px and badge 12px. Reserve 12px for compact metadata; forms, descriptions and empty states should normally use at least 14px. Headings use tight tracking and regular body text uses a 1.5 line height.
+
+Interactive controls use the density tokens in `index.css`: `--control-height` is 36px, `--control-sm-height` and `--control-icon-size` are 32px, and `--control-lg-height` is 40px on desktop with a fine pointer. Below 768px and on coarse pointers all four are 44px. Use the shared Button, Input and Select; do not combine `min-height` and padding to approximate their heights. Inputs and selects in the same form must have equal computed heights. Multiline input uses Textarea. Dialog and card titles are 20px; page titles are 24px; the chat room title is 16px so opening a side panel does not resize it.
 
 The spacing scale follows 4px steps. `--space-6` (24px) is the standard page section and card padding on wide screens, reduced on narrow screens. Dividers and surface changes carry hierarchy; elevation is for overlays and raised cards. Radius tokens range from 4px controls to 12px dialogs and full pill badges.
 
 ## 4. Components and feedback
 
-Use the shared `components/ui` buttons, inputs, cards, dialogs, tables and tabs. Inputs use semantic surfaces and a visible focus ring. Primary actions use teal, secondary actions are neutral, and destructive actions use the danger token. Disabled, loading and error states stay visible and explain what happened.
+Use the shared `components/ui` buttons, inputs, selects, textareas, cards, dialogs, tables and tabs. Inputs use semantic surfaces and a visible focus ring. Primary actions use teal, secondary actions are neutral, and destructive actions use the danger token. Disabled, loading and error states stay visible and explain what happened.
 
 Use `FeedbackProvider` for destructive confirmation and transient notices. Confirmation identifies the affected object and consequence; a failed action shows an actionable error. Dialogs fit within the viewport, scroll internally when needed, and keep actions reachable by touch or keyboard.
 
 ## 5. Layout and navigation
 
 `PageShell` provides the shared sidebar and mobile top bar for full page areas. Chat uses its own three part workspace: project and room navigation, conversation, and an optional context rail for responsibilities, tasks and files. Desktop keeps the main work area central. At narrower widths, secondary rails become panels or drawers so they never squeeze the main content to a single character column.
+
+Language and theme live in Personal settings beside the signed-in account. Login keeps its own visible language/theme controls. Desktop navigation preserves a narrow rail when collapsed, with collapse and expand at the same upper-left position. Menus in scrollable navigation use SidebarMenuPopover so actions stay inside the viewport. The context rail toggle stays at the end of the room header; thread layout is also available in the room menu on small screens.
 
 Page headers show location, title, a short description when useful, then the main action and secondary actions. Empty states offer the next usable action: create a project, create a room, choose a room, add an agent, or upload a file. Forms reveal exceptional settings only when needed. Existing server fields and saved values must remain reachable.
 
@@ -58,3 +62,11 @@ Fixed interface copy lives in `src/i18n/catalogs/`. The locale provider persists
 ## 8. Verification
 
 After a UI change, run the frontend build and relevant component and browser tests. Inspect the affected route at the four reference widths in both themes and languages. Check the actual pointer target on crowded headers and menus, keyboard focus order, dialog scrolling, empty states and the full login to room flow.
+
+## 9. Setup and management journeys
+
+Machines is an administrator's execution-environment page. Registration leads to installation, server URL, a foreground CLI command, and a live connection check. Existing offline machines can reopen the connection guide. Copying a command does not embed the one-time token. The guide explicitly distinguishes registration from a running daemon and automatic startup.
+
+CreateAgentDialog owns the initial identity, engine/model, permission and room draft. The selected machine is passed to the server and validated before placement; older API clients may omit it for automatic placement. Description is distinct from optional AGENTS.md instructions. Successful creation leads to agent settings; a partially configured credential never silently creates a duplicate agent on retry.
+
+Agent settings keeps existing sections mounted to preserve unsaved edits and offers direct navigation to overview, connection, instructions, rooms, workspace, responsibilities, tasks and activity. Workspace access follows the existing room/global/local approval model and references registered workspace IDs rather than host paths. Empty states, failure states and retries must remain explicit.

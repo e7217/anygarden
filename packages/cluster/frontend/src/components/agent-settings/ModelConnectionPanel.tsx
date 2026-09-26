@@ -7,6 +7,7 @@ import { applyEndpoint, getEndpoint, switchPiToNative, type EndpointConfiguratio
 import DirectEndpointPanel from './DirectEndpointPanel'
 import PiNativeAuthPanel from './PiNativeAuthPanel'
 import { useLocale } from '@/i18n/LocaleProvider'
+import { compatibleReasoning, reasoningLevelsFor } from '@/lib/engineReasoning'
 
 export type ConnectionState =
   | { agentId: string; status: 'loading' }
@@ -86,10 +87,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
     return () => { active = false }
   }, [agent.engine, fetchEngineCatalog])
 
-  const reasoningLevels = useMemo(() => {
-    const selected = catalog?.models.find(item => item.id === agent.model)
-    return selected?.reasoning_levels.length ? selected.reasoning_levels : (catalog?.reasoning_levels ?? [])
-  }, [catalog, agent.model])
+  const reasoningLevels = useMemo(() => reasoningLevelsFor(catalog, agent.model), [catalog, agent.model])
 
   async function saveNative() {
     if (!providerPattern.test(provider) || !model.trim()) {
@@ -150,7 +148,10 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
 
   async function saveModel(value: string) {
     setBusy(true); setError('')
-    try { await updateAgent(agent.id, { model: value || null, model_set: true }) }
+    const reasoning = compatibleReasoning(catalog, value, agent.reasoning_effort)
+    try { await updateAgent(agent.id, { model: value || null, model_set: true,
+      ...(reasoning !== (agent.reasoning_effort ?? null) ? { reasoning_effort: reasoning, reasoning_effort_set: true } : {}),
+    }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : t('admin.modelConnection.saveModelFailed')) }
     finally { setBusy(false) }
   }

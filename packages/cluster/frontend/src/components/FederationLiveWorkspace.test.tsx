@@ -62,7 +62,7 @@ function selectTab(name: string) {
 describe('FederationLiveWorkspace', () => {
   it('labels the surface as live, not a mock', () => {
     render(<FederationLiveWorkspace federation={baseFederation()} />)
-    expect(screen.getByText(/Live federation view · real API/i)).toBeInTheDocument()
+    expect(screen.getByText(/Connected federation workspace/i)).toBeInTheDocument()
     expect(screen.queryByText(/Interactive mock/i)).not.toBeInTheDocument()
   })
 

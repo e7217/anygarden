@@ -49,9 +49,7 @@ _WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
 _EMBEDDED_PATH = re.compile(
     r"(?:^|[\s'\"=:,(])(?:/[^\s'\"),]+|~[\\/][^\s'\"),]+|[A-Za-z]:[\\/][^\s'\"),]+)"
 )
-_OPAQUE_SECRET_VALUE = re.compile(
-    r"(?:wcp|wsc|mch|agt)_[A-Za-z0-9_-]+", re.IGNORECASE
-)
+_OPAQUE_SECRET_VALUE = re.compile(r"(?:wcp|wsc|mch|agt)_[A-Za-z0-9_-]+", re.IGNORECASE)
 _NAMED_SECRET_VALUE = re.compile(
     r"(?:token|secret|password|credential|authorization)\s*[:=]",
     re.IGNORECASE,
@@ -540,6 +538,36 @@ def machine_can_activate(
     if mode == "read" and effective != "restricted":
         return False, "workspace_read_requires_restricted"
     return True, None
+
+
+def workspace_support_reason(machine: Machine | None, agent: Agent) -> str | None:
+    """Shared read-mode readiness used before offering a new lease in the UI."""
+    if machine is None:
+        return "agent_not_placed"
+    if machine.status != "online":
+        return "machine_offline"
+    if (
+        normalize_workspace_signing_public_key(machine.workspace_signing_public_key)
+        is None
+    ):
+        return "workspace_receipt_signing_unavailable"
+    return None
+
+
+def workspace_mode_support(
+    machine: Machine | None, agent: Agent, mode: str
+) -> tuple[bool, str | None]:
+    """Report the same implementation limits as activation, before requesting approval."""
+    reason = workspace_support_reason(machine, agent)
+    if reason:
+        return False, reason
+    assert machine is not None
+    return machine_can_activate(
+        machine=machine,
+        agent=agent,
+        mode=mode,
+        receipt_capabilities=list(machine.control_capabilities or []),
+    )
 
 
 def attachment_frame(attachment: WorkspaceAttachment) -> dict[str, str | int]:

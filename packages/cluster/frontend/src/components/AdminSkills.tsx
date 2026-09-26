@@ -415,7 +415,7 @@ export default function AdminSkills() {
           >
             <SearchIcon className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.searchSkills')}
           </Button>
-          <Button size="sm" className="order-first min-h-11 w-full sm:w-auto lg:order-last" onClick={() => setRegisterOpen(true)}>
+          <Button size="sm" className="order-first w-full sm:w-auto lg:order-last" onClick={() => setRegisterOpen(true)}>
             <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.registerSkill')}
           </Button>
         </div>
@@ -527,7 +527,7 @@ export default function AdminSkills() {
                         {t('admin.skills.attachedCount', { count: skill.attached_agent_ids.length })}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:min-h-11 lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
+                    <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
                       <Button
                         variant="ghost"
                         size="sm"

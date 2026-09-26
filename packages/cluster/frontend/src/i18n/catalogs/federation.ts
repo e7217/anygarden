@@ -1,8 +1,8 @@
 /** Fixed UI copy for federation administration, its preview, and topology. */
 const copy = {
   'federation.errorPrefix': ['Last action failed', '마지막 작업 실패'],
-  'federation.liveNotice': ['Live federation view · real API', '실시간 연합 작업 화면 · 실제 API'],
-  'federation.liveNoticeBody': ['Actions on this page call this node over HTTP with your admin session.', '이 화면의 작업은 관리자 세션을 사용해 현재 노드의 HTTP API를 호출합니다.'],
+  'federation.liveNotice': ['Connected federation workspace', '연결된 연합 작업 공간'],
+  'federation.liveNoticeBody': ['Manage node connections, shared channels, and task handoffs here. Changes are applied immediately.', '이곳에서 노드 연결, 공유 채널, 작업 전달을 관리합니다. 변경 사항은 즉시 적용됩니다.'],
   'federation.previewNotice': ['Interactive mock · no server connection', '체험용 화면 · 서버 연결 없음'],
   'federation.previewNoticeBody': ['Actions only change this preview and never invite, revoke, or run anything.', '여기서 누른 작업은 미리보기만 바꾸며 실제 초대, 접근 취소, 실행은 일어나지 않습니다.'],
   'federation.eyebrow': ['Federated collaboration', '연합 협업'],

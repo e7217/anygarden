@@ -381,6 +381,48 @@ test.describe('thread composer contract', () => {
     }
   })
 
+  test('header controls share a compact desktop size and a touch size on phones', async ({ page }) => {
+    await openRoom(page)
+    for (const width of [375, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 800 })
+      const settings = await page.getByTestId('room-header-settings-menu-trigger').boundingBox()
+      const context = await page.getByTestId('right-rail-toggle').boundingBox()
+      expect(settings).not.toBeNull()
+      expect(context).not.toBeNull()
+      expect(settings!.height).toBe(width < 768 ? 44 : 32)
+      expect(context!.height).toBe(settings!.height)
+      expect(context!.width).toBe(settings!.width)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+    }
+  })
+
+  test('mobile overflow menu keeps thread layout available', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 })
+    await openRoom(page)
+    await expect(page.getByTestId('thread-mode-toggle')).toBeHidden()
+    await page.getByTestId('room-header-settings-menu-trigger').click()
+    await page.getByTestId('room-menu-thread-mode').click()
+    await threadTrigger(page).click()
+    await expect(page.getByTestId('thread-inline-root')).toBeVisible()
+  })
+
+  test('collapsed navigation restores from the same position without covering the title', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await openRoom(page)
+    const collapse = page.getByTestId('sidebar-collapse')
+    const before = await collapse.boundingBox()
+    await collapse.click()
+    const expand = page.getByTestId('sidebar-expand')
+    await expect(expand).toBeVisible()
+    const after = await expand.boundingBox()
+    expect(after!.x).toBe(before!.x)
+    expect(after!.y).toBe(before!.y)
+    const title = await page.getByRole('heading', { name: 'e2e-room', level: 2 }).boundingBox()
+    expect(title!.x).toBeGreaterThanOrEqual(after!.x + after!.width)
+    await expand.click()
+    await expect(collapse).toBeVisible()
+  })
+
   test('context rail overlays the chat at tablet width', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 800 })
     await openRoom(page)

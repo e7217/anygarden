@@ -29,7 +29,7 @@ export default function AdminSystem() {
             {t('admin.system.description')}
           </p>
         </div>
-        <Button onClick={refresh} disabled={loading} className="min-h-11 w-full sm:w-auto lg:shrink-0">
+        <Button onClick={refresh} disabled={loading} className="w-full sm:w-auto lg:shrink-0">
           <RefreshCw className={loading ? 'animate-spin' : ''} />
           {loading ? t('admin.system.checking') : t('admin.system.checkUpdates')}
         </Button>

@@ -321,7 +321,7 @@ export default function ChatArea({
               return null
             }
             return (
-              <div key={msg.seq || i} data-message-id={msg.id} className="group/message">
+              <div key={msg.seq || i} data-message-id={msg.id} className="group/message relative">
                 <MessageBubble
                   message={msg}
                   participants={participants}
