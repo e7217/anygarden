@@ -19,12 +19,12 @@ import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import RoomEditDialog from '@/components/RoomEditDialog'
 import SidebarProjectMenu from '@/components/SidebarProjectMenu'
 import SidebarRoomMenu from '@/components/SidebarRoomMenu'
+import SidebarAdminMenu from '@/components/SidebarAdminMenu'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
 import {
-  Hash, Plus, ChevronDown, ChevronRight, LogOut, Server, MessageSquare, X,
-  Pin, PinOff, GripVertical, Share2, PanelLeftClose, BookOpen, Plug, Waypoints, Network,
-  Package,
+  Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
+  Pin, PinOff, GripVertical, PanelLeftClose,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -140,18 +140,6 @@ interface SidebarProps {
   /** Mobile off-canvas open state. Desktop (md+) is always visible. */
   open?: boolean
   onClose?: () => void
-}
-
-function ExperimentalNavBadge() {
-  return (
-    <span
-      aria-hidden="true"
-      title="Experimental feature"
-      className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-[10px] font-semibold leading-4 text-[var(--color-brand-tint-text)]"
-    >
-      Experimental
-    </span>
-  )
 }
 
 export default function Sidebar({
@@ -426,7 +414,7 @@ export default function Sidebar({
       </div>
 
       {/* Projects & Rooms */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="px-2 py-2">
           {/* Pinned section — top-level pinned rooms across all
               projects, ordered by ``sort_order`` (#47). The
@@ -704,109 +692,8 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Admin section */}
-      {user?.is_admin && (
-        <div className="border-t border-[var(--color-border)] px-2 py-2">
-          <p className="text-badge uppercase px-2 py-1 text-[var(--color-foreground-muted)]">
-            Admin
-          </p>
-          <div className="flex flex-col gap-0.5">
-            <button
-              onClick={() => go('/admin/machines')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/admin/machines'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Server className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              Machines
-            </button>
-            <button
-              onClick={() => go('/admin/system')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/admin/system'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Package className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              <span className="min-w-0 truncate">System</span>
-              {updateAvailable && (
-                <span
-                  className="ml-auto rounded-full bg-[#f2f9ff] px-2 py-0.5 text-[11px] font-semibold text-[#097fe8]"
-                  title="Update available"
-                >
-                  update
-                </span>
-              )}
-            </button>
-            <button
-              onClick={() => go('/admin/skills')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/admin/skills'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <BookOpen className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              Skills
-            </button>
-            <button
-              onClick={() => go('/admin/mcp-templates')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/admin/mcp-templates'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Plug className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              MCP Servers
-            </button>
-            <button
-              aria-label="Usage"
-              onClick={() => go('/admin/usage')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname.startsWith('/admin/usage')
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Waypoints className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              <span className="min-w-0 truncate">Usage</span>
-            </button>
-            <button
-              aria-label="Federation, experimental feature"
-              onClick={() => go('/admin/federation')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname.startsWith('/admin/federation')
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Network className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              <span className="min-w-0 truncate">Federation</span>
-              <ExperimentalNavBadge />
-            </button>
-            <button
-              aria-label="Topology, experimental feature"
-              onClick={() => go('/topology')}
-              className={`flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
-                location.pathname === '/topology'
-                  ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                  : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
-              }`}
-            >
-              <Share2 className="mr-2 h-4 w-4 text-[var(--color-foreground-subtle)]" />
-              <span className="min-w-0 truncate">Topology</span>
-              <ExperimentalNavBadge />
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* User info */}
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-3">
+      <div className="relative flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-xs text-[var(--color-foreground-muted)]">{user?.email}</span>
           {serverVersion && (
@@ -815,9 +702,18 @@ export default function Sidebar({
             </span>
           )}
         </div>
-        <Button variant="ghost" size="icon" onClick={logout} title="Logout">
-          <LogOut className="h-4 w-4" />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          {isAdmin && (
+            <SidebarAdminMenu
+              pathname={location.pathname}
+              updateAvailable={updateAvailable}
+              onGo={go}
+            />
+          )}
+          <Button variant="ghost" size="icon" onClick={logout} title="Logout" className="min-h-11 min-w-11">
+            <LogOut className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       </aside>
     </>

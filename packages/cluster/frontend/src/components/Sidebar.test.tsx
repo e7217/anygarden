@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 
 // Sidebar pulls in a chain of provider-backed hooks. For the
@@ -13,6 +13,13 @@ import Sidebar from './Sidebar'
 const authMockState = vi.hoisted(() => ({
   isAdmin: false,
   logout: vi.fn(),
+}))
+const updateMockState = vi.hoisted(() => ({ available: false }))
+vi.mock('@/hooks/useSystemVersion', () => ({
+  useSystemVersion: () => null,
+  useUpdateStatus: () => ({
+    updates: updateMockState.available ? [{ update_available: true }] : [],
+  }),
 }))
 const roomsMockState = vi.hoisted(() => ({
   projects: [] as Array<{ id: string; name: string }>,
@@ -128,6 +135,7 @@ vi.mock('@/components/EntityAvatar', () => ({
 
 beforeEach(() => {
   authMockState.isAdmin = false
+  updateMockState.available = false
   authMockState.logout.mockReset()
   roomsMockState.projects = []
   roomsMockState.rooms = {}
@@ -163,20 +171,40 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-function renderSidebar() {
+function CurrentPath() {
+  const location = useLocation()
+  return <span data-testid="current-path">{location.pathname}</span>
+}
+
+function renderSidebar(path = '/', onClose?: () => void) {
   return render(
-    <MemoryRouter>
-      <Sidebar selectedRoom={null} />
+    <MemoryRouter initialEntries={[path]}>
+      <Sidebar selectedRoom={null} open={Boolean(onClose)} onClose={onClose} />
+      <CurrentPath />
     </MemoryRouter>,
   )
 }
 
-describe('Sidebar — experimental admin nav badges (#346)', () => {
-  it('shows usage separately from experimental Federation and Topology', () => {
-    authMockState.isAdmin = true
-
+describe('Sidebar — footer admin menu (#699)', () => {
+  it('hides admin navigation from non-admins', () => {
     renderSidebar()
+    expect(screen.queryByRole('button', { name: 'Admin settings' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Machines' })).not.toBeInTheDocument()
+  })
 
+  it('shows all seven links only after opening the admin settings menu', () => {
+    authMockState.isAdmin = true
+    renderSidebar()
+    const trigger = screen.getByRole('button', { name: 'Admin settings' })
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'Machines' })).not.toBeInTheDocument()
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'true')
+    expect(trigger).toHaveAttribute('aria-controls')
+    expect(screen.getByRole('group', { name: 'Admin navigation' })).toBeInTheDocument()
+    for (const name of ['Machines', 'System', 'Skills', 'MCP Servers', 'Usage']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
     expect(screen.getByRole('button', {
       name: 'Usage',
     })).toBeInTheDocument()
@@ -189,6 +217,41 @@ describe('Sidebar — experimental admin nav badges (#346)', () => {
       name: 'Topology, experimental feature',
     })).toBeInTheDocument()
     expect(screen.getAllByText('Experimental')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Machines' })).toHaveFocus()
+  })
+
+  it('navigates using the existing sidebar action and closes the mobile drawer', () => {
+    authMockState.isAdmin = true
+    const onClose = vi.fn()
+    renderSidebar('/', onClose)
+    fireEvent.click(screen.getByRole('button', { name: 'Admin settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/admin/skills')
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: 'Skills' })).not.toBeInTheDocument()
+  })
+
+  it('closes on outside pointer down and Escape, restoring focus after Escape', () => {
+    authMockState.isAdmin = true
+    renderSidebar()
+    const trigger = screen.getByRole('button', { name: 'Admin settings' })
+    fireEvent.click(trigger)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(trigger).toHaveFocus()
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(trigger)
+    fireEvent.pointerDown(document.body)
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('marks the current route and exposes system updates on the closed trigger', () => {
+    authMockState.isAdmin = true
+    updateMockState.available = true
+    renderSidebar('/admin/usage/details')
+    const trigger = screen.getByRole('button', { name: 'Admin settings, update available' })
+    fireEvent.click(trigger)
+    expect(screen.getByRole('button', { name: 'Usage' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: /System/ })).toHaveTextContent('update')
   })
 })
 
