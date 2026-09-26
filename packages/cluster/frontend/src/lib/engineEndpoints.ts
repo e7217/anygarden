@@ -5,6 +5,29 @@ import { apiFetch } from '@/lib/api'
 
 export type EndpointProtocol = 'responses' | 'chat-completions'
 
+export interface EndpointConfiguration {
+  provider: string | null
+  model: string | null
+  base_url: string | null
+  api_protocol: EndpointProtocol | null
+  credential_ref: string | null
+}
+
+export async function getEndpoint(agentId: string): Promise<EndpointConfiguration> {
+  const response = await apiFetch(`/api/v1/agents/${agentId}/endpoint`)
+  if (!response.ok) throw new Error(await detail(response, 'Unable to load model connection'))
+  return response.json()
+}
+
+export async function switchPiToNative(agentId: string, provider: string, model: string): Promise<EndpointConfiguration> {
+  const response = await apiFetch(`/api/v1/agents/${agentId}/endpoint`, {
+    method: 'PUT',
+    body: JSON.stringify({ base_url: null, provider, model }),
+  })
+  if (!response.ok) throw new Error(await detail(response, 'Unable to switch Pi connection'))
+  return response.json()
+}
+
 export interface DiscoveredModel {
   id: string
   max_model_len: number | null

@@ -24,7 +24,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import AgentSettingsDialog from './AgentSettingsDialog'
-import type { Agent, EngineCatalog } from '@/hooks/useAgents'
+import type { Agent } from '@/hooks/useAgents'
 
 afterEach(() => cleanup())
 
@@ -137,27 +137,10 @@ describe('AgentSettingsDialog', () => {
 // the same shape, and a future regression on either side is caught
 // here as long as the wrapper continues to mirror the call sites.
 describe('AgentSettingsDialog — parent state pattern (#281)', () => {
-  it('keeps the model select in sync after the agents list mutates', async () => {
-    const catalog: EngineCatalog = {
-      engine: 'claude-code',
-      default_model: 'claude-haiku-4-5',
-      models: [
-        {
-          id: 'claude-haiku-4-5',
-          label: 'Haiku 4.5',
-          reasoning_levels: [],
-        },
-        {
-          id: 'claude-opus-4-7',
-          label: 'Opus 4.7',
-          reasoning_levels: [],
-        },
-      ],
-      reasoning_levels: [],
-    }
+  it('keeps the name in sync after the agents list mutates', async () => {
 
     function Parent() {
-      const initial = makeAgent({ id: 'a1', model: 'claude-haiku-4-5' })
+      const initial = makeAgent({ id: 'a1', name: 'before' })
       const [agents, setAgents] = useState<Agent[]>([initial])
       // Canonical pattern — store the open agent's ID, derive the
       // Agent from the live list so it tracks ``setAgents`` updates.
@@ -172,7 +155,7 @@ describe('AgentSettingsDialog — parent state pattern (#281)', () => {
       const mutate = () =>
         setAgents(prev =>
           prev.map(a =>
-            a.id === openId ? { ...a, model: 'claude-opus-4-7' } : a,
+            a.id === openId ? { ...a, name: 'after' } : a,
           ),
         )
 
@@ -189,7 +172,7 @@ describe('AgentSettingsDialog — parent state pattern (#281)', () => {
             updateAgent={vi.fn()}
             upsertAgentFile={vi.fn()}
             deleteAgentFile={vi.fn()}
-            fetchEngineCatalog={vi.fn().mockResolvedValue(catalog)}
+            fetchEngineCatalog={vi.fn().mockResolvedValue(null)}
           />
         </>
       )
@@ -201,20 +184,10 @@ describe('AgentSettingsDialog — parent state pattern (#281)', () => {
       </MemoryRouter>,
     )
 
-    // Wait for the engine catalog fetch to resolve so the model row
-    // actually renders (the row is hidden while ``catalogState`` is
-    // still ``loading``).
-    const select = (await screen.findByTestId(
-      'overview-model-select',
-    )) as HTMLSelectElement
-    expect(select.value).toBe('claude-haiku-4-5')
-
-    // Mutate the agents list. Without the canonical pattern (i.e. with
-    // the old snapshot approach), the dialog would still render the
-    // pre-mutation prop and the select would stay on the haiku entry.
+    const input = screen.getByTestId('overview-name-input') as HTMLInputElement
+    expect(input.value).toBe('before')
     fireEvent.click(screen.getByTestId('mutate-agents'))
-
-    expect(select.value).toBe('claude-opus-4-7')
+    expect(input.value).toBe('after')
   })
 })
 

@@ -31,6 +31,7 @@ import PresenceDot from '@/components/PresenceDot'
 import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview, EngineCatalog } from '@/hooks/useAgents'
 import OverviewPanel from '@/components/agent-settings/OverviewPanel'
+import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
@@ -38,7 +39,7 @@ import TasksPanel from '@/components/agent-settings/TasksPanel'
 import GoalsPanel from '@/components/agent-settings/GoalsPanel'
 import { ChevronRight, EyeOff, Trash2, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import type { ReactNode } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 
 interface Props {
   agent: Agent | null
@@ -180,6 +181,11 @@ export default function AgentSettingsDialog({
   contextWindowOptOut,
   onToggleContextWindowOptOut,
 }: Props) {
+  const [connectionState, setConnectionState] = useState<ConnectionState | null>(null)
+  const onConnectionChange = useCallback((next: ConnectionState) => setConnectionState(next), [])
+  useEffect(() => {
+    if (!open) setConnectionState(null)
+  }, [open])
   const machineOffline = agent?.machine_online === false
   const agentOnline = deriveAgentOnline(agent?.actual_state, { machineOffline })
   const displayState = agentStatusLabel(agent?.actual_state, { machineOffline })
@@ -192,7 +198,7 @@ export default function AgentSettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-4xl max-h-[90dvh] overflow-hidden flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-5 pb-3 border-b border-[var(--color-border)]">
           <DialogTitle className="flex items-center gap-2">
             <span>Agent settings</span>
@@ -225,14 +231,27 @@ export default function AgentSettingsDialog({
             lifting for section separation; the 1px whisper seam tried
             in #170 was too subtle on its own. */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--color-surface-alt)]">
-          <div className="px-6 py-5 space-y-3">
+          <div className="px-3 py-4 space-y-3 sm:px-6 sm:py-5">
             <Section id="overview" title="Overview">
               <OverviewPanel
                 agent={agent}
                 updateAgent={updateAgent}
                 fetchEngineCatalog={fetchEngineCatalog}
+                connectionState={connectionState}
               />
             </Section>
+
+            {agent && (agent.engine === 'codex-cli' || agent.engine === 'pi-cli') && (
+              <Section id="model-connection" title="Model connection">
+                <ModelConnectionPanel
+                  key={agent.id}
+                  agent={agent}
+                  updateAgent={updateAgent}
+                  fetchEngineCatalog={fetchEngineCatalog}
+                  onConnectionChange={onConnectionChange}
+                />
+              </Section>
+            )}
 
             <Section id="manifest" title="Manifest">
               <ManifestPanel

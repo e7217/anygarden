@@ -19,6 +19,7 @@ from anygarden.engines.endpoints import (
     probe_models,
     validate_base_url,
 )
+from anygarden.engines.validation import pi_provider_error
 from anygarden.scheduler.placement import NoSuitableMachineError, select_machine_for
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agent-endpoints"])
@@ -93,8 +94,32 @@ async def put_endpoint(
 ):
     agent = await _agent(db, agent_id)
     body = await _body(request)
-    if body == {"base_url": None}:
+    native_switch = (
+        isinstance(body, dict)
+        and set(body) == {"base_url", "provider", "model"}
+        and body.get("base_url") is None
+    )
+    codex_reset = body == {"base_url": None, "model": None}
+    if body == {"base_url": None} or native_switch or codex_reset:
+        if codex_reset and agent.engine != "codex-cli":
+            raise HTTPException(422, "Only Codex can reset to its default model")
+        if native_switch:
+            provider, model = body["provider"], body["model"]
+            if (
+                agent.engine != "pi-cli"
+                or pi_provider_error(agent.engine, provider)
+                or not isinstance(model, str)
+                or not (1 <= len(model.strip()) <= 256)
+            ):
+                raise HTTPException(422, "Invalid Pi native provider or model")
+            model = model.strip()
         changed = any((agent.base_url, agent.api_protocol, agent.credential_ref))
+        if native_switch:
+            changed = changed or agent.provider != provider or agent.model != model
+            agent.provider, agent.model = provider, model
+        if codex_reset:
+            changed = changed or agent.provider is not None or agent.model is not None
+            agent.provider = agent.model = None
         agent.base_url = agent.api_protocol = agent.credential_ref = None
     else:
         try:

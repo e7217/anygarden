@@ -7,10 +7,10 @@ built-in provider such as `zai` needs its own API key registered by an admin.
 
 ## Configure an agent
 
-1. Set the agent engine to `pi-cli`, choose a built-in API-key provider, and
+1. Set the agent engine to `pi-cli`, keep **Connection type → Pi provider**, choose a built-in API-key provider, and
    select a model; native Pi agents require an explicit model. For Z.AI Coding Plan, use provider `zai` and the model ID
    supplied by the installed Pi catalog.
-2. Open **Agent settings → Overview → Pi provider authentication**. Enter the
+2. Open **Agent settings → Model connection → Pi provider authentication**. Enter the
    API key and choose **Save key**. The key is write-only; the panel shows its
    provider and revision, never the value.
 3. Start or restart the agent. It checks provider, model, and authentication
@@ -22,7 +22,12 @@ The admin-only API is `GET/PUT/DELETE /api/v1/agents/{agent_id}/pi-auth`.
 restarts the agent. `DELETE` removes the stored key and restarts the agent.
 Changing the provider never reuses a key registered for the previous provider:
 save a new key before restarting. An agent with a Direct model connection uses
-that connection's separate credential settings instead.
+that connection's separate credential settings instead. To switch an existing
+direct Pi agent to a native provider, choose **Pi provider** in Model connection,
+enter its provider/model and key, and select **Switch to Pi provider**. The
+connection fields switch together; the key uses the separate write-only API.
+The UI reports and retries partial failures, including an attempted restoration
+of the previous direct connection if key storage fails.
 
 ## Failure handling
 

@@ -54,6 +54,12 @@ describe('direct endpoint editor', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Connect a compatible machine first')
     expect(saved).not.toHaveBeenCalled()
   })
+  it('resets an existing Codex direct connection to the CLI default', async () => {
+    const { calls, saved } = setup()
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable direct connection' }))
+    await waitFor(() => expect(saved).toHaveBeenCalledOnce())
+    expect(calls.find(c => c.method === 'PUT')?.body).toEqual({ base_url: null, model: null })
+  })
 })
 
 describe('direct endpoint status and model discovery (#685)', () => {
@@ -74,6 +80,7 @@ describe('direct endpoint status and model discovery (#685)', () => {
     mockWith({ provider: 'local', model: null, base_url: null, api_protocol: null, credential_ref: null })
     render(<DirectEndpointPanel agentId="a" engine="pi-cli" onSaved={vi.fn()} />)
     expect(await screen.findByText('Direct connection: not configured')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Disable direct connection' })).toBeNull()
   })
   it('shows the configured target and warns when the model is not served', async () => {
     const calls = mockWith(config)
