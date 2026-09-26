@@ -10,6 +10,7 @@ from typing import Literal, Union
 
 from pydantic import BaseModel, Field
 
+from anygarden_machine.managed_workspace import WorkspaceSnapshot
 
 # ── Server -> Machine frames ──────────────────────────────────────────
 
@@ -258,7 +259,26 @@ class WorkspaceRevokeFrame(BaseModel):
     epoch: int
 
 
+class ManagedWorkspaceRequestFrame(BaseModel):
+    type: Literal["managed_workspace_request"] = "managed_workspace_request"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=0)
+    operation: Literal["list", "read"] = "list"
+    path: str = Field(default="", max_length=1024)
+    cursor: str | None = Field(default=None, max_length=255)
+
+
+class ManagedWorkspaceResultFrame(BaseModel):
+    type: Literal["managed_workspace_result"] = "managed_workspace_result"
+    request_id: str = Field(min_length=1, max_length=64)
+    agent_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=0)
+    snapshot: WorkspaceSnapshot
+
+
 ServerFrame = Union[
+    ManagedWorkspaceRequestFrame,
     SyncDesiredStateFrame,
     SyncBatchFrame,
     TokenGrantFrame,
@@ -480,6 +500,7 @@ class WorkspaceRevokeReceiptFrame(BaseModel):
 
 
 MachineFrame = Union[
+    ManagedWorkspaceResultFrame,
     RegisterFrame,
     ReportActualStateFrame,
     TokenRequestFrame,
@@ -497,6 +518,7 @@ MachineFrame = Union[
 # ── Frame parsing ─────────────────────────────────────────────────────
 
 _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
+    "managed_workspace_request": ManagedWorkspaceRequestFrame,
     "sync_desired_state": SyncDesiredStateFrame,
     "sync_batch": SyncBatchFrame,
     "token_grant": TokenGrantFrame,

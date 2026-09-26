@@ -169,6 +169,7 @@ class ParticipantOut(BaseModel):
     role: str
     display_name: str = ""
     kind: str = "user"
+    description: str | None = None
     # True when the underlying User row is an anonymous guest. Lets
     # the client render a distinct "Guest" badge without having to
     # keep a separate kind value (the server would otherwise risk
@@ -507,6 +508,7 @@ async def get_room(
             continue
         display_name = ""
         kind = "user"
+        description = None
         is_anonymous = False
         engine: Optional[str] = None
         avatar_kind: Optional[str] = None
@@ -531,6 +533,7 @@ async def get_room(
             agent = agent_result.scalar_one_or_none()
             if agent:
                 display_name = agent.name
+                description = agent.description
                 engine = agent.engine
                 # Issue #101 — carry the admin's avatar choice so the
                 # room renders the same glyph everywhere the agent
@@ -548,6 +551,7 @@ async def get_room(
                 role=p.role,
                 display_name=display_name,
                 kind=kind,
+                description=description,
                 is_anonymous=is_anonymous,
                 online=online,
                 last_seen_at=last_seen_at,

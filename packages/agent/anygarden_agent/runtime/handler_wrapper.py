@@ -232,6 +232,8 @@ def _normalize_engine_result(raw: EngineResult) -> tuple[Optional[str], Optional
 _QueueItem = Tuple[
     Optional[str],
     Optional[str],
+    str | None,
+    dict[str, Any],
     Callable[[], Awaitable["EngineResult"]],
     float,
 ]
@@ -253,6 +255,7 @@ _FAILURE_NOTICES = {
     "AUTH_CHECK_FAILED": _PI_NATIVE_CONFIG_NOTICE,
 }
 _REJECTED_NOTICE = "⚠️ 에이전트가 다른 요청을 처리 중이라 이 메시지를 받지 못했습니다."
+_CANCELLED_NOTICE = "위임된 작업이 취소되었습니다."
 # #457 — a queued follow-up sat past its TTL before the queue drained;
 # answering it now would be a stale reply, so it is skipped with a notice
 # rather than silently dropped.
@@ -280,7 +283,10 @@ class RoomHandlerSupervisor:
         request_id: Optional[str],
         run_engine: Callable[[], Awaitable[EngineResult]],
         thread_root_id: Optional[str] = None,
+        delegation_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
+        turn_context = dict(turn_context or {})
         lock = self._room_locks.setdefault(room_id, asyncio.Lock())
         if lock.locked():
             # A turn is in flight (or the holder is mid-drain). Defer this
@@ -290,15 +296,16 @@ class RoomHandlerSupervisor:
             queue = self._queues.setdefault(room_id, deque())
             if len(queue) < _MAX_QUEUE_DEPTH:
                 queue.append(
-                    (request_id, thread_root_id, run_engine, time.monotonic())
+                    (request_id, thread_root_id, delegation_id, turn_context, run_engine, time.monotonic())
                 )
                 # ``queued`` is a terminal handler_finished result, not a
                 # new lifecycle phase — no user notice (the turn will be
                 # answered for real once it drains).
                 existing = self._inflight.get(room_id)
-                await self._client.sendLifecycle(
+                await self._lifecycle(
                     room_id,
                     request_id,
+                    turn_context,
                     event="handler_finished",
                     outcome="queued",
                     error=f"deferred behind request_id={existing}",
@@ -306,9 +313,10 @@ class RoomHandlerSupervisor:
                 return
             # Queue is at cap — preserve the Wave 0 behaviour: reject + notice.
             existing = self._inflight.get(room_id)
-            await self._client.sendLifecycle(
+            await self._lifecycle(
                 room_id,
                 request_id,
+                turn_context,
                 event="handler_finished",
                 outcome="rejected",
                 error=f"room busy with request_id={existing}",
@@ -318,7 +326,7 @@ class RoomHandlerSupervisor:
             await self._send_room_message(
                 room_id,
                 _REJECTED_NOTICE,
-                metadata={"request_id": request_id} if request_id else None,
+                metadata=_reply_metadata(request_id, delegation_id, "rejected", turn_context),
                 thread_root_id=thread_root_id,
             )
             return
@@ -330,6 +338,8 @@ class RoomHandlerSupervisor:
                     request_id,
                     run_engine,
                     thread_root_id=thread_root_id,
+                    delegation_id=delegation_id,
+                    turn_context=turn_context,
                 )
                 # Drain any follow-ups that arrived while this turn ran. The
                 # lock is still held for the whole drain, so a new dispatch
@@ -355,13 +365,14 @@ class RoomHandlerSupervisor:
         if queue is None:
             return
         while queue:
-            req_id, thread_root_id, run_engine, enqueued_at = queue.popleft()
+            req_id, thread_root_id, delegation_id, turn_context, run_engine, enqueued_at = queue.popleft()
             if (time.monotonic() - enqueued_at) > _QUEUE_ITEM_TTL_SEC:
                 # Stale — skip rather than answer late. Mirror the rejected
                 # shape: a terminal handler_finished + a user notice.
-                await self._client.sendLifecycle(
+                await self._lifecycle(
                     room_id,
                     req_id,
+                    turn_context,
                     event="handler_finished",
                     outcome="rejected",
                     error="queued turn skipped: exceeded TTL",
@@ -369,7 +380,7 @@ class RoomHandlerSupervisor:
                 await self._send_room_message(
                     room_id,
                     _STALE_NOTICE,
-                    metadata={"request_id": req_id} if req_id else None,
+                    metadata=_reply_metadata(req_id, delegation_id, "rejected", turn_context),
                     thread_root_id=thread_root_id,
                 )
                 continue
@@ -379,6 +390,8 @@ class RoomHandlerSupervisor:
                 req_id,
                 run_engine,
                 thread_root_id=thread_root_id,
+                delegation_id=delegation_id,
+                turn_context=turn_context,
             )
         # Tidy up the empty deque so idle rooms don't accumulate state.
         if not queue:
@@ -391,10 +404,12 @@ class RoomHandlerSupervisor:
         run_engine: Callable[[], Awaitable[EngineResult]],
         *,
         thread_root_id: Optional[str] = None,
+        delegation_id: str | None = None,
+        turn_context: dict[str, Any] | None = None,
     ) -> None:
         started = time.monotonic()
-        await self._client.sendLifecycle(
-            room_id, request_id, event="handler_started"
+        await self._lifecycle(
+            room_id, request_id, turn_context, event="handler_started"
         )
 
         # #457 — opt-in transient retry (default OFF). The handler_started
@@ -406,9 +421,10 @@ class RoomHandlerSupervisor:
         retried = False
         while True:
             engine_started = time.monotonic()
-            await self._client.sendLifecycle(
+            await self._lifecycle(
                 room_id,
                 request_id,
+                turn_context,
                 event="engine_call_started",
                 engine=self._engine,
             )
@@ -464,9 +480,10 @@ class RoomHandlerSupervisor:
                 # and re-raise immediately.
                 outcome = "cancelled"
                 engine_dur = int((time.monotonic() - engine_started) * 1000)
-                await self._client.sendLifecycle(
+                await self._lifecycle(
                     room_id,
                     request_id,
+                    turn_context,
                     event="engine_call_finished",
                     outcome=outcome,
                     duration_ms=engine_dur,
@@ -477,9 +494,17 @@ class RoomHandlerSupervisor:
                     cost_usd=turn.cost_usd if turn else None,
                 )
                 total = int((time.monotonic() - started) * 1000)
-                await self._client.sendLifecycle(
+                if delegation_id:
+                    await self._send_room_message(
+                        room_id,
+                        _CANCELLED_NOTICE,
+                        metadata=_reply_metadata(request_id, delegation_id, outcome, turn_context),
+                        thread_root_id=thread_root_id,
+                    )
+                await self._lifecycle(
                     room_id,
                     request_id,
+                    turn_context,
                     event="handler_finished",
                     outcome=outcome,
                     duration_ms=total,
@@ -506,7 +531,7 @@ class RoomHandlerSupervisor:
             # that carries a ``request_id`` means the engine was asked to
             # answer and didn't. Surface it as ``failed`` + a user notice
             # rather than leaving the user staring at silence.
-            if outcome == "ok" and not response and request_id is not None:
+            if outcome == "ok" and not response and (request_id is not None or delegation_id):
                 outcome = "failed"
                 if error is None:
                     error = "engine produced no response"
@@ -526,9 +551,10 @@ class RoomHandlerSupervisor:
                 _metrics.agent_empty_untracked_total.inc()
 
             engine_dur = int((time.monotonic() - engine_started) * 1000)
-            await self._client.sendLifecycle(
+            await self._lifecycle(
                 room_id,
                 request_id,
+                turn_context,
                 event="engine_call_finished",
                 outcome=outcome,
                 duration_ms=engine_dur,
@@ -572,9 +598,10 @@ class RoomHandlerSupervisor:
                 # Signal the retry (no user notice — the real answer or the
                 # exhaustion notice comes after). Shaped like the other
                 # terminal-ish results so trace/metrics see a ``retrying``.
-                await self._client.sendLifecycle(
+                await self._lifecycle(
                     room_id,
                     request_id,
+                    turn_context,
                     event="handler_finished",
                     outcome="retrying",
                     error=error,
@@ -593,7 +620,7 @@ class RoomHandlerSupervisor:
                 outcome = "retry_exhausted"
             break
 
-        send_metadata = {"request_id": request_id} if request_id else None
+        send_metadata = _reply_metadata(request_id, delegation_id, outcome, turn_context)
         # ``response`` truthy → deliver it. An empty result reaches here
         # only for proactive/untracked turns (request_id is None); those
         # keep the legitimate "no-reply" semantics. Tracked empty turns
@@ -623,16 +650,29 @@ class RoomHandlerSupervisor:
                 metadata=send_metadata,
                 thread_root_id=thread_root_id,
             )
+        elif outcome == "cancelled" and delegation_id:
+            await self._send_room_message(
+                room_id,
+                _CANCELLED_NOTICE,
+                metadata=send_metadata,
+                thread_root_id=thread_root_id,
+            )
 
         total = int((time.monotonic() - started) * 1000)
-        await self._client.sendLifecycle(
+        await self._lifecycle(
             room_id,
             request_id,
+            turn_context,
             event="handler_finished",
             outcome=outcome,
             duration_ms=total,
             error=error,
         )
+
+    async def _lifecycle(self, room_id, request_id, context, **details) -> None:
+        proof = {key: value for key, value in (context or {}).items()
+                 if key in {"turn_attempt", "turn_generation", "turn_lease"}}
+        await self._client.sendLifecycle(room_id, request_id, **proof, **details)
 
     async def _send_room_message(
         self,
@@ -649,3 +689,15 @@ class RoomHandlerSupervisor:
             # adding the new keyword only when it carries real information.
             kwargs["thread_root_id"] = thread_root_id
         await self._client.send(room_id, content, **kwargs)
+
+
+def _reply_metadata(
+    request_id: str | None, delegation_id: str | None, outcome: str,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    metadata = dict(context or {})
+    if request_id:
+        metadata["request_id"] = request_id
+    if delegation_id:
+        metadata.update(delegation_id=delegation_id, delegation_outcome=outcome)
+    return metadata or None

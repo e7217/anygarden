@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import {
   createGoal,
+  updateGoal,
   type Goal,
   type GoalCreateInput,
+  type GoalUpdateInput,
   type GoalMaterialize,
   type GoalTriggerType,
 } from '@/lib/goals'
@@ -30,6 +32,8 @@ interface GoalFormProps {
    *  in the single-candidate case so the UI is informative without
    *  asking for a redundant click. */
   roomAgents: GoalFormAgentOption[]
+  /** Existing responsibility; assignee and owner stay unchanged. */
+  goal?: Goal
   /** Pre-selected agent id. Defaults to the first ``roomAgents``
    *  entry if omitted — matches the implicit "first-agent" behaviour
    *  pre-#312, but the field is now visible and editable. */
@@ -54,14 +58,17 @@ interface GoalFormProps {
  */
 export default function GoalForm({
   roomAgents,
+  goal,
   defaultAgentId = null,
   defaultReportRoomId = null,
   onCreated,
   onCancel,
 }: GoalFormProps) {
   const { t } = useLocale()
-  const [title, setTitle] = useState('')
-  const [spec, setSpec] = useState('')
+  const active = useRef(true)
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  const [title, setTitle] = useState(goal?.title ?? '')
+  const [spec, setSpec] = useState(goal?.spec ?? '')
   // #312 — explicit assignee field. Defaults to ``defaultAgentId`` if
   // the caller pre-picked one (e.g. AgentSettingsDialog has a fixed
   // agent); otherwise the first candidate so the implicit pre-#312
@@ -70,25 +77,26 @@ export default function GoalForm({
   // open this form when no agents are available, but we render the
   // disabled select rather than crashing.
   const [assigneeAgentId, setAssigneeAgentId] = useState<string>(
-    defaultAgentId ?? roomAgents[0]?.id ?? '',
+    goal?.assignee_agent_id ?? defaultAgentId ?? roomAgents[0]?.id ?? '',
   )
   const [reportRoomId, setReportRoomId] = useState<string>(
-    defaultReportRoomId ?? '',
+    goal ? goal.report_room_id ?? '' : defaultReportRoomId ?? '',
   )
-  const [triggerType, setTriggerType] = useState<GoalTriggerType>('cron')
-  const [cronExpr, setCronExpr] = useState('0 9 * * *')
-  const [intervalSecs, setIntervalSecs] = useState<number>(600)
+  const [triggerType, setTriggerType] = useState<GoalTriggerType>(goal?.trigger_type ?? 'cron')
+  const [cronExpr, setCronExpr] = useState(String(goal?.trigger_config.cron ?? '0 9 * * *'))
+  const [intervalSecs, setIntervalSecs] = useState<number>(Number(goal?.trigger_config.interval_seconds ?? 600))
   const [materialize, setMaterialize] =
-    useState<GoalMaterialize>('interesting_only')
+    useState<GoalMaterialize>(goal?.materialize ?? 'interesting_only')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const triggerConfig = useMemo<Record<string, unknown>>(() => {
-    if (triggerType === 'cron') return { cron: cronExpr.trim() }
+    const preserved = goal?.trigger_type === triggerType ? goal.trigger_config : {}
+    if (triggerType === 'cron') return { ...preserved, cron: cronExpr.trim() }
     if (triggerType === 'interval')
-      return { interval_seconds: Number(intervalSecs) }
-    return {}
-  }, [triggerType, cronExpr, intervalSecs])
+      return { ...preserved, interval_seconds: Number(intervalSecs) }
+    return { ...preserved }
+  }, [goal, triggerType, cronExpr, intervalSecs])
 
   const submit = async () => {
     setError(null)
@@ -114,12 +122,26 @@ export default function GoalForm({
         materialize,
         report_room_id: reportRoomId.trim() || null,
       }
-      const goal = await createGoal(assigneeAgentId, input)
-      onCreated(goal)
+      const patch: GoalUpdateInput = {}
+      if (goal) {
+        // Sending an unchanged schedule would reset next_run_at on the server.
+        if (input.title !== goal.title) patch.title = input.title
+        if (input.spec !== goal.spec) patch.spec = input.spec
+        if (input.materialize !== goal.materialize) patch.materialize = input.materialize
+        if (input.report_room_id !== goal.report_room_id) patch.report_room_id = input.report_room_id
+        if (triggerType !== goal.trigger_type) {
+          patch.trigger_type = triggerType
+          patch.trigger_config = triggerConfig
+        } else if (JSON.stringify(triggerConfig) !== JSON.stringify(goal.trigger_config)) {
+          patch.trigger_config = triggerConfig
+        }
+      }
+      const saved = goal ? await updateGoal(goal.id, patch) : await createGoal(assigneeAgentId, input)
+      if (active.current) onCreated(saved)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (active.current) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setSubmitting(false)
+      if (active.current) setSubmitting(false)
     }
   }
 
@@ -145,7 +167,7 @@ export default function GoalForm({
           id="goal-assignee"
           value={assigneeAgentId}
           onChange={(e) => setAssigneeAgentId(e.target.value)}
-          disabled={roomAgents.length <= 1}
+          disabled={Boolean(goal) || roomAgents.length <= 1}
           aria-label={t('goals.pickAgent')}
           aria-required="true"
           data-testid="goal-form-assignee-select"
@@ -260,7 +282,7 @@ export default function GoalForm({
           {t('common.cancel')}
         </Button>
         <Button size="sm" onClick={submit} disabled={submitting}>
-          {submitting ? t('goals.saving') : t('goals.add')}
+          {submitting ? t('goals.saving') : goal ? t('common.save') : t('goals.add')}
         </Button>
       </div>
     </div>

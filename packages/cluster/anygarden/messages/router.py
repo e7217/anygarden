@@ -17,6 +17,7 @@ from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Message as MessageRow
 from anygarden.db.models import MessageReaction, Participant
 from anygarden.dependencies import get_current_identity, get_db
+from anygarden.messages.metadata import strip_turn_proof
 from anygarden.messages.references import (
     InvalidSharedFileReference,
     canonicalize_shared_file_references,
@@ -120,6 +121,18 @@ async def _write_message(
     )
     room_wake_triggers = list(getattr(access.room, "wake_triggers", None) or [])
     metadata = dict(body.metadata) if body.metadata else {}
+    if "delegation_target_participant_id" in metadata:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Directed delegations require the agent WebSocket",
+        )
+    # REST sends never run the durable completion/admission state machine.
+    # Their persisted/broadcast metadata must not impersonate a leased turn
+    # or a terminal delegation control reply, even for agent-authenticated
+    # callers. Ordinary custom metadata remains available.
+    metadata = strip_turn_proof(metadata)
+    metadata.pop("next_speaker_participant_id", None)
+    metadata.pop("delegation_outcome", None)
     try:
         metadata = await canonicalize_shared_file_references(
             db,

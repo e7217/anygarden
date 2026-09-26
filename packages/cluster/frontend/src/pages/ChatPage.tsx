@@ -26,6 +26,7 @@ import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useParticipantPresence } from '@/hooks/useParticipantPresence'
+import { useRoomParticipants } from '@/hooks/useRoomParticipants'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
@@ -34,37 +35,7 @@ import type { MentionOption } from '@/components/MentionPopover'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
-export interface Participant {
-  id: string
-  display_name: string
-  kind: string
-  user_id?: string
-  agent_id?: string
-  // Mirrors ``ParticipantOut.role`` from ``rooms/router.py``.
-  // Used for per-room admin-ish UI gating (e.g. the Invites button)
-  // — the server remains the sole authority.
-  role?: string
-  // True for anonymous guest users. Lets the UI show a distinct
-  // "guest" badge without having to introduce a new ``kind`` value,
-  // which would break legacy callers expecting ``user``/``agent``.
-  is_anonymous?: boolean
-  // Presence fields (#54). Populated from ``GET /rooms/{id}`` and
-  // merged in realtime via ``useParticipantPresence`` WS patches.
-  online?: boolean
-  last_seen_at?: string | null
-  // Agent engine identifier (#102). Populated when ``kind === 'agent'``
-  // from the backing ``Agent.engine`` row; undefined for user/guest.
-  // Drives the engine-mark badge on ``EntityAvatar`` (available to
-  // non-admin viewers too, unlike the admin-gated ``useAgents()``).
-  engine?: string
-  // Issue #101 — agent avatar override (null for user participants).
-  avatar_kind?: string | null
-  avatar_value?: string | null
-  // Issue #271 — short public-facing self-introduction. Populated for
-  // agent participants whose admin set ``Agent.description``; null
-  // for users/guests and for agents without a description set.
-  description?: string | null
-}
+export type { Participant } from '@/lib/participants'
 
 export default function ChatPage() {
   const { t } = useLocale()
@@ -83,8 +54,8 @@ export default function ChatPage() {
   } = useRooms()
   const { user } = useAuth()
   const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(selectedRoom)
-  const [participants, setParticipants] = useState<Record<string, Participant>>({})
-  const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
+  const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
+  const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // Thread grouping is derived once here so the timeline and the side
   // panel can never disagree about which messages are replies.
   const threadIndex = useMemo(() => indexThreads(messages), [messages])
@@ -152,7 +123,6 @@ export default function ChatPage() {
   // overlay (<md viewport) is local to ChatPage because only the chat
   // route hosts the rail right now.
   const [rightRailOpen, setRightRailOpen] = useState(false)
-  const [participantsVersion, setParticipantsVersion] = useState(0)
 
   const currentRoom = useMemo<Room | null>(() => {
     if (!selectedRoom) return null
@@ -237,55 +207,9 @@ export default function ChatPage() {
     return () => window.clearTimeout(timer)
   }, [selectedRoom, messages.length, markRoomRead])
 
-  // Fetch room details to get participants with display_name/kind
-  useEffect(() => {
-    if (!selectedRoom) {
-      setParticipants({})
-      setMyParticipantId(null)
-      return
-    }
-    let cancelled = false
-    ;(async () => {
-      try {
-        const resp = await apiFetch(`/api/v1/rooms/${selectedRoom}`)
-        if (!resp.ok || cancelled) return
-        const room = await resp.json()
-        const pMap: Record<string, Participant> = {}
-        let myPid: string | null = null
-        for (const p of room.participants ?? []) {
-          pMap[p.id] = {
-            id: p.id,
-            display_name: p.display_name ?? p.name ?? p.id.slice(0, 8),
-            kind: p.kind ?? 'user',
-            user_id: p.user_id,
-            agent_id: p.agent_id,
-            role: p.role,
-            is_anonymous: Boolean(p.is_anonymous),
-            online: typeof p.online === 'boolean' ? p.online : false,
-            last_seen_at: p.last_seen_at ?? null,
-            // #102 — thread agent engine through so MessageBubble can
-            // render the engine badge without admin access.
-            engine: p.engine,
-            // Issue #101 — avatar override per agent participant.
-            avatar_kind: p.avatar_kind ?? null,
-            avatar_value: p.avatar_value ?? null,
-          }
-          if (user && p.user_id === user.id) {
-            myPid = p.id
-          }
-        }
-        if (!cancelled) {
-          setParticipants(pMap)
-          setMyParticipantId(myPid)
-        }
-      } catch { /* ignore */ }
-    })()
-    return () => { cancelled = true }
-  }, [selectedRoom, user, participantsVersion])
-
   const refreshParticipants = useCallback(() => {
-    setParticipantsVersion(v => v + 1)
-  }, [])
+    void refreshRoomParticipants()
+  }, [refreshRoomParticipants])
 
   // Agent IDs that are participants in the current room (for the manage dialog)
   const participantAgentIds = useMemo(() => {

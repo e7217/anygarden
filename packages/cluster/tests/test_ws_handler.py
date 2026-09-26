@@ -1784,7 +1784,8 @@ class TestAgentCausalLink:
                 await db.flush()
                 for name in agent_names:
                     agent = Agent(
-                        name=name, engine="codex", actual_state="running"
+                        name=name, engine="codex", actual_state="running",
+                        desired_state="running",
                     )
                     db.add(agent)
                     await db.flush()
@@ -1818,7 +1819,9 @@ class TestAgentCausalLink:
             await e.dispose()
 
     @staticmethod
-    def _agent_send(app, token: str, room_id: str, content: str, metadata=None):
+    def _agent_send(
+        app, token: str, room_id: str, content: str, metadata=None, thread_root_id=None
+    ):
         """Connect as an agent, send one message, return its id."""
         from starlette.testclient import TestClient
 
@@ -1829,6 +1832,8 @@ class TestAgentCausalLink:
             ) as ws:
                 ws.receive_text()  # welcome
                 frame = {"type": "send", "content": content}
+                if thread_root_id is not None:
+                    frame["thread_root_id"] = thread_root_id
                 if metadata is not None:
                     frame["metadata"] = metadata
                 ws.send_text(json.dumps(frame))
@@ -1945,6 +1950,786 @@ class TestAgentCausalLink:
             )).scalars().all()
             assert rows == []
 
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "strategy", ["mentioned_only", "round_robin", "orchestrator"]
+    )
+    @pytest.mark.parametrize("target_role", ["member", "admin", "owner"])
+    async def test_directed_delegation_creates_only_target_child_turn(
+        self, make_room, strategy, target_role
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import (
+            ActivityLog,
+            AgentTurn,
+            AgentTurnAttempt,
+            AgentTurnOutbox,
+            Message,
+        )
+
+        env = await make_room(strategy=strategy, agent_names=["A", "B", "C"])
+        async with env["sf"]() as db:
+            room = await db.get(Room, env["room_id"])
+            room.orchestrator_agent_id = env["agents"]["A"]
+            target = await db.get(Participant, env["parts"]["C"])
+            target.role = target_role
+            await db.commit()
+        delegation_id = str(uuid4())
+        message_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            f"[DELEGATED] <@user:{env['parts']['C']}> review the changes",
+            metadata={
+                "delegation_id": delegation_id,
+                "delegation_target_participant_id": env["parts"]["C"],
+                "request_id": "parent-request",
+                "next_speaker_participant_id": env["parts"]["B"],
+            },
+        )
+        async with env["sf"]() as db:
+            turns = (await db.scalars(select(AgentTurn))).all()
+            assert len(turns) == 1
+            turn = turns[0]
+            assert turn.agent_id == env["agents"]["C"]
+            assert turn.target_participant_id == env["parts"]["C"]
+            assert turn.trigger_message_id == message_id
+            assert turn.request_id != "parent-request"
+            assert turn.state == "pending"
+            attempt = (await db.scalars(select(AgentTurnAttempt))).one()
+            assert attempt.turn_id == turn.request_id
+            assert attempt.lease_token
+            outbox = (await db.scalars(select(AgentTurnOutbox))).one()
+            assert outbox.turn_id == turn.request_id
+            assert outbox.participant_id == env["parts"]["C"]
+            message = await db.get(Message, message_id)
+            assert message.extra_metadata["delegation_id"] == delegation_id
+            assert (
+                message.extra_metadata["next_speaker_participant_id"]
+                == env["parts"]["C"]
+            )
+            event = (
+                await db.scalars(
+                    select(ActivityLog).where(
+                        ActivityLog.event_type == "message_received"
+                    )
+                )
+            ).one()
+            assert event.request_id == turn.request_id
+            assert event.details["parent_request_id"] == "parent-request"
+            assert (
+                await db.get(Room, env["room_id"])
+            ).next_speaker_participant_id == env["parts"]["C"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("strategy", ["round_robin", "orchestrator"])
+    @pytest.mark.parametrize(
+        "invalid_case",
+        [
+            "observer",
+            "human_target",
+            "cross_room",
+            "self",
+            "missing_target",
+            "null_target",
+            "bad_id",
+            "missing_id",
+            "forged_mentions",
+            "mismatched_mention",
+            "bad_prefix",
+            "empty_task",
+            "human_sender",
+        ],
+    )
+    async def test_invalid_directed_delegation_never_falls_back(
+        self, make_room, config, strategy, invalid_case
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, Message
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy=strategy, agent_names=["A", "B", "C"])
+        token = env["tokens"]["A"]
+        target_pid = env["parts"]["C"]
+        async with env["sf"]() as db:
+            room = await db.get(Room, env["room_id"])
+            room.orchestrator_agent_id = env["agents"]["A"]
+            target = await db.get(Participant, target_pid)
+            if invalid_case == "observer":
+                target.role = "observer"
+            elif invalid_case == "cross_room":
+                other = Room(project_id=room.project_id, name="other")
+                db.add(other)
+                await db.flush()
+                target.room_id = other.id
+            elif invalid_case in {"human_target", "human_sender"}:
+                user = User(email="delegate-human@test.com", password_hash="x")
+                db.add(user)
+                await db.flush()
+                if invalid_case == "human_target":
+                    target.agent_id = None
+                    target.user_id = user.id
+                else:
+                    db.add(Participant(room_id=room.id, user_id=user.id, role="member"))
+                    token = create_user_token(
+                        user.id, user.email, False, secret=config.jwt_secret
+                    )
+            await db.commit()
+        if invalid_case == "self":
+            target_pid = env["parts"]["A"]
+        elif invalid_case == "missing_target":
+            target_pid = str(uuid4())
+        content = f"[DELEGATED] <@user:{target_pid}> review the changes"
+        metadata = {
+            "delegation_id": str(uuid4()),
+            "delegation_target_participant_id": target_pid,
+            "next_speaker_participant_id": env["parts"]["B"],
+        }
+        if invalid_case == "null_target":
+            metadata["delegation_target_participant_id"] = None
+        elif invalid_case == "bad_id":
+            metadata["delegation_id"] = "not-a-uuid"
+        elif invalid_case == "missing_id":
+            metadata.pop("delegation_id")
+        elif invalid_case == "forged_mentions":
+            content = "[DELEGATED] review the changes"
+            metadata["mentions"] = [{"type": "user", "id": target_pid}]
+        elif invalid_case == "mismatched_mention":
+            content = f"[DELEGATED] <@user:{env['parts']['B']}> review"
+        elif invalid_case == "bad_prefix":
+            content = f"[HANDOFF] <@user:{target_pid}> review"
+        elif invalid_case == "empty_task":
+            content = f"[DELEGATED] <@user:{target_pid}>  "
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws,
+        ):
+            ws.receive_text()
+            ws.send_json({"type": "send", "content": content, "metadata": metadata})
+            assert ws.receive_json() == {
+                "type": "error",
+                "detail": "Invalid directed delegation",
+            }
+        async with env["sf"]() as db:
+            assert (await db.scalars(select(AgentTurn))).all() == []
+            assert (await db.scalars(select(Message))).all() == []
+            assert (
+                await db.get(Room, env["room_id"])
+            ).next_speaker_participant_id is None
+
+    @pytest.mark.asyncio
+    async def test_directed_thread_delegation_does_not_fan_out_task_mentions(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        async with env["sf"]() as db:
+            root = await append_message(
+                db, room_id=env["room_id"], participant_id=None, content="root"
+            )
+            await db.commit()
+            root_id = root.id
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}",
+                subprotocols=["anygarden.v1", f"bearer.{env['tokens']['A']}"],
+            ) as ws,
+        ):
+            ws.receive_text()
+            ws.send_json(
+                {
+                    "type": "send",
+                    "thread_root_id": root_id,
+                    "content": f"[DELEGATED] <@user:{env['parts']['C']}> review <@user:{env['parts']['B']}>'s work",
+                    "metadata": {
+                        "delegation_id": str(uuid4()),
+                        "delegation_target_participant_id": env["parts"]["C"],
+                    },
+                }
+            )
+            assert ws.receive_json()["type"] == "message"
+        async with env["sf"]() as db:
+            turn = (await db.scalars(select(AgentTurn))).one()
+            assert turn.target_participant_id == env["parts"]["C"]
+            assert turn.thread_root_id == root_id
+
+    @pytest.mark.asyncio
+    async def test_directed_delegation_delivers_one_leased_frame_to_live_target(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, AgentTurnOutbox
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        delegation_id = str(uuid4())
+        with TestClient(env["app"]) as client:
+
+            def connect(name):
+                return client.websocket_connect(
+                    f"/ws/rooms/{env['room_id']}?generation=0&ready=1",
+                    subprotocols=["anygarden.v1", f"bearer.{env['tokens'][name]}"],
+                )
+
+            with (
+                connect("A") as sender,
+                connect("B") as bystander,
+                connect("C") as target,
+            ):
+                for ws in (sender, bystander, target):
+                    assert ws.receive_json()["type"] == "welcome"
+                    ready = ws.receive_json()
+                    while ready["type"] == "presence_update":
+                        ready = ws.receive_json()
+                    assert ready == {"type": "room_ready", "room_id": env["room_id"]}
+                sender.send_json(
+                    {
+                        "type": "send",
+                        "content": f"[DELEGATED] <@user:{env['parts']['C']}> review",
+                        "metadata": {
+                            "delegation_id": delegation_id,
+                            "delegation_target_participant_id": env["parts"]["C"],
+                        },
+                    }
+                )
+
+                def receive_message(ws):
+                    frame = ws.receive_json()
+                    while frame["type"] == "presence_update":
+                        frame = ws.receive_json()
+                    assert frame["type"] == "message", frame
+                    return frame
+
+                sent = receive_message(sender)
+                ambient = receive_message(bystander)
+                invocation = receive_message(target)
+                assert invocation["id"] == sent["id"] == ambient["id"]
+                assert "request_id" not in ambient["metadata"]
+                md = invocation["metadata"]
+                assert md["delegation_id"] == delegation_id
+                assert md["request_id"]
+                assert md["turn_lease"]
+                assert md["turn_attempt"] == 1
+                assert md["turn_generation"] == 0
+                # Finish the sender's outbox transaction before another
+                # socket touches this fixture's single SQLite connection.
+                sender.send_json({"type": "delivery-complete-check"})
+                assert sender.receive_json()["type"] == "error"
+                # A round trip is a barrier: no raw duplicate may be queued
+                # before this next frame on the target's socket.
+                target.send_json({"type": "typing", "is_typing": False})
+                assert target.receive_json()["type"] == "typing"
+                for ws in (target, bystander, sender):
+                    ws.close()
+
+                async def wait_disconnected():
+                    import anyio
+
+                    manager = env["app"].state.connection_manager
+                    with anyio.fail_after(5):
+                        while any(
+                            [
+                                await manager.is_connected(pid)
+                                for pid in env["parts"].values()
+                            ]
+                        ):
+                            await anyio.sleep(0.001)
+
+                client.portal.call(wait_disconnected)
+        async with env["sf"]() as db:
+            turn = (await db.scalars(select(AgentTurn))).one()
+            assert turn.request_id == md["request_id"]
+            outbox = (await db.scalars(select(AgentTurnOutbox))).one()
+            assert outbox.state == "delivered"
+            assert outbox.delivery_count == 1
+
+    @pytest.mark.asyncio
+    async def test_directed_delegation_replay_does_not_duplicate_pending_delivery(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.turns.service import deliver_pending_outbox
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "C"])
+        async with env["sf"]() as db:
+            await append_message(
+                db, room_id=env["room_id"], participant_id=None, content="baseline"
+            )
+            await db.commit()
+        message_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            f"[DELEGATED] <@user:{env['parts']['C']}> review",
+            metadata={
+                "delegation_id": str(uuid4()),
+                "delegation_target_participant_id": env["parts"]["C"],
+            },
+        )
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}?since_seq=1&generation=0&ready=1",
+                subprotocols=["anygarden.v1", f"bearer.{env['tokens']['C']}"],
+            ) as ws,
+        ):
+            assert ws.receive_json()["type"] == "welcome"
+            invocation = ws.receive_json()
+            assert invocation["id"] == message_id
+            assert invocation["metadata"]["turn_lease"]
+            assert ws.receive_json() == {
+                "type": "room_ready",
+                "room_id": env["room_id"],
+            }
+
+            async def deliver():
+                return await deliver_pending_outbox(
+                    env["sf"],
+                    env["app"].state.connection_manager,
+                    participant_ids=[env["parts"]["C"]],
+                )
+
+            assert client.portal.call(deliver) == 0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_directed_requests_keep_distinct_child_leases(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, AgentTurnAttempt
+        from anygarden.orchestration.rules import PeerHandoffBudget
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        env["app"].state.peer_handoff_budget = PeerHandoffBudget()
+        for target_name in ("B", "C"):
+            self._agent_send(
+                env["app"],
+                env["tokens"]["A"],
+                env["room_id"],
+                f"[DELEGATED] <@user:{env['parts'][target_name]}> review",
+                metadata={
+                    "delegation_id": str(uuid4()),
+                    "delegation_target_participant_id": env["parts"][target_name],
+                },
+            )
+        async with env["sf"]() as db:
+            turns = (await db.scalars(select(AgentTurn))).all()
+            assert {turn.target_participant_id for turn in turns} == {
+                env["parts"]["B"],
+                env["parts"]["C"],
+            }
+            assert len({turn.request_id for turn in turns}) == 2
+            attempts = (await db.scalars(select(AgentTurnAttempt))).all()
+            assert len({attempt.lease_token for attempt in attempts}) == 2
+
+    @pytest.mark.asyncio
+    async def test_legacy_delegation_metadata_keeps_existing_routing(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "[DELEGATED] legacy request",
+            metadata={"delegation_id": str(uuid4())},
+        )
+        async with env["sf"]() as db:
+            assert (await db.scalars(select(AgentTurn))).all() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "strategy", ["mentioned_only", "round_robin", "orchestrator"]
+    )
+    @pytest.mark.parametrize(
+        "outcome",
+        ["ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted"],
+    )
+    @pytest.mark.parametrize("in_thread", [False, True])
+    async def test_terminal_delegation_result_never_wakes_another_agent(
+        self, make_room, strategy, outcome, in_thread
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, Message
+        from anygarden.orchestration.rules import PeerHandoffBudget
+
+        env = await make_room(strategy=strategy, agent_names=["A", "B"])
+        budget = PeerHandoffBudget()
+        env["app"].state.peer_handoff_budget = budget
+        remaining_before = budget.remaining(env["room_id"])
+        root_id = None
+        async with env["sf"]() as db:
+            room = await db.get(Room, env["room_id"])
+            room.orchestrator_agent_id = env["agents"]["A"]
+            if in_thread:
+                root = await append_message(
+                    db, room_id=room.id, participant_id=None, content="root"
+                )
+                root_id = root.id
+            await db.commit()
+        content = f"Result mentions <@user:{env['parts']['B']}> for context only"
+        if strategy == "orchestrator" and not in_thread:
+            # Exercise both the explicit handoff and unaddressed moderator
+            # fallback, which must also remain idle for terminal results.
+            content = (
+                f"[HANDOFF] <@user:{env['parts']['B']}> result"
+                if outcome == "ok"
+                else "Delegated work finished"
+            )
+        message_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            content,
+            metadata={"delegation_id": str(uuid4()), "delegation_outcome": outcome},
+            thread_root_id=root_id,
+        )
+        assert budget.remaining(env["room_id"]) == remaining_before
+        async with env["sf"]() as db:
+            assert (await db.scalars(select(AgentTurn))).all() == []
+            message = await db.get(Message, message_id)
+            assert message.extra_metadata["delegation_outcome"] == outcome
+            assert (
+                await db.get(Room, env["room_id"])
+            ).next_speaker_participant_id is None
+
+    @pytest.mark.asyncio
+    async def test_terminal_delegation_result_completes_its_leased_parent(
+        self, make_room
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, AgentTurnAttempt, Message
+        from anygarden.turns.service import create_turn
+
+        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
+        async with env["sf"]() as db:
+            trigger = await append_message(
+                db, room_id=env["room_id"], participant_id=None, content="parent task"
+            )
+            turn = await create_turn(
+                db,
+                room_id=env["room_id"],
+                participant_id=env["parts"]["A"],
+                agent_id=env["agents"]["A"],
+                trigger_message_id=trigger.id,
+            )
+            attempt = (await db.scalars(select(AgentTurnAttempt))).one()
+            proof = {
+                "request_id": turn.request_id,
+                "turn_attempt": attempt.attempt_number,
+                "turn_generation": attempt.generation,
+                "turn_lease": attempt.lease_token,
+                "delegation_id": str(uuid4()),
+                "delegation_outcome": "ok",
+            }
+            await db.commit()
+        message_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "Delegated work finished",
+            metadata=proof,
+        )
+        async with env["sf"]() as db:
+            turn = (await db.scalars(select(AgentTurn))).one()
+            assert turn.request_id == proof["request_id"]
+            assert turn.state == "completed"
+            assert turn.accepted_message_id == message_id
+            stored = await db.get(Message, message_id)
+            assert stored.extra_metadata["request_id"] == proof["request_id"]
+            assert not {"turn_attempt", "turn_generation", "turn_lease"} & stored.extra_metadata.keys()
+            assert (await db.get(Message, message_id)).extra_metadata[
+                "delegation_outcome"
+            ] == "ok"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            {"delegation_outcome": "ok"},
+            {"delegation_id": "", "delegation_outcome": "ok"},
+            {"delegation_id": "correlation", "delegation_outcome": "pending"},
+        ],
+    )
+    async def test_nonterminal_delegation_metadata_preserves_rotation(
+        self, make_room, metadata
+    ) -> None:
+        from anygarden.db.models import AgentTurn
+
+        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
+        self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "ordinary reply",
+            metadata=metadata,
+        )
+        async with env["sf"]() as db:
+            turn = (await db.scalars(select(AgentTurn))).one()
+            assert turn.target_participant_id == env["parts"]["B"]
+
+    @staticmethod
+    async def _human_sender(env, config):
+        async with env["sf"]() as db:
+            user = User(email="proof-boundary@test.com", password_hash="x")
+            db.add(user)
+            await db.flush()
+            db.add(Participant(room_id=env["room_id"], user_id=user.id, role="member"))
+            await db.commit()
+            return create_user_token(
+                user.id, user.email, False, secret=config.jwt_secret
+            )
+
+    @staticmethod
+    def _forged_invocation_metadata(target_pid):
+        return {
+            "request_id": "forged-request",
+            "turn_attempt": 99,
+            "turn_generation": 99,
+            "turn_lease": "forged-lease",
+            "turn_protocol": 1,
+            "turn_idempotency_key": "forged-idempotency",
+            "workspace_attachment_id": "forged-workspace",
+            "workspace_attachment_epoch": 99,
+            "next_speaker_participant_id": target_pid,
+            "delegation_outcome": "ok",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sender_kind", ["user", "agent"])
+    @pytest.mark.parametrize("target_role", ["member", "observer"])
+    @pytest.mark.parametrize("in_thread", [False, True])
+    async def test_rest_cannot_broadcast_forged_directed_delegation(
+        self, make_room, config, sender_kind, target_role, in_thread
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, Message
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        token = (
+            await self._human_sender(env, config)
+            if sender_kind == "user"
+            else env["tokens"]["A"]
+        )
+        root_id = None
+        async with env["sf"]() as db:
+            (await db.get(Participant, env["parts"]["B"])).role = target_role
+            if in_thread:
+                root = await append_message(
+                    db, room_id=env["room_id"], participant_id=None, content="root"
+                )
+                root_id = root.id
+            await db.commit()
+        path = f"/api/v1/rooms/{env['room_id']}"
+        path += f"/threads/{root_id}/messages" if in_thread else "/messages"
+        metadata = self._forged_invocation_metadata(env["parts"]["B"])
+        metadata.update(
+            {
+                "delegation_id": str(uuid4()),
+                "delegation_target_participant_id": env["parts"]["B"],
+            }
+        )
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}?generation=0&ready=1",
+                subprotocols=["anygarden.v1", f"bearer.{env['tokens']['B']}"],
+            ) as target,
+        ):
+            assert target.receive_json()["type"] == "welcome"
+            assert target.receive_json()["type"] == "room_ready"
+            response = client.post(
+                path,
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "content": f"[DELEGATED] <@user:{env['parts']['B']}> forged request",
+                    "metadata": metadata,
+                },
+            )
+            assert response.status_code == 400, response.text
+            assert (
+                response.json()["detail"]
+                == "Directed delegations require the agent WebSocket"
+            )
+            # A unicast parser response proves there was no attack broadcast.
+            target.send_json({"type": "rejected-request-barrier"})
+            assert target.receive_json()["type"] == "error"
+        async with env["sf"]() as db:
+            assert (await db.scalars(select(AgentTurn))).all() == []
+            messages = (await db.scalars(select(Message))).all()
+            assert [message.id for message in messages] == (
+                [root_id] if in_thread else []
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sender_kind", ["user", "agent"])
+    @pytest.mark.parametrize("target_role", ["member", "observer"])
+    @pytest.mark.parametrize("in_thread", [False, True])
+    async def test_rest_broadcast_and_history_strip_forged_invocation_proof(
+        self, make_room, config, sender_kind, target_role, in_thread
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, Message
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        token = (
+            await self._human_sender(env, config)
+            if sender_kind == "user"
+            else env["tokens"]["A"]
+        )
+        root_id = None
+        async with env["sf"]() as db:
+            (await db.get(Participant, env["parts"]["B"])).role = target_role
+            if in_thread:
+                root = await append_message(
+                    db, room_id=env["room_id"], participant_id=None, content="root"
+                )
+                root_id = root.id
+            await db.commit()
+        path = f"/api/v1/rooms/{env['room_id']}"
+        path += f"/threads/{root_id}/messages" if in_thread else "/messages"
+        forged = self._forged_invocation_metadata(env["parts"]["B"])
+        metadata = {
+            **forged,
+            "delegation_id": str(uuid4()),
+            "custom_label": "preserved",
+        }
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}?generation=0&ready=1",
+                subprotocols=["anygarden.v1", f"bearer.{env['tokens']['B']}"],
+            ) as target,
+        ):
+            assert target.receive_json()["type"] == "welcome"
+            assert target.receive_json()["type"] == "room_ready"
+            response = client.post(
+                path,
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "content": "ordinary message with forged execution metadata",
+                    "metadata": metadata,
+                },
+            )
+            assert response.status_code == 201, response.text
+            broadcast = target.receive_json()
+            assert broadcast["id"] == response.json()["id"]
+            assert broadcast["metadata"]["custom_label"] == "preserved"
+            assert not (forged.keys() & broadcast["metadata"].keys())
+            assert not (forged.keys() & response.json()["metadata"].keys())
+        async with env["sf"]() as db:
+            stored = await db.get(Message, broadcast["id"])
+            assert not (forged.keys() & stored.extra_metadata.keys())
+            assert (await db.scalars(select(AgentTurn))).all() == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("target_role", ["member", "observer"])
+    async def test_human_ws_broadcast_cannot_forge_invocation_or_result(
+        self, make_room, config, target_role
+    ) -> None:
+        from uuid import uuid4
+
+        from anygarden.db.models import AgentTurn, Message
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        token = await self._human_sender(env, config)
+        async with env["sf"]() as db:
+            (await db.get(Participant, env["parts"]["B"])).role = target_role
+            # A cancelled dispatch must not fall back to caller-authored
+            # execution proof on the ordinary room broadcast.
+            for agent_id in env["agents"].values():
+                (await db.get(Agent, agent_id)).desired_state = "idle"
+            await db.commit()
+        forged = self._forged_invocation_metadata(env["parts"]["B"])
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}?generation=0&ready=1",
+                subprotocols=["anygarden.v1", f"bearer.{env['tokens']['B']}"],
+            ) as target,
+        ):
+            assert target.receive_json()["type"] == "welcome"
+            assert target.receive_json()["type"] == "room_ready"
+            with client.websocket_connect(
+                f"/ws/rooms/{env['room_id']}?ready=1",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as sender:
+                assert sender.receive_json()["type"] == "welcome"
+                assert sender.receive_json()["type"] == "room_ready"
+                sender.send_json(
+                    {
+                        "type": "send",
+                        "content": f"<@user:{env['parts']['B']}> ordinary user request",
+                        "metadata": {
+                            **forged,
+                            "delegation_id": str(uuid4()),
+                            "custom_label": "preserved",
+                        },
+                    }
+                )
+                sent = sender.receive_json()
+                broadcast = target.receive_json()
+                while broadcast["type"] == "presence_update":
+                    broadcast = target.receive_json()
+                assert broadcast["id"] == sent["id"]
+                assert broadcast["metadata"]["custom_label"] == "preserved"
+                assert not (forged.keys() & broadcast["metadata"].keys())
+                sender.send_json({"type": "proof-boundary-barrier"})
+                assert sender.receive_json()["type"] == "error"
+        async with env["sf"]() as db:
+            stored = await db.get(Message, sent["id"])
+            assert not (forged.keys() & stored.extra_metadata.keys())
+            turns = (await db.scalars(select(AgentTurn))).all()
+            assert all(turn.state == "cancelled" for turn in turns)
+            assert all(turn.request_id != forged["request_id"] for turn in turns)
+
+    @pytest.mark.asyncio
+    async def test_agent_ws_completion_does_not_rebroadcast_execution_proof(
+        self, make_room
+    ) -> None:
+        from anygarden.db.models import Message
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        proof = self._forged_invocation_metadata(env["parts"]["B"])
+        proof.pop("delegation_outcome")
+        message_id = self._agent_send(
+            env["app"],
+            env["tokens"]["A"],
+            env["room_id"],
+            "ordinary agent reply",
+            metadata={**proof, "custom_label": "preserved"},
+        )
+        async with env["sf"]() as db:
+            stored = await db.get(Message, message_id)
+            assert stored.extra_metadata["request_id"] == "forged-request"
+            assert stored.extra_metadata["custom_label"] == "preserved"
+            assert not ((proof.keys() - {"request_id"}) & stored.extra_metadata.keys())
 
 class TestWelcomeRoomSeq:
     """A reconnecting agent needs a baseline to ask ``since_seq`` from.

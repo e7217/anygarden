@@ -133,7 +133,17 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
     lifecycle = app.state.agent_lifecycle
     frame_type = data.get("type")
 
-    if frame_type == "register":
+    if frame_type == "managed_workspace_result":
+        from anygarden_machine.protocol.frames import ManagedWorkspaceResultFrame
+        from pydantic import ValidationError
+
+        try:
+            result = ManagedWorkspaceResultFrame.model_validate(data)
+        except ValidationError:
+            return
+        machine_bus.resolve_workspace(machine_id, result.model_dump())
+
+    elif frame_type == "register":
         await _handle_register(session_factory, machine_id, data)
         # Place any orphaned agents (desired=running, no machine)
         await _place_orphaned_agents(session_factory, lifecycle)
@@ -202,8 +212,9 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         memory_md = data.get("memory_md", "")
         if agent_id:
             async with session_factory() as db:
-                from anygarden.db.models import Agent
                 from sqlalchemy import update
+
+                from anygarden.db.models import Agent
 
                 await db.execute(
                     update(Agent)

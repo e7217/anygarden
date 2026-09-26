@@ -51,6 +51,20 @@ def _make_client(
 
 
 class TestShouldRespond:
+    @pytest.mark.parametrize("target,lease,expected", [
+        ("my-pid-123", "valid-lease", True),
+        ("other-agent", "valid-lease", False),
+        ("my-pid-123", None, False),
+    ])
+    def test_directed_delegation_requires_target_and_durable_delivery(self, target, lease, expected):
+        client = _make_client()
+        metadata = {"delegation_id": "d1", "delegation_target_participant_id": target,
+                    "request_id": "child-request"}
+        if lease:
+            metadata["turn_lease"] = lease
+        msg = {"participant_id": "parent-agent", "content": f"[DELEGATED] <@user:{target}> task", "metadata": metadata}
+        assert should_respond(msg, client) is expected
+
     def test_skip_own_message(self):
         client = _make_client()
         msg = {"participant_id": "my-pid-123", "content": "hello", "metadata": {}}

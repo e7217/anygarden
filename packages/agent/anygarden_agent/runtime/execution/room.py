@@ -7,6 +7,7 @@ that configuration, OAuth and tools; remote execution retains isolated defaults.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from .codex import CodexRuntime
 from .contracts import Invocation
@@ -49,6 +50,10 @@ class RoomCodexRuntime(CodexRuntime):
 
 
 class RoomPiRuntime(PiRuntime):
+    def __init__(self, executable: Path):
+        super().__init__(executable)
+        self.self_tools_config: Path | None = None
+
     def command(self, invocation, session, output):
         cmd = super().command(invocation, session, output)
         for flag in (
@@ -61,10 +66,13 @@ class RoomPiRuntime(PiRuntime):
             cmd.remove(flag)
         if invocation.permission_level == "restricted":
             cmd += ["--tools", "read,grep,find,ls"]
+        elif self.self_tools_config is not None:
+            from .pi_self_tools import EXTENSION_PATH
+
+            cmd += ["--extension", str(EXTENSION_PATH)]
         return cmd
 
-    @staticmethod
-    def environment(invocation):
+    def environment(self, invocation):
         # Pi settings/session locations remain per-agent. Local HOME and staged
         # environment are preserved for its configured skills and tools.
         original = room_environment(invocation)
@@ -76,8 +84,14 @@ class RoomPiRuntime(PiRuntime):
         result = PiRuntime.environment(replace(invocation, environment=safe))
         if "HOME" in original:
             result["HOME"] = original["HOME"]
-        if "ANYGARDEN_AGENT_TOKEN" in original:
-            result["ANYGARDEN_AGENT_TOKEN"] = original["ANYGARDEN_AGENT_TOKEN"]
+        from .pi_self_tools import CONFIG_ENV
+
+        result.pop(CONFIG_ENV, None)
+        if invocation.permission_level != "restricted":
+            if "ANYGARDEN_AGENT_TOKEN" in original:
+                result["ANYGARDEN_AGENT_TOKEN"] = original["ANYGARDEN_AGENT_TOKEN"]
+            if self.self_tools_config is not None:
+                result[CONFIG_ENV] = str(self.self_tools_config)
         return result
 
 
@@ -85,7 +99,8 @@ def staged_environment() -> dict[str, str]:
     from anygarden_agent import secrets
 
     from .endpoint import CHILD_KEY, CONFIG_KEY, INPUT_KEY
-    from .pi_auth import CONFIG_KEY as PI_CONFIG_KEY, INPUT_KEY as PI_INPUT_KEY
+    from .pi_auth import CONFIG_KEY as PI_CONFIG_KEY
+    from .pi_auth import INPUT_KEY as PI_INPUT_KEY
 
     # Preserve the existing local engine configuration, but never pass the
     # server transport identity or private endpoint descriptor into a tool.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
@@ -26,9 +26,11 @@ from anygarden.db.models import (
 )
 from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import replay_since_seq
+from anygarden.messages.metadata import strip_turn_proof
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
 from anygarden.rooms.authorization import (
+    AGENT_EXECUTION_ROLES,
     Capability,
     require_capability,
     room_authorization_session,
@@ -559,6 +561,56 @@ def _is_ambient_candidate(
         if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
             return False
     return True
+
+
+async def _directed_delegation_target(
+    db: AsyncSession,
+    *,
+    room_id: str,
+    content: str,
+    metadata: dict[str, Any],
+    sender_agent_id: str | None,
+) -> str | None:
+    """Admit the explicit SDK delegation contract, never caller nominations.
+
+    The new target key opts into strict validation. Older messages carrying
+    only a delegation correlation ID retain their existing routing behavior.
+    """
+    if "delegation_target_participant_id" not in metadata:
+        return None
+    target_pid = metadata["delegation_target_participant_id"]
+    delegation_id = metadata.get("delegation_id")
+    invalid = ValueError("Invalid directed delegation")
+    if (
+        sender_agent_id is None
+        or not isinstance(target_pid, str)
+        or not target_pid
+        or not isinstance(delegation_id, str)
+    ):
+        raise invalid
+    try:
+        UUID(delegation_id)
+    except ValueError:
+        raise invalid from None
+    prefix = f"[DELEGATED] <@user:{target_pid}>"
+    if not content.startswith(prefix) or not content[len(prefix):].strip():
+        raise invalid
+    # Only the server's canonical parser may authorize the mention. This
+    # also detects a token stripped by a routing safety rule upstream.
+    if {"type": "user", "id": target_pid} not in metadata.get("mentions", []):
+        raise invalid
+    target = await db.scalar(
+        select(Participant.id).where(
+            Participant.id == target_pid,
+            Participant.room_id == room_id,
+            Participant.agent_id.isnot(None),
+            Participant.agent_id != sender_agent_id,
+            Participant.role.in_(AGENT_EXECUTION_ROLES),
+        )
+    )
+    if target is None:
+        raise invalid
+    return target
 
 
 async def _apply_orchestrator_handoff(
@@ -1123,10 +1175,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         truncated = False
                         break
                     for msg in page:
-                        frame = message_to_frame(msg)
-                        await websocket.send_text(frame.model_dump_json())
                         cursor = msg.seq
                         replayed += 1
+                        if (
+                            identity is not None
+                            and identity.kind == "agent"
+                            and (msg.extra_metadata or {}).get(
+                                "delegation_target_participant_id"
+                            ) == participant.id
+                        ):
+                            # The durable outbox owns this invocation. Raw
+                            # history has no child lease and must not execute
+                            # again before/after its durable delivery.
+                            continue
+                        frame = message_to_frame(msg)
+                        await websocket.send_text(frame.model_dump_json())
                     if len(page) < REPLAY_PAGE_SIZE:
                         # Short page → caught up; no more rows to replay.
                         truncated = False
@@ -1145,6 +1208,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         replayed=replayed,
                         ceil=REPLAY_CEIL,
                     )
+
+        if "ready=1" in raw_query.split("&"):
+            if identity is not None and identity.kind == "agent":
+                from anygarden.turns.service import deliver_pending_outbox
+
+                await deliver_pending_outbox(
+                    session_factory, manager, participant_ids=[participant.id]
+                )
+            # Opt-in SDK barrier: welcome precedes subscription, so it is
+            # insufficient to prove a newly joined room can receive work.
+            await websocket.send_text(
+                json.dumps({"type": "room_ready", "room_id": room_id})
+            )
 
         # -- Main receive loop --
         while True:
@@ -1265,6 +1341,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
 
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
+                # Speaker nomination is always recomputed by this send's
+                # server dispatcher. No client can stamp it into a broadcast.
+                metadata.pop("next_speaker_participant_id", None)
+                if identity is None or identity.kind != "agent":
+                    metadata = strip_turn_proof(metadata)
+                    metadata.pop("delegation_outcome", None)
                 # D-6 (#629): validate + stamp interaction payloads on the
                 # agent WS path too — same closed schema as REST, no bypass.
                 from anygarden.interactions import (
@@ -1341,9 +1423,23 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 is_agent_for_peer = (
                     identity is not None and identity.kind == "agent"
                 )
+                is_delegation_result = (
+                    is_agent_for_peer
+                    and isinstance(metadata.get("delegation_id"), str)
+                    and bool(metadata["delegation_id"])
+                    and metadata.get("delegation_outcome") in (
+                        "ok", "failed", "timeout", "cancelled", "rejected",
+                        "retry_exhausted",
+                    )
+                )
+                # Explicit delegations have their own target/role admission
+                # below. The heuristic chatter budget must not strip their
+                # required mention or discard concurrent directed requests.
                 if (
                     not is_thread_reply
                     and is_agent_for_peer
+                    and not is_delegation_result
+                    and "delegation_target_participant_id" not in metadata
                     and mentions
                     and peer_handoff_budget is not None
                 ):
@@ -1581,6 +1677,23 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # BEFORE the commit-and-broadcast so the stamp persists on
                 # the stored row and replays correctly on reconnect.
                 async with session_factory() as db:
+                    try:
+                        directed_target_pid = await _directed_delegation_target(
+                            db,
+                            room_id=room_id,
+                            content=frame_in.content,
+                            metadata=metadata,
+                            sender_agent_id=(
+                                identity.id
+                                if identity is not None and identity.kind == "agent"
+                                else None
+                            ),
+                        )
+                    except ValueError as exc:
+                        await websocket.send_text(
+                            ErrorOut(detail=str(exc)).model_dump_json()
+                        )
+                        continue
                     completion_decision = None
                     if identity is not None and identity.kind == "agent":
                         from anygarden.turns.service import begin_completion
@@ -1610,6 +1723,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         if completion_decision.outcome in {"idempotent", "stale"}:
                             await db.commit()
                             continue
+                        # Consume proof above, but never expose it as another
+                        # participant's invocation through broadcast/history.
+                        # The echoed request ID remains correlation metadata.
+                        metadata = strip_turn_proof(metadata, keep_request_id=True)
 
                     room_row = (
                         await db.execute(
@@ -1658,7 +1775,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # ``Room.next_speaker_participant_id``, which persists
                     # a stale value across sends). Drives the agent→agent
                     # causal fan-out below.
-                    nominated_pid: str | None = None
+                    nominated_pid = (
+                        directed_target_pid if not is_delegation_result else None
+                    )
+                    if nominated_pid is not None:
+                        metadata["next_speaker_participant_id"] = directed_target_pid
+                        await db.execute(
+                            sa_update(Room)
+                            .where(Room.id == room_id)
+                            .values(next_speaker_participant_id=directed_target_pid)
+                        )
 
                     # Issue #159 Phase B — round_robin dispatcher.
                     # Server picks the next speaker; agents just check
@@ -1667,7 +1793,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # immediately, rather than wherever the cursor
                     # happened to stop before. See
                     # ``_compute_round_robin_next`` for the details.
-                    if not is_thread_reply and speaker_strategy == "round_robin":
+                    if (
+                        directed_target_pid is None
+                        and not is_delegation_result
+                        and not is_thread_reply
+                        and speaker_strategy == "round_robin"
+                    ):
                         sender_is_human = (
                             identity is not None and identity.kind == "user"
                         )
@@ -1707,7 +1838,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         else None
                     )
                     handoff_pid = None
-                    if not is_thread_reply:
+                    if (
+                        directed_target_pid is None
+                        and not is_delegation_result
+                        and not is_thread_reply
+                    ):
                         handoff_pid = await _apply_orchestrator_handoff(
                             db,
                             room_id=room_id,
@@ -1733,7 +1868,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # the orchestrator omit the mention token from
                     # the second handoff onward in 5/5 trials, even
                     # with persona reinforcement).
-                    if not is_thread_reply and speaker_strategy == "orchestrator":
+                    if (
+                        directed_target_pid is None
+                        and not is_delegation_result
+                        and not is_thread_reply
+                        and speaker_strategy == "orchestrator"
+                    ):
                         fallback_info = (
                             await _apply_orchestrator_fallback_nominate(
                                 db,
@@ -1899,7 +2039,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # nomination (single-agent round_robin wraps to the
                         # sender) is skipped: a turn must not causally link
                         # to its own author.
-                        if is_thread_reply:
+                        if is_delegation_result:
+                            # Result subscribers consume control replies;
+                            # they never start an engine invocation. Minting
+                            # a peer turn here would leave an orphan forever.
+                            next_agent_parts = []
+                        elif is_thread_reply and directed_target_pid is None:
                             next_agent_parts = [
                                 (pid, aid)
                                 for pid, aid in thread_agent_parts
@@ -2045,7 +2190,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     if lifecycle is not None:
                         await lifecycle.release_generation_drain(identity.id)
 
-                def _make_out(pid: str) -> MessageOut | None:
+                def _make_out(
+                    pid: str,
+                    *,
+                    delegation_target_pid: str | None = directed_target_pid,
+                ) -> MessageOut | None:
                     """Per-recipient MessageOut.
 
                     Agents receive ``metadata.request_id`` so they can
@@ -2054,7 +2203,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     the stored metadata unchanged — ``request_id``
                     never persists on the message row itself.
                     """
-                    if pid in request_id_by_participant:
+                    if pid in request_id_by_participant or pid == delegation_target_pid:
                         return None
                     return message_to_frame(msg, metadata=base_metadata)
 

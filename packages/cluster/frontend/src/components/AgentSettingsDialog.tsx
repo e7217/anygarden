@@ -136,11 +136,13 @@ function CollapsibleSection({
   title,
   children,
   defaultOpen = false,
+  onToggle,
 }: {
   id: string
   title: string
   children: ReactNode
   defaultOpen?: boolean
+  onToggle?: (open: boolean) => void
 }) {
   return (
     <details
@@ -148,6 +150,7 @@ function CollapsibleSection({
       data-testid={`agent-settings-section-${id}`}
       className={`${SECTION_CARD_CLASS} group`}
       open={defaultOpen}
+      onToggle={event => onToggle?.(event.currentTarget.open)}
     >
       <summary
         className={`${SECTION_HEADING_CLASS} flex min-h-[var(--control-sm-height)] items-center justify-between gap-3 cursor-pointer list-none select-none`}
@@ -180,10 +183,14 @@ export default function AgentSettingsDialog({
   const { t } = useLocale()
   const bodyRef = useRef<HTMLDivElement>(null)
   const [selectedSection, setSelectedSection] = useState('overview')
+  const [activityOpen, setActivityOpen] = useState(false)
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null)
   const onConnectionChange = useCallback((next: ConnectionState) => setConnectionState(next), [])
   useEffect(() => {
-    if (!open) setConnectionState(null)
+    if (!open) {
+      setConnectionState(null)
+      setActivityOpen(false)
+    }
     if (open) setSelectedSection('overview')
   }, [open])
   const machineOffline = agent?.machine_online === false
@@ -317,6 +324,8 @@ export default function AgentSettingsDialog({
                 open right now". */}
             <Section id="goals" title={t('admin.agentSettings.responsibilities')}>
               <GoalsPanel
+                key={agent?.id}
+                onNavigateAway={() => onOpenChange(false)}
                 agentId={agent?.id ?? null}
                 agentName={agent?.name ?? ''}
               />
@@ -326,14 +335,14 @@ export default function AgentSettingsDialog({
                 assigned to this agent. Sits next to Rooms because both
                 answer "what is this agent doing right now". */}
             <Section id="tasks" title={t('admin.agentSettings.tasks')}>
-              <TasksPanel agentId={agent?.id ?? null} />
+              <TasksPanel agentId={agent?.id ?? null} onNavigateAway={() => onOpenChange(false)} />
             </Section>
 
             {/* Activity is a lifecycle log — least-often consulted of
                 the four sections. Collapsed by default keeps Manifest
                 and Rooms closer to the top of the scroll. */}
-            <CollapsibleSection id="activity" title={t('admin.agentSettings.activity')}>
-              <ActivityPanel agentId={agent?.id ?? null} />
+            <CollapsibleSection id="activity" title={t('admin.agentSettings.activity')} onToggle={setActivityOpen}>
+              <ActivityPanel agentId={agent?.id ?? null} active={open && activityOpen} />
             </CollapsibleSection>
           </div>
         </div>

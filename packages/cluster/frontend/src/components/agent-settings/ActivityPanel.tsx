@@ -1,25 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { ChevronRight, Loader2, RefreshCw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { isPendingOutcome, isTerminalActivity, useAgentActivity, type ActivityLog } from '@/hooks/useAgentActivity'
+export type { ActivityLog } from '@/hooks/useAgentActivity'
 import { useLocale } from '@/i18n/LocaleProvider'
-
-export interface ActivityLog {
-  id: string
-  event_type: string
-  timestamp: string
-  // #222 — the turn-correlation id. Null for system events
-  // (start_requested / stop_requested / state_changed) that don't
-  // belong to any particular request lifecycle.
-  request_id: string | null
-  // #429 — which agent the row belongs to. The per-agent panel knows
-  // this implicitly; the room-level view (RoomActivityDialog) needs it
-  // to label each turn. Optional so existing callers compile unchanged.
-  agent_id?: string | null
-  details: Record<string, unknown> | null
-}
 
 interface Props {
   agentId: string | null
+  active?: boolean
 }
 
 // A turn is the cluster's bookkeeping unit for "one user input → agent
@@ -51,7 +39,7 @@ export interface Turn {
 }
 
 type TurnOutcome = 'responded' | 'silent' | 'orphaned' | 'in_flight'
-type EngineOutcome = 'ok' | 'failed' | 'timeout' | 'cancelled' | 'rejected'
+type EngineOutcome = 'ok' | 'failed' | 'timeout' | 'cancelled' | 'rejected' | 'queued' | 'retrying' | 'retry_exhausted'
 
 function str(v: unknown): string | null {
   return typeof v === 'string' ? v : null
@@ -82,8 +70,9 @@ export function activityErrorMessage(error: string): string {
 function deriveOutcome(events: ActivityLog[]): TurnOutcome {
   const kinds = new Set(events.map(e => e.event_type))
   if (kinds.has('handler_orphaned')) return 'orphaned'
+  if (!events.some(isTerminalActivity) && events.some(e => isPendingOutcome(e.details?.outcome))) return 'in_flight'
   if (kinds.has('response_sent')) return 'responded'
-  if (kinds.has('handler_finished')) return 'silent'
+  if (events.some(isTerminalActivity)) return 'silent'
   return 'in_flight'
 }
 
@@ -108,7 +97,7 @@ export function splitLogs(
   const turns: Turn[] = []
   for (const [requestId, rawEvents] of byRequest.entries()) {
     const events = [...rawEvents].sort((a, b) =>
-      a.timestamp.localeCompare(b.timestamp),
+      a.timestamp === b.timestamp ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.timestamp.localeCompare(b.timestamp),
     )
     const firstTs = new Date(events[0].timestamp).getTime()
     const lastTs = new Date(events[events.length - 1].timestamp).getTime()
@@ -134,10 +123,15 @@ export function splitLogs(
       if (e.event_type === 'engine_call_started' || e.event_type === 'engine_call_finished') {
         engine = str(d.engine) ?? engine
       }
+      if (e.event_type === 'handler_started') {
+        finalOutcome = null
+        durationMs = null
+        error = null
+      }
       if (e.event_type === 'handler_finished') {
         finalOutcome = (str(d.outcome) as EngineOutcome | null) ?? finalOutcome
-        durationMs = num(d.duration_ms) ?? durationMs
-        error = str(d.error) ?? error
+        durationMs = isTerminalActivity(e) ? num(d.duration_ms) : null
+        error = isTerminalActivity(e) ? str(d.error) : null
       }
       if (e.event_type === 'engine_call_finished') {
         error = error ?? str(d.error)
@@ -162,7 +156,12 @@ export function splitLogs(
     })
   }
   // Most recent turn first.
-  turns.sort((a, b) => b.firstTs - a.firstTs)
+  turns.sort((a, b) => {
+    const firstA = a.events[0], firstB = b.events[0]
+    return firstA.timestamp === firstB.timestamp
+      ? (firstA.id < firstB.id ? 1 : firstA.id > firstB.id ? -1 : 0)
+      : firstB.timestamp.localeCompare(firstA.timestamp)
+  })
   return { turns, system }
 }
 
@@ -206,7 +205,7 @@ export function turnDotClass(turn: Turn): string {
   const fo = turn.finalOutcome
   if (fo) {
     if (fo === 'ok') return 'bg-[var(--color-success)]'
-    if (fo === 'cancelled') return 'bg-[var(--color-foreground-muted)]'
+    if (fo === 'cancelled' || isPendingOutcome(fo)) return 'bg-[var(--color-foreground-muted)]'
     return 'bg-[var(--color-destructive,#d74c4c)]' // failed | timeout | rejected
   }
   return outcomeDotClass(turn.outcome)
@@ -231,20 +230,13 @@ function eventDetail(evt: ActivityLog, localizeError: (error: string) => string)
   return parts.join(' · ')
 }
 
-export default function ActivityPanel({ agentId }: Props) {
+export default function ActivityPanel({ agentId, active = true }: Props) {
   const { t, formatDate } = useLocale()
-  const [logs, setLogs] = useState<ActivityLog[]>([])
+  const activity = useAgentActivity(agentId, active)
+  const { logs } = activity
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
-  useEffect(() => {
-    if (!agentId) return
-    let cancelled = false
-    apiFetch(`/api/v1/agents/${agentId}/activity?limit=50`).then(async r => {
-      if (cancelled || !r.ok) return
-      setLogs(await r.json())
-    })
-    return () => { cancelled = true }
-  }, [agentId])
+  useEffect(() => { setExpanded(new Set()) }, [agentId])
 
   const { turns, system } = useMemo(() => splitLogs(logs), [logs])
   const localizeError = (error: string) => {
@@ -267,6 +259,9 @@ export default function ActivityPanel({ agentId }: Props) {
       timeout: t('admin.activity.outcome.timeout'),
       cancelled: t('admin.activity.outcome.cancelled'),
       rejected: t('admin.activity.outcome.rejected'),
+      queued: t('admin.activity.outcome.queued'),
+      retrying: t('admin.activity.outcome.retrying'),
+      retry_exhausted: t('admin.activity.outcome.retryExhausted'),
     }
     return known[outcome] ?? outcome
   }
@@ -280,21 +275,23 @@ export default function ActivityPanel({ agentId }: Props) {
     })
   }
 
-  if (logs.length === 0) {
-    return (
-      <div className="py-2" data-testid="activity-panel">
-        <p className="text-caption text-[var(--color-foreground-muted)]">
-          {t('admin.activity.none')}
-        </p>
-      </div>
-    )
-  }
-
   return (
-    <div
-      className="max-h-[60vh] overflow-y-auto space-y-3 py-2"
-      data-testid="activity-panel"
-    >
+    <div className="space-y-3 py-2" data-testid="activity-panel" aria-busy={activity.busy}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-[var(--color-foreground-muted)]">
+          {activity.autoUpdating ? t('admin.activity.autoUpdating') : t('admin.activity.historyHint')}
+        </p>
+        <Button variant="outline" size="sm" disabled={activity.busy || !agentId} onClick={() => void activity.refresh()}>
+          <RefreshCw className={activity.refreshing ? 'animate-spin' : ''} />{t('common.refresh')}
+        </Button>
+      </div>
+      {activity.loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.activity.loading')}</p>}
+      {activity.error && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-destructive)]">
+        <p>{t(logs.length ? 'admin.activity.refreshFailed' : 'admin.activity.loadFailed')}</p>
+        <Button variant="outline" size="sm" disabled={activity.busy} onClick={() => void activity.retry()}>{t('common.retry')}</Button>
+      </div>}
+      {!activity.loading && !activity.error && logs.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.activity.none')}</p>}
+      <div className="max-h-[60vh] overflow-y-auto space-y-3">
       {turns.length > 0 && (
         <section className="space-y-1.5">
           <h4 className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
@@ -446,6 +443,11 @@ export default function ActivityPanel({ agentId }: Props) {
           </ul>
         </section>
       )}
+      </div>
+      {activity.hasMore && <Button variant="outline" size="sm" disabled={activity.busy} onClick={() => void activity.loadMore()}>
+        {activity.loadingMore && <Loader2 className="animate-spin" />}{t('admin.activity.loadOlder')}
+      </Button>}
+      {logs.length > 0 && !activity.hasMore && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.activity.historyEnd')}</p>}
     </div>
   )
 }

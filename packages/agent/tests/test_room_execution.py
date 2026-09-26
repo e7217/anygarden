@@ -117,6 +117,12 @@ def setup_room(tmp_path, monkeypatch):
         "anygarden_agent.integrations.room_execution.shutil.which",
         lambda _: str(executable),
     )
+    # These room-supervisor tests use a fake engine and no cluster server.
+    # The real self MCP handshake/ownership is covered by test_pi_self_tools.
+    monkeypatch.setattr(
+        "anygarden_agent.runtime.execution.pi_self_tools.prepare_pi_self_tools",
+        AsyncMock(return_value=tmp_path / "self-tools-fixture.json"),
+    )
     # #688 — Pi uses the machine-managed executable handed over by the spawner.
     monkeypatch.setenv("ANYGARDEN_PI_EXECUTABLE", str(executable))
     monkeypatch.delenv("ANYGARDEN_PI_USE_PATH", raising=False)

@@ -648,8 +648,20 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         if re.search(pattern, content, re.IGNORECASE):
             mentioned_me = True
 
+    # Directed delegations execute only on the nominated agent's leased
+    # delivery, including thread requests. Raw broadcasts remain context.
+    if content.startswith("[DELEGATED]") and metadata.get("delegation_target_participant_id"):
+        target = metadata["delegation_target_participant_id"]
+        return (
+            MessagePolicy.RESPOND
+            if target in client._my_participant_ids and f"<@user:{target}>" in content
+            and isinstance(metadata.get("request_id"), str)
+            and isinstance(metadata.get("turn_lease"), str)
+            else MessagePolicy.INGEST_ONLY
+        )
+
     # Thread replies are room-wide context, but only a canonical explicit
-    # mention wakes this agent. This precedes every special routing fallback.
+    # mention wakes this agent. This precedes every legacy routing fallback.
     if is_thread_reply and not mentioned_me:
         if getattr(client, "_context_window_opt_out", False):
             return MessagePolicy.SKIP

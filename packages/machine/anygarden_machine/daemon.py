@@ -13,7 +13,7 @@ import structlog
 import websockets
 from websockets.asyncio.client import connect
 
-from anygarden_machine import __version__
+from anygarden_machine import __version__, managed_workspace
 from anygarden_machine.config import save_token
 from anygarden_machine.crash_budget import CrashBudget
 from anygarden_machine.detector import detect_engines
@@ -21,17 +21,18 @@ from anygarden_machine.engines.managed import ensure_managed_pi
 from anygarden_machine.engines.registry import get_lifecycle
 from anygarden_machine.engines.updater import run_engine_update
 from anygarden_machine.manifest_store import ManifestStore
-from anygarden_machine.sysinfo import collect_system_info
 from anygarden_machine.protocol.frames import (
     AgentActual,
     AgentMemorySharedFileDeleteFrame,
     AgentMemorySharedFileWriteFrame,
+    EngineCheckResultFrame,
+    EngineUpdateResultFrame,
+    ManagedWorkspaceRequestFrame,
+    ManagedWorkspaceResultFrame,
     RegisterFrame,
     ReportActualStateFrame,
     RequestReplacementFrame,
     SelfUpdateResultFrame,
-    EngineCheckResultFrame,
-    EngineUpdateResultFrame,
     SyncDesiredStateFrame,
     TokenRequestFrame,
     WorkspaceAttachReceiptFrame,
@@ -39,6 +40,7 @@ from anygarden_machine.protocol.frames import (
     parse_server_frame,
 )
 from anygarden_machine.spawner import Spawner, SpawnManifest
+from anygarden_machine.sysinfo import collect_system_info
 from anygarden_machine.updater import run_update
 from anygarden_machine.workspace_registry import WorkspaceRegistry
 from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
@@ -315,6 +317,7 @@ class MachineDaemon:
             # signing are intentionally absent, so the cluster must reject
             # every write activation from this daemon version.
             control_capabilities=[
+                *([managed_workspace.CAPABILITY] if managed_workspace.supported() else []),
                 "agent_generation_reports_v1",
                 "direct_endpoint_v1",
                 "pi_native_auth_v1",
@@ -410,6 +413,8 @@ class MachineDaemon:
         frame = parse_server_frame(data)
 
         match frame.type:
+            case "managed_workspace_request":
+                await self._handle_managed_workspace(frame)
             case "sync_desired_state":
                 await self._handle_sync_desired_state(frame)
             case "sync_batch":
@@ -436,6 +441,23 @@ class MachineDaemon:
                 await self._handle_workspace_attach_request(frame)
             case "workspace_revoke":
                 await self._handle_workspace_revoke(frame)
+
+    async def _handle_managed_workspace(self, frame: ManagedWorkspaceRequestFrame) -> None:
+        lock = self._agent_locks.setdefault(frame.agent_id, asyncio.Lock())
+        async with lock:
+            running = self._spawner.get_running(frame.agent_id)
+            snapshot = await asyncio.to_thread(
+                managed_workspace.browse,
+                self._manifest_store.agents_root, frame.agent_id, frame.generation,
+                operation=frame.operation, path=frame.path, cursor=frame.cursor,
+                running_generation=self._running_generations.get(frame.agent_id),
+                running_pid=running.pid if running else None,
+                running_started_at=running.started_at if running else None,
+            )
+        await self._send(ManagedWorkspaceResultFrame(
+            request_id=frame.request_id, agent_id=frame.agent_id,
+            generation=frame.generation, snapshot=snapshot,
+        ).model_dump())
 
     async def _handle_workspace_attach_request(self, frame: Any) -> None:
         """Verify local registration/consent without attaching a path."""

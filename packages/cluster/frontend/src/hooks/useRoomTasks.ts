@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
 
 // Task shape mirrors `TaskOut` in packages/cluster/anygarden/api/v1/tasks.py.
@@ -75,182 +75,91 @@ export function useRoomTasks(
   opts: UseRoomTasksOptions = {},
 ): UseRoomTasksValue {
   const { status, goalId } = opts
-  const [tasks, setTasks] = useState<Task[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // The scope object distinguishes A → B → A, not just different room IDs.
+  // Store it with each snapshot so old rows disappear in the first render.
+  const scope = useMemo(() => ({ roomId, status, goalId, active: true, request: 0 }), [roomId, status, goalId])
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const [snapshot, setSnapshot] = useState<{ scope: typeof scope; tasks: Task[]; loading: boolean; error: string | null }>(
+    () => ({ scope, tasks: [], loading: Boolean(roomId), error: null }),
+  )
+  const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope])
 
   const refresh = useCallback(async () => {
-    if (!roomId) {
-      setTasks([])
-      return
-    }
+    if (!roomId || !isCurrent()) return
+    const request = ++scope.request
+    const accepts = () => isCurrent() && scope.request === request
     const params = new URLSearchParams()
     if (status) params.set('status', status)
     if (goalId) params.set('goal_id', goalId)
     const qs = params.toString()
-    setLoading(true)
-    setError(null)
+    setSnapshot(previous => ({ scope, tasks: previous.scope === scope ? previous.tasks : [], loading: true, error: null }))
     try {
-      const resp = await apiFetch(
-        `/api/v1/rooms/${roomId}/tasks${qs ? '?' + qs : ''}`,
-      )
-      if (resp.ok) {
-        setTasks(await resp.json())
-      } else {
-        setTasks([])
-        setError(`Fetch failed (HTTP ${resp.status})`)
-      }
-    } catch (e) {
-      setTasks([])
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
+      const resp = await apiFetch(`/api/v1/rooms/${roomId}/tasks${qs ? '?' + qs : ''}`)
+      if (!resp.ok) throw new Error(`Fetch failed (HTTP ${resp.status})`)
+      const tasks = await resp.json() as Task[]
+      if (accepts()) setSnapshot({ scope, tasks, loading: false, error: null })
+    } catch (error) {
+      if (accepts()) setSnapshot({ scope, tasks: [], loading: false, error: error instanceof Error ? error.message : String(error) })
     }
-  }, [roomId, status, goalId])
+  }, [roomId, status, goalId, scope, isCurrent])
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    scope.active = true
+    void refresh()
+    return () => { scope.active = false }
+  }, [scope, refresh])
 
-  // #266 — refetch when the server pushes a ``task.updated`` frame.
-  // Listening on ``window`` keeps this hook independent of where the
-  // WS is mounted in the React tree (ChatPage owns the connection).
   useEffect(() => {
     if (!roomId) return
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as
-        | { task?: { room_id?: string } }
-        | undefined
-      if (!detail?.task) return
-      // Ignore events for other rooms — the hook only mirrors the
-      // currently selected room's task list.
-      if (detail.task.room_id && detail.task.room_id !== roomId) return
-      refresh()
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { task?: { room_id?: string } } | undefined
+      if (detail?.task && (!detail.task.room_id || detail.task.room_id === roomId)) void refresh()
     }
     window.addEventListener('anygarden:task:updated', handler)
     return () => window.removeEventListener('anygarden:task:updated', handler)
   }, [roomId, refresh])
 
-  const create = useCallback<UseRoomTasksValue['create']>(
-    async (input) => {
-      if (!roomId) return null
-      const resp = await apiFetch(`/api/v1/rooms/${roomId}/tasks`, {
-        method: 'POST',
-        body: JSON.stringify({
-          title: input.title,
-          assignee_participant_id: input.assignee_participant_id ?? null,
-        }),
-      })
-      if (!resp.ok) {
-        setError(`Create failed (HTTP ${resp.status})`)
-        return null
-      }
-      const created = (await resp.json()) as Task
+  // An action may finish after its room has gone away. Neither the follow-up
+  // query nor its error/return value may affect the newly selected room.
+  const mutate = useCallback(async (path: string, init: RequestInit, label: string, returnsTask = false): Promise<Task | null> => {
+    if (!roomId || !isCurrent()) return null
+    try {
+      const resp = await apiFetch(path, init)
+      if (!isCurrent()) return null
+      if (!resp.ok) throw new Error(`${label} failed (HTTP ${resp.status})`)
+      const task = returnsTask ? await resp.json() as Task : null
+      if (!isCurrent()) return null
       await refresh()
-      return created
-    },
-    [roomId, refresh],
-  )
-
-  const update = useCallback<UseRoomTasksValue['update']>(
-    async (id, patch) => {
-      const resp = await apiFetch(`/api/v1/tasks/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(patch),
-      })
-      if (!resp.ok) {
-        setError(`Update failed (HTTP ${resp.status})`)
-        return
+      return isCurrent() ? task : null
+    } catch (error) {
+      if (isCurrent()) {
+        ++scope.request
+        setSnapshot(previous => ({ scope, tasks: previous.scope === scope ? previous.tasks : [], loading: false, error: error instanceof Error ? error.message : String(error) }))
       }
-      await refresh()
-    },
-    [refresh],
-  )
+      return null
+    }
+  }, [roomId, scope, isCurrent, refresh])
 
-  const createFromMessage = useCallback<
-    UseRoomTasksValue['createFromMessage']
-  >(
-    async (messageId, input) => {
-      if (!roomId) return null
-      const resp = await apiFetch(
-        `/api/v1/rooms/${roomId}/messages/${messageId}/task`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            title: input.title,
-            assignee_participant_id: input.assignee_participant_id ?? null,
-          }),
-        },
-      )
-      if (!resp.ok) {
-        setError(`Create from message failed (HTTP ${resp.status})`)
-        return null
-      }
-      const created = (await resp.json()) as Task
-      await refresh()
-      return created
-    },
-    [roomId, refresh],
-  )
+  const create = useCallback<UseRoomTasksValue['create']>(input => mutate(`/api/v1/rooms/${roomId}/tasks`, {
+    method: 'POST', body: JSON.stringify({ title: input.title, assignee_participant_id: input.assignee_participant_id ?? null }),
+  }, 'Create', true), [roomId, mutate])
 
-  const claim = useCallback<UseRoomTasksValue['claim']>(
-    async (id) => {
-      const resp = await apiFetch(`/api/v1/tasks/${id}/claim`, {
-        method: 'POST',
-      })
-      if (!resp.ok) {
-        setError(`Claim failed (HTTP ${resp.status})`)
-        return null
-      }
-      const claimed = (await resp.json()) as Task
-      await refresh()
-      return claimed
-    },
-    [refresh],
-  )
+  const createFromMessage = useCallback<UseRoomTasksValue['createFromMessage']>((messageId, input) => mutate(`/api/v1/rooms/${roomId}/messages/${messageId}/task`, {
+    method: 'POST', body: JSON.stringify({ title: input.title, assignee_participant_id: input.assignee_participant_id ?? null }),
+  }, 'Create from message', true), [roomId, mutate])
 
-  const requeue = useCallback<UseRoomTasksValue['requeue']>(
-    async (id, input) => {
-      const resp = await apiFetch(`/api/v1/tasks/${id}/requeue`, {
-        method: 'POST',
-        body: JSON.stringify({
-          reason: input.reason,
-          assignee_participant_id: input.assignee_participant_id ?? null,
-        }),
-      })
-      if (!resp.ok) {
-        setError(`Requeue failed (HTTP ${resp.status})`)
-        return null
-      }
-      const requeued = (await resp.json()) as Task
-      await refresh()
-      return requeued
-    },
-    [refresh],
-  )
+  const claim = useCallback<UseRoomTasksValue['claim']>(id => mutate(`/api/v1/tasks/${id}/claim`, { method: 'POST' }, 'Claim', true), [mutate])
+  const requeue = useCallback<UseRoomTasksValue['requeue']>((id, input) => mutate(`/api/v1/tasks/${id}/requeue`, {
+    method: 'POST', body: JSON.stringify({ reason: input.reason, assignee_participant_id: input.assignee_participant_id ?? null }),
+  }, 'Requeue', true), [mutate])
+  const update = useCallback<UseRoomTasksValue['update']>(async (id, patch) => {
+    await mutate(`/api/v1/tasks/${id}`, { method: 'PUT', body: JSON.stringify(patch) }, 'Update')
+  }, [mutate])
+  const remove = useCallback<UseRoomTasksValue['remove']>(async id => {
+    await mutate(`/api/v1/tasks/${id}`, { method: 'DELETE' }, 'Delete')
+  }, [mutate])
 
-  const remove = useCallback<UseRoomTasksValue['remove']>(
-    async (id) => {
-      const resp = await apiFetch(`/api/v1/tasks/${id}`, { method: 'DELETE' })
-      if (!resp.ok && resp.status !== 204) {
-        setError(`Delete failed (HTTP ${resp.status})`)
-        return
-      }
-      await refresh()
-    },
-    [refresh],
-  )
-
-  return {
-    tasks,
-    loading,
-    error,
-    refresh,
-    create,
-    createFromMessage,
-    claim,
-    requeue,
-    update,
-    remove,
-  }
+  const current = snapshot.scope === scope && roomId ? snapshot : { tasks: [], loading: Boolean(roomId), error: null }
+  return { tasks: current.tasks, loading: current.loading, error: current.error, refresh, create, createFromMessage, claim, requeue, update, remove }
 }

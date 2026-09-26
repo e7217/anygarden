@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   deleteGoal,
   listRoomGoals,
@@ -25,71 +25,55 @@ export interface UseRoomGoalsValue {
  * ``null`` suspends fetching.
  */
 export function useRoomGoals(roomId: string | null): UseRoomGoalsValue {
-  const [goals, setGoals] = useState<Goal[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const scope = useMemo(() => ({ roomId, active: true, request: 0 }), [roomId])
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const [snapshot, setSnapshot] = useState<{ scope: typeof scope; goals: Goal[]; loading: boolean; error: string | null }>(
+    () => ({ scope, goals: [], loading: Boolean(roomId), error: null }),
+  )
+  const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope])
 
   const refresh = useCallback(async () => {
-    if (!roomId) {
-      setGoals([])
-      return
-    }
-    setLoading(true)
-    setError(null)
+    if (!roomId || !isCurrent()) return
+    const request = ++scope.request
+    const accepts = () => isCurrent() && scope.request === request
+    setSnapshot(previous => ({ scope, goals: previous.scope === scope ? previous.goals : [], loading: true, error: null }))
     try {
-      setGoals(await listRoomGoals(roomId))
-    } catch (e) {
-      setGoals([])
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
+      const goals = await listRoomGoals(roomId)
+      if (accepts()) setSnapshot({ scope, goals, loading: false, error: null })
+    } catch (error) {
+      if (accepts()) setSnapshot({ scope, goals: [], loading: false, error: error instanceof Error ? error.message : String(error) })
     }
-  }, [roomId])
+  }, [roomId, scope, isCurrent])
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    scope.active = true
+    void refresh()
+    return () => { scope.active = false }
+  }, [scope, refresh])
 
-  // ``anygarden:goal:updated`` is the broadcast we'll start firing from
-  // the server in a follow-up — listen for it now so a server-side
-  // upgrade lights up live without a frontend redeploy.
   useEffect(() => {
     if (!roomId) return
-    const handler = () => {
-      refresh()
-    }
+    const handler = () => { void refresh() }
     window.addEventListener('anygarden:goal:updated', handler)
     return () => window.removeEventListener('anygarden:goal:updated', handler)
   }, [roomId, refresh])
 
-  const remove = useCallback(async (goalId: string) => {
-    await deleteGoal(goalId)
-    setGoals((prev) => prev.filter((g) => g.id !== goalId))
-  }, [])
+  const mutate = useCallback(async (action: () => Promise<unknown>) => {
+    if (!roomId || !isCurrent()) return
+    try {
+      await action()
+      if (isCurrent()) await refresh()
+    } catch (error) {
+      // The old view's handler must not notify the user in another room.
+      if (isCurrent()) throw error
+    }
+  }, [roomId, isCurrent, refresh])
+  const remove = useCallback((id: string) => mutate(() => deleteGoal(id)), [mutate])
+  const runNow = useCallback((id: string) => mutate(() => runGoalNow(id)), [mutate])
+  const pause = useCallback((id: string) => mutate(() => pauseGoal(id)), [mutate])
+  const resume = useCallback((id: string) => mutate(() => resumeGoal(id)), [mutate])
 
-  const runNow = useCallback(
-    async (goalId: string) => {
-      await runGoalNow(goalId)
-      await refresh()
-    },
-    [refresh],
-  )
-
-  const pause = useCallback(
-    async (goalId: string) => {
-      const updated = await pauseGoal(goalId)
-      setGoals((prev) => prev.map((g) => (g.id === goalId ? updated : g)))
-    },
-    [],
-  )
-
-  const resume = useCallback(
-    async (goalId: string) => {
-      const updated = await resumeGoal(goalId)
-      setGoals((prev) => prev.map((g) => (g.id === goalId ? updated : g)))
-    },
-    [],
-  )
-
-  return { goals, loading, error, refresh, remove, runNow, pause, resume }
+  const current = snapshot.scope === scope && roomId ? snapshot : { goals: [], loading: Boolean(roomId), error: null }
+  return { goals: current.goals, loading: current.loading, error: current.error, refresh, remove, runNow, pause, resume }
 }
