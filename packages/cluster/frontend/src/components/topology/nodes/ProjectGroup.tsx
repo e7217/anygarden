@@ -1,6 +1,7 @@
 import React from 'react'
 import { type NodeProps } from '@xyflow/react'
 import { TEXT_MUTED } from '../constants'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Project group — dashed-bordered container for rooms that share a
@@ -10,19 +11,20 @@ import { TEXT_MUTED } from '../constants'
  * compatibility — v2 will flip ``node.hidden`` based on a filter toggle.
  */
 function ProjectGroupInner({ data }: NodeProps) {
+  const { t } = useLocale()
   const label = (data?.label as string | undefined) ?? 'project'
   return (
     <div
       style={{
         minWidth: 320,
         minHeight: 160,
-        border: '1px dashed rgba(0,0,0,0.08)',
+        border: '1px dashed var(--color-border)',
         borderRadius: 12,
         position: 'relative',
         padding: 12,
         background: 'transparent',
       }}
-      aria-label={`Project group ${label}`}
+      aria-label={t('topology.projectGroup', { name: label })}
     >
       <span
         style={{
@@ -30,7 +32,7 @@ function ProjectGroupInner({ data }: NodeProps) {
           top: -8,
           left: 12,
           padding: '0 6px',
-          background: '#ffffff',
+          background: 'var(--color-surface-elevated)',
           color: TEXT_MUTED,
           fontFamily: 'Inter, system-ui, sans-serif',
           fontSize: 11,

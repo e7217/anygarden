@@ -11,6 +11,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
+import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
 
 // Keep these in sync with packages/cluster/anygarden/api/v1/invites.py.
 // ``InviteCreate`` validates the same bounds server-side; enforcing
@@ -39,14 +41,15 @@ interface Props {
 
 // Preset durations mirror what the server accepts. ``null`` ⇒ "no
 // expiry" so an admin can explicitly opt into indefinite links.
-const EXPIRY_OPTIONS: { label: string; seconds: number | null }[] = [
-  { label: '1 hour', seconds: 60 * 60 },
-  { label: '24 hours', seconds: 60 * 60 * 24 },
-  { label: '7 days', seconds: 60 * 60 * 24 * 7 },
-  { label: 'Never', seconds: null },
+const EXPIRY_OPTIONS: { label: MessageKey; seconds: number | null }[] = [
+  { label: 'guest.oneHour', seconds: 60 * 60 },
+  { label: 'guest.oneDay', seconds: 60 * 60 * 24 },
+  { label: 'guest.oneWeek', seconds: 60 * 60 * 24 * 7 },
+  { label: 'guest.never', seconds: null },
 ]
 
 export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) {
+  const { locale, t } = useLocale()
   const [invites, setInvites] = useState<InviteRow[]>([])
   const [expirySeconds, setExpirySeconds] = useState<number | null>(60 * 60 * 24)
   const [maxUses, setMaxUses] = useState<string>('')
@@ -62,8 +65,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
       setLoading(true)
       const resp = await apiFetch(`/api/v1/rooms/${roomId}/invites`)
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || `Failed to load invites (${resp.status})`)
+        throw new Error(t('guest.loadInvitesFailed', { status: resp.status }))
       }
       setInvites(await resp.json())
       setError(null)
@@ -72,7 +74,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
     } finally {
       setLoading(false)
     }
-  }, [roomId])
+  }, [roomId, t])
 
   useEffect(() => {
     if (open) {
@@ -91,18 +93,18 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
     const trimmed = maxUses.trim()
     const parsedMaxUses = trimmed === '' ? null : Number(trimmed)
     if (parsedMaxUses !== null && !Number.isInteger(parsedMaxUses)) {
-      setError('Max uses must be a positive integer or blank.')
+      setError(t('guest.maxUsesInteger'))
       return
     }
     if (parsedMaxUses !== null && (parsedMaxUses < 1 || parsedMaxUses > 1000)) {
-      setError('Max uses must be between 1 and 1000.')
+      setError(t('guest.maxUsesRange'))
       return
     }
     if (
       expirySeconds !== null &&
       (expirySeconds < MIN_EXPIRY_SECONDS || expirySeconds > MAX_EXPIRY_SECONDS)
     ) {
-      setError('Expiry is outside the allowed range.')
+      setError(t('guest.expiryRange'))
       return
     }
 
@@ -116,8 +118,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
         }),
       })
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || `Failed to create invite (${resp.status})`)
+        throw new Error(t('guest.createFailed', { status: resp.status }))
       }
       const created = await resp.json()
       setFreshToken(created.token)
@@ -137,8 +138,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
         method: 'DELETE',
       })
       if (!resp.ok && resp.status !== 204) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || `Failed to revoke (${resp.status})`)
+        throw new Error(t('guest.revokeFailed', { status: resp.status }))
       }
       await reload()
     } catch (e) {
@@ -162,81 +162,78 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Invite links</DialogTitle>
-          <DialogDescription>
-            Share a guest link so non-members can join this room without
-            creating an account. Guests can only read and send messages
-            in this room.
-          </DialogDescription>
+          <DialogTitle>{t('guest.inviteTitle')}</DialogTitle>
+          <DialogDescription>{t('guest.inviteDescription')}</DialogDescription>
         </DialogHeader>
 
         {/* Create form */}
         <div className="space-y-4 py-2">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>Expiry</Label>
+              <Label>{t('guest.expiry')}</Label>
               <select
                 value={expirySeconds === null ? 'never' : String(expirySeconds)}
                 onChange={(e) => {
                   const v = e.target.value
                   setExpirySeconds(v === 'never' ? null : Number(v))
                 }}
-                className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-2 text-sm"
+                className="min-h-11 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-sm"
               >
                 {EXPIRY_OPTIONS.map((opt) => (
                   <option
                     key={opt.label}
                     value={opt.seconds === null ? 'never' : String(opt.seconds)}
                   >
-                    {opt.label}
+                    {t(opt.label)}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="invite-max-uses">Max uses (optional)</Label>
+              <Label htmlFor="invite-max-uses">{t('guest.maxUses')}</Label>
               <Input
                 id="invite-max-uses"
                 type="number"
                 min={1}
                 max={1000}
-                placeholder="Unlimited"
+                placeholder={t('guest.unlimited')}
                 value={maxUses}
                 onChange={(e) => setMaxUses(e.target.value)}
               />
             </div>
           </div>
           <Button onClick={handleCreate} disabled={loading}>
-            {loading ? 'Working…' : 'Create invite link'}
+            {loading ? t('guest.working') : t('guest.createInvite')}
           </Button>
         </div>
 
         {/* Fresh token display (one-time) */}
         {freshToken && (
           <div className="space-y-2 rounded-[var(--radius-md)] border border-[var(--color-brand)] bg-[color:color-mix(in_srgb,var(--color-brand)_8%,transparent)] p-3">
-            <div className="text-sm font-medium">Copy this link now</div>
+            <div className="text-sm font-medium">{t('guest.copyNow')}</div>
             <div className="text-xs text-[var(--color-foreground-muted)]">
-              The server only stores a hash — you won't be able to see this link again.
+              {t('guest.copyWarning')}
             </div>
             <textarea
               readOnly
               rows={2}
               value={inviteUrl(freshToken)}
-              className="w-full resize-none rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-2 py-1 font-mono text-xs"
+              className="w-full resize-none rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-xs"
+              aria-label={t('guest.copyLink')}
               onFocus={(e) => e.target.select()}
             />
             <Button variant="outline" size="sm" onClick={handleCopyToken}>
-              Copy link
+              {t('guest.copyLink')}
             </Button>
           </div>
         )}
 
         {/* Existing invites */}
         <div className="space-y-2">
-          <div className="text-sm font-medium">Active invites</div>
+          <div className="text-sm font-medium">{t('guest.activeInvites')}</div>
           {invites.length === 0 && !loading && (
             <div className="text-xs text-[var(--color-foreground-muted)]">
-              No active invites for this room.
+              {t('guest.noInvites')}
             </div>
           )}
           <ul className="space-y-1 max-h-48 overflow-y-auto">
@@ -248,7 +245,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-mono">{inv.id}</div>
                   <div className="text-[var(--color-foreground-muted)]">
-                    {describeInvite(inv)}
+                    {describeInvite(inv, locale, t)}
                   </div>
                 </div>
                 {!inv.revoked_at && (
@@ -258,7 +255,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
                     onClick={() => handleRevoke(inv.id)}
                     disabled={loading}
                   >
-                    Revoke
+                    {t('guest.revoke')}
                   </Button>
                 )}
               </li>
@@ -274,7 +271,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Close
+            {t('common.close')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -293,28 +290,28 @@ function inviteUrl(token: string): string {
   return `${window.location.origin}/invite/${encodeURIComponent(token)}`
 }
 
-function describeInvite(inv: InviteRow): string {
+function describeInvite(inv: InviteRow, locale: 'ko' | 'en', t: ReturnType<typeof useLocale>['t']): string {
   if (inv.revoked_at) {
-    return `revoked ${formatRelative(inv.revoked_at)}`
+    return t('guest.revoked', { time: formatRelative(inv.revoked_at, locale) })
   }
   const parts: string[] = []
   if (inv.expires_at) {
-    parts.push(`expires ${formatRelative(inv.expires_at)}`)
+    parts.push(t('guest.expires', { time: formatRelative(inv.expires_at, locale) }))
   } else {
-    parts.push('never expires')
+    parts.push(t('guest.neverExpires'))
   }
   parts.push(
     inv.max_uses === null
-      ? `${inv.use_count} uses`
-      : `${inv.use_count} / ${inv.max_uses} uses`,
+      ? t('guest.uses', { count: inv.use_count })
+      : t('guest.usesLimit', { count: inv.use_count, max: inv.max_uses }),
   )
   return parts.join(' · ')
 }
 
-function formatRelative(iso: string): string {
+function formatRelative(iso: string, locale: 'ko' | 'en'): string {
   try {
     const d = new Date(iso)
-    return d.toLocaleString(undefined, {
+    return d.toLocaleString(locale === 'ko' ? 'ko-KR' : 'en-US', {
       month: 'short',
       day: 'numeric',
       hour: 'numeric',

@@ -3,8 +3,14 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import RoomQueryBanner, { type PendingQuery } from './RoomQueryBanner'
+import { LocaleProvider } from '@/i18n/LocaleProvider'
 
 afterEach(() => cleanup())
+
+function renderKo(ui: Parameters<typeof render>[0]) {
+  localStorage.setItem('anygarden_locale', 'ko')
+  return render(<LocaleProvider>{ui}</LocaleProvider>)
+}
 
 function pending(overrides: Partial<PendingQuery> = {}): PendingQuery {
   return {
@@ -20,14 +26,14 @@ function pending(overrides: Partial<PendingQuery> = {}): PendingQuery {
 
 describe('RoomQueryBanner', () => {
   it('renders nothing when queries array is empty', () => {
-    const { container } = render(
+    const { container } = renderKo(
       <RoomQueryBanner queries={[]} onDismiss={() => {}} onScrollTo={() => {}} />,
     )
     expect(container.firstChild).toBeNull()
   })
 
   it('renders pending chip with count and room name', () => {
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'pending', responded: 1, expected: 3 })]}
         onDismiss={() => {}}
@@ -41,7 +47,7 @@ describe('RoomQueryBanner', () => {
   })
 
   it('pending with no expected count shows "응답 대기 중"', () => {
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'pending', responded: 0, expected: 0 })]}
         onDismiss={() => {}}
@@ -55,7 +61,7 @@ describe('RoomQueryBanner', () => {
 
   it('renders completed chip and calls onScrollTo when the body is clicked', () => {
     const onScrollTo = vi.fn()
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'completed', responded: 3, expected: 3 })]}
         onDismiss={() => {}}
@@ -76,7 +82,7 @@ describe('RoomQueryBanner', () => {
   it('completed chip X button dismisses without scrolling', () => {
     const onDismiss = vi.fn()
     const onScrollTo = vi.fn()
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'completed', responded: 3, expected: 3 })]}
         onDismiss={onDismiss}
@@ -90,7 +96,7 @@ describe('RoomQueryBanner', () => {
 
   it('renders timeout chip with missing-count hint and dismiss button', () => {
     const onDismiss = vi.fn()
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'timeout', responded: 1, expected: 3 })]}
         onDismiss={onDismiss}
@@ -106,7 +112,7 @@ describe('RoomQueryBanner', () => {
 
   it('renders solo chip with explicit empty-target label and dismiss', () => {
     const onDismiss = vi.fn()
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending({ status: 'solo', responded: 0, expected: 0 })]}
         onDismiss={onDismiss}
@@ -121,7 +127,7 @@ describe('RoomQueryBanner', () => {
   })
 
   it('renders multiple chips side-by-side for parallel queries', () => {
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[
           pending({ query_id: 'q1', target_room_name: 'dev' }),
@@ -136,7 +142,7 @@ describe('RoomQueryBanner', () => {
   })
 
   it('uses role=status with polite aria-live for accessibility', () => {
-    render(
+    renderKo(
       <RoomQueryBanner
         queries={[pending()]}
         onDismiss={() => {}}

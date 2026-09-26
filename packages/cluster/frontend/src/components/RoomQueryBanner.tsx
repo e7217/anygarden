@@ -26,6 +26,7 @@
 
 import { Loader2, Check, AlertTriangle, X, UserX } from 'lucide-react'
 import type { RoomQueryStatus } from '@/lib/room-query'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /** What ChatArea keeps per in-flight query. */
 export interface PendingQuery {
@@ -84,6 +85,7 @@ interface QueryChipProps {
 }
 
 function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
+  const { t } = useLocale()
   const base =
     'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)]'
 
@@ -95,10 +97,10 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
     const count =
       query.expected > 0
         ? `${query.responded}/${query.expected}`
-        : '응답 대기 중'
+        : t('chat.awaitingResponse')
     return (
       <span
-        className={`${base} border-[var(--color-border)] bg-white text-[var(--color-foreground-muted)]`}
+        className={`${base} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)]`}
         data-testid={`room-query-chip-${query.query_id}`}
         data-status="pending"
       >
@@ -127,7 +129,7 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
           type="button"
           onClick={() => onScrollTo(query.query_id)}
           className="inline-flex items-center gap-1.5 -my-1 -ml-2.5 py-1 pl-2.5 pr-1 rounded-l-full cursor-pointer hover:bg-[var(--color-brand)]/10 focus:outline-none focus:ring-2 focus:ring-[var(--color-ring)]"
-          aria-label={`결과로 이동: #${query.target_room_name}`}
+          aria-label={t('chat.queryResult', { name: query.target_room_name })}
         >
           <Check className="h-3 w-3" aria-hidden="true" />
           <span>#{query.target_room_name}</span>
@@ -138,8 +140,8 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
         <button
           type="button"
           onClick={() => onDismiss(query.query_id)}
-          className="ml-0.5 rounded p-0.5 hover:bg-black/5 focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
-          aria-label="알림 닫기"
+          className="ml-0.5 rounded p-0.5 hover:bg-[var(--color-surface-hover)] focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
+          aria-label={t('chat.dismissNotice')}
         >
           <X className="h-3 w-3" aria-hidden="true" />
         </button>
@@ -151,7 +153,7 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
     const missing = Math.max(query.expected - query.responded, 0)
     return (
       <span
-        className={`${base} border-[var(--color-warning)]/30 bg-[#fff5ec] text-[var(--color-warning)]`}
+        className={`${base} border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] text-[var(--color-warning)]`}
         data-testid={`room-query-chip-${query.query_id}`}
         data-status="timeout"
       >
@@ -159,13 +161,13 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
         <span>#{query.target_room_name}</span>
         <span>
           {query.responded}/{query.expected}
-          {missing > 0 ? ` · ${missing}명 미응답` : ''}
+          {missing > 0 ? ` · ${t('chat.missingResponses', { count: missing })}` : ''}
         </span>
         <button
           type="button"
           onClick={() => onDismiss(query.query_id)}
-          className="ml-0.5 rounded p-0.5 hover:bg-black/5 focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
-          aria-label="알림 닫기"
+          className="ml-0.5 rounded p-0.5 hover:bg-[var(--color-surface-hover)] focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
+          aria-label={t('chat.dismissNotice')}
         >
           <X className="h-3 w-3" aria-hidden="true" />
         </button>
@@ -176,18 +178,18 @@ function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
   // solo
   return (
     <span
-      className={`${base} border-[var(--color-border)] bg-white text-[var(--color-foreground-muted)]`}
+      className={`${base} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)]`}
       data-testid={`room-query-chip-${query.query_id}`}
       data-status="solo"
     >
       <UserX className="h-3 w-3" aria-hidden="true" />
       <span>#{query.target_room_name}</span>
-      <span>응답 가능 에이전트 없음</span>
+      <span>{t('chat.noRespondingAgents')}</span>
       <button
         type="button"
         onClick={() => onDismiss(query.query_id)}
-        className="ml-0.5 rounded p-0.5 hover:bg-black/5 focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
-        aria-label="알림 닫기"
+        className="ml-0.5 rounded p-0.5 hover:bg-[var(--color-surface-hover)] focus:outline-none focus:ring-1 focus:ring-[var(--color-ring)]"
+        aria-label={t('chat.dismissNotice')}
       >
         <X className="h-3 w-3" aria-hidden="true" />
       </button>

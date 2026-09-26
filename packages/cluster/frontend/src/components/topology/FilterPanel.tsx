@@ -1,6 +1,16 @@
 import { useMemo } from 'react'
 import type { NodeKind } from './types'
 import { BORDER, TEXT_MUTED, TEXT_PRIMARY } from './constants'
+import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
+
+const kindKeys: Record<NodeKind, MessageKey> = {
+  user: 'topology.kindUser',
+  machine: 'topology.kindMachine',
+  agent: 'topology.kindAgent',
+  room: 'topology.kindRoom',
+  project: 'topology.kindProject',
+}
 
 export interface FilterState {
   kinds: Record<NodeKind, boolean>
@@ -42,14 +52,17 @@ export default function FilterPanel({
   knownEngines,
   knownStates,
 }: Props) {
+  const { t } = useLocale()
   const kindList = useMemo<NodeKind[]>(() => ['user', 'machine', 'agent', 'room'], [])
 
   return (
     <aside
+      className="topology-filter-panel"
       style={{
         width: 240,
         flex: '0 0 240px',
-        borderRight: '1px solid rgba(0,0,0,0.1)',
+        minHeight: 0,
+        borderRight: BORDER,
         background: 'var(--color-surface)',
         padding: 16,
         display: 'flex',
@@ -57,7 +70,7 @@ export default function FilterPanel({
         gap: 16,
         overflowY: 'auto',
       }}
-      aria-label="Topology filters"
+      aria-label={t('topology.filters')}
     >
       <div>
         <label
@@ -71,16 +84,18 @@ export default function FilterPanel({
             marginBottom: 8,
           }}
         >
-          Search
+          {t('topology.search')}
         </label>
         <input
           type="search"
-          placeholder="Filter by name..."
+          placeholder={t('topology.filterByName')}
+          aria-label={t('topology.search')}
           value={filter.search}
           onChange={e => onChange({ ...filter, search: e.target.value })}
           style={{
             width: '100%',
-            padding: '6px 10px',
+            padding: '10px 12px',
+            minHeight: 44,
             border: BORDER,
             borderRadius: 4,
             fontSize: 13,
@@ -101,7 +116,7 @@ export default function FilterPanel({
             margin: '0 0 8px',
           }}
         >
-          Node types
+          {t('topology.nodeTypes')}
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {kindList.map(kind => (
@@ -114,7 +129,7 @@ export default function FilterPanel({
                 fontSize: 13,
                 color: TEXT_PRIMARY,
                 cursor: 'pointer',
-                padding: '2px 0',
+                minHeight: 40,
               }}
             >
               <input
@@ -127,7 +142,7 @@ export default function FilterPanel({
                   })
                 }
               />
-              <span style={{ flex: 1, textTransform: 'capitalize' }}>{kind}</span>
+              <span style={{ flex: 1 }}>{t(kindKeys[kind])}</span>
               <span style={{ fontSize: 11, color: TEXT_MUTED }}>
                 {counts[kind] ?? 0}
               </span>
@@ -148,7 +163,7 @@ export default function FilterPanel({
               margin: '0 0 8px',
             }}
           >
-            Agent engine
+            {t('topology.agentEngine')}
           </p>
           <ChipGroup
             options={knownEngines}
@@ -170,7 +185,7 @@ export default function FilterPanel({
               margin: '0 0 8px',
             }}
           >
-            Agent state
+            {t('topology.agentState')}
           </p>
           <ChipGroup
             options={knownStates}
@@ -192,12 +207,13 @@ function ChipGroup({
   selected: string[] | null
   onChange: (v: string[] | null) => void
 }) {
+  const { t } = useLocale()
   const active = new Set(selected ?? options)
   const allSelected = selected === null || selected.length === options.length
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
       <Chip
-        label="All"
+        label={t('topology.all')}
         active={allSelected}
         onClick={() => onChange(null)}
       />
@@ -243,9 +259,10 @@ function Chip({
         fontSize: 12,
         fontWeight: 600,
         letterSpacing: 0.125,
-        padding: '4px 8px',
+        padding: '8px 10px',
+        minHeight: 36,
         borderRadius: 9999,
-        background: active ? 'var(--color-brand-tint-bg)' : 'rgba(0,0,0,0.05)',
+        background: active ? 'var(--color-brand-tint-bg)' : 'var(--color-surface-alt)',
         color: active ? 'var(--color-brand-tint-text)' : TEXT_PRIMARY,
         border: 'none',
         cursor: 'pointer',

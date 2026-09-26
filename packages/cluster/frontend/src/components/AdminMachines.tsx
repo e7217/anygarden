@@ -16,7 +16,7 @@ import {
   DoorOpen, FileCog, History, Loader2, ArrowUpCircle,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
-import { unsupportedEngineVersionWarning } from '@/lib/engineVersion'
+import { extractEngineVersion, unsupportedEngineVersionWarning } from '@/lib/engineVersion'
 import { applyEndpoint, storeEndpointCredential, type DiscoveredModel } from '@/lib/engineEndpoints'
 import CreateAgentEndpointSection, {
   emptyEndpointDraft,
@@ -29,6 +29,8 @@ import { EntityAvatar, type AvatarKind } from '@/components/EntityAvatar'
 import PresenceDot from '@/components/PresenceDot'
 import { deriveAgentOnline, agentStatusLabel } from '@/lib/agent-liveness'
 import { shouldShowFallbackCrashWarning } from '@/lib/admin-agent-warning'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import type { Agent } from '@/hooks/useAgents'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -69,20 +71,21 @@ const DEPRECATED_BADGE_CSS =
 
 // #553 — small engine status pill, mirroring #546's StatusBadge styling.
 function EngineStatusBadge({ info }: { info: MachineEngineInfo }) {
+  const { t } = useLocale()
   const pill = 'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold'
-  const muted = `${pill} bg-[rgba(0,0,0,0.05)] text-[var(--color-foreground-muted)]`
-  const accent = `${pill} bg-[#f2f9ff] text-[#097fe8]`
-  if (info.update_status === 'updating') return <span className={accent}>updating…</span>
+  const muted = `${pill} bg-[var(--color-surface-alt)] text-[var(--color-foreground-muted)]`
+  const accent = `${pill} bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] text-[var(--color-brand-text)]`
+  if (info.update_status === 'updating') return <span className={accent}>{t('admin.machines.updating')}</span>
   if (info.update_status === 'failed')
     return (
       <span
         className={`${pill} bg-[color:color-mix(in_srgb,var(--color-destructive)_10%,transparent)] text-[var(--color-destructive)]`}
       >
-        update failed
+        {t('admin.machines.updateFailed')}
       </span>
     )
-  if (info.update_available) return <span className={accent}>update available</span>
-  if (info.latest_checked_at) return <span className={muted}>up to date</span>
+  if (info.update_available) return <span className={accent}>{t('admin.machines.updateAvailable')}</span>
+  if (info.latest_checked_at) return <span className={muted}>{t('admin.machines.upToDate')}</span>
   return null
 }
 
@@ -92,16 +95,54 @@ function statusDot(status: string) {
   return 'bg-[var(--color-foreground-subtle)]'
 }
 
-function statusLabel(status: string) {
-  if (status === 'online') return 'Online'
-  if (status === 'offline') return 'Offline'
-  if (status === 'draining') return 'Draining'
-  return status
-}
-
 // ── Main Component ─────────────────────────────────────────────────
 
 export default function AdminMachines() {
+  const { locale, t, formatDate } = useLocale()
+  const { confirm: confirmAction, notify } = useFeedback()
+  const statusLabel = (status: string) => {
+    if (status === 'online') return t('common.online')
+    if (status === 'offline') return t('common.offline')
+    if (status === 'draining') return t('admin.machines.draining')
+    return status
+  }
+  const agentStateLabel = (status: string) => {
+    const labels: Record<string, ReturnType<typeof t>> = {
+      unreachable: t('admin.machines.agentState.unreachable'),
+      unknown: t('admin.machines.agentState.unknown'),
+      running: t('admin.machines.agentState.running'),
+      starting: t('admin.machines.agentState.starting'),
+      stopping: t('admin.machines.agentState.stopping'),
+      stopped: t('admin.machines.agentState.stopped'),
+      idle: t('admin.machines.agentState.idle'),
+      pending: t('admin.machines.agentState.pending'),
+      crashed: t('admin.machines.agentState.crashed'),
+      failed: t('admin.machines.agentState.failed'),
+    }
+    return labels[status] ?? status
+  }
+  const reasoningLabel = (level: string) => {
+    const labels: Record<string, string> = {
+      minimal: t('admin.machines.reasoning.minimal'),
+      low: t('admin.machines.reasoning.low'),
+      medium: t('admin.machines.reasoning.medium'),
+      high: t('admin.machines.reasoning.high'),
+      xhigh: t('admin.machines.reasoning.xhigh'),
+      max: t('admin.machines.reasoning.max'),
+      ultra: t('admin.machines.reasoning.ultra'),
+    }
+    return labels[level] ?? level
+  }
+  const activityLabel = (eventType: string) => {
+    const labels: Record<string, string> = {
+      online: t('admin.machines.activity.online'),
+      offline: t('admin.machines.activity.offline'),
+      drain: t('admin.machines.activity.drain'),
+      self_update: t('admin.machines.activity.selfUpdate'),
+      engine_update: t('admin.machines.activity.engineUpdate'),
+    }
+    return labels[eventType] ?? eventType
+  }
   const { machines, drainMachine, registerMachine, deleteMachine, updateMachine, updateMachineDaemon, checkMachineEngine, updateMachineEngine, regenerateToken } = useMachines()
   const {
     createAgent, fetchEngineCatalog, agents, startAgent, stopAgent,
@@ -288,13 +329,24 @@ export default function AdminMachines() {
   const preferredMachineEngine = sortedMachineEngines[0]?.engine ?? ''
   // #687 — warn before creation for engines that publish an exact version gate.
   // Codex publishes an empty list because it attempts unlisted versions.
-  const agentEngineVersionWarning = agentEngine && agentCatalog?.engine === agentEngine
+  const rawAgentEngineVersionWarning = agentEngine && agentCatalog?.engine === agentEngine
     ? unsupportedEngineVersionWarning(
         agentEngine,
         machineEngines.find(e => e.engine === agentEngine)?.version,
         agentCatalog.supported_versions,
       )
     : null
+  const detectedEngineVersion = extractEngineVersion(machineEngines.find(e => e.engine === agentEngine)?.version)
+  const requiredVersions = agentCatalog?.supported_versions ?? []
+  const agentEngineVersionWarning = rawAgentEngineVersionWarning && locale === 'ko' && detectedEngineVersion
+    ? t('admin.machines.versionWarning', {
+        engine: agentEngine,
+        version: detectedEngineVersion,
+        required: requiredVersions.length === 1
+          ? requiredVersions[0]
+          : t('admin.machines.oneOfVersions', { versions: requiredVersions.join(', ') }),
+      })
+    : rawAgentEngineVersionWarning
   const selectedAgentEngineMeta = agentEngine
     ? engineMetadataById.get(agentEngine)
     : undefined
@@ -361,7 +413,7 @@ export default function AdminMachines() {
   }
 
   const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return false
+    if (!await confirmAction({ title: t('admin.machines.deleteAgentTitle'), description: t('admin.machines.confirmDeleteAgent'), destructive: true })) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room (see PR #12) — refresh both the
     // per-machine detail and the sidebar DM list so the ghost entry
@@ -432,7 +484,7 @@ export default function AdminMachines() {
         } catch (e) {
           // The agent exists; keep the dialog open to explain, but the form
           // is already reset so a second click cannot create a duplicate.
-          setCreateError(`Agent created, but the API key was not applied: ${e instanceof Error ? e.message : String(e)}. Add it in the agent's Settings → Direct model connection.`)
+          setCreateError(t('admin.machines.agentKeyError', { error: e instanceof Error ? e.message : String(e) }))
           setCreating(false)
           return
         }
@@ -453,22 +505,23 @@ export default function AdminMachines() {
   // ── Render ───────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-full">
+    <div className="flex min-h-full min-w-0 flex-col lg:h-full lg:flex-row">
       {/* ── Left: Machine Card List ── */}
-      <div className="w-64 shrink-0 border-r border-[var(--color-border)] overflow-y-auto bg-[var(--color-background)]">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)]">
-          <h2 className="text-sm font-semibold text-[var(--color-foreground)]">Machines</h2>
-          <Button variant="ghost" size="sm" onClick={() => setRegisterOpen(true)}>
+      <div className="w-full min-w-0 shrink-0 border-b border-[var(--color-border)] bg-[var(--color-background)] lg:w-64 lg:overflow-y-auto lg:border-r lg:border-b-0">
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3 lg:flex-col lg:items-stretch">
+          <h1 className="text-heading min-w-0 text-[var(--color-foreground)]">{t('admin.machines.title')}</h1>
+          <Button size="sm" className="min-h-11 gap-2 lg:w-full" onClick={() => setRegisterOpen(true)} aria-label={t('admin.machines.registerMachine')}>
             <Plus className="h-4 w-4" />
+            <span>{t('admin.machines.registerMachine')}</span>
           </Button>
         </div>
-        <div className="p-2 space-y-1">
+        <div className="flex min-w-0 gap-2 overflow-x-auto p-3 lg:block lg:space-y-2 lg:overflow-x-visible lg:p-2">
           {machines.length === 0 ? (
-            <div className="px-3 py-8 text-center">
+            <div className="w-full px-3 py-8 text-center">
               <Server className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-              <p className="text-xs text-[var(--color-foreground-muted)]">No machines registered</p>
+              <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.none')}</p>
               <Button variant="ghost" size="sm" className="mt-2" onClick={() => setRegisterOpen(true)}>
-                <Plus className="mr-1 h-3 w-3" /> Register
+                <Plus className="mr-1 h-3 w-3" /> {t('admin.machines.register')}
               </Button>
             </div>
           ) : (
@@ -477,10 +530,10 @@ export default function AdminMachines() {
                 <button
                   key={m.id}
                   onClick={() => setSelectedId(m.id)}
-                  className={`w-full text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all ${
+                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all lg:w-full ${
                     selectedId === m.id
                       ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
+                      : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
                   <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{m.name}</div>
@@ -493,7 +546,7 @@ export default function AdminMachines() {
                       {statusLabel(m.status)}
                     </span>
                     <span className="text-xs text-[var(--color-foreground-subtle)]">
-                      {agentCountByMachine.get(m.id) ?? 0} agents
+                      {t('admin.machines.agentCount', { count: agentCountByMachine.get(m.id) ?? 0 })}
                     </span>
                   </div>
                 </button>
@@ -501,17 +554,17 @@ export default function AdminMachines() {
               {unplacedAgents.length > 0 && (
                 <button
                   onClick={() => setSelectedId(UNPLACED)}
-                  className={`w-full text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all ${
+                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all lg:w-full ${
                     isUnplacedView
                       ? 'bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
-                      : 'bg-white border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
+                      : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
                   }`}
                 >
-                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">Unplaced</div>
-                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">Agents not bound to any machine</div>
+                  <div className="text-sm font-medium text-[var(--color-foreground)] truncate">{t('admin.machines.unplaced')}</div>
+                  <div className="text-xs text-[var(--color-foreground-muted)] truncate">{t('admin.machines.unplacedSubtitle')}</div>
                   <div className="flex items-center gap-2 mt-1.5">
                     <span className="text-xs text-[var(--color-foreground-subtle)]">
-                      {unplacedAgents.length} agent{unplacedAgents.length > 1 ? 's' : ''}
+                      {t('admin.machines.agentCount', { count: unplacedAgents.length })}
                     </span>
                   </div>
                 </button>
@@ -522,23 +575,20 @@ export default function AdminMachines() {
       </div>
 
       {/* ── Right: Machine Detail ── */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="min-w-0 flex-1 p-4 sm:p-6 lg:overflow-y-auto">
         {isUnplacedView ? (
           <div className="max-w-2xl space-y-6">
             <div>
-              <h1 className="text-lg font-semibold text-[var(--color-foreground)]">Unplaced agents</h1>
+              <h2 className="text-lead text-[var(--color-foreground)]">{t('admin.machines.unplacedTitle')}</h2>
               <p className="text-sm text-[var(--color-foreground-muted)]">
-                These agents exist but are not bound to any machine — usually
-                because their last spawn attempt found no eligible host.
-                Delete to remove, or Retry to let the scheduler try placing
-                them again.
+                {t('admin.machines.unplacedDescription')}
               </p>
             </div>
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)] divide-y divide-[var(--color-border)]">
               {unplacedAgents.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-                  <p className="text-sm text-[var(--color-foreground-muted)]">No unplaced agents</p>
+                  <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.noUnplaced')}</p>
                 </div>
               ) : unplacedAgents.map(agent => (
                 <div key={agent.id} className="flex items-center justify-between px-4 py-3 gap-3">
@@ -558,7 +608,7 @@ export default function AdminMachines() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-[var(--color-foreground)] truncate">{agent.name}</span>
-                        <span className="text-xs text-[var(--color-foreground-muted)]">· {agent.actual_state}</span>
+                        <span className="text-xs text-[var(--color-foreground-muted)]">· {agentStateLabel(agent.actual_state)}</span>
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
                         <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
@@ -592,7 +642,7 @@ export default function AdminMachines() {
                       variant="ghost"
                       size="icon"
                       onClick={async () => { try { await startAgent(agent.id) } catch { /* ignore */ } }}
-                      title="Retry placement"
+                      title={t('admin.machines.retryPlacement')}
                     >
                       <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
                     </Button>
@@ -618,14 +668,14 @@ export default function AdminMachines() {
           </div>
         ) : !selectedMachine ? (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-[var(--color-foreground-muted)]">Select a machine</p>
+            <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.select')}</p>
           </div>
         ) : (
           <div className="max-w-2xl space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-lg font-semibold text-[var(--color-foreground)]">{selectedMachine.name}</h1>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lead break-words text-[var(--color-foreground)]">{selectedMachine.name}</h2>
                 {(selectedMachine.description || selectedMachine.hostname) && (
                   <p className="text-sm text-[var(--color-foreground-muted)]">{selectedMachine.description || selectedMachine.hostname}</p>
                 )}
@@ -640,17 +690,17 @@ export default function AdminMachines() {
             </div>
 
             {/* Info */}
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Info</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('admin.machines.info')}</h3>
               </div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 px-4 py-3 text-sm">
+              <div className="grid grid-cols-1 gap-x-8 gap-y-2 px-4 py-3 text-sm sm:grid-cols-2">
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Hostname</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.hostname')}</span>
                   <p className="text-[var(--color-foreground)] font-medium break-all">{selectedMachine.hostname || '—'}</p>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">IP address</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.ipAddress')}</span>
                   <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.lan_ip || '—'}</p>
                 </div>
                 <div>
@@ -659,41 +709,41 @@ export default function AdminMachines() {
                 </div>
                 <div>
                   <span className="text-[var(--color-foreground-muted)]">CPU</span>
-                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.cpu_cores ? `${selectedMachine.cpu_cores} cores` : '—'}</p>
+                  <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.cpu_cores ? t('admin.machines.cpuCores', { count: selectedMachine.cpu_cores }) : '—'}</p>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Memory</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.memory')}</span>
                   <p className="text-[var(--color-foreground)] font-medium">{selectedMachine.memory_gb ? `${selectedMachine.memory_gb} GB` : '—'}</p>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Version</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.version')}</span>
                   <p className="text-[var(--color-foreground)] font-medium">
                     {selectedMachine.daemon_version || '-'}
                     {selectedMachine.update_status === 'updating' && (
-                      <span className="ml-2 text-xs text-[var(--color-foreground-muted)]">updating…</span>
+                      <span className="ml-2 text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.updating')}</span>
                     )}
                     {selectedMachine.update_status === 'success' && (
-                      <span className="ml-2 text-xs text-[#097fe8]">updated</span>
+                      <span className="ml-2 text-xs text-[var(--color-brand-text)]">{t('admin.machines.updated')}</span>
                     )}
                     {selectedMachine.update_status === 'failed' && (
                       <span
                         className="ml-2 text-xs text-[var(--color-destructive)]"
                         title={selectedMachine.update_error || undefined}
                       >
-                        update failed
+                        {t('admin.machines.updateFailed')}
                       </span>
                     )}
                   </p>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Engines</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.engines')}</span>
                   <div className="flex flex-col gap-1.5 mt-0.5">
                     {sortedMachineEngines.map(e => {
                       const engineMeta = engineMetadataById.get(e.engine)
                       const busy = engineBusy === e.engine
                       const online = selectedMachine?.status === 'online'
                       const btn =
-                        'rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] px-1.5 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:bg-[rgba(0,0,0,0.03)] disabled:opacity-40 disabled:cursor-not-allowed'
+                        'rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] disabled:opacity-40 disabled:cursor-not-allowed'
                       return (
                         <div key={e.engine} className="flex items-center gap-1.5 flex-wrap">
                           <Badge variant="outline" className="text-xs">
@@ -705,7 +755,7 @@ export default function AdminMachines() {
                               className={DEPRECATED_BADGE_CSS}
                               title={engineMeta.deprecation_note ?? undefined}
                             >
-                              Deprecated
+                              {t('admin.machines.deprecated')}
                             </Badge>
                           ) : null}
                           {e.version && (
@@ -714,7 +764,7 @@ export default function AdminMachines() {
                             </span>
                           )}
                           {e.update_available && e.latest_version && (
-                            <span className="font-mono text-[11px] text-[#097fe8]">
+                            <span className="font-mono text-[11px] text-[var(--color-brand-text)]">
                               → {e.latest_version}
                             </span>
                           )}
@@ -723,17 +773,17 @@ export default function AdminMachines() {
                             className={btn}
                             onClick={() => handleCheckEngine(e.engine)}
                             disabled={busy || !online}
-                            title={online ? 'Check latest version' : 'Machine is offline'}
+                            title={online ? t('admin.machines.checkLatest') : t('admin.machines.offlineHint')}
                           >
-                            {busy ? '…' : 'Check'}
+                            {busy ? '…' : t('admin.machines.check')}
                           </button>
                           {e.update_available && (
                             <button
-                              className={`${btn} text-[#097fe8] border-[color:color-mix(in_srgb,#097fe8_35%,transparent)] hover:bg-[#f2f9ff]`}
+                              className={`${btn} text-[var(--color-brand-text)] border-[color:color-mix(in_srgb,var(--color-brand)_35%,transparent)] hover:bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)]`}
                               onClick={() => handleUpdateEngine(e.engine)}
                               disabled={busy || !online}
                             >
-                              Update
+                              {t('admin.machines.update')}
                             </button>
                           )}
                         </div>
@@ -743,10 +793,10 @@ export default function AdminMachines() {
                   </div>
                 </div>
                 <div>
-                  <span className="text-[var(--color-foreground-muted)]">Active agents</span>
+                  <span className="text-[var(--color-foreground-muted)]">{t('admin.machines.activeAgents')}</span>
                   <p className="text-[var(--color-foreground)] font-medium">
                     {selectedMachine.status === 'offline'
-                      ? <span className="text-[var(--color-foreground-subtle)]">unknown (offline)</span>
+                      ? <span className="text-[var(--color-foreground-subtle)]">{t('admin.machines.unknownOffline')}</span>
                       : machineAgents.filter(a => a.actual_state === 'running' || a.actual_state === 'starting' || a.actual_state === 'pending').length}
                   </p>
                 </div>
@@ -754,10 +804,10 @@ export default function AdminMachines() {
             </div>
 
             {/* Agents */}
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">
-                  Agents ({machineAgents.length})
+                  {t('admin.machines.agentsHeading', { count: machineAgents.length })}
                 </h3>
                 <Button
                   variant="ghost"
@@ -770,14 +820,14 @@ export default function AdminMachines() {
                   }}
                   disabled={selectedMachine.status !== 'online'}
                 >
-                  <Plus className="mr-1 h-3.5 w-3.5" /> New Agent
+                  <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.machines.newAgent')}
                 </Button>
               </div>
               <div className="divide-y divide-[var(--color-border)]">
                 {machineAgents.length === 0 ? (
                   <div className="px-4 py-8 text-center">
                     <Bot className="mx-auto h-8 w-8 text-[var(--color-foreground-subtle)] mb-2" />
-                    <p className="text-sm text-[var(--color-foreground-muted)]">No agents on this machine</p>
+                    <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.machines.noAgents')}</p>
                   </div>
                 ) : machineAgents.map(agent => {
                   // When the hosting machine's WS is disconnected we
@@ -795,7 +845,7 @@ export default function AdminMachines() {
                   // all derive liveness the same way.
                   const isMachineOffline = selectedMachine.status === 'offline'
                   const online = deriveAgentOnline(agent.actual_state, { machineOffline: isMachineOffline })
-                  const displayState = agentStatusLabel(agent.actual_state, { machineOffline: isMachineOffline })
+                  const displayState = agentStateLabel(agentStatusLabel(agent.actual_state, { machineOffline: isMachineOffline }))
                   const isStopped = agent.actual_state === 'stopped' || agent.actual_state === 'idle' || agent.actual_state === 'crashed'
                   const isRunning = agent.actual_state === 'running' || agent.actual_state === 'starting'
                   return (
@@ -827,7 +877,7 @@ export default function AdminMachines() {
                           </div>
                           <div className="flex items-center gap-2 mt-0.5 text-xs text-[var(--color-foreground-subtle)]">
                             <span>{ENGINE_LABELS[agent.engine] ?? agent.engine}</span>
-                            {agent.reasoning_effort && <span>· {agent.reasoning_effort}</span>}
+                            {agent.reasoning_effort && <span>· {reasoningLabel(agent.reasoning_effort)}</span>}
                             {agent.rooms.length > 0 && (
                               <span className="truncate">· {agent.rooms.map(r => `#${r}`).join(', ')}</span>
                             )}
@@ -855,7 +905,7 @@ export default function AdminMachines() {
                                 variant="ghost"
                                 size="icon"
                                 disabled
-                                title={isRunning ? 'Stopping…' : 'Starting…'}
+                                title={isRunning ? t('admin.machines.stopping') : t('admin.machines.starting')}
                               >
                                 <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--color-foreground-muted)]" />
                               </Button>
@@ -867,7 +917,7 @@ export default function AdminMachines() {
                                 variant="ghost"
                                 size="icon"
                                 onClick={() => { void stopAgent(agent.id) }}
-                                title={isMachineOffline ? 'Machine is offline' : 'Stop'}
+                                title={isMachineOffline ? t('admin.machines.offlineHint') : t('admin.machines.stop')}
                                 disabled={isMachineOffline}
                               >
                                 <Square className="h-3.5 w-3.5 text-[var(--color-destructive)]" />
@@ -879,7 +929,7 @@ export default function AdminMachines() {
                               variant="ghost"
                               size="icon"
                               onClick={() => { void startAgent(agent.id) }}
-                              title={isMachineOffline ? 'Machine is offline' : 'Start'}
+                              title={isMachineOffline ? t('admin.machines.offlineHint') : t('admin.machines.start')}
                               disabled={isMachineOffline}
                             >
                               <Play className="h-3.5 w-3.5 text-[var(--color-success)]" />
@@ -907,9 +957,9 @@ export default function AdminMachines() {
             </div>
 
             {/* Token & Control */}
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">Token & Control</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('admin.machines.tokenControl')}</h3>
               </div>
               <div className="px-4 py-3 space-y-3">
                 {regenToken && (
@@ -927,60 +977,60 @@ export default function AdminMachines() {
                 )}
                 <div className="flex flex-wrap gap-2">
                   <Button variant="outline" size="sm" onClick={async () => {
-                    if (!confirm('Rotate token? Daemon will reconnect with the new token.')) return
+                    if (!await confirmAction({ title: t('admin.machines.rotateToken'), description: t('admin.machines.confirmRotate') })) return
                     const r = await regenerateToken(selectedMachine.id, false)
                     setRegenToken(r.token)
                   }}>
-                    <RefreshCw className="mr-1.5 h-3 w-3" /> Rotate Token
+                    <RefreshCw className="mr-1.5 h-3 w-3" /> {t('admin.machines.rotateToken')}
                   </Button>
                   <Button variant="outline" size="sm"
                     disabled={selectedMachine.status === 'draining' || selectedMachine.status === 'offline'}
                     onClick={async () => {
-                      if (!confirm('Drain this machine? No new agents will be placed.')) return
+                      if (!await confirmAction({ title: t('admin.machines.drain'), description: t('admin.machines.confirmDrain') })) return
                       await drainMachine(selectedMachine.id)
                     }}
                   >
-                    <PauseCircle className="mr-1.5 h-3 w-3" /> Drain
+                    <PauseCircle className="mr-1.5 h-3 w-3" /> {t('admin.machines.drain')}
                   </Button>
                   <Button variant="outline" size="sm"
                     disabled={selectedMachine.status === 'offline' || selectedMachine.update_status === 'updating'}
                     onClick={async () => {
-                      if (!confirm('Update this machine to the latest anygarden-machine? The daemon will reinstall and restart.')) return
+                      if (!await confirmAction({ title: t('admin.machines.update'), description: t('admin.machines.confirmUpdate') })) return
                       try {
                         await updateMachineDaemon(selectedMachine.id)
                       } catch (e) {
-                        alert(`Failed to trigger update: ${(e as Error).message}`)
+                        notify({ message: t('admin.machines.triggerUpdateFailed', { error: (e as Error).message }), tone: 'error' })
                       }
                     }}
                   >
-                    <ArrowUpCircle className="mr-1.5 h-3 w-3" /> Update
+                    <ArrowUpCircle className="mr-1.5 h-3 w-3" /> {t('admin.machines.update')}
                   </Button>
                   <Button variant="outline" size="sm"
                     className="text-[var(--color-destructive)] hover:text-[var(--color-destructive)] border-[var(--color-destructive)]/30 hover:border-[var(--color-destructive)]/50"
                     onClick={async () => {
-                      if (!confirm(`Delete machine "${selectedMachine.name}"? This cannot be undone.`)) return
+                      if (!await confirmAction({ title: t('admin.machines.deleteMachine'), description: t('admin.machines.confirmDelete', { name: selectedMachine.name }), destructive: true })) return
                       try {
                         await deleteMachine(selectedMachine.id, machineAgents.length > 0)
                         setSelectedId(null)
                       } catch (e) {
-                        alert(`Failed to delete machine: ${(e as Error).message}`)
+                        notify({ message: t('admin.machines.deleteFailed', { error: (e as Error).message }), tone: 'error' })
                       }
                     }}
                   >
-                    <Trash2 className="mr-1.5 h-3 w-3" /> Delete Machine
+                    <Trash2 className="mr-1.5 h-3 w-3" /> {t('admin.machines.deleteMachine')}
                   </Button>
                 </div>
               </div>
             </div>
 
             {/* History */}
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white shadow-[var(--shadow-card)]">
+            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] shadow-[var(--shadow-card)]">
               <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">History</h3>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">{t('admin.machines.history')}</h3>
               </div>
               <div className="px-4 py-3 max-h-64 overflow-y-auto">
                 {machineActivity.length === 0 ? (
-                  <p className="text-caption text-[var(--color-foreground-muted)]">No activity yet</p>
+                  <p className="text-caption text-[var(--color-foreground-muted)]">{t('admin.machines.noActivity')}</p>
                 ) : (
                   <div className="space-y-1.5">
                     {machineActivity.map(evt => (
@@ -990,9 +1040,9 @@ export default function AdminMachines() {
                             : evt.event_type === 'offline' ? 'bg-[var(--color-foreground-subtle)]'
                             : 'bg-[var(--color-warning)]'
                         }`} />
-                        <span className="font-medium text-[var(--color-foreground)]">{evt.event_type}</span>
+                        <span className="font-medium text-[var(--color-foreground)]">{activityLabel(evt.event_type)}</span>
                         <span className="text-[var(--color-foreground-muted)]">
-                          {new Date(evt.timestamp).toLocaleString()}
+                          {formatDate(new Date(evt.timestamp), { dateStyle: 'medium', timeStyle: 'short' })}
                         </span>
                       </div>
                     ))}
@@ -1008,25 +1058,24 @@ export default function AdminMachines() {
       <Dialog open={registerOpen} onOpenChange={setRegisterOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Register Machine</DialogTitle>
+            <DialogTitle>{t('admin.machines.registerTitle')}</DialogTitle>
             <DialogDescription>
-              Add a new machine to host agents. Its hostname and system info are
-              detected automatically when the daemon connects.
+              {t('admin.machines.registerDescription')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Name</Label>
-              <Input placeholder="e.g. gpu-worker-01" value={regName} onChange={e => setRegName(e.target.value)} />
+              <Label>{t('admin.machines.name')}</Label>
+              <Input placeholder={t('admin.machines.namePlaceholder')} value={regName} onChange={e => setRegName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Description <span className="text-[var(--color-foreground-subtle)]">(optional)</span></Label>
-              <Input placeholder="e.g. downstairs GPU rig" value={regDescription} onChange={e => setRegDescription(e.target.value)} />
+              <Label>{t('admin.machines.description')} <span className="text-[var(--color-foreground-subtle)]">{t('admin.machines.optional')}</span></Label>
+              <Input placeholder={t('admin.machines.descriptionPlaceholder')} value={regDescription} onChange={e => setRegDescription(e.target.value)} />
             </div>
           </div>
           <DialogFooter>
             <Button onClick={handleRegister} disabled={regLoading || !regName.trim()}>
-              {regLoading ? 'Registering...' : 'Register'}
+              {regLoading ? t('admin.machines.registering') : t('admin.machines.register')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1036,12 +1085,12 @@ export default function AdminMachines() {
       <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Machine Registered</DialogTitle>
-            <DialogDescription>Copy the token — it's shown only once.</DialogDescription>
+            <DialogTitle>{t('admin.machines.registered')}</DialogTitle>
+            <DialogDescription>{t('admin.machines.copyTokenDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_25%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] p-3 text-sm text-[var(--color-warning)]">
-              This token is shown only once. Copy it now.
+              {t('admin.machines.copyTokenWarning')}
             </div>
             <div className="flex gap-2">
               <code className="flex-1 font-mono text-sm bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] p-3 border border-[var(--color-border)] break-all">
@@ -1056,7 +1105,7 @@ export default function AdminMachines() {
             </div>
           </div>
           <DialogFooter>
-            <Button onClick={() => setTokenDialogOpen(false)}>Done</Button>
+            <Button onClick={() => setTokenDialogOpen(false)}>{t('admin.machines.done')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1065,24 +1114,24 @@ export default function AdminMachines() {
       <Dialog open={createAgentOpen} onOpenChange={setCreateAgentOpen}>
         <DialogContent className="max-w-md max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Create Agent on {selectedMachine?.name}</DialogTitle>
-            <DialogDescription>The agent will be placed on this machine.</DialogDescription>
+            <DialogTitle>{t('admin.machines.createAgentTitle', { name: selectedMachine?.name ?? '' })}</DialogTitle>
+            <DialogDescription>{t('admin.machines.createAgentDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Name</Label>
-              <Input placeholder="Agent name" value={agentName} onChange={e => setAgentName(e.target.value)} />
+              <Label>{t('admin.machines.name')}</Label>
+              <Input placeholder={t('admin.machines.agentNamePlaceholder')} value={agentName} onChange={e => setAgentName(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="create-agent-engine">Engine</Label>
+              <Label htmlFor="create-agent-engine">{t('admin.machines.engine')}</Label>
               <select id="create-agent-engine" value={agentEngine} onChange={e => setAgentEngine(e.target.value)} className={selectCSS}>
-                <option value="" disabled>Select engine</option>
+                <option value="" disabled>{t('admin.machines.selectEngine')}</option>
                 {sortedMachineEngines.map(e => {
                   const label = ENGINE_LABELS[e.engine] ?? e.engine
                   const deprecated = engineMetadataById.get(e.engine)?.deprecated === true
                   return (
                     <option key={e.engine} value={e.engine}>
-                      {deprecated ? `${label} (Deprecated)` : label}
+                      {deprecated ? `${label} (${t('admin.machines.deprecated')})` : label}
                     </option>
                   )
                 })}
@@ -1092,7 +1141,7 @@ export default function AdminMachines() {
                   className="text-xs text-[var(--color-warning)]"
                   title={selectedAgentEngineMeta.deprecation_note ?? undefined}
                 >
-                  Deprecated engine. OpenHands is recommended for new agents.
+                  {t('admin.machines.deprecatedEngine')}
                 </p>
               ) : null}
               {agentEngineVersionWarning && (
@@ -1103,48 +1152,48 @@ export default function AdminMachines() {
             </div>
             {agentEngine === 'pi-cli' && (
               <div className="space-y-2">
-                <Label htmlFor="create-pi-connection-type">Connection type</Label>
+                <Label htmlFor="create-pi-connection-type">{t('admin.machines.connectionType')}</Label>
                 <select id="create-pi-connection-type" className={selectCSS}
                   value={endpointActive ? 'direct' : 'native'}
                   onChange={e => {
                     setEndpointDraft({ ...emptyEndpointDraft('pi-cli'), enabled: e.target.value === 'direct' })
                     setAgentProvider(''); setAgentModel(''); setDiscoveredModels([])
                   }}>
-                  <option value="native">Pi provider</option>
-                  <option value="direct">Direct model server</option>
+                  <option value="native">{t('admin.machines.piProvider')}</option>
+                  <option value="direct">{t('admin.machines.directServer')}</option>
                 </select>
               </div>
             )}
             {agentEngine === 'pi-cli' && (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="pi-provider">Provider (required)</Label>
+                  <Label htmlFor="pi-provider">{t('admin.machines.providerRequired')}</Label>
                   <Input id="pi-provider" value={agentProvider} onChange={e => setAgentProvider(e.target.value)}
-                    placeholder="zai or my-local" maxLength={64} required aria-invalid={!validPiProvider} />
+                    placeholder={t('admin.machines.providerPlaceholder')} maxLength={64} required aria-invalid={!validPiProvider} />
                   <p className="text-xs text-[var(--color-foreground-muted)]">
                     {endpointActive
-                      ? 'Provider ID for this model server (e.g. my-local).'
-                      : 'Enter a built-in or configured custom provider name. No provider is selected automatically.'}
+                      ? t('admin.machines.directProviderHint')
+                      : t('admin.machines.providerHint')}
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="pi-model">Model (required)</Label>
+                  <Label htmlFor="pi-model">{t('admin.machines.modelRequired')}</Label>
                   <Input id="pi-model" value={agentModel} onChange={e => setAgentModel(e.target.value)}
-                    list="pi-models" placeholder={endpointActive ? 'Model ID served by the endpoint (required)' : 'Model ID for this provider (required)'} />
+                    list="pi-models" placeholder={endpointActive ? t('admin.machines.endpointModelPlaceholder') : t('admin.machines.providerModelPlaceholder')} />
                   <datalist id="pi-models">
                     {discoveredModels.map(m => <option key={`endpoint-${m.id}`} value={m.id}>{m.max_model_len ? `${m.id} (${m.max_model_len.toLocaleString()} tokens)` : m.id}</option>)}
                     {!endpointActive && agentCatalog?.models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </datalist>
-                  {!endpointActive && <p className="text-xs text-[var(--color-foreground-muted)]">After creating the agent, open its settings and save a Pi provider API key before starting it.</p>}
+                  {!endpointActive && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.machines.providerKeyHint')}</p>}
                 </div>
               </>
             )}
             {agentEngine !== 'pi-cli' && !endpointActive && agentCatalog && agentCatalog.models.length > 0 && (
               <div className="space-y-2">
-                <Label>Model</Label>
+                <Label>{t('admin.machines.model')}</Label>
                 <select value={agentModel} onChange={e => setAgentModel(e.target.value)} className={selectCSS}>
                   {agentCatalog.default_model && (
-                    <option value="">Default ({agentCatalog.default_model})</option>
+                    <option value="">{t('admin.machines.defaultModel', { model: agentCatalog.default_model })}</option>
                   )}
                   {(() => {
                     const builtins = agentCatalog.models.filter(m => m.source !== 'gateway')
@@ -1157,7 +1206,7 @@ export default function AdminMachines() {
                     return (
                       <>
                         {builtins.length > 0 && (
-                          <optgroup label="Built-in">
+                          <optgroup label={t('admin.machines.builtIn')}>
                             {builtins.map(m => (
                               <option key={m.id} value={m.id}>{m.label}</option>
                             ))}
@@ -1188,19 +1237,19 @@ export default function AdminMachines() {
             )}
             {agentReasoningLevels.length > 0 && (
               <div className="space-y-2">
-                <Label>Reasoning Effort</Label>
+                <Label>{t('admin.machines.reasoningEffort')}</Label>
                 <select value={agentReasoning} onChange={e => setAgentReasoning(e.target.value)} className={selectCSS}>
-                  <option value="">Default</option>
+                  <option value="">{t('admin.machines.default')}</option>
                   {agentReasoningLevels.map(level => (
                     <option key={level} value={level}>
-                      {level.charAt(0).toUpperCase() + level.slice(1)}
+                      {reasoningLabel(level)}
                     </option>
                   ))}
                 </select>
               </div>
             )}
             <div className="space-y-2">
-              <Label>Rooms (optional)</Label>
+              <Label>{t('admin.machines.roomsOptional')}</Label>
               <div className="max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
                 {projects.map(project => {
                   const rs = roomsByProject[project.id] ?? []
@@ -1226,7 +1275,7 @@ export default function AdminMachines() {
               </div>
               {agentRooms.size === 0 && (
                 <p className="text-xs text-[var(--color-foreground-muted)]">
-                  No rooms selected — agent will stay idle until assigned to a room.
+                  {t('admin.machines.noRoomsSelected')}
                 </p>
               )}
             </div>
@@ -1234,7 +1283,7 @@ export default function AdminMachines() {
           <DialogFooter>
             {createError && <p role="alert">{createError}</p>}
             <Button onClick={handleCreateAgent} disabled={creating || !agentName.trim() || !agentEngine || (providerRequired && !validPiProvider) || (agentEngine === 'pi-cli' && !endpointActive && !agentModel.trim()) || (endpointActive && !endpointDraftReady(endpointDraft, agentModel))}>
-              {creating ? 'Creating...' : 'Create Agent'}
+              {creating ? t('admin.machines.creating') : t('admin.machines.createAgent')}
             </Button>
           </DialogFooter>
         </DialogContent>

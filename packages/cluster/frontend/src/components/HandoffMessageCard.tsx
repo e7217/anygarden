@@ -27,6 +27,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import MarkdownContent from '@/components/MarkdownContent'
 import { parseServerDate } from '@/lib/datetime'
 import type { HandoffMeta } from '@/lib/handoff'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /** 5 minutes in milliseconds — a pending handoff older than this
  * transitions to the ``timeout`` state so the breathing animation
@@ -80,6 +81,7 @@ export default memo(function HandoffMessageCard({
   resolveUser,
   resolveRoom,
 }: HandoffMessageCardProps) {
+  const { t } = useLocale()
   const [expanded, setExpanded] = useState(false)
   const state = useMemo(
     () => deriveState(createdAt, resolvedAt),
@@ -92,7 +94,7 @@ export default memo(function HandoffMessageCard({
     <div
       data-testid="handoff-card"
       data-state={state}
-      className={`handoff-card ${stateClass} relative w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white px-3 py-2.5`}
+      className={`handoff-card ${stateClass} relative w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5`}
     >
       {/* Top accent bar — the ::before pseudo-element in index.css
           paints the 1px line and drives the sweep animation. */}
@@ -100,7 +102,7 @@ export default memo(function HandoffMessageCard({
         data-testid="handoff-target-caption"
         className="flex items-center gap-1.5 text-xs text-[var(--color-foreground-muted)]"
       >
-        <span aria-hidden="true" className="text-[var(--color-brand)]">
+        <span aria-hidden="true" className="text-[var(--color-brand-text)]">
           →
         </span>
         <span className="font-medium text-[var(--color-foreground)]">
@@ -108,7 +110,7 @@ export default memo(function HandoffMessageCard({
         </span>
         {state === 'timeout' && (
           <span className="ml-1 text-[11px] text-[var(--color-foreground-subtle)]">
-            · 응답 없음
+            · {t('chat.handoffNoResponse')}
           </span>
         )}
       </div>
@@ -120,14 +122,14 @@ export default memo(function HandoffMessageCard({
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
             aria-controls="handoff-instruction-panel"
-            className="mt-1 inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand-focus)] rounded-sm"
+            className="mt-1 inline-flex min-h-11 items-center gap-1 rounded-sm px-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand-focus)]"
           >
             {expanded ? (
               <ChevronDown className="h-3 w-3" aria-hidden="true" />
             ) : (
               <ChevronRight className="h-3 w-3" aria-hidden="true" />
             )}
-            <span>{expanded ? '숨기기' : '지시문 보기'}</span>
+            <span>{expanded ? t('chat.hideInstruction') : t('chat.viewInstruction')}</span>
           </button>
           {expanded && (
             <div

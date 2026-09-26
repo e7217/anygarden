@@ -8,6 +8,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   artifactDownloadUrl,
   deleteRoomArtifact,
@@ -67,7 +69,7 @@ function ArtifactImagePreview({
   }, [roomId, artifactId])
   if (!src) {
     return (
-      <div className="flex h-32 w-full items-center justify-center rounded-[var(--radius-sm)] bg-black/[0.03]">
+      <div className="flex h-32 w-full items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)]">
         <ImageIcon className="h-6 w-6 text-[var(--color-foreground-subtle)]" />
       </div>
     )
@@ -76,7 +78,7 @@ function ArtifactImagePreview({
     <img
       src={src}
       alt={alt}
-      className="h-32 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-black/[0.02] object-contain"
+      className="h-32 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] object-contain"
     />
   )
 }
@@ -91,6 +93,8 @@ export default function RoomArtifactsDialog({
   open,
   onOpenChange,
 }: RoomArtifactsDialogProps) {
+  const { t } = useLocale()
+  const { confirm } = useFeedback()
   const [items, setItems] = useState<RoomArtifact[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -130,7 +134,7 @@ export default function RoomArtifactsDialog({
 
   const handleDelete = async (artifactId: string) => {
     if (!roomId) return
-    if (!confirm('이 산출물을 룸에서 제거할까요?')) return
+    if (!await confirm({ title: t('rooms.removeArtifact'), description: t('rooms.removeArtifactConfirm'), confirmLabel: t('rooms.removeArtifact'), destructive: true })) return
     try {
       await deleteRoomArtifact(roomId, artifactId)
       setItems(prev => prev.filter(i => i.id !== artifactId))
@@ -141,15 +145,14 @@ export default function RoomArtifactsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[min(90dvh,52rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ImageIcon className="h-4 w-4 text-[var(--color-foreground-muted)]" />
-            산출물
+            {t('rooms.artifacts')}
           </DialogTitle>
           <DialogDescription>
-            에이전트가 <code>memory/outbox/</code>에 떨군 파일이 여기에 모입니다.
-            이미지는 미리보기로, 그 외 파일은 다운로드로 확인할 수 있어요.
+            {t('rooms.artifactsDescription')}
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -159,11 +162,11 @@ export default function RoomArtifactsDialog({
         )}
         {loading ? (
           <p className="text-sm text-[var(--color-foreground-subtle)]">
-            불러오는 중...
+            {t('common.loading')}
           </p>
         ) : items.length === 0 ? (
           <p className="text-sm text-[var(--color-foreground-subtle)]">
-            아직 에이전트가 만든 산출물이 없습니다.
+            {t('rooms.noArtifacts')}
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -181,7 +184,7 @@ export default function RoomArtifactsDialog({
                       alt={item.filename}
                     />
                   ) : (
-                    <div className="flex h-32 w-full items-center justify-center rounded-[var(--radius-sm)] bg-black/[0.03]">
+                    <div className="flex h-32 w-full items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)]">
                       <FileText className="h-6 w-6 text-[var(--color-foreground-subtle)]" />
                     </div>
                   )}
@@ -201,8 +204,9 @@ export default function RoomArtifactsDialog({
                       href={downloadUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-2 py-1 text-xs text-[var(--color-foreground-muted)] hover:bg-black/5"
-                      title="다운로드"
+                      className="inline-flex min-h-9 min-w-9 items-center justify-center gap-1 rounded-[var(--radius-xs)] px-2 py-1 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+                      title={t('rooms.download')}
+                      aria-label={t('rooms.download')}
                     >
                       <Download className="h-3.5 w-3.5" />
                     </a>
@@ -210,8 +214,8 @@ export default function RoomArtifactsDialog({
                       variant="ghost"
                       size="icon"
                       onClick={() => handleDelete(item.id)}
-                      aria-label={`Delete ${item.filename}`}
-                      title="삭제"
+                      aria-label={t('rooms.deleteArtifact', { name: item.filename })}
+                      title={t('rooms.removeArtifact')}
                     >
                       <Trash2 className="h-4 w-4 text-[var(--color-foreground-subtle)]" />
                     </Button>

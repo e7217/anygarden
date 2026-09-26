@@ -28,8 +28,10 @@ import { useParticipantPresence } from '@/hooks/useParticipantPresence'
 import { useRooms, type Room } from '@/hooks/useRooms'
 import { useAuth } from '@/hooks/useAuth'
 import { apiFetch } from '@/lib/api'
-import { MessageSquare, Menu } from 'lucide-react'
+import { MessageSquare, Menu, Plus } from 'lucide-react'
 import type { MentionOption } from '@/components/MentionPopover'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 export interface Participant {
   id: string
@@ -64,6 +66,8 @@ export interface Participant {
 }
 
 export default function ChatPage() {
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
   const selectedRoom = roomId ?? null
@@ -135,6 +139,8 @@ export default function ChatPage() {
   const [roomInvitesOpen, setRoomInvitesOpen] = useState(false)
   const [participantsOpen, setParticipantsOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [createProjectRequest, requestCreateProject] = useState(0)
+  const [createRoomRequest, requestCreateRoom] = useState(0)
   // #115 — desktop collapse state + Ctrl/Cmd+B handler now live in
   // <Sidebar> + <SidebarExpandButton>, backed by <SidebarLayoutProvider>.
   // ChatPage no longer owns any sidebar-collapse state.
@@ -388,34 +394,27 @@ export default function ChatPage() {
           refreshParticipants()
           return
         }
-        // Surface the backend's detail string via ``alert`` — other
-        // chat-page flows (representative set, stop-all-agents) rely
-        // on the same plain-alert escape hatch, so this stays
-        // consistent. A richer toast mechanism can be retrofitted in
-        // a follow-up.
-        let detail = `Failed to remove participant (${resp.status})`
+        let detail = t('chat.failedRemoveParticipant', { status: resp.status })
         try {
           const body = await resp.json()
           if (body && typeof body.detail === 'string') detail = body.detail
         } catch { /* ignore body parse */ }
-        window.alert(detail)
+        notify({ message: detail, tone: 'error' })
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : String(err))
+        notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
       }
     },
-    [selectedRoom, refreshParticipants],
+    [selectedRoom, refreshParticipants, notify, t],
   )
 
   const handleDeleteRoom = useCallback(async () => {
     if (!selectedRoom || !currentRoom) return
-    // Native confirm — same low-friction pattern the participant
-    // removal flow uses. The body spells out the cascade rules so
-    // the host doesn't discover them by surprise after the fact.
-    const ok = window.confirm(
-      `이 룸 "${currentRoom.name}"을(를) 삭제하시겠습니까?\n\n` +
-        '룸의 모든 메시지가 사라지며, 하위 룸들은 최상위로 이동합니다. ' +
-        '되돌릴 수 없습니다.',
-    )
+    const ok = await confirm({
+      title: t('chat.deleteRoomTitle', { name: currentRoom.name }),
+      description: t('chat.deleteRoomDescription'),
+      confirmLabel: t('chat.delete'),
+      destructive: true,
+    })
     if (!ok) return
     try {
       const resp = await apiFetch(`/api/v1/rooms/${selectedRoom}`, {
@@ -430,16 +429,16 @@ export default function ChatPage() {
         navigate('/')
         return
       }
-      let detail = `Failed to delete room (${resp.status})`
+      let detail = t('chat.failedDeleteRoom', { status: resp.status })
       try {
         const body = await resp.json()
         if (body && typeof body.detail === 'string') detail = body.detail
       } catch { /* ignore body parse */ }
-      window.alert(detail)
+      notify({ message: detail, tone: 'error' })
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
     }
-  }, [selectedRoom, currentRoom, navigate])
+  }, [selectedRoom, currentRoom, navigate, t, confirm, notify])
 
   // Listen for ``room_deleted`` WS frames pushed for OTHER sessions
   // — e.g. another tab the same user has open, or a host deleted a
@@ -491,6 +490,8 @@ export default function ChatPage() {
         selectedRoom={selectedRoom}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        createProjectRequest={createProjectRequest}
+        createRoomRequest={createRoomRequest}
       />
       <SidebarExpandButton />
 
@@ -736,24 +737,49 @@ export default function ChatPage() {
         ) : (
           <>
             {/* Mobile-only top bar with menu button for empty state */}
-            <div className="flex h-14 items-center gap-2 border-b border-[var(--color-border)] bg-white px-4 md:hidden">
+            <div className="flex h-14 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2 md:hidden">
               <Button
                 variant="ghost"
                 size="icon"
+                className="min-h-11 min-w-11"
                 onClick={() => setSidebarOpen(true)}
-                aria-label="Open sidebar"
+                aria-label={t('chat.openSidebar')}
               >
                 <Menu className="h-5 w-5" />
               </Button>
               <span className="text-[15px] font-bold tracking-tight">Anygarden</span>
             </div>
             <div className="flex flex-1 flex-col items-center justify-center bg-[var(--color-surface-alt)] px-6 text-center">
-              <MessageSquare className="mb-4 h-16 w-16 text-[var(--color-foreground-subtle)] opacity-70" />
-              <h2 className="text-lead text-[var(--color-foreground)]">Welcome to Anygarden</h2>
-              <p className="text-caption text-[var(--color-foreground-muted)] mt-2">Select a room from the sidebar to start chatting.</p>
-              {projects.length === 0 && (
-                <p className="text-caption text-[var(--color-foreground-muted)] mt-1">Create a project first to get started.</p>
-              )}
+              <div className="flex w-full max-w-sm flex-col items-center">
+                <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-whisper">
+                  <MessageSquare className="h-8 w-8 text-[var(--color-foreground-muted)]" />
+                </div>
+                <h2 className="text-lead text-[var(--color-foreground)]">{t('chat.welcome')}</h2>
+                <p className="mt-2 text-sm text-[var(--color-foreground-muted)]">
+                  {projects.length === 0
+                    ? t('chat.emptyProjectDescription')
+                    : t('chat.emptyRoomDescription')}
+                </p>
+                <Button
+                  className="mt-6 min-h-11"
+                  onClick={() => {
+                    if (projects.length === 0) requestCreateProject(value => value + 1)
+                    else requestCreateRoom(value => value + 1)
+                  }}
+                >
+                  <Plus className="h-4 w-4" />
+                  {projects.length === 0 ? t('chat.createProject') : t('chat.createRoom')}
+                </Button>
+                {projects.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    className="mt-2 min-h-11 md:hidden"
+                    onClick={() => setSidebarOpen(true)}
+                  >
+                    {t('chat.browseRooms')}
+                  </Button>
+                )}
+              </div>
             </div>
           </>
         )}

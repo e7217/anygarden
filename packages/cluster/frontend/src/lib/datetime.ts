@@ -36,7 +36,11 @@ export function parseServerDate(input: string): Date {
  * so today's messages look identical to before. ``now`` is injectable
  * for deterministic tests. Returns ``''`` on unparseable input, matching
  * the prior fail-safe in ``MessageBubble``. */
-export function formatMessageTimestamp(iso: string, now: Date = new Date()): string {
+export function formatMessageTimestamp(
+  iso: string,
+  now: Date = new Date(),
+  locale: 'ko' | 'en' = 'ko',
+): string {
   let d: Date
   try {
     d = parseServerDate(iso)
@@ -45,14 +49,20 @@ export function formatMessageTimestamp(iso: string, now: Date = new Date()): str
   }
   if (Number.isNaN(d.getTime())) return ''
 
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const time = new Intl.DateTimeFormat(locale === 'ko' ? 'ko-KR' : 'en-US', {
+    hour: 'numeric', minute: '2-digit',
+  }).format(d)
   const sameDay =
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate()
   if (sameDay) return time
 
-  const monthDay = `${d.getMonth() + 1}월 ${d.getDate()}일`
-  const date = d.getFullYear() === now.getFullYear() ? monthDay : `${d.getFullYear()}년 ${monthDay}`
+  const sameYear = d.getFullYear() === now.getFullYear()
+  const date = locale === 'ko'
+    ? `${sameYear ? '' : `${d.getFullYear()}년 `}${d.getMonth() + 1}월 ${d.getDate()}일`
+    : new Intl.DateTimeFormat('en-US', {
+      month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }),
+    }).format(d)
   return `${date} ${time}`
 }

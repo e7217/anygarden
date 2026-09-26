@@ -1,6 +1,6 @@
 import { Component, useMemo, useState } from 'react'
 import type { Edge, Node } from '@xyflow/react'
-import { RefreshCcw, AlertTriangle } from 'lucide-react'
+import { RefreshCcw, AlertTriangle, SlidersHorizontal, X } from 'lucide-react'
 import PageShell from '@/components/PageShell'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
@@ -18,6 +18,7 @@ import {
 } from '@/components/topology/useTopologyLayoutOverrides'
 import type { GraphEdge, GraphNode, NodeKind } from '@/components/topology/types'
 import { TEXT_MUTED, TEXT_PRIMARY } from '@/components/topology/constants'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Simple error boundary so a crash inside React Flow doesn't take the
@@ -38,19 +39,21 @@ class TopologyErrorBoundary extends Component<{ children: React.ReactNode }, Err
   render() {
     if (this.state.error) {
       return (
-        <EmptyState
-          title="토폴로지를 그릴 수 없어요"
+        <TopologyCrashState
           message={this.state.error.message}
-          action={
-            <Button onClick={() => this.setState({ error: null })}>
-              <RefreshCcw className="h-4 w-4" /> 다시 시도
-            </Button>
-          }
+          onRetry={() => this.setState({ error: null })}
         />
       )
     }
     return this.props.children
   }
+}
+
+function TopologyCrashState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { t } = useLocale()
+  return <EmptyState title={t('topology.cannotDraw')} message={message} action={
+    <Button onClick={onRetry}><RefreshCcw className="h-4 w-4" /> {t('topology.tryAgain')}</Button>
+  } />
 }
 
 function EmptyState({
@@ -77,8 +80,8 @@ function EmptyState({
         style={{
           maxWidth: 420,
           padding: 24,
-          background: 'var(--color-surface)',
-          border: '1px solid rgba(0,0,0,0.1)',
+          background: 'var(--color-surface-elevated)',
+          border: '1px solid var(--color-border)',
           borderRadius: 12,
           boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
           textAlign: 'center',
@@ -109,6 +112,7 @@ function EmptyState({
 }
 
 function TopologySkeleton() {
+  const { t } = useLocale()
   return (
     <div
       style={{
@@ -119,7 +123,7 @@ function TopologySkeleton() {
         background: 'var(--color-surface-alt)',
       }}
     >
-      <div style={{ color: TEXT_MUTED, fontSize: 13 }}>토폴로지를 불러오는 중...</div>
+      <div style={{ color: TEXT_MUTED, fontSize: 13 }}>{t('topology.loading')}</div>
     </div>
   )
 }
@@ -130,8 +134,10 @@ function TopologySkeleton() {
  * rail + detail panel siblings.
  */
 export default function TopologyPage() {
+  const { t, formatNumber } = useLocale()
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const [filter, setFilter] = useState<FilterState>(DEFAULT_FILTER)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const { user } = useAuth()
 
   // Poll every 5s so the Room "is_typing" pulse (#84) stays within the
@@ -226,22 +232,26 @@ export default function TopologyPage() {
   }
 
   return (
-    <PageShell title="Topology" scroll={false}>
+    <PageShell title={t('topology.title')} scroll={false}>
       {/* Desktop header */}
-      <div className="hidden h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-white px-6 md:flex">
+      <div className="hidden h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-6 md:flex">
         <div className="flex items-baseline gap-3">
           <span className="text-[17px] font-bold tracking-tight text-[var(--color-foreground)]">
-            Topology
+            {t('topology.title')}
           </span>
           {data && (
             <span className="text-xs text-[var(--color-foreground-muted)]">
-              {data.scope} · {data.nodes.length} nodes · {data.edges.length} edges
+              {t('topology.summary', {
+                scope: t(data.scope === 'global' ? 'topology.scopeGlobal' : 'topology.scopePersonal'),
+                nodes: formatNumber(data.nodes.length),
+                edges: formatNumber(data.edges.length),
+              })}
             </span>
           )}
         </div>
         <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
           <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+          {t('common.refresh')}
         </Button>
       </div>
 
@@ -262,21 +272,41 @@ export default function TopologyPage() {
             <TopologySkeleton />
           ) : error ? (
             <EmptyState
-              title="토폴로지를 불러오지 못했습니다"
+              title={t('topology.loadFailed')}
               message={error.message}
               action={
                 <Button onClick={refresh}>
-                  <RefreshCcw className="h-4 w-4" /> 다시 시도
+                  <RefreshCcw className="h-4 w-4" /> {t('topology.tryAgain')}
                 </Button>
               }
             />
           ) : !data || data.nodes.length === 0 ? (
             <EmptyState
-              title="아직 보여줄 게 없어요"
-              message="머신을 등록하거나 룸에 참여하면 여기에 그래프가 그려져요."
+              title={t('topology.emptyTitle')}
+              message={t('topology.emptyBody')}
             />
           ) : (
-            <section className="flex min-w-0 flex-1">
+            <section className="relative flex min-h-0 min-w-0 flex-1">
+              <div className="absolute left-3 top-3 z-10 flex gap-2 md:hidden">
+                <Button variant="outline" size="icon" onClick={() => setFiltersOpen(true)} aria-label={t('topology.showFilters')}>
+                  <SlidersHorizontal className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" size="icon" onClick={refresh} disabled={loading} aria-label={t('common.refresh')}>
+                  <RefreshCcw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                </Button>
+              </div>
+              {filtersOpen && (
+                <div className="absolute inset-0 z-20 flex md:hidden">
+                  <div className="flex h-full max-w-[calc(100vw-48px)] flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+                    <div className="flex h-14 items-center justify-between border-b border-[var(--color-border)] px-4">
+                      <span className="font-semibold">{t('topology.filters')}</span>
+                      <Button variant="ghost" size="icon" onClick={() => setFiltersOpen(false)} aria-label={t('topology.closeFilters')}><X className="h-4 w-4" /></Button>
+                    </div>
+                    <FilterPanel filter={filter} onChange={setFilter} counts={counts} knownEngines={knownEngines} knownStates={knownStates} />
+                  </div>
+                  <button type="button" className="flex-1 bg-[var(--color-overlay)]" onClick={() => setFiltersOpen(false)} aria-label={t('topology.closeFilters')} />
+                </div>
+              )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <TopologyCanvas
                   nodes={layouted.nodes as Node[]}

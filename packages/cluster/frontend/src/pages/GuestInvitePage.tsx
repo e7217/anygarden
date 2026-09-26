@@ -5,6 +5,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { getAuthToken, setGuestToken } from '@/lib/authStorage'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { LocaleToggle } from '@/i18n/LocaleToggle'
+import { ThemeToggle } from '@/theme/ThemeToggle'
 
 /**
  * ``/invite/:token``
@@ -17,6 +20,7 @@ import { getAuthToken, setGuestToken } from '@/lib/authStorage'
  * inline. A more flexible "dual session" story is deferred per §11.11.
  */
 export default function GuestInvitePage() {
+  const { t } = useLocale()
   const { token: rawToken } = useParams<{ token: string }>()
   const navigate = useNavigate()
   const [displayName, setDisplayName] = useState('')
@@ -34,7 +38,7 @@ export default function GuestInvitePage() {
 
     const trimmed = displayName.trim()
     if (trimmed.length < 1 || trimmed.length > 64) {
-      setError('Display name must be 1–64 characters.')
+      setError(t('guest.displayNameInvalid'))
       return
     }
 
@@ -46,8 +50,7 @@ export default function GuestInvitePage() {
         body: JSON.stringify({ token, display_name: trimmed }),
       })
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || 'Could not accept invite')
+        throw new Error(t('guest.joinFailed'))
       }
       const data = await resp.json()
       // Single-tab architecture: the guest JWT overwrites the
@@ -60,44 +63,44 @@ export default function GuestInvitePage() {
         displayName: data.display_name ?? trimmed,
       })
       navigate(`/g/${data.room_id}`, { replace: true })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+    } catch {
+      setError(t('guest.joinFailed'))
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--color-background)] p-4">
+    <div className="relative flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)] p-4 py-16">
+      <div className="absolute right-4 top-4 flex items-center gap-2">
+        <LocaleToggle compact />
+        <ThemeToggle />
+      </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Join as a guest</CardTitle>
-          <CardDescription>
-            Choose a display name. Guests can read and send messages in
-            the invited room, and mention agents by name.
-          </CardDescription>
+          <CardTitle>{t('guest.joinTitle')}</CardTitle>
+          <CardDescription>{t('guest.joinDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
           {hadPriorSession && (
             <div className="mb-4 rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">
-              You're already signed in. Joining as a guest will sign you
-              out of that account in this tab.
+              {t('guest.priorSession')}
             </div>
           )}
           <form onSubmit={handleAccept} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="guest-display-name">Display name</Label>
+              <Label htmlFor="guest-display-name">{t('guest.displayName')}</Label>
               <Input
                 id="guest-display-name"
                 autoFocus
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="e.g. Jamie"
+                placeholder={t('guest.displayNamePlaceholder')}
                 maxLength={64}
               />
             </div>
             {error && (
-              <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
+              <div role="alert" className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
                 {error}
               </div>
             )}
@@ -106,7 +109,7 @@ export default function GuestInvitePage() {
               className="w-full"
               disabled={submitting || !token}
             >
-              {submitting ? 'Joining…' : 'Join room'}
+              {submitting ? t('guest.joining') : t('guest.join')}
             </Button>
           </form>
         </CardContent>

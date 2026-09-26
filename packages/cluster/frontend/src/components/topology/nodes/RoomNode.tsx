@@ -9,14 +9,15 @@ import {
   TEXT_PRIMARY,
 } from '../constants'
 import './RoomNode.css'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Room node: auto-width pill, 32px tall, rounded-full.
  *
  * Channels use ``#`` prefix; DMs use ``@``. Representative-agent rooms
- * get a leading star rendered in Notion Blue to flag the relationship
- * at a glance (the representative agent's ``participates`` edge is also
- * drawn in Notion Blue via ``data.is_representative``; the star
+ * get a leading star rendered in the teal accent to flag the relationship
+ * at a glance (the representative agent's ``participates`` edge also
+ * uses the accent via ``data.is_representative``; the star
  * disambiguates without needing to hover, see #226).
  *
  * When ``data.is_typing`` is true, the pill gets a subtle pulse via
@@ -24,6 +25,7 @@ import './RoomNode.css'
  * ``GET /api/v1/graph`` polled at 5s from TopologyPage (#84).
  */
 function RoomNodeInner({ data, selected }: NodeProps) {
+  const { t } = useLocale()
   const label = (data?.label as string | undefined) ?? 'room'
   const isDm = Boolean(data?.is_dm)
   const participantCount = (data?.participant_count as number | undefined) ?? 0
@@ -35,13 +37,12 @@ function RoomNodeInner({ data, selected }: NodeProps) {
   const className = isTyping ? 'room-node room-node--active' : 'room-node'
   // Surface the active-typing state to assistive tech and hover tooltips
   // so the visual pulse (``.room-node--active``) isn't the only channel
-  // carrying that signal. English to stay consistent with the rest of
-  // the topology labels.
+  // carrying that signal.
   const ariaLabel = isTyping
-    ? `Room ${prefix}${label}, ${participantCount} participants, typing active`
-    : `Room ${prefix}${label}, ${participantCount} participants`
+    ? t('topology.roomNodeTyping', { name: `${prefix}${label}`, count: participantCount })
+    : t('topology.roomNode', { name: `${prefix}${label}`, count: participantCount })
   const titleText = isTyping
-    ? `${prefix}${label} · ${participantCount} · typing`
+    ? `${prefix}${label} · ${participantCount} · ${t('topology.typing')}`
     : `${prefix}${label} · ${participantCount}`
 
   return (

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 export interface ActivityLog {
   id: string
@@ -213,7 +214,7 @@ export function turnDotClass(turn: Turn): string {
 
 // #425 — per-event one-line detail (engine / duration / outcome / error)
 // pulled from the row's details JSON; '' when the row carries nothing.
-function eventDetail(evt: ActivityLog): string {
+function eventDetail(evt: ActivityLog, localizeError: (error: string) => string): string {
   const d = evt.details ?? {}
   const parts: string[] = []
   const engine = str(d.engine)
@@ -224,13 +225,14 @@ function eventDetail(evt: ActivityLog): string {
   if (outcome) parts.push(outcome)
   const err = str(d.error)
   if (err) {
-    const label = activityErrorMessage(err)
+    const label = localizeError(err)
     parts.push(label.length > 80 ? label.slice(0, 79) + '…' : label)
   }
   return parts.join(' · ')
 }
 
 export default function ActivityPanel({ agentId }: Props) {
+  const { t, formatDate } = useLocale()
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
 
@@ -245,6 +247,29 @@ export default function ActivityPanel({ agentId }: Props) {
   }, [agentId])
 
   const { turns, system } = useMemo(() => splitLogs(logs), [logs])
+  const localizeError = (error: string) => {
+    const known: Record<string, string> = {
+      AUTH_MISSING: t('admin.activity.authMissing'),
+      UNKNOWN_PROVIDER: t('admin.activity.unknownProvider'),
+      AUTH_CHECK_FAILED: t('admin.activity.authCheckFailed'),
+      ENGINE_AUTH_ERROR: t('admin.activity.engineAuthError'),
+      PI_PROVIDER_ERROR: t('admin.activity.piProviderError'),
+    }
+    return known[error] ?? error
+  }
+  const localizedOutcome = (outcome: string) => {
+    const known: Record<string, string> = {
+      responded: t('admin.activity.outcome.responded'),
+      'no response': t('admin.activity.outcome.silent'),
+      orphaned: t('admin.activity.outcome.orphaned'),
+      'in flight': t('admin.activity.outcome.inFlight'),
+      failed: t('admin.activity.outcome.failed'),
+      timeout: t('admin.activity.outcome.timeout'),
+      cancelled: t('admin.activity.outcome.cancelled'),
+      rejected: t('admin.activity.outcome.rejected'),
+    }
+    return known[outcome] ?? outcome
+  }
 
   const toggle = (rid: string) => {
     setExpanded(prev => {
@@ -259,7 +284,7 @@ export default function ActivityPanel({ agentId }: Props) {
     return (
       <div className="py-2" data-testid="activity-panel">
         <p className="text-caption text-[var(--color-foreground-muted)]">
-          No activity yet
+          {t('admin.activity.none')}
         </p>
       </div>
     )
@@ -273,7 +298,7 @@ export default function ActivityPanel({ agentId }: Props) {
       {turns.length > 0 && (
         <section className="space-y-1.5">
           <h4 className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
-            Turns
+            {t('admin.activity.turns')}
           </h4>
           <ul className="space-y-1">
             {turns.map(turn => {
@@ -299,10 +324,10 @@ export default function ActivityPanel({ agentId }: Props) {
                     />
                     <span
                       className={`inline-block h-1.5 w-1.5 rounded-full shrink-0 ${turnDotClass(turn)}`}
-                      aria-label={turnLabel(turn)}
+                      aria-label={localizedOutcome(turnLabel(turn))}
                     />
                     <span className="font-medium text-[var(--color-foreground)]">
-                      {new Date(turn.firstTs).toLocaleString()}
+                      {formatDate(new Date(turn.firstTs), { dateStyle: 'medium', timeStyle: 'short' })}
                     </span>
                     <span className="text-[var(--color-foreground-muted)]">
                       · {formatDuration(duration)}
@@ -313,12 +338,12 @@ export default function ActivityPanel({ agentId }: Props) {
                       </span>
                     )}
                     <span className="text-[var(--color-foreground-muted)]">
-                      · {turnLabel(turn)}
+                      · {localizedOutcome(turnLabel(turn))}
                     </span>
                     {turn.triggerMessageId && (
                       <span
                         className="ml-auto truncate text-[10px] text-[var(--color-foreground-subtle)] font-mono"
-                        title={`Triggered by message ${turn.triggerMessageId}`}
+                        title={t('admin.activity.triggeredBy', { id: turn.triggerMessageId })}
                       >
                         #{turn.triggerMessageId.slice(0, 6)}
                       </span>
@@ -328,11 +353,11 @@ export default function ActivityPanel({ agentId }: Props) {
                     <ol className="border-t border-[var(--color-border)] px-6 py-1.5 space-y-0.5">
                       {turn.roomId && (
                         <li className="text-[10px] text-[var(--color-foreground-subtle)] font-mono">
-                          room {turn.roomId}
+                          {t('admin.activity.room', { id: turn.roomId })}
                         </li>
                       )}
                       {turn.events.map(evt => {
-                        const detail = eventDetail(evt)
+                        const detail = eventDetail(evt, localizeError)
                         return (
                           <li
                             key={evt.id}
@@ -342,7 +367,7 @@ export default function ActivityPanel({ agentId }: Props) {
                               {evt.event_type}
                             </span>
                             <span className="text-[var(--color-foreground-muted)]">
-                              {new Date(evt.timestamp).toLocaleTimeString()}
+                              {formatDate(new Date(evt.timestamp), { timeStyle: 'medium' })}
                             </span>
                             {detail && (
                               <span className="truncate text-[var(--color-foreground-muted)]">
@@ -354,7 +379,7 @@ export default function ActivityPanel({ agentId }: Props) {
                       })}
                       {turn.error && (
                         <li className="text-[11px] text-[var(--color-destructive,#d74c4c)]">
-                          error: {activityErrorMessage(turn.error)}
+                          {t('admin.activity.error', { message: localizeError(turn.error) })}
                         </li>
                       )}
                     </ol>
@@ -369,7 +394,7 @@ export default function ActivityPanel({ agentId }: Props) {
       {system.length > 0 && (
         <section className="space-y-1">
           <h4 className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
-            System events
+            {t('admin.activity.systemEvents')}
           </h4>
           <ul className="space-y-1">
             {system.map(evt => {
@@ -405,15 +430,15 @@ export default function ActivityPanel({ agentId }: Props) {
                       : 'bg-[var(--color-warning)]'
                   }`} />
                   <span className="font-medium text-[var(--color-foreground)]">
-                    {isPermChange ? 'permission_changed' : evt.event_type}
+                    {isPermChange ? t('admin.activity.permissionChanged') : evt.event_type}
                   </span>
                   {isPermChange && fromTier && toTier && (
                     <span className="text-[var(--color-foreground-muted)] font-mono">
-                      {fromTier} → {toTier}
+                      {fromTier === 'default' ? t('admin.activity.defaultTier') : fromTier} → {toTier === 'default' ? t('admin.activity.defaultTier') : toTier}
                     </span>
                   )}
                   <span className="text-[var(--color-foreground-muted)]">
-                    {new Date(evt.timestamp).toLocaleString()}
+                    {formatDate(new Date(evt.timestamp), { dateStyle: 'medium', timeStyle: 'short' })}
                   </span>
                 </li>
               )

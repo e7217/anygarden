@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 interface RoomSharedFilesDialogProps {
   roomId: string | null
@@ -39,6 +41,8 @@ export default function RoomSharedFilesDialog({
   open,
   onOpenChange,
 }: RoomSharedFilesDialogProps) {
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
   const { files, loading, error, refresh, remove } = useRoomFiles(roomId)
 
   // The hook auto-fetches on roomId change. We only want to *force* a
@@ -50,9 +54,18 @@ export default function RoomSharedFilesDialog({
 
   const handleDelete = async (fileId: string) => {
     if (!roomId) return
-    if (!confirm('이 파일을 룸에서 제거할까요? 참여 에이전트의 복사본도 함께 삭제됩니다.'))
-      return
-    await remove(fileId)
+    const accepted = await confirm({
+      title: t('guest.removeFileTitle'),
+      description: t('guest.deleteFileConfirm'),
+      confirmLabel: t('guest.removeFileTitle'),
+      destructive: true,
+    })
+    if (!accepted) return
+    try {
+      await remove(fileId)
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' })
+    }
   }
 
   return (
@@ -61,10 +74,10 @@ export default function RoomSharedFilesDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Paperclip className="h-4 w-4 text-[var(--color-foreground-muted)]" />
-            공유 파일
+            {t('guest.sharedFiles')}
           </DialogTitle>
           <DialogDescription>
-            이 룸에 첨부된 파일은 참여 에이전트의 <code>memory/shared/</code>로 복사 배포됩니다.
+            {t('guest.sharedFilesDescription')}
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -74,11 +87,11 @@ export default function RoomSharedFilesDialog({
         )}
         {loading ? (
           <p className="text-sm text-[var(--color-foreground-subtle)]">
-            불러오는 중...
+            {t('common.loading')}
           </p>
         ) : files.length === 0 ? (
           <p className="text-sm text-[var(--color-foreground-subtle)]">
-            아직 공유된 파일이 없습니다.
+            {t('guest.noSharedFiles')}
           </p>
         ) : (
           <ul className="flex flex-col divide-y divide-[var(--color-border)]">
@@ -100,8 +113,8 @@ export default function RoomSharedFilesDialog({
                   variant="ghost"
                   size="icon"
                   onClick={() => handleDelete(f.id)}
-                  aria-label={`Delete ${f.filename}`}
-                  title="삭제"
+                  aria-label={t('guest.deleteFile', { name: f.filename })}
+                  title={t('guest.deleteFile', { name: f.filename })}
                 >
                   <Trash2 className="h-4 w-4 text-[var(--color-foreground-subtle)]" />
                 </Button>

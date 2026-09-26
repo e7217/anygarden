@@ -6,6 +6,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
 import { Plus } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface CreateRoomDialogProps {
   projects: { id: string; name: string }[]
@@ -13,6 +14,7 @@ interface CreateRoomDialogProps {
 }
 
 export default function CreateRoomDialog({ projects, onCreateRoom }: CreateRoomDialogProps) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [projectId, setProjectId] = useState(projects[0]?.id || '')
@@ -34,20 +36,20 @@ export default function CreateRoomDialog({ projects, onCreateRoom }: CreateRoomD
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
           <Plus className="mr-2 h-4 w-4" />
-          New Room
+          {t('rooms.new')}
         </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create Room</DialogTitle>
+          <DialogTitle>{t('rooms.createTitle')}</DialogTitle>
           <DialogDescription>
-            Give your new room a name. Rooms group conversations inside a project.
+            {t('rooms.createDescription')}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           {projects.length > 1 && (
             <div className="space-y-2">
-              <Label htmlFor="project-select">Project</Label>
+              <Label htmlFor="project-select">{t('rooms.project')}</Label>
               <select
                 id="project-select"
                 value={projectId}
@@ -61,10 +63,10 @@ export default function CreateRoomDialog({ projects, onCreateRoom }: CreateRoomD
             </div>
           )}
           <div className="space-y-2">
-            <Label htmlFor="room-name">Room Name</Label>
+            <Label htmlFor="room-name">{t('rooms.name')}</Label>
             <Input
               id="room-name"
-              placeholder="e.g. general, design, backend"
+              placeholder={t('rooms.namePlaceholder')}
               value={name}
               onChange={e => setName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleCreate()}
@@ -73,7 +75,7 @@ export default function CreateRoomDialog({ projects, onCreateRoom }: CreateRoomD
         </div>
         <DialogFooter>
           <Button onClick={handleCreate} disabled={loading || !name.trim() || !projectId}>
-            {loading ? 'Creating...' : 'Create Room'}
+            {loading ? t('rooms.creating') : t('rooms.create')}
           </Button>
         </DialogFooter>
       </DialogContent>

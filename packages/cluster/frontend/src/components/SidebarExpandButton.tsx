@@ -1,5 +1,6 @@
 import { PanelLeftOpen } from 'lucide-react'
 import { useSidebarLayout } from '@/hooks/useSidebarLayout'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Floating expand button shown only when the desktop sidebar is
@@ -11,16 +12,17 @@ import { useSidebarLayout } from '@/hooks/useSidebarLayout'
  * empty-state menu for off-canvas drawer control instead.
  */
 export default function SidebarExpandButton() {
+  const { t } = useLocale()
   const { collapsed, toggleCollapsed } = useSidebarLayout()
   if (!collapsed) return null
   return (
     <button
       type="button"
       onClick={toggleCollapsed}
-      aria-label="Expand sidebar"
+      aria-label={t('chat.expandSidebar')}
       data-testid="sidebar-expand"
-      title="Expand sidebar (⌘B)"
-      className="hidden md:inline-flex fixed left-2 top-2 z-30 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white p-1.5 text-[var(--color-foreground-muted)] shadow-whisper hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+      title={t('chat.expandSidebarShortcut')}
+      className="hidden md:inline-flex fixed left-2 top-2 z-30 h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-foreground-muted)] shadow-whisper hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
     >
       <PanelLeftOpen className="h-4 w-4" />
     </button>

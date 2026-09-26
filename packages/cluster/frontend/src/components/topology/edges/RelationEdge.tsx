@@ -15,7 +15,7 @@ import { edgeStyleFor } from '../constants'
  * dispatches to the correct path algorithm + style:
  *   - smoothstep for ``owns``, ``places``, ``parent_of``
  *   - straight + dashed for ``participates`` — color-only differentiation
- *     between representative (full Notion Blue) and non-representative
+ *     between representative (full teal accent) and non-representative
  *     (semi-transparent), so the merged ``represents``/``participates``
  *     model from #226/#228 reads as one kind visually (see #231).
  *

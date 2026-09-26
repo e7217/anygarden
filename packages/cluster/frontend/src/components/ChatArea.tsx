@@ -16,7 +16,8 @@ import { parseServerDate } from '@/lib/datetime'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
 import { canHostThread, type ThreadIndex } from '@/lib/threads'
-import { typingParticipantLabel, type AgentStage } from '@/lib/typingStage'
+import type { AgentStage } from '@/lib/typingStage'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
@@ -55,6 +56,7 @@ export default function ChatArea({
   onOpenThread,
   renderInlineThread,
 }: ChatAreaProps) {
+  const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
   // Radix ScrollArea forwards the outer ref to its Root element;
   // the actual scrolling viewport is a descendant with
@@ -262,9 +264,14 @@ export default function ChatArea({
 
   const typingNames = Array.from(typingUsers ?? [])
     .filter(pid => pid !== myParticipantId)
-    .map(pid => typingParticipantLabel(
-      participants[pid]?.display_name ?? pid.slice(0, 8), typingStages[pid],
-    ))
+    .map(pid => {
+      const name = participants[pid]?.display_name ?? pid.slice(0, 8)
+      const stage = typingStages[pid]
+      if (!stage) return name
+      const stageKey = stage === 'preparing' ? 'chat.stagePreparing'
+        : stage === 'using_tool' ? 'chat.stageUsingTool' : 'chat.stageWriting'
+      return `${name} · ${t(stageKey)}`
+    })
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -272,22 +279,22 @@ export default function ChatArea({
 
   if (messages.length === 0) {
     return (
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center bg-white px-6 py-4 text-center">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center bg-[var(--color-surface)] px-6 py-4 text-center">
         <MessageSquare className="mb-4 h-12 w-12 text-[var(--color-foreground-subtle)] opacity-60" />
-        <p className="text-lead text-[var(--color-foreground)]">No messages yet</p>
-        <p className="text-caption text-[var(--color-foreground-muted)] mt-1">Start the conversation by sending a message below.</p>
+        <p className="text-lead text-[var(--color-foreground)]">{t('chat.noMessages')}</p>
+        <p className="text-caption text-[var(--color-foreground-muted)] mt-1">{t('chat.startConversation')}</p>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-1 flex-col bg-white min-h-0">
+    <div className="flex flex-1 flex-col bg-[var(--color-surface)] min-h-0">
       <RoomQueryBanner
         queries={pendingQueries}
         onDismiss={handleDismiss}
         onScrollTo={handleScrollTo}
       />
-      <ScrollArea className="flex-1 bg-white" ref={scrollRootRef}>
+      <ScrollArea className="flex-1 bg-[var(--color-surface)]" ref={scrollRootRef}>
         <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-6 py-4">
           {/* With a thread index, only top-level messages appear here —
               replies live in the panel. ``roots`` preserves stream order
@@ -349,7 +356,7 @@ export default function ChatArea({
               <span className="text-badge text-[var(--color-foreground-muted)] mb-1 pl-1">
                 {typingNames.join(', ')}
               </span>
-              <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-white border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
+              <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-[var(--color-surface)] border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
                 <BrailleSpinner />
               </div>
             </div>

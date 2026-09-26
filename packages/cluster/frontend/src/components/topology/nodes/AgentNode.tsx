@@ -8,21 +8,19 @@ import {
   agentStateColor,
 } from '../constants'
 import './AgentNode.css'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Agent node: 140×44 pill — engine logo + agent name + state dot.
  *
- * DESIGN notes:
- * - Border color signals lifecycle state (running → Notion Blue,
- *   crashed → warning orange, idle → soft neutral). This is the only
- *   node where Notion Blue doubles as both status and accent, per
- *   DESIGN.md §2 "Status colors" carveout ("running" == intent is alive).
- * - Background tint is engine-specific but always near-white so the
- *   state ring stays the dominant signal.
+ * - Border color signals lifecycle state using theme-aware status tokens.
+ * - Engine tints follow the light/dark palette while the state ring
+ *   remains the dominant signal.
  * - The running pulse (see AgentNode.css) uses box-shadow so it
  *   composes with #82's hover-opacity dimming without conflict.
  */
 function AgentNodeInner({ data, selected }: NodeProps) {
+  const { t } = useLocale()
   const engine = (data?.engine as string | undefined) ?? ''
   const state = (data?.actual_state as string | undefined) ?? 'idle'
   const label = (data?.label as string | undefined) ?? 'agent'
@@ -50,13 +48,15 @@ function AgentNodeInner({ data, selected }: NodeProps) {
         boxShadow: SHADOW_SOFT,
         color: TEXT_PRIMARY,
       }}
-      aria-label={
-        `Agent ${label}, engine ${engine || 'unknown'}, state ${state}` +
-        (isTrusted ? ', permission trusted (host access)' : '')
-      }
+      aria-label={t('topology.agentNode', {
+        name: label,
+        engine: engine || t('common.unknown').toLowerCase(),
+        state,
+        permission: isTrusted ? t('topology.trustedPermission') : '',
+      })}
       title={
         `${label} · ${engine} · ${state}` +
-        (isTrusted ? ' · ⚠ trusted (host access)' : '')
+        (isTrusted ? t('topology.trustedTitle') : '')
       }
     >
       <Handle

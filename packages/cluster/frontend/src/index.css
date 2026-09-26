@@ -1,81 +1,87 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Anygarden Design System — Notion-inspired warm neutrals
-   See DESIGN.md for full specification.
+   Anygarden Design System — quiet teal, light by default.
+   Keep the existing token names so product views can migrate incrementally.
    ========================================================================== */
 
 @theme {
   /* -- Color: primary surfaces & text -- */
   --color-background: #ffffff;
-  --color-foreground: rgba(0, 0, 0, 0.95);           /* near-black, not pure */
-  --color-foreground-muted: #615d59;                 /* warm gray 500 */
-  --color-foreground-subtle: #a39e98;                /* warm gray 300 */
+  --color-foreground: #122522;
+  --color-foreground-muted: #52645f;
+  --color-foreground-subtle: #657870;
 
   --color-surface: #ffffff;
-  --color-surface-alt: #f6f5f4;                      /* warm white, for section alternation */
-  --color-surface-dark: #31302e;                     /* warm dark */
+  --color-surface-alt: #f5f8f7;
+  --color-surface-elevated: #ffffff;
+  --color-surface-hover: #eef4f1;
+  --color-surface-selected: #e6f4f1;
+  --color-surface-dark: #182622;
+  --color-code-foreground: #edf6f2;
 
   /* -- Color: interactive accent -- */
-  --color-brand: #0075de;                            /* Notion Blue */
-  --color-brand-hover: #005bab;                      /* active/pressed */
-  --color-brand-focus: #0075de;                      /* = brand — one base blue (#435) */
-  --color-brand-tint-bg: #f2f9ff;                    /* pill badge bg */
-  --color-brand-tint-text: #005bab;                  /* pill badge text — AA on tint-bg ≈5.9:1 (#435) */
-  --color-brand-secondary: #213183;                  /* deep navy */
-  --color-brand-light: #62aef0;                      /* link on dark */
+  --color-brand: #0f766e;                           /* filled action; white text 5.47:1 */
+  --color-brand-hover: #0b5f58;
+  --color-brand-focus: #0f766e;
+  --color-brand-text: #0b5f58;                      /* links/text are separate from fills */
+  --color-link: #0b5f58;
+  --color-on-brand: #ffffff;
+  --color-brand-tint-bg: #e6f4f1;
+  --color-brand-tint-text: #0b5f58;
+  --color-brand-secondary: #164a45;
+  --color-brand-light: #5eead4;
 
   /* -- Color: semantic -- */
-  --color-success: #1aae39;
-  --color-success-soft: #2a9d99;                     /* teal */
-  --color-warning: #dd5b00;                          /* caution / attention — unchanged */
-  --color-danger: #c83a2b;                           /* destructive / delete — distinct red (#435) */
+  --color-success: #15803d;
+  --color-success-soft: #e9f7ec;
+  --color-warning: #b45309;
+  --color-warning-soft: #fff5e7;
+  --color-danger: #b42318;
+  --color-danger-solid: #b42318;                     /* filled destructive action */
+  --color-danger-solid-hover: #912018;
+  --color-danger-soft: #fff0ee;
+  --color-overlay: rgba(11, 20, 18, 0.42);
 
-  /* -- Color: status (#71) --
-     Status colors convey liveness/health state for stateful
-     resources (agents, machines, participants) and live OUTSIDE
-     the single-accent interactive palette: the Notion Blue
-     ``--color-brand`` family stays reserved for clickable intent.
-     ``--color-status-online`` is a muted sage — saturated enough
-     to pop against warm neutrals, desaturated enough not to fight
-     the accent. See DESIGN.md §2 "Status colors". */
-  --color-status-online: #5b9e6d;
+  /* Health states stay distinct from teal actions. */
+  --color-status-online: #15803d;
 
-  /* -- Color: avatar tones (#435) --
-     Seeded 8-tone palette read by ``lib/avatar.ts`` (FNV-1a hash → slot).
-     Each is a soft tint over white (``-N``) with a darker foreground for
-     initials (``-N-fg``). Tone 8 reuses brand blue by design. This token
-     set replaces the previously orphaned ``--color-accent-*`` family,
-     which was defined here but never referenced by the avatar palette. */
-  --color-tone-1: #efedea;                                --color-tone-1-fg: #615d59;
-  --color-tone-2: color-mix(in srgb, #2a9d99 18%, white); --color-tone-2-fg: #1d6f6c;
-  --color-tone-3: color-mix(in srgb, #1aae39 18%, white); --color-tone-3-fg: #0d7821;
-  --color-tone-4: color-mix(in srgb, #dd5b00 18%, white); --color-tone-4-fg: #a33f00;
-  --color-tone-5: color-mix(in srgb, #ff64c8 18%, white); --color-tone-5-fg: #b03c91;
-  --color-tone-6: color-mix(in srgb, #391c57 14%, white); --color-tone-6-fg: #391c57;
-  --color-tone-7: color-mix(in srgb, #523410 14%, white); --color-tone-7-fg: #523410;
-  --color-tone-8: #f2f9ff;                                --color-tone-8-fg: #005bab;
+  /* Seeded avatar palette, paired backgrounds and readable initials. */
+  --color-tone-1: #e9eeeb; --color-tone-1-fg: #41574b;
+  --color-tone-2: #e0f2ef; --color-tone-2-fg: #0b5f58;
+  --color-tone-3: #e9f7ec; --color-tone-3-fg: #166534;
+  --color-tone-4: #fff2e3; --color-tone-4-fg: #92400e;
+  --color-tone-5: #fbeafa; --color-tone-5-fg: #9d257b;
+  --color-tone-6: #f0eaf7; --color-tone-6-fg: #633d83;
+  --color-tone-7: #f2eee6; --color-tone-7-fg: #705024;
+  --color-tone-8: #e8f1f6; --color-tone-8-fg: #285d78;
 
   /* -- Color: borders -- */
-  --color-border: rgba(0, 0, 0, 0.1);                /* whisper border */
-  --color-border-strong: #dddddd;                    /* input border */
-  --color-border-subtle: rgba(0, 0, 0, 0.06);
+  --color-border: #dce7e3;
+  --color-border-strong: #849891;                    /* 3.05:1 on white */
+  --color-border-subtle: #eaf0ed;
+  --color-scrollbar: #bdcdc5;
 
-  /* -- shadcn legacy aliases (backwards compat for existing classes) -- */
+  /* -- shadcn aliases (backwards compatible) -- */
   --color-card: #ffffff;
-  --color-card-foreground: rgba(0, 0, 0, 0.95);
-  --color-muted: #f6f5f4;
-  --color-muted-foreground: #615d59;
-  --color-primary: rgba(0, 0, 0, 0.95);
+  --color-card-foreground: #122522;
+  --color-muted: #f5f8f7;
+  --color-muted-foreground: #52645f;
+  --color-primary: #0f766e;
   --color-primary-foreground: #ffffff;
-  --color-secondary: rgba(0, 0, 0, 0.05);
-  --color-secondary-foreground: rgba(0, 0, 0, 0.95);
-  --color-accent: #f6f5f4;
-  --color-accent-foreground: rgba(0, 0, 0, 0.95);
-  --color-destructive: var(--color-danger);          /* shadcn alias → danger red (#435) */
+  --color-secondary: #f5f8f7;
+  --color-secondary-foreground: #122522;
+  --color-accent: #eef4f1;
+  --color-accent-foreground: #122522;
+  --color-destructive: var(--color-danger);
   --color-destructive-foreground: #ffffff;
-  --color-input: #dddddd;
-  --color-ring: #0075de;                             /* = brand-focus — one base blue (#435) */
+  --color-input: #849891;
+  --color-ring: #0f766e;
+
+  /* Chat messages stay neutral so teal keeps its meaning as an action. */
+  --color-message-sent: #e6f4f1;
+  --color-message-received: #f5f8f7;
+  --color-message-foreground: #122522;
 
   /* -- Typography -- */
   --font-sans: "Inter", -apple-system, system-ui, "Segoe UI", Helvetica,
@@ -104,23 +110,92 @@
   --space-8: 32px;
   --space-12: 48px;
 
-  /* -- Shadow stacks (Notion multi-layer elevation) -- */
-  --shadow-whisper:
-    0 1px 0 rgba(0, 0, 0, 0.02);
-  --shadow-card:
-    rgba(0, 0, 0, 0.04) 0px 4px 18px,
-    rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
-    rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px,
-    rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
-  --shadow-deep:
-    rgba(0, 0, 0, 0.01) 0px 1px 3px,
-    rgba(0, 0, 0, 0.02) 0px 3px 7px,
-    rgba(0, 0, 0, 0.02) 0px 7px 15px,
-    rgba(0, 0, 0, 0.04) 0px 14px 28px,
-    rgba(0, 0, 0, 0.05) 0px 23px 52px;
-  --shadow-focus:
-    0 0 0 2px rgba(0, 117, 222, 0.35),   /* = brand #0075de @ 35% (#435) */
-    rgba(0, 0, 0, 0.04) 0px 4px 18px;
+  /* Borders carry most surfaces; reserve elevation for overlays. */
+  --shadow-whisper: 0 1px 1px rgba(18, 37, 34, 0.03);
+  --shadow-card: 0 1px 2px rgba(18, 37, 34, 0.05);
+  --shadow-deep: 0 18px 48px rgba(18, 37, 34, 0.16);
+  --shadow-focus: 0 0 0 3px rgba(15, 118, 110, 0.22);
+}
+
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-background: #0b1412;
+  --color-foreground: #edf6f2;
+  --color-foreground-muted: #aabeb5;
+  --color-foreground-subtle: #8ca79b;
+
+  --color-surface: #101b18;
+  --color-surface-alt: #15221e;
+  --color-surface-elevated: #1b2b26;
+  --color-surface-hover: #20332d;
+  --color-surface-selected: #183b35;
+  --color-surface-dark: #07110f;
+  --color-code-foreground: #edf6f2;
+
+  /* Keep the filled button dark enough for white; brighten links separately. */
+  --color-brand: #0f766e;
+  --color-brand-hover: #0b5f58;
+  --color-brand-focus: #5eead4;
+  --color-brand-text: #5eead4;
+  --color-link: #5eead4;
+  --color-on-brand: #ffffff;
+  --color-brand-tint-bg: #103b35;
+  --color-brand-tint-text: #a5f3e5;
+  --color-brand-secondary: #5eead4;
+  --color-brand-light: #5eead4;
+
+  --color-success: #86efac;
+  --color-success-soft: #153e2b;
+  --color-warning: #fcd34d;
+  --color-warning-soft: #493516;
+  --color-danger: #fda4af;
+  --color-danger-solid: #be123c;
+  --color-danger-solid-hover: #9f1239;
+  --color-danger-soft: #4a2228;
+  --color-overlay: rgba(0, 0, 0, 0.68);
+  --color-status-online: #4ade80;
+
+  --color-tone-1: #27352f; --color-tone-1-fg: #d8e7df;
+  --color-tone-2: #13463f; --color-tone-2-fg: #a5f3e5;
+  --color-tone-3: #153e2b; --color-tone-3-fg: #a7f3c4;
+  --color-tone-4: #4a2c17; --color-tone-4-fg: #ffd2a6;
+  --color-tone-5: #452443; --color-tone-5-fg: #f2bae8;
+  --color-tone-6: #312540; --color-tone-6-fg: #dcc9f2;
+  --color-tone-7: #3a301f; --color-tone-7-fg: #e9d3ad;
+  --color-tone-8: #123d4d; --color-tone-8-fg: #afe7f2;
+
+  --color-border: #30433a;
+  --color-border-strong: #657c71;
+  --color-border-subtle: #26382f;
+  --color-scrollbar: #40574c;
+
+  --color-card: #15221e;
+  --color-card-foreground: #edf6f2;
+  --color-muted: #15221e;
+  --color-muted-foreground: #aabeb5;
+  --color-primary: #0f766e;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #1b2b26;
+  --color-secondary-foreground: #edf6f2;
+  --color-accent: #20332d;
+  --color-accent-foreground: #edf6f2;
+  --color-destructive: #fda4af;
+  --color-destructive-foreground: #ffffff;
+  --color-input: #657c71;
+  --color-ring: #5eead4;
+
+  --color-message-sent: #183b35;
+  --color-message-received: #1b2b26;
+  --color-message-foreground: #edf6f2;
+
+  --shadow-whisper: 0 1px 1px rgba(0, 0, 0, 0.12);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-deep: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --shadow-focus: 0 0 0 3px rgba(94, 234, 212, 0.28);
 }
 
 /* ==========================================================================
@@ -146,18 +221,20 @@ body {
   line-height: 1.5;
 }
 
-/* Larger text gets lining numerals and tighter tracking — see DESIGN.md §3 */
-h1, h2, h3, .display {
-  font-feature-settings: "lnum", "locl";
-  font-weight: 700;
-  color: var(--color-foreground);
-  letter-spacing: -0.015em;
-}
+/* Base heading defaults yield to Tailwind utilities on product-specific views. */
+@layer base {
+  h1, h2, h3, .display {
+    font-feature-settings: "lnum", "locl";
+    font-weight: 700;
+    color: var(--color-foreground);
+    letter-spacing: -0.015em;
+  }
 
-/* Element styles map onto the type scale: h1→title, h2→heading, h3→lead. */
-h1 { font-size: 2rem; line-height: 1.1; letter-spacing: -0.02em; }    /* title 32 */
-h2 { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; } /* heading 24 */
-h3 { font-size: 1.25rem; line-height: 1.4; letter-spacing: -0.006em; font-weight: 600; } /* lead 20 */
+  /* Element styles map onto the type scale: h1→title, h2→heading, h3→lead. */
+  h1 { font-size: 2rem; line-height: 1.1; letter-spacing: -0.02em; }    /* title 32 */
+  h2 { font-size: 1.5rem; line-height: 1.2; letter-spacing: -0.015em; } /* heading 24 */
+  h3 { font-size: 1.25rem; line-height: 1.4; letter-spacing: -0.006em; font-weight: 600; } /* lead 20 */
+}
 
 code, pre, kbd, samp {
   font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
@@ -169,10 +246,10 @@ code, pre, kbd, samp {
   outline-offset: 2px;
 }
 
-/* Scrollbar — discreet, matches warm neutrals */
+/* Scrollbar follows the selected surface theme. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+  scrollbar-color: var(--color-scrollbar) transparent;
 }
 *::-webkit-scrollbar {
   width: 10px;
@@ -180,13 +257,13 @@ code, pre, kbd, samp {
 }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+  background: var(--color-scrollbar);
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--color-border-strong);
   background-clip: padding-box;
 }
 
@@ -312,7 +389,7 @@ code, pre, kbd, samp {
 /* Code block */
 .markdown-prose pre {
   background: var(--color-surface-dark);
-  color: #e8e6e3;
+  color: var(--color-code-foreground);
   padding: 0.75rem 1rem;
   border-radius: var(--radius-md);
   overflow-x: auto;
@@ -330,7 +407,7 @@ code, pre, kbd, samp {
 
 /* Links */
 .markdown-prose a {
-  color: var(--color-brand);
+  color: var(--color-link);
   text-decoration: none;
 }
 .markdown-prose a:hover {
@@ -441,7 +518,7 @@ code, pre, kbd, samp {
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(0, 117, 222, 0.9) 50%,
+    var(--color-brand-text) 50%,
     transparent 100%
   );
   background-size: 50% 100%;
@@ -452,12 +529,12 @@ code, pre, kbd, samp {
 .handoff-card--resolved::before {
   /* Static translucent brand tint — still a visible pair-marker, but
      stops moving once the target has replied. */
-  background: rgba(0, 117, 222, 0.25);
+  background: color-mix(in srgb, var(--color-brand-text) 40%, transparent);
 }
 
 .handoff-card--timeout::before {
   /* Muted neutral so the card reads as "stale" without shouting. */
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--color-border-strong);
 }
 
 /* Accessibility — honour prefers-reduced-motion by freezing the sweep

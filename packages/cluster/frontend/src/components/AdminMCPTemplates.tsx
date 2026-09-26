@@ -9,6 +9,8 @@ import {
 import { Plug, Plus, Trash2, RefreshCw, Link as LinkIcon, X, Eye, EyeOff } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   slugify,
   extractPlaceholders,
@@ -65,6 +67,8 @@ interface Instance {
 type Tab = 'builtin' | 'custom'
 
 export default function AdminMCPTemplates() {
+  const { t } = useLocale()
+  const { confirm: confirmAction } = useFeedback()
   const [templates, setTemplates] = useState<Template[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,14 +85,14 @@ export default function AdminMCPTemplates() {
     setError(null)
     try {
       const resp = await apiFetch('/api/v1/admin/mcp-templates')
-      if (!resp.ok) throw new Error(`GET /mcp-templates → ${resp.status}`)
+      if (!resp.ok) throw new Error(t('admin.mcp.loadFailed', { status: resp.status }))
       setTemplates(await resp.json())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   const loadInstances = useCallback(async (agentIds: string[]) => {
     const next: Record<string, Instance[]> = {}
@@ -121,37 +125,37 @@ export default function AdminMCPTemplates() {
 
   const handleDelete = useCallback(async (template: Template) => {
     if (template.source === 'builtin') return
-    if (!window.confirm(`"${template.display_name}" 템플릿을 삭제하시겠습니까?`)) return
+    if (!await confirmAction({ title: t('admin.mcp.deleteTitle'), description: t('admin.mcp.confirmDelete', { name: template.display_name }), destructive: true })) return
     const resp = await apiFetch(`/api/v1/admin/mcp-templates/${template.id}`, {
       method: 'DELETE',
     })
     if (resp.status === 204) {
       await load()
     } else {
-      let detail = `Delete failed (${resp.status})`
+      let detail = t('admin.mcp.deleteFailed', { status: resp.status })
       try {
         const body = await resp.json()
         if (body?.detail) detail = body.detail
       } catch { /* ignore */ }
       setError(detail)
     }
-  }, [load])
+  }, [load, t, confirmAction])
 
   return (
-    <div className="max-w-4xl p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--color-foreground)]">MCP Servers</h1>
+    <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-5 sm:px-6 sm:py-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-heading text-[var(--color-foreground)]">{t('admin.mcp.title')}</h1>
           <p className="text-sm text-[var(--color-foreground-muted)]">
-            Register Model Context Protocol servers and attach them to agents.
+            {t('admin.mcp.description')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:shrink-0 lg:justify-end">
           <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t('common.refresh')}
           </Button>
-          <Button size="sm" onClick={() => setEditorTarget({
+          <Button size="sm" className="order-first min-h-11 w-full sm:w-auto lg:order-last" onClick={() => setEditorTarget({
             id: '',
             name: '',
             display_name: '',
@@ -166,19 +170,19 @@ export default function AdminMCPTemplates() {
             updated_at: '',
             instance_count: 0,
           })}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> New template
+            <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.mcp.newTemplate')}
           </Button>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
           {error}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white p-1 w-fit">
+      <div className="flex gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-1 w-fit">
         {(['builtin', 'custom'] as Tab[]).map(tab => (
           <button
             key={tab}
@@ -189,21 +193,21 @@ export default function AdminMCPTemplates() {
                 : 'text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)]'
             }`}
           >
-            {tab === 'builtin' ? 'Builtin' : 'Custom'}
+            {tab === 'builtin' ? t('admin.mcp.builtin') : t('admin.mcp.custom')}
           </button>
         ))}
       </div>
 
       {visibleTemplates.length === 0 && !loading ? (
-        <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white px-6 py-10 text-center shadow-[var(--shadow-card)]">
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-6 py-10 text-center shadow-[var(--shadow-card)]">
           <Plug
             className="mx-auto mb-3 h-8 w-8 text-[var(--color-foreground-subtle)]"
             strokeWidth={1.5}
           />
           <p className="text-sm text-[var(--color-foreground-muted)]">
             {activeTab === 'builtin'
-              ? '빌트인 템플릿이 아직 시드되지 않았습니다. 서버를 재시작하세요.'
-              : '등록된 커스텀 템플릿이 없습니다.'}
+              ? t('admin.mcp.noBuiltin')
+              : t('admin.mcp.noCustom')}
           </p>
         </div>
       ) : (
@@ -211,12 +215,12 @@ export default function AdminMCPTemplates() {
           {visibleTemplates.map(template => (
             <div
               key={template.id}
-              className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white px-4 py-3 shadow-[var(--shadow-card)]"
+              className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-4 py-3 shadow-[var(--shadow-card)]"
               data-testid={`mcp-template-row-${template.id}`}
             >
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
                       {template.display_name}
                     </h3>
@@ -225,7 +229,7 @@ export default function AdminMCPTemplates() {
                     </Badge>
                     {template.source === 'builtin' && (
                       <Badge variant="outline" className="text-[var(--color-foreground-muted)]">
-                        builtin
+                        {t('admin.mcp.builtin')}
                       </Badge>
                     )}
                   </div>
@@ -246,15 +250,15 @@ export default function AdminMCPTemplates() {
                         className="text-[10px] text-[var(--color-foreground-muted)]"
                         title={template.required_env_vars.join('\n')}
                       >
-                        {template.required_env_vars.length} env var{template.required_env_vars.length === 1 ? '' : 's'}
+                        {t('admin.mcp.envCount', { count: template.required_env_vars.length })}
                       </Badge>
                     )}
                   </div>
                   <p className="mt-2 text-xs text-[var(--color-foreground-muted)]">
-                    {template.instance_count} instance{template.instance_count === 1 ? '' : 's'}
+                    {t('admin.mcp.instanceCount', { count: template.instance_count })}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:min-h-11 lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -262,7 +266,7 @@ export default function AdminMCPTemplates() {
                     data-testid={`mcp-template-attach-${template.id}`}
                   >
                     <LinkIcon className="mr-1 h-3.5 w-3.5" />
-                    Attach
+                    {t('admin.mcp.attach')}
                   </Button>
                   {template.source === 'custom' && (
                     <>
@@ -271,13 +275,13 @@ export default function AdminMCPTemplates() {
                         size="sm"
                         onClick={() => setEditorTarget(template)}
                       >
-                        Edit
+                        {t('admin.mcp.edit')}
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => void handleDelete(template)}
-                        aria-label={`Delete ${template.display_name}`}
+                        aria-label={t('admin.mcp.deleteLabel', { name: template.display_name })}
                       >
                         <Trash2 className="h-4 w-4 text-[var(--color-danger)]" />
                       </Button>
@@ -328,6 +332,7 @@ interface AttachDialogProps {
 }
 
 function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDialogProps) {
+  const { t } = useLocale()
   const eligibleAgents = agents.filter(a => template.supported_engines.includes(a.engine))
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(
     eligibleAgents[0]?.id ?? null,
@@ -357,7 +362,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
         },
       )
       if (!resp.ok) {
-        let detail = `Attach failed (${resp.status})`
+        let detail = t('admin.mcp.attachFailed', { status: resp.status })
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -370,7 +375,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
     } finally {
       setBusy(false)
     }
-  }, [selectedAgentId, template.id, envValues, onClose])
+  }, [selectedAgentId, template.id, envValues, onClose, t])
 
   const handleDetach = useCallback(async () => {
     if (!selectedAgentId || !existing) return
@@ -386,23 +391,21 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Attach <code>{template.name}</code>
+            {t('admin.mcp.attachTitle', { name: template.name })}
           </DialogTitle>
           <DialogDescription>
-            Wire this MCP server to an agent. Credentials are Fernet-encrypted
-            at rest; they&apos;re rendered into the engine&apos;s settings file
-            at spawn time.
+            {t('admin.mcp.attachDescription')}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
           {eligibleAgents.length === 0 ? (
             <p className="text-sm text-[var(--color-foreground-muted)]">
-              No agents running on a supported engine ({template.supported_engines.join(', ')}).
+              {t('admin.mcp.noEligibleAgents', { engines: template.supported_engines.join(', ') })}
             </p>
           ) : (
             <>
               <div>
-                <Label htmlFor="mcp-attach-agent">Agent</Label>
+                <Label htmlFor="mcp-attach-agent">{t('admin.mcp.agent')}</Label>
                 <select
                   id="mcp-attach-agent"
                   value={selectedAgentId ?? ''}
@@ -410,7 +413,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
                     setSelectedAgentId(e.target.value)
                     setEnvValues({})
                   }}
-                  className="w-full rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-2 py-1.5 text-sm"
+                  className="w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-1.5 text-sm"
                 >
                   {eligibleAgents.map(a => (
                     <option key={a.id} value={a.id}>
@@ -421,9 +424,8 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
               </div>
 
               {existing && (
-                <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-background)] px-3 py-2 text-xs text-[var(--color-foreground-muted)]">
-                  Already attached. Re-entering values will overwrite the
-                  stored credentials.
+                <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2 text-xs text-[var(--color-foreground-muted)]">
+                  {t('admin.mcp.alreadyAttached')}
                 </div>
               )}
 
@@ -444,7 +446,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
                       <button
                         type="button"
                         onClick={() => setShowValues(v => ({ ...v, [varName]: !visible }))}
-                        aria-label={visible ? `Hide ${varName}` : `Show ${varName}`}
+                        aria-label={visible ? t('admin.mcp.hideVariable', { name: varName }) : t('admin.mcp.showVariable', { name: varName })}
                         aria-pressed={visible}
                         className="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-[var(--color-foreground-subtle)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:text-[var(--color-foreground)]"
                       >
@@ -470,11 +472,11 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
               onClick={() => void handleDetach()}
               className="mr-auto text-[var(--color-danger)]"
             >
-              Detach
+              {t('admin.mcp.detach')}
             </Button>
           )}
           <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             onClick={() => void handleAttach()}
@@ -483,7 +485,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
               || template.required_env_vars.some(v => !envValues[v])
             }
           >
-            {busy ? 'Saving…' : existing ? 'Update' : 'Attach'}
+            {busy ? t('admin.mcp.saving') : existing ? t('admin.mcp.update') : t('admin.mcp.attach')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -546,6 +548,7 @@ function makeAdvancedStateFromForm(form: TemplateFormState): AdvancedState {
 }
 
 function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
+  const { t } = useLocale()
   const isCreate = template.id === ''
 
   const initial = useMemo(() => {
@@ -643,14 +646,14 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           supported_engines: Array.from(advanced.supportedEngines),
         })
         if (out.mode === 'advanced') {
-          setError('Current advanced config cannot be represented in simple mode (engine divergence or non-stdio keys).')
+          setError(t('admin.mcp.simpleConversionError'))
           return
         }
         setForm(out.state)
         setError(null)
         setMode('simple')
       } catch (e) {
-        setError(`config_per_engine is not valid JSON: ${(e as Error).message}`)
+        setError(t('admin.mcp.invalidJson', { error: (e as Error).message }))
       }
     }
   }
@@ -682,7 +685,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
       try {
         configParsed = JSON.parse(advanced.configText)
       } catch (e) {
-        return { ok: false, status: 0, detail: `config_per_engine is not valid JSON: ${(e as Error).message}` }
+        return { ok: false, status: 0, detail: t('admin.mcp.invalidJson', { error: (e as Error).message }) }
       }
       body = {
         name: slugOverride,
@@ -710,13 +713,13 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           }),
         })
     if (resp.ok) return { ok: true }
-    let detail = `Save failed (${resp.status})`
+    let detail = t('admin.mcp.saveFailed', { status: resp.status })
     try {
       const j = await resp.json()
       if (j?.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
     } catch { /* ignore */ }
     return { ok: false, status: resp.status, detail }
-  }, [mode, form, advanced, isCreate, template.id])
+  }, [mode, form, advanced, isCreate, template.id, t])
 
   const handleSave = useCallback(async () => {
     setBusy(true)
@@ -724,11 +727,11 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
     try {
       const initialSlug = (mode === 'simple' ? form.slug : advanced.slug).trim()
       if (!initialSlug) {
-        setError('Slug cannot be empty.')
+        setError(t('admin.mcp.emptySlug'))
         return
       }
       if (!form.displayName.trim()) {
-        setError('Display name cannot be empty.')
+        setError(t('admin.mcp.emptyDisplayName'))
         return
       }
       // Create 모드에서만 slug 충돌 시 suffix 재시도. Edit 모드는 slug 불변.
@@ -745,14 +748,14 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           continue
         }
         setError(result.detail + (result.status === 409
-          ? ' (Try a different display name or set a custom slug in Advanced mode.)'
+          ? ` (${t('admin.mcp.slugConflict')})`
           : ''))
         return
       }
     } finally {
       setBusy(false)
     }
-  }, [mode, form.slug, form.displayName, advanced.slug, isCreate, saveOnce, onSaved])
+  }, [mode, form.slug, form.displayName, advanced.slug, isCreate, saveOnce, onSaved, t])
 
   const saveDisabled = busy
     || !form.displayName.trim()
@@ -763,11 +766,10 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            {isCreate ? 'New MCP template' : `Edit ${template.name}`}
+            {isCreate ? t('admin.mcp.newTitle') : t('admin.mcp.editTitle', { name: template.name })}
           </DialogTitle>
           <DialogDescription>
-            Register a stdio MCP server. Use <code>${'${VAR}'}</code> in args or
-            env values for placeholders that admins will fill in per agent.
+            {t('admin.mcp.editorDescription')}
           </DialogDescription>
         </DialogHeader>
 
@@ -775,20 +777,20 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           {mode === 'simple' ? (
             <>
               <div>
-                <Label htmlFor="mcp-display">Display name</Label>
+                <Label htmlFor="mcp-display">{t('admin.mcp.displayName')}</Label>
                 <Input
                   id="mcp-display"
                   value={form.displayName}
                   onChange={e => setForm(prev => ({ ...prev, displayName: e.target.value }))}
-                  placeholder="Internal Knowledge Base"
+                  placeholder={t('admin.mcp.displayNamePlaceholder')}
                 />
               </div>
               <div>
                 <Label htmlFor="mcp-slug">
-                  Slug
+                  {t('admin.mcp.slug')}
                   {isCreate && !slugTouched && (
                     <span className="ml-1 text-[10px] font-normal text-[var(--color-foreground-subtle)]">
-                      (auto)
+                      {t('admin.mcp.auto')}
                     </span>
                   )}
                 </Label>
@@ -804,7 +806,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="mcp-desc">Description</Label>
+                <Label htmlFor="mcp-desc">{t('admin.mcp.descriptionLabel')}</Label>
                 <Input
                   id="mcp-desc"
                   value={form.description}
@@ -812,13 +814,13 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label>Transport</Label>
-                <div className="mt-1 inline-flex rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-background)] px-2 py-1 text-xs text-[var(--color-foreground-muted)]">
+                <Label>{t('admin.mcp.transport')}</Label>
+                <div className="mt-1 inline-flex rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-background)] px-2 py-1 text-xs text-[var(--color-foreground-muted)]">
                   stdio
                 </div>
               </div>
               <div>
-                <Label htmlFor="mcp-command">Command</Label>
+                <Label htmlFor="mcp-command">{t('admin.mcp.command')}</Label>
                 <Input
                   id="mcp-command"
                   value={form.command}
@@ -827,7 +829,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label>Args</Label>
+                <Label>{t('admin.mcp.args')}</Label>
                 <div className="space-y-1.5 pt-1">
                   {form.args.map((arg, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -841,19 +843,19 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                         variant="ghost"
                         size="icon"
                         onClick={() => removeArg(i)}
-                        aria-label={`Remove arg ${i + 1}`}
+                        aria-label={t('admin.mcp.removeArg', { count: i + 1 })}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   ))}
                   <Button variant="ghost" size="sm" onClick={addArg}>
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add arg
+                    <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.mcp.addArg')}
                   </Button>
                 </div>
               </div>
               <div>
-                <Label>Environment variables</Label>
+                <Label>{t('admin.mcp.envVariables')}</Label>
                 <div className="space-y-1.5 pt-1">
                   {form.envRows.map((row, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -869,13 +871,13 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                           checked={row.secret}
                           onChange={e => updateEnv(i, { secret: e.target.checked })}
                         />
-                        Secret
+                        {t('admin.mcp.secret')}
                       </label>
                       {!row.secret && (
                         <Input
                           value={row.value}
                           onChange={e => updateEnv(i, { value: e.target.value })}
-                          placeholder="value"
+                          placeholder={t('admin.mcp.valuePlaceholder')}
                           className="flex-1 text-xs"
                         />
                       )}
@@ -883,25 +885,25 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                         variant="ghost"
                         size="icon"
                         onClick={() => removeEnv(i)}
-                        aria-label={`Remove env ${i + 1}`}
+                        aria-label={t('admin.mcp.removeEnv', { count: i + 1 })}
                       >
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   ))}
                   <Button variant="ghost" size="sm" onClick={addEnv}>
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add env
+                    <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.mcp.addEnv')}
                   </Button>
                 </div>
               </div>
               <div>
                 <Label className="text-[var(--color-foreground-muted)]">
-                  Required placeholders (auto)
+                  {t('admin.mcp.placeholders')}
                 </Label>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {placeholders.length === 0 ? (
                     <span className="text-xs text-[var(--color-foreground-subtle)]">
-                      None detected.
+                      {t('admin.mcp.noneDetected')}
                     </span>
                   ) : (
                     placeholders.map(p => (
@@ -916,7 +918,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
           ) : (
             <>
               <div>
-                <Label htmlFor="mcp-slug-adv">Slug</Label>
+                <Label htmlFor="mcp-slug-adv">{t('admin.mcp.slug')}</Label>
                 <Input
                   id="mcp-slug-adv"
                   value={advanced.slug}
@@ -926,7 +928,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="mcp-display-adv">Display name</Label>
+                <Label htmlFor="mcp-display-adv">{t('admin.mcp.displayName')}</Label>
                 <Input
                   id="mcp-display-adv"
                   value={form.displayName}
@@ -934,7 +936,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label htmlFor="mcp-desc-adv">Description</Label>
+                <Label htmlFor="mcp-desc-adv">{t('admin.mcp.descriptionLabel')}</Label>
                 <Input
                   id="mcp-desc-adv"
                   value={form.description}
@@ -942,12 +944,12 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label>Supported engines</Label>
+                <Label>{t('admin.mcp.supportedEngines')}</Label>
                 <div className="flex flex-wrap gap-2 pt-1">
                   {SUPPORTED_ENGINES.map(engine => (
                     <label
                       key={engine}
-                      className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-2 py-1 text-xs cursor-pointer"
+                      className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-1 text-xs cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -960,7 +962,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 </div>
               </div>
               <div>
-                <Label htmlFor="mcp-env-adv">Required env vars (comma-separated)</Label>
+                <Label htmlFor="mcp-env-adv">{t('admin.mcp.requiredEnvVars')}</Label>
                 <Input
                   id="mcp-env-adv"
                   value={advanced.requiredEnvText}
@@ -974,7 +976,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                   id="mcp-config-adv"
                   value={advanced.configText}
                   onChange={e => setAdvanced(prev => ({ ...prev, configText: e.target.value }))}
-                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-white px-3 py-2 font-mono text-xs"
+                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2 font-mono text-xs"
                 />
               </div>
             </>
@@ -994,11 +996,11 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
             onClick={toggleAdvanced}
             className="mr-auto text-[var(--color-foreground-muted)]"
           >
-            {mode === 'simple' ? 'Advanced ▸' : '◂ Simple'}
+            {mode === 'simple' ? t('admin.mcp.advanced') : t('admin.mcp.simple')}
           </Button>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>{t('common.cancel')}</Button>
           <Button onClick={() => void handleSave()} disabled={saveDisabled}>
-            {busy ? 'Saving…' : isCreate ? 'Create' : 'Save'}
+            {busy ? t('admin.mcp.saving') : isCreate ? t('common.create') : t('common.save')}
           </Button>
         </DialogFooter>
       </DialogContent>

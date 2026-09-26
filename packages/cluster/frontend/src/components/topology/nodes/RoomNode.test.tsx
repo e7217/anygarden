@@ -64,7 +64,7 @@ describe('RoomNode typing pulse (#84)', () => {
   })
 
   it('keeps the active class even when the node is selected', () => {
-    // Selection paints a Notion Blue border (inline style); the typing
+    // Selection paints a teal accent border (inline style); the typing
     // pulse paints a box-shadow ring (CSS class). They live on the
     // same element and must compose without one cancelling the other.
     const { container } = renderNode(

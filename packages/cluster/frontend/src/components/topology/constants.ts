@@ -1,54 +1,49 @@
 /**
  * Topology design tokens.
  *
- * Pulled FROM DESIGN.md so the node/edge components stay visually
- * consistent with the rest of the app. Do not hard-code colors,
- * borders, or shadows in component files — reach for these constants
- * and extend here when a new variant is needed.
+ * Resolve through the shared semantic tokens so graph nodes and edges
+ * follow the light and dark themes without re-rendering graph data.
  */
 
-// Notion Blue — the single saturated interactive accent per DESIGN.md §2.
-export const ACCENT = '#0075de'
-export const ACCENT_SOFT = '#0075de80' // 50% alpha for agent-participates edge
+export const ACCENT = 'var(--color-brand-text)'
+export const ACCENT_SOFT = 'var(--color-topology-accent-soft)'
 
-// Status color split per DESIGN.md §2 "Status colors".
-export const STATUS_ONLINE = '#5b9e6d' // muted sage
-export const STATUS_OFFLINE = 'rgba(0,0,0,0.25)'
-export const STATUS_DRAIN = '#dd5b00' // warning orange, used sparingly
+// Node health stays distinct from the teal action accent.
+export const STATUS_ONLINE = 'var(--color-status-online)'
+export const STATUS_OFFLINE = 'var(--color-foreground-subtle)'
+export const STATUS_DRAIN = 'var(--color-warning)'
 
-// Whisper-weight borders.
-export const BORDER = '1px solid rgba(0,0,0,0.1)'
-export const BORDER_SOFT = '1px solid rgba(0,0,0,0.08)'
+// Shared surface borders.
+export const BORDER = '1px solid var(--color-border)'
+export const BORDER_SOFT = '1px solid var(--color-border-subtle)'
 
-// Sub-0.05 shadow stack (matches DESIGN.md Soft Card / Level 2).
-export const SHADOW_SOFT = '0 1px 2px rgba(0,0,0,0.04)'
+export const SHADOW_SOFT = 'var(--shadow-card)'
 
 // Surfaces.
-export const SURFACE = '#ffffff'
-export const SURFACE_ALT = '#f6f5f4' // warm white
+export const SURFACE = 'var(--color-surface-elevated)'
+export const SURFACE_ALT = 'var(--color-surface-alt)'
 
 // Text.
-export const TEXT_PRIMARY = 'rgba(0,0,0,0.95)'
-export const TEXT_MUTED = '#615d59'
-export const TEXT_SUBTLE = '#a39e98'
+export const TEXT_PRIMARY = 'var(--color-foreground)'
+export const TEXT_MUTED = 'var(--color-foreground-muted)'
+export const TEXT_SUBTLE = 'var(--color-foreground-subtle)'
 
-// Engine-specific background tints. Keep these near-white so the
-// saturation never fights Notion Blue — these are flavor, not signal.
+// Engine-specific tints use the paired theme palette.
 export const ENGINE_TINT: Record<string, string> = {
-  codex: '#eff6ff', // blue-50
-  claude: '#fff7ed', // orange-50
-  gemini: '#f5f3ff', // violet-50
-  openai: '#ecfdf5', // emerald-50
-  default: '#f6f5f4', // warm white
+  codex: 'var(--color-tone-8)',
+  claude: 'var(--color-tone-4)',
+  gemini: 'var(--color-tone-6)',
+  openai: 'var(--color-tone-3)',
+  default: 'var(--color-surface-alt)',
 }
 
 /** Agent actual_state → border color (status dot / focus ring). */
 export function agentStateColor(state: string | undefined | null): string {
   if (!state) return STATUS_OFFLINE
   if (state === 'running') return ACCENT
-  if (state === 'starting' || state === 'stopping') return '#a39e98'
-  if (state === 'crashed') return '#dd5b00'
-  if (state === 'idle' || state === 'stopped') return 'rgba(0,0,0,0.15)'
+  if (state === 'starting' || state === 'stopping') return TEXT_SUBTLE
+  if (state === 'crashed') return 'var(--color-danger)'
+  if (state === 'idle' || state === 'stopped') return 'var(--color-border-strong)'
   return STATUS_OFFLINE
 }
 
@@ -74,14 +69,14 @@ export function edgeStyleFor(
 ): EdgeStyle {
   switch (kind) {
     case 'owns':
-      return { stroke: 'rgba(0,0,0,0.2)', strokeWidth: 1, type: 'smoothstep' }
+      return { stroke: 'var(--color-border-strong)', strokeWidth: 1, type: 'smoothstep' }
     case 'places':
-      return { stroke: 'rgba(0,0,0,0.28)', strokeWidth: 1.5, type: 'smoothstep' }
+      return { stroke: 'var(--color-foreground-subtle)', strokeWidth: 1.5, type: 'smoothstep' }
     case 'participates':
       // Same shape across the whole participates kind — straight + dashed —
       // so the merged ``represents``/``participates`` model from #226/#228
       // reads as a single domain relation. The representative case only
-      // swaps ACCENT_SOFT (50% alpha) for ACCENT (full Notion Blue) so
+      // swaps ACCENT_SOFT for the full theme accent so
       // differentiation is color-only per #231.
       if (actor === 'agent') {
         return {
@@ -92,18 +87,18 @@ export function edgeStyleFor(
         }
       }
       return {
-        stroke: 'rgba(0,0,0,0.15)',
+        stroke: 'var(--color-border-strong)',
         strokeWidth: 1,
         strokeDasharray: '4 4',
         type: 'straight',
       }
     case 'parent_of':
       return {
-        stroke: 'rgba(0,0,0,0.22)',
+        stroke: 'var(--color-foreground-subtle)',
         strokeWidth: 1.5,
         type: 'smoothstep',
       }
     default:
-      return { stroke: 'rgba(0,0,0,0.2)', strokeWidth: 1, type: 'smoothstep' }
+      return { stroke: 'var(--color-border-strong)', strokeWidth: 1, type: 'smoothstep' }
   }
 }

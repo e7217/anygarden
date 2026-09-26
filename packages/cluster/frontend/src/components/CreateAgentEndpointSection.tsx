@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useLocale } from '@/i18n/LocaleProvider'
 import {
   type DiscoveredModel,
   type EndpointProtocol,
@@ -38,25 +39,25 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
   onModelsLoaded: (models: DiscoveredModel[]) => void
   selectClassName: string
 }) {
+  const { t } = useLocale()
   const [loading, setLoading] = useState(false)
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState<{ count: number; reachableFrom: string } | null>(null)
   const [error, setError] = useState('')
   const urlValid = isValidEndpointUrl(draft.baseUrl)
   const update = (patch: Partial<EndpointDraft>) => onChange({ ...draft, ...patch })
 
   async function loadModels() {
-    setLoading(true); setError(''); setStatus('')
+    setLoading(true); setError(''); setStatus(null)
     try {
       const result = await discoverEndpointModels({
         base_url: draft.baseUrl,
         ...(draft.auth === 'key' && draft.apiKey ? { api_key: draft.apiKey } : {}),
       })
       onModelsLoaded(result.models)
-      const where = result.reachable_from === 'server' ? 'reachable from the AnyGarden server' : `reachable from ${result.reachable_from}`
-      setStatus(`${result.models.length} ${result.models.length === 1 ? 'model' : 'models'} found · ${where}`)
+      setStatus({ count: result.models.length, reachableFrom: result.reachable_from })
     } catch (e) {
       onModelsLoaded([])
-      setError(e instanceof Error ? e.message : 'Unable to load models')
+      setError(e instanceof Error ? e.message : t('admin.endpoint.loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -66,18 +67,18 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
     <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
       <>
           <p className="text-xs text-[var(--color-foreground-muted)]">
-            OpenAI-compatible server such as vLLM, llama.cpp or Ollama (<code>/v1</code>). The agent calls it from its machine.
+            {t('admin.endpoint.description')}
           </p>
           <div className="space-y-2">
-            <Label htmlFor="endpoint-base-url">Base URL</Label>
+            <Label htmlFor="endpoint-base-url">{t('admin.endpoint.baseUrl')}</Label>
             <Input id="endpoint-base-url" value={draft.baseUrl} placeholder="http://localhost:8000/v1"
               onChange={e => update({ baseUrl: e.target.value.trim() })} aria-invalid={!!draft.baseUrl && !urlValid} />
             {draft.baseUrl && !urlValid && (
-              <p className="text-xs text-[var(--color-warning)]">Enter an HTTP(S) URL without credentials, query or fragment.</p>
+              <p className="text-xs text-[var(--color-warning)]">{t('admin.endpoint.invalidUrl')}</p>
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="endpoint-protocol">API protocol</Label>
+            <Label htmlFor="endpoint-protocol">{t('admin.endpoint.apiProtocol')}</Label>
             <select id="endpoint-protocol" className={selectClassName} value={draft.protocol}
               onChange={e => update({ protocol: e.target.value as EndpointProtocol })}>
               {engine === 'pi-cli' && <option value="chat-completions">Chat Completions</option>}
@@ -85,27 +86,29 @@ export default function CreateAgentEndpointSection({ engine, draft, onChange, on
             </select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="endpoint-auth">Authentication</Label>
+            <Label htmlFor="endpoint-auth">{t('admin.endpoint.authentication')}</Label>
             <select id="endpoint-auth" className={selectClassName} value={draft.auth}
               onChange={e => update({ auth: e.target.value as EndpointDraft['auth'], apiKey: '' })}>
-              <option value="none">No authentication</option>
-              <option value="key">API key</option>
+              <option value="none">{t('admin.endpoint.noAuthentication')}</option>
+              <option value="key">{t('admin.endpoint.apiKey')}</option>
             </select>
           </div>
           {draft.auth === 'key' && (
             <div className="space-y-2">
-              <Label htmlFor="endpoint-api-key">API key</Label>
+              <Label htmlFor="endpoint-api-key">{t('admin.endpoint.apiKey')}</Label>
               <Input id="endpoint-api-key" type="password" autoComplete="new-password" value={draft.apiKey}
                 onChange={e => update({ apiKey: e.target.value })} />
-              <p className="text-xs text-[var(--color-foreground-muted)]">Stored encrypted for this agent after creation; it cannot be read back.</p>
+              <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.endpoint.keyHint')}</p>
             </div>
           )}
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" size="sm" className="min-h-11" disabled={!urlValid || loading || (draft.auth === 'key' && !draft.apiKey)}
               onClick={() => void loadModels()}>
-              {loading ? 'Loading…' : 'Load models'}
+              {loading ? t('admin.endpoint.loading') : t('admin.endpoint.loadModels')}
             </Button>
-            {status && <span role="status" className="text-xs text-[var(--color-foreground-muted)]">{status}</span>}
+            {status && <span role="status" className="text-xs text-[var(--color-foreground-muted)]">{status.reachableFrom === 'server'
+              ? t('admin.endpoint.modelsFoundServer', { count: status.count })
+              : t('admin.endpoint.modelsFoundHost', { count: status.count, host: status.reachableFrom })}</span>}
           </div>
           {error && <p role="alert" className="text-xs text-[var(--color-warning)]">{error}</p>}
       </>

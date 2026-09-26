@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { apiFetch } from '@/lib/api'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ParentParticipant {
   id: string
@@ -67,6 +68,7 @@ export default function CreateSubRoomDialog({
   onOpenChange,
   onCreated,
 }: Props) {
+  const { t } = useLocale()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [parent, setParent] = useState<ParentRoom | null>(null)
@@ -87,7 +89,7 @@ export default function CreateSubRoomDialog({
       const resp = await apiFetch(`/api/v1/rooms/${parentRoomId}`)
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || 'Failed to load parent room')
+        throw new Error(body.detail || '__subroom_load_failed__')
       }
       const data = await resp.json()
       setParent({
@@ -153,7 +155,7 @@ export default function CreateSubRoomDialog({
       )
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}))
-        throw new Error(body.detail || 'Failed to create sub-room')
+        throw new Error(body.detail || t('subroom.createFailed'))
       }
       const newRoom = await resp.json()
       onCreated({ id: newRoom.id, name: newRoom.name })
@@ -166,29 +168,25 @@ export default function CreateSubRoomDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[min(90dvh,52rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create sub-room</DialogTitle>
+          <DialogTitle>{t('subroom.create')}</DialogTitle>
           <DialogDescription>
-            A sub-room is a focused side channel under{' '}
-            <span className="font-medium text-[var(--color-foreground)]">
-              {parentRoomName}
-            </span>
-            . Only members of the parent can be invited.
+            {t('subroom.description', { name: parentRoomName })}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
           <div className="py-6 text-center text-caption text-[var(--color-foreground-muted)]">
-            Loading parent members…
+            {t('subroom.loadingMembers')}
           </div>
         ) : (
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label htmlFor="sub-room-name">Name</Label>
+              <Label htmlFor="sub-room-name">{t('rooms.name')}</Label>
               <Input
                 id="sub-room-name"
-                placeholder="design-spike"
+                placeholder={t('subroom.namePlaceholder')}
                 value={name}
                 onChange={e => setName(e.target.value)}
                 onKeyDown={e => {
@@ -203,11 +201,11 @@ export default function CreateSubRoomDialog({
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="sub-room-desc">Description (optional)</Label>
+              <Label htmlFor="sub-room-desc">{t('subroom.descriptionLabel')}</Label>
               <textarea
                 id="sub-room-desc"
-                className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white px-3 py-2 text-sm placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-1 resize-none"
-                placeholder="이 서브룸의 목적을 설명하세요 (에이전트 delegation 판단에 사용됩니다)"
+                className="flex w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1 resize-none"
+                placeholder={t('subroom.descriptionPlaceholder')}
                 rows={2}
                 value={description}
                 onChange={e => setDescription(e.target.value)}
@@ -217,23 +215,22 @@ export default function CreateSubRoomDialog({
 
             {myParticipantId === null && (
               <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
-                You're not a member of the parent room — refresh the
-                room and try again.
+                {t('subroom.notMember')}
               </div>
             )}
 
             <div className="space-y-2">
-              <Label>Invite parent members (optional)</Label>
+              <Label>{t('subroom.invite')}</Label>
               {invitees.length === 0 ? (
                 <p className="text-caption text-[var(--color-foreground-subtle)]">
-                  The parent has no other members to invite.
+                  {t('subroom.noInvitees')}
                 </p>
               ) : (
                 <div className="max-h-48 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)]">
                   {invitees.map(p => (
                     <label
                       key={p.id}
-                      className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--color-surface-alt)] cursor-pointer"
+                      className="flex min-h-11 items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--color-surface-hover)] cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -257,20 +254,20 @@ export default function CreateSubRoomDialog({
 
         {error ? (
           <div className="rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-3 py-2 text-sm text-[var(--color-warning)]">
-            {error}
+            {error === '__subroom_load_failed__' ? t('subroom.loadFailed') : error}
           </div>
         ) : null}
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={creating}>
-            Cancel
+            {t('common.cancel')}
           </Button>
           <Button
             onClick={handleCreate}
             disabled={!canSubmit}
             data-testid="sub-room-create"
           >
-            {creating ? 'Creating…' : 'Create'}
+            {creating ? t('rooms.creating') : t('common.create')}
           </Button>
         </DialogFooter>
       </DialogContent>

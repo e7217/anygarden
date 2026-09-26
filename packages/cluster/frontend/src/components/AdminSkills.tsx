@@ -13,6 +13,8 @@ import {
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { useAgents } from '@/hooks/useAgents'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 /**
  * Skill library admin page (#119 / #127 / #125).
@@ -77,22 +79,18 @@ interface AuditEntry {
   detail: Record<string, unknown>
 }
 
-const STATUS_LABEL: Record<SkillStatus, string> = {
-  pending: '대기',
-  approved: '승인',
-  rejected: '거부',
-}
-
 const STATUS_BADGE_CLASS: Record<SkillStatus, string> = {
   pending:
-    'border-[rgba(0,0,0,0.12)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] text-[var(--color-warning)]',
+    'border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] text-[var(--color-warning)]',
   approved:
-    'border-[rgba(0,0,0,0.12)] bg-[color:color-mix(in_srgb,var(--color-success)_10%,transparent)] text-[var(--color-success)]',
+    'border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-success)_10%,transparent)] text-[var(--color-success)]',
   rejected:
-    'border-[rgba(0,0,0,0.12)] bg-[color:color-mix(in_srgb,var(--color-danger)_10%,transparent)] text-[var(--color-danger)]',
+    'border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_10%,transparent)] text-[var(--color-danger)]',
 }
 
 export default function AdminSkills() {
+  const { t, formatDate } = useLocale()
+  const { confirm: confirmAction } = useFeedback()
   const [skills, setSkills] = useState<Skill[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -139,14 +137,14 @@ export default function AdminSkills() {
       // in lockstep (otherwise a click-to-approve briefly desyncs the
       // counts in the opposite tab).
       const resp = await apiFetch('/api/v1/admin/skills')
-      if (!resp.ok) throw new Error(`GET /skills → ${resp.status}`)
+      if (!resp.ok) throw new Error(t('admin.skills.loadFailed', { status: resp.status }))
       setSkills(await resp.json())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     void load()
@@ -179,7 +177,7 @@ export default function AdminSkills() {
         }),
       })
       if (!resp.ok) {
-        let detail = `Register failed (${resp.status})`
+        let detail = t('admin.skills.registerFailed', { status: resp.status })
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -199,7 +197,7 @@ export default function AdminSkills() {
     } finally {
       setRegBusy(false)
     }
-  }, [regSource, regName, regRev, load])
+  }, [regSource, regName, regRev, load, t])
 
   const handleApprove = useCallback(async (skill: Skill) => {
     const resp = await apiFetch(
@@ -212,9 +210,11 @@ export default function AdminSkills() {
   const handleReject = useCallback(async (skill: Skill) => {
     if (
       skill.attached_agent_ids.length > 0 &&
-      !window.confirm(
-        `"${skill.name}" 스킬이 ${skill.attached_agent_ids.length}개 에이전트에 연결되어 있습니다. 거부하면 다음 spawn 에서 제거됩니다. 계속할까요?`,
-      )
+      !await confirmAction({
+        title: t('admin.skills.reject'),
+        description: t('admin.skills.confirmReject', { name: skill.name, count: skill.attached_agent_ids.length }),
+        destructive: true,
+      })
     ) {
       return
     }
@@ -223,15 +223,15 @@ export default function AdminSkills() {
       { method: 'POST' },
     )
     if (resp.ok) await load()
-  }, [load])
+  }, [load, t, confirmAction])
 
   const handleDelete = useCallback(async (skill: Skill) => {
-    if (!window.confirm(`"${skill.name}" 스킬을 삭제하시겠습니까? 모든 attachment 도 함께 제거됩니다.`)) {
+    if (!await confirmAction({ title: t('admin.skills.deleteTitle'), description: t('admin.skills.confirmDelete', { name: skill.name }), destructive: true })) {
       return
     }
     const resp = await apiFetch(`/api/v1/admin/skills/${skill.id}`, { method: 'DELETE' })
     if (resp.status === 204) await load()
-  }, [load])
+  }, [load, t, confirmAction])
 
   // #126 — run a skills.sh search. Called on open and on every
   // submit; TTL-cached on the server so re-opens are cheap.
@@ -242,7 +242,7 @@ export default function AdminSkills() {
       const qs = new URLSearchParams({ q: query, limit: '20' })
       const resp = await apiFetch(`/api/v1/admin/skills/search?${qs.toString()}`)
       if (!resp.ok) {
-        let detail = `Search failed (${resp.status})`
+        let detail = t('admin.skills.searchFailed', { status: resp.status })
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -256,7 +256,7 @@ export default function AdminSkills() {
     } finally {
       setSearchLoading(false)
     }
-  }, [])
+  }, [t])
 
   // Register a skill directly from a search result. Uses the
   // skills.sh ``source`` + ``skillId`` as (source, name) for the
@@ -276,7 +276,7 @@ export default function AdminSkills() {
         setActiveTab('pending')
         await load()
       } else {
-        let detail = `Register failed (${resp.status})`
+        let detail = t('admin.skills.registerFailed', { status: resp.status })
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -290,7 +290,7 @@ export default function AdminSkills() {
         return next
       })
     }
-  }, [load])
+  }, [load, t])
 
   // #126 — refresh a single skill against upstream HEAD. Phase 2 gate
   // means a SHA change mints a new pending row — the list reloads to
@@ -305,7 +305,7 @@ export default function AdminSkills() {
       if (resp.ok) {
         await load()
       } else {
-        let detail = `Refresh failed (${resp.status})`
+        let detail = t('admin.skills.refreshFailed', { status: resp.status })
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -319,21 +319,18 @@ export default function AdminSkills() {
         return next
       })
     }
-  }, [load])
+  }, [load, t])
 
   // #120 — move an agent-authored skill into the shared library so any
   // agent can attach to it afterwards.
   const handlePromote = useCallback(async (skill: Skill) => {
-    if (!window.confirm(
-      `"${skill.name}" 을 공유 라이브러리로 승격하시겠습니까? ` +
-      `다른 에이전트도 이 스킬에 attach 할 수 있게 됩니다.`
-    )) return
+    if (!await confirmAction({ title: t('admin.skills.promote'), description: t('admin.skills.confirmPromote', { name: skill.name }) })) return
     const resp = await apiFetch(
       `/api/v1/admin/skills/${skill.id}/promote`,
       { method: 'POST' },
     )
     if (resp.ok) await load()
-  }, [load])
+  }, [load, t, confirmAction])
 
   const openPreview = useCallback(async (skill: Skill) => {
     setPreviewTarget(skill)
@@ -383,7 +380,7 @@ export default function AdminSkills() {
       } else if (resp.status === 409) {
         // Most common reason — skill isn't approved. The server's
         // detail message is the right thing to surface verbatim.
-        let detail = '미승인 스킬은 attach 할 수 없습니다.'
+        let detail = t('admin.skills.attachUnapproved')
         try {
           const body = await resp.json()
           if (body?.detail) detail = body.detail
@@ -391,21 +388,21 @@ export default function AdminSkills() {
         setAttachError(detail)
       }
     }
-  }, [load])
+  }, [load, t])
 
   return (
-    <div className="max-w-4xl p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-[var(--color-foreground)]">Skills</h1>
+    <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-5 sm:px-6 sm:py-6">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-heading text-[var(--color-foreground)]">{t('admin.skills.title')}</h1>
           <p className="text-sm text-[var(--color-foreground-muted)]">
-            Register shared skills from GitHub, approve them, and attach to agents.
+            {t('admin.skills.description')}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:shrink-0 lg:justify-end">
           <Button variant="ghost" size="sm" onClick={() => void load()} disabled={loading}>
             <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            {t('common.refresh')}
           </Button>
           <Button
             variant="ghost"
@@ -416,16 +413,16 @@ export default function AdminSkills() {
             }}
             data-testid="admin-skill-search-open"
           >
-            <SearchIcon className="mr-1 h-3.5 w-3.5" /> Search skills.sh
+            <SearchIcon className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.searchSkills')}
           </Button>
-          <Button size="sm" onClick={() => setRegisterOpen(true)}>
-            <Plus className="mr-1 h-3.5 w-3.5" /> Register skill
+          <Button size="sm" className="order-first min-h-11 w-full sm:w-auto lg:order-last" onClick={() => setRegisterOpen(true)}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.registerSkill')}
           </Button>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
+        <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3 text-sm text-[var(--color-danger)]">
           {error}
         </div>
       )}
@@ -433,21 +430,21 @@ export default function AdminSkills() {
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as SkillStatus)}>
         <TabsList>
           <TabsTrigger value="pending">
-            대기 {byStatus.pending.length > 0 && (
+            {t('admin.skills.pending')} {byStatus.pending.length > 0 && (
               <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
                 {byStatus.pending.length}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="approved">
-            승인 {byStatus.approved.length > 0 && (
+            {t('admin.skills.approved')} {byStatus.approved.length > 0 && (
               <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
                 {byStatus.approved.length}
               </span>
             )}
           </TabsTrigger>
           <TabsTrigger value="rejected">
-            거부 {byStatus.rejected.length > 0 && (
+            {t('admin.skills.rejected')} {byStatus.rejected.length > 0 && (
               <span className="ml-1 text-xs text-[var(--color-foreground-muted)]">
                 {byStatus.rejected.length}
               </span>
@@ -458,25 +455,25 @@ export default function AdminSkills() {
         {(['pending', 'approved', 'rejected'] as SkillStatus[]).map(status => (
           <TabsContent key={status} value={status} className="space-y-2">
             {byStatus[status].length === 0 && !loading ? (
-              <div className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white px-6 py-10 text-center shadow-[var(--shadow-card)]">
+              <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-6 py-10 text-center shadow-[var(--shadow-card)]">
                 <BookOpen
                   className="mx-auto mb-3 h-8 w-8 text-[var(--color-foreground-subtle)]"
                   strokeWidth={1.5}
                 />
                 <p className="text-sm text-[var(--color-foreground-muted)]">
-                  {status === 'pending' && '대기 중인 스킬이 없습니다. 새 스킬을 등록하면 이 탭에 표시됩니다.'}
-                  {status === 'approved' && '승인된 스킬이 없습니다.'}
-                  {status === 'rejected' && '거부된 스킬이 없습니다.'}
+                  {status === 'pending' && t('admin.skills.noPending')}
+                  {status === 'approved' && t('admin.skills.noApproved')}
+                  {status === 'rejected' && t('admin.skills.noRejected')}
                 </p>
               </div>
             ) : (
               byStatus[status].map(skill => (
                 <div
                   key={skill.id}
-                  className="rounded-[var(--radius-lg)] border border-[rgba(0,0,0,0.1)] bg-white px-4 py-3 shadow-[var(--shadow-card)]"
+                  className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-4 py-3 shadow-[var(--shadow-card)]"
                   data-testid={`admin-skill-row-${skill.id}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
@@ -487,7 +484,7 @@ export default function AdminSkills() {
                           className={STATUS_BADGE_CLASS[skill.status]}
                           data-testid={`admin-skill-status-${skill.id}`}
                         >
-                          {STATUS_LABEL[skill.status]}
+                          {t(`admin.skills.${skill.status}`)}
                         </Badge>
                         <Badge variant="outline">
                           <code className="text-[11px]">{skill.pinned_rev.slice(0, 8)}</code>
@@ -498,28 +495,28 @@ export default function AdminSkills() {
                             className="text-[var(--color-foreground-muted)]"
                             title={skill.scripts_detected.join('\n')}
                           >
-                            +{skill.scripts_detected.length} files
+                            {t('admin.skills.filesCount', { count: skill.scripts_detected.length })}
                           </Badge>
                         )}
                         {skill.created_by_agent_id !== null && (
                           <Badge
                             variant="outline"
                             className="text-[var(--color-foreground-muted)]"
-                            title={`Authored by agent ${skill.created_by_agent_id}`}
+                            title={t('admin.skills.authoredByAgent', { id: skill.created_by_agent_id })}
                             data-testid={`admin-skill-agent-authored-${skill.id}`}
                           >
-                            <Bot className="mr-1 h-3 w-3" /> agent
+                            <Bot className="mr-1 h-3 w-3" /> {t('admin.skills.agent')}
                           </Badge>
                         )}
                         {skill.stale && (
                           <Badge
                             variant="outline"
-                            className="border-[rgba(0,0,0,0.12)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] text-[var(--color-warning)]"
-                            title="Upstream HEAD has moved — click Refresh to re-fetch"
+                            className="border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-warning)_10%,transparent)] text-[var(--color-warning)]"
+                            title={t('admin.skills.staleHint')}
                             data-testid={`admin-skill-stale-${skill.id}`}
                           >
                             <AlertCircle className="mr-1 h-3 w-3" />
-                            Update available
+                            {t('admin.skills.updateAvailable')}
                           </Badge>
                         )}
                       </div>
@@ -527,17 +524,17 @@ export default function AdminSkills() {
                         <code>{skill.source}</code>
                       </p>
                       <p className="mt-1 text-xs text-[var(--color-foreground-muted)]">
-                        {skill.attached_agent_ids.length} agent{skill.attached_agent_ids.length === 1 ? '' : 's'} attached
+                        {t('admin.skills.attachedCount', { count: skill.attached_agent_ids.length })}
                       </p>
                     </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1 border-t border-[var(--color-border)] pt-2 [&_button]:min-h-11 lg:shrink-0 lg:border-t-0 lg:pt-0 lg:[&_button]:min-h-0">
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => void openPreview(skill)}
                         data-testid={`admin-skill-preview-${skill.id}`}
                       >
-                        <Eye className="mr-1 h-3.5 w-3.5" /> Preview
+                        <Eye className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.preview')}
                       </Button>
                       <Button
                         variant="ghost"
@@ -545,7 +542,7 @@ export default function AdminSkills() {
                         onClick={() => void openAudits(skill)}
                         data-testid={`admin-skill-audits-${skill.id}`}
                       >
-                        <History className="mr-1 h-3.5 w-3.5" /> History
+                        <History className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.history')}
                       </Button>
                       {skill.status !== 'approved' && (
                         <Button
@@ -555,7 +552,7 @@ export default function AdminSkills() {
                           data-testid={`admin-skill-approve-${skill.id}`}
                         >
                           <Check className="mr-1 h-3.5 w-3.5 text-[var(--color-success)]" />
-                          Approve
+                          {t('admin.skills.approve')}
                         </Button>
                       )}
                       {skill.status !== 'rejected' && (
@@ -566,7 +563,7 @@ export default function AdminSkills() {
                           data-testid={`admin-skill-reject-${skill.id}`}
                         >
                           <X className="mr-1 h-3.5 w-3.5 text-[var(--color-danger)]" />
-                          Reject
+                          {t('admin.skills.reject')}
                         </Button>
                       )}
                       {skill.status === 'approved' && (
@@ -576,7 +573,7 @@ export default function AdminSkills() {
                           onClick={() => setAttachTarget(skill)}
                           data-testid={`admin-skill-attach-${skill.id}`}
                         >
-                          Attach
+                          {t('admin.skills.attach')}
                         </Button>
                       )}
                       {skill.created_by_agent_id !== null && (
@@ -585,9 +582,9 @@ export default function AdminSkills() {
                           size="sm"
                           onClick={() => void handlePromote(skill)}
                           data-testid={`admin-skill-promote-${skill.id}`}
-                          title="Promote to shared library"
+                          title={t('admin.skills.promoteHint')}
                         >
-                          <Share2 className="mr-1 h-3.5 w-3.5" /> Promote
+                          <Share2 className="mr-1 h-3.5 w-3.5" /> {t('admin.skills.promote')}
                         </Button>
                       )}
                       {/* #126 — refresh against upstream HEAD. Hidden for
@@ -600,17 +597,17 @@ export default function AdminSkills() {
                           disabled={refreshingIds.has(skill.id)}
                           onClick={() => void handleRefresh(skill)}
                           data-testid={`admin-skill-refresh-${skill.id}`}
-                          title="Re-fetch from upstream HEAD"
+                          title={t('admin.skills.refreshHint')}
                         >
                           <RefreshCw className={`mr-1 h-3.5 w-3.5 ${refreshingIds.has(skill.id) ? 'animate-spin' : ''}`} />
-                          Refresh
+                          {t('common.refresh')}
                         </Button>
                       )}
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => void handleDelete(skill)}
-                        aria-label={`Delete ${skill.name}`}
+                        aria-label={t('admin.skills.deleteLabel', { name: skill.name })}
                         data-testid={`admin-skill-delete-${skill.id}`}
                       >
                         <Trash2 className="h-4 w-4 text-[var(--color-danger)]" />
@@ -628,17 +625,14 @@ export default function AdminSkills() {
       <Dialog open={registerOpen} onOpenChange={setRegisterOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Register skill from GitHub</DialogTitle>
+            <DialogTitle>{t('admin.skills.registerTitle')}</DialogTitle>
             <DialogDescription>
-              The repo must follow the <code>skills/&lt;name&gt;/SKILL.md</code> layout.
-              We pin the commit SHA at registration so spawns stay reproducible.
-              New skills start in <strong>pending</strong> and need approval before
-              they can be attached.
+              {t('admin.skills.registerDescription')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
-              <Label htmlFor="skill-source">Source (owner/repo)</Label>
+              <Label htmlFor="skill-source">{t('admin.skills.source')}</Label>
               <Input
                 id="skill-source"
                 placeholder="vercel-labs/agent-skills"
@@ -647,7 +641,7 @@ export default function AdminSkills() {
               />
             </div>
             <div>
-              <Label htmlFor="skill-name">Skill name</Label>
+              <Label htmlFor="skill-name">{t('admin.skills.name')}</Label>
               <Input
                 id="skill-name"
                 placeholder="web-design-guidelines"
@@ -656,10 +650,10 @@ export default function AdminSkills() {
               />
             </div>
             <div>
-              <Label htmlFor="skill-rev">Revision (optional)</Label>
+              <Label htmlFor="skill-rev">{t('admin.skills.revision')}</Label>
               <Input
                 id="skill-rev"
-                placeholder="HEAD / branch / tag / SHA"
+                placeholder={t('admin.skills.revisionPlaceholder')}
                 value={regRev}
                 onChange={e => setRegRev(e.target.value)}
               />
@@ -674,13 +668,13 @@ export default function AdminSkills() {
               onClick={() => setRegisterOpen(false)}
               disabled={regBusy}
             >
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button
               onClick={() => void handleRegister()}
               disabled={regBusy || !regSource.trim() || !regName.trim()}
             >
-              {regBusy ? 'Registering…' : 'Register'}
+              {regBusy ? t('admin.skills.registering') : t('admin.skills.register')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -691,29 +685,29 @@ export default function AdminSkills() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
-              Preview <code>{previewTarget?.name}</code>
+              {t('admin.skills.previewTitle', { name: previewTarget?.name ?? '' })}
             </DialogTitle>
             <DialogDescription>
-              SKILL.md body + 보조 파일 목록. 승인 결정 전에 내용을 확인하세요.
+              {t('admin.skills.previewDescription')}
             </DialogDescription>
           </DialogHeader>
           {previewLoading && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">Loading…</p>
+            <p className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
           )}
           {preview && (
             <div className="space-y-3 min-w-0">
               <div className="min-w-0">
                 <Label className="text-xs">SKILL.md</Label>
-                <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-3 text-xs">
+                <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs">
                   {preview.skill_md}
                 </pre>
               </div>
               {preview.extra_files.length > 0 && (
                 <div className="min-w-0">
                   <Label className="text-xs">
-                    보조 파일 ({preview.extra_files.length})
+                    {t('admin.skills.extraFiles', { count: preview.extra_files.length })}
                   </Label>
-                  <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[var(--color-surface-alt)] p-2 text-xs">
+                  <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs">
                     {preview.extra_files.map(path => (
                       <li key={path} className="font-mono">
                         {path}
@@ -725,7 +719,7 @@ export default function AdminSkills() {
             </div>
           )}
           <DialogFooter>
-            <Button onClick={() => { setPreviewTarget(null); setPreview(null) }}>Close</Button>
+            <Button onClick={() => { setPreviewTarget(null); setPreview(null) }}>{t('common.close')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -735,18 +729,18 @@ export default function AdminSkills() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              History <code>{auditTarget?.name}</code>
+              {t('admin.skills.historyTitle', { name: auditTarget?.name ?? '' })}
             </DialogTitle>
             <DialogDescription>
-              이 스킬의 변경 이력 (가장 최근부터).
+              {t('admin.skills.historyDescription')}
             </DialogDescription>
           </DialogHeader>
           {auditLoading && (
-            <p className="text-sm text-[var(--color-foreground-muted)]">Loading…</p>
+            <p className="text-sm text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
           )}
           {!auditLoading && audits.length === 0 && (
             <p className="text-sm text-[var(--color-foreground-muted)]">
-              이력이 없습니다.
+              {t('admin.skills.noHistory')}
             </p>
           )}
           {!auditLoading && audits.length > 0 && (
@@ -754,12 +748,12 @@ export default function AdminSkills() {
               {audits.map(a => (
                 <li
                   key={a.id}
-                  className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] p-2 text-xs"
+                  className="rounded-[var(--radius-sm)] border border-[var(--color-border)] p-2 text-xs"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <Badge variant="outline">{a.action}</Badge>
                     <span className="text-[var(--color-foreground-muted)]">
-                      {new Date(a.at).toLocaleString()}
+                      {formatDate(new Date(a.at), { dateStyle: 'medium', timeStyle: 'short' })}
                     </span>
                   </div>
                   {Object.keys(a.detail).length > 0 && (
@@ -772,7 +766,7 @@ export default function AdminSkills() {
             </ul>
           )}
           <DialogFooter>
-            <Button onClick={() => { setAuditTarget(null); setAudits([]) }}>Close</Button>
+            <Button onClick={() => { setAuditTarget(null); setAudits([]) }}>{t('common.close')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -785,21 +779,21 @@ export default function AdminSkills() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Attach <code>{attachTarget?.name}</code>
+              {t('admin.skills.attachTitle', { name: attachTarget?.name ?? '' })}
             </DialogTitle>
             <DialogDescription>
-              Toggle the agents that should receive this skill's directory on their next spawn.
+              {t('admin.skills.attachDescription')}
             </DialogDescription>
           </DialogHeader>
           {attachError && (
-            <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
               {attachError}
             </div>
           )}
           <div className="max-h-80 space-y-1 overflow-auto py-2">
             {agents.length === 0 ? (
               <p className="text-sm text-[var(--color-foreground-muted)]">
-                No agents yet — create an agent first under Machines.
+                {t('admin.skills.noAgents')}
               </p>
             ) : (
               agents.map(agent => {
@@ -807,7 +801,7 @@ export default function AdminSkills() {
                 return (
                   <label
                     key={agent.id}
-                    className="flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-black/5 cursor-pointer"
+                    className="flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-hover)] cursor-pointer"
                   >
                     <input
                       type="checkbox"
@@ -826,7 +820,7 @@ export default function AdminSkills() {
           </div>
           <DialogFooter>
             <Button onClick={() => { setAttachTarget(null); setAttachError(null) }}>
-              Done
+              {t('admin.skills.done')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -841,15 +835,14 @@ export default function AdminSkills() {
       >
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Search skills.sh</DialogTitle>
+            <DialogTitle>{t('admin.skills.searchSkills')}</DialogTitle>
             <DialogDescription>
-              검색어를 입력해 skills.sh 에서 스킬을 찾고 한 번 클릭으로 등록하세요.
-              등록된 스킬은 <strong>대기</strong> 탭에 들어가 승인 후 attach 가능합니다.
+              {t('admin.skills.searchDescription')}
             </DialogDescription>
           </DialogHeader>
           <div className="flex items-center gap-2 py-2">
             <Input
-              placeholder="design / slack / python …"
+              placeholder={t('admin.skills.searchPlaceholder')}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => {
@@ -862,25 +855,25 @@ export default function AdminSkills() {
               disabled={searchLoading}
               data-testid="admin-skill-search-submit"
             >
-              {searchLoading ? '검색 중…' : 'Search'}
+              {searchLoading ? t('admin.skills.searching') : t('common.search')}
             </Button>
           </div>
           {searchError && (
-            <div className="rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
               {searchError}
             </div>
           )}
           <div className="max-h-[26rem] overflow-auto">
             {searchResults.length === 0 && !searchLoading ? (
               <p className="py-6 text-center text-sm text-[var(--color-foreground-muted)]">
-                검색 결과가 없습니다.
+                {t('admin.skills.noSearchResults')}
               </p>
             ) : (
               <ul className="space-y-1">
                 {searchResults.map(hit => (
                   <li
                     key={hit.id}
-                    className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[rgba(0,0,0,0.1)] px-3 py-2"
+                    className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[var(--color-border)] px-3 py-2"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
@@ -888,7 +881,7 @@ export default function AdminSkills() {
                           {hit.name}
                         </span>
                         <span className="text-xs text-[var(--color-foreground-muted)]">
-                          {hit.installs} installs
+                          {t('admin.skills.installs', { count: hit.installs })}
                         </span>
                       </div>
                       <p className="truncate text-xs text-[var(--color-foreground-muted)]">
@@ -901,7 +894,7 @@ export default function AdminSkills() {
                       onClick={() => void registerFromSearch(hit)}
                       data-testid={`admin-skill-register-from-search-${hit.id}`}
                     >
-                      {registeringIds.has(hit.id) ? 'Registering…' : 'Register'}
+                      {registeringIds.has(hit.id) ? t('admin.skills.registering') : t('admin.skills.register')}
                     </Button>
                   </li>
                 ))}
@@ -913,7 +906,7 @@ export default function AdminSkills() {
               variant="ghost"
               onClick={() => setSearchOpen(false)}
             >
-              Close
+              {t('common.close')}
             </Button>
           </DialogFooter>
         </DialogContent>

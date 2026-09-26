@@ -14,6 +14,7 @@ import { apiFetch } from '@/lib/api'
 import { EntityAvatar } from '@/components/EntityAvatar'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import type { Participant } from '@/pages/ChatPage'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface TaskPanelProps {
   roomId: string
@@ -32,15 +33,15 @@ const STATUS_ICON: Record<string, typeof Circle> = {
   blocked: PauseCircle,
   failed: XCircle,
 }
-const STATUS_LABEL: Record<string, string> = {
-  todo: 'Todo',
-  in_progress: 'In Progress',
-  done: 'Done',
-  blocked: 'Blocked',
-  failed: 'Failed',
-}
-
 export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
+  const { t } = useLocale()
+  const statusLabel: Record<string, string> = {
+    todo: t('chat.todo'),
+    in_progress: t('chat.inProgress'),
+    done: t('chat.done'),
+    blocked: t('chat.blocked'),
+    failed: t('chat.failed'),
+  }
   const [filter, setFilter] = useState<string | null>(null)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
@@ -123,26 +124,26 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
   }
 
   const filters = [
-    { key: null, label: 'All' },
-    { key: 'todo', label: 'Todo' },
-    { key: 'in_progress', label: 'In Progress' },
-    { key: 'blocked', label: 'Blocked' },
-    { key: 'failed', label: 'Failed' },
-    { key: 'done', label: 'Done' },
+    { key: null, label: t('chat.all') },
+    { key: 'todo', label: t('chat.todo') },
+    { key: 'in_progress', label: t('chat.inProgress') },
+    { key: 'blocked', label: t('chat.blocked') },
+    { key: 'failed', label: t('chat.failed') },
+    { key: 'done', label: t('chat.done') },
   ]
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Filter tabs */}
-      <div className="flex items-center gap-1 border-b border-[var(--color-border)] px-4 py-2">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-[var(--color-border)] px-4 py-2">
         {filters.map(f => (
           <button
             key={f.key ?? 'all'}
             onClick={() => setFilter(f.key)}
-            className={`rounded-[var(--radius-sm)] px-2.5 py-1 text-xs transition-colors ${
+            className={`min-h-11 shrink-0 whitespace-nowrap rounded-[var(--radius-sm)] px-2.5 text-xs transition-colors ${
               filter === f.key
-                ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand)] font-medium'
-                : 'text-[var(--color-foreground-muted)] hover:bg-black/5'
+                ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] font-medium'
+                : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]'
             }`}
           >
             {f.label}
@@ -161,25 +162,25 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             <div
               key={task.id}
               data-testid={`task-row-${task.id}`}
-              className="group flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+              className="group flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
             >
-              <button onClick={() => cycleStatus(task)} title={`Status: ${STATUS_LABEL[task.status] ?? task.status}`}>
+              <button onClick={() => cycleStatus(task)} title={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} aria-label={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} className="flex h-11 w-11 shrink-0 items-center justify-center md:h-6 md:w-6">
                 <Icon
                   className={`h-4 w-4 ${
                     task.status === 'done'
-                      ? 'text-green-600'
+                      ? 'text-[var(--color-success)]'
                       : task.status === 'in_progress'
-                        ? 'text-[var(--color-brand)]'
+                        ? 'text-[var(--color-brand-text)]'
                         : task.status === 'failed'
-                          ? 'text-rose-600'
+                        ? 'text-[var(--color-danger)]'
                           : task.status === 'blocked'
-                            ? 'text-amber-600'
+                          ? 'text-[var(--color-warning)]'
                             : 'text-[var(--color-foreground-subtle)]'
                   }`}
                 />
               </button>
               <span
-                className={`flex-1 text-sm ${
+                className={`min-w-0 flex-1 truncate text-sm ${
                   task.status === 'done' || task.status === 'failed'
                     ? 'line-through text-[var(--color-foreground-muted)]'
                     : 'text-[var(--color-foreground)]'
@@ -193,19 +194,19 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               <select
                 value={task.assignee_participant_id ?? ''}
                 onChange={e => reassign(task, e.target.value)}
-                className="bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 max-w-[8rem] truncate"
-                aria-label="Reassign task"
+                className="min-h-11 min-w-0 max-w-[8rem] truncate border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none focus:ring-0 md:min-h-6"
+                aria-label={t('chat.reassign')}
               >
-                <option value="">— unassigned —</option>
+                <option value="">— {t('chat.unassigned')} —</option>
                 {agentParticipants.length > 0 && (
-                  <optgroup label="Agents">
+                  <optgroup label={t('chat.agents')}>
                     {agentParticipants.map(p => (
                       <option key={p.id} value={p.id}>{p.display_name}</option>
                     ))}
                   </optgroup>
                 )}
                 {allowHumanAssignment && humanParticipants.length > 0 && (
-                  <optgroup label="People">
+                  <optgroup label={t('chat.people')}>
                     {humanParticipants.map(p => (
                       <option key={p.id} value={p.id}>{p.display_name}</option>
                     ))}
@@ -224,8 +225,9 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               {!task.source_message_id ? (
                 <button
                   onClick={() => remove(task.id)}
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
-                  title="Delete task"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-destructive)]/70 opacity-100 transition-all hover:bg-[var(--color-destructive)]/10 hover:text-[var(--color-destructive)] md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
+                  title={t('chat.deleteTask')}
+                  aria-label={t('chat.deleteTask')}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
@@ -235,37 +237,37 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
         })}
         {tasks.length === 0 && (
           <div className="py-8 text-center text-sm text-[var(--color-foreground-muted)]">
-            No tasks yet
+            {t('chat.noTasks')}
           </div>
         )}
       </div>
 
       {/* Add task — inline composer with assignee picker */}
       <div className="border-t border-[var(--color-border)] px-4 py-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             value={newTitle}
             onChange={e => setNewTitle(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && createTask()}
-            placeholder="Add a task..."
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-foreground-subtle)]"
+            placeholder={t('chat.addTask')}
+            className="min-h-11 min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-foreground-subtle)]"
           />
           <select
             value={newAssignee}
             onChange={e => setNewAssignee(e.target.value)}
-            className="bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 max-w-[8rem] truncate"
-            aria-label="Pick assignee"
+            className="min-h-11 max-w-[8rem] truncate border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none focus:ring-0 md:min-h-6"
+            aria-label={t('chat.pickAssignee')}
           >
-            <option value="">— assignee —</option>
+            <option value="">— {t('chat.assignee')} —</option>
             {agentParticipants.length > 0 && (
-              <optgroup label="Agents">
+              <optgroup label={t('chat.agents')}>
                 {agentParticipants.map(p => (
                   <option key={p.id} value={p.id}>{p.display_name}</option>
                 ))}
               </optgroup>
             )}
             {allowHumanAssignment && humanParticipants.length > 0 && (
-              <optgroup label="People">
+              <optgroup label={t('chat.people')}>
                 {humanParticipants.map(p => (
                   <option key={p.id} value={p.id}>{p.display_name}</option>
                 ))}
@@ -276,8 +278,9 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             <button
               type="button"
               onClick={() => setNewAssignee('')}
-              className="p-0.5 rounded hover:bg-black/5 text-[var(--color-foreground-subtle)]"
-              title="Clear assignee"
+              className="flex h-11 w-11 items-center justify-center rounded text-[var(--color-foreground-subtle)] hover:bg-[var(--color-surface-hover)] md:h-6 md:w-6"
+              title={t('chat.clearAssignee')}
+              aria-label={t('chat.clearAssignee')}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -287,6 +290,8 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             size="sm"
             onClick={createTask}
             disabled={adding || !newTitle.trim()}
+            aria-label={t('chat.createTask')}
+            className="min-h-11 min-w-11"
           >
             <Plus className="h-4 w-4" />
           </Button>

@@ -7,15 +7,16 @@ import {
   SURFACE,
   TEXT_PRIMARY,
 } from '../constants'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * User node: 56×56 circular avatar.
  *
  * When no avatar asset exists we fall back to the email's first glyph.
- * Admin users get a crown badge — rendered in Notion Blue rather than
- * gold so the accent stays monochromatic per DESIGN.md §2.
+ * Admin users get a crown badge in the shared teal accent.
  */
 function UserNodeInner({ data, selected }: NodeProps) {
+  const { t } = useLocale()
   const label = (data?.label as string | undefined) ?? 'user'
   const isAdmin = Boolean(data?.is_admin)
 
@@ -40,7 +41,7 @@ function UserNodeInner({ data, selected }: NodeProps) {
         letterSpacing: '-0.3px',
         position: 'relative',
       }}
-      aria-label={`User ${label}${isAdmin ? ' (admin)' : ''}`}
+      aria-label={t('topology.userNode', { name: label, admin: isAdmin ? t('topology.adminSuffix') : '' })}
       title={label}
     >
       <Handle
@@ -60,7 +61,7 @@ function UserNodeInner({ data, selected }: NodeProps) {
             height: 18,
             borderRadius: '50%',
             background: SURFACE,
-            border: `1px solid rgba(0,0,0,0.08)`,
+            border: BORDER,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

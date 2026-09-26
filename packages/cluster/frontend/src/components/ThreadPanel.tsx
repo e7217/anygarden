@@ -8,6 +8,7 @@ import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { threadDraftKey } from '@/lib/composerDrafts'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ThreadPanelProps {
   /** The top-level message the thread hangs off. */
@@ -53,6 +54,7 @@ export default function ThreadPanel({
   onTyping,
   onClose,
 }: ThreadPanelProps) {
+  const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
   const { files: roomFiles } = useRoomFiles(roomId)
 
@@ -76,23 +78,23 @@ export default function ThreadPanel({
       {/* Mobile backdrop — same chrome as the context rail's. */}
       <button
         type="button"
-        aria-label="Close thread"
+        aria-label={t('chat.closeThread')}
         data-testid="thread-panel-backdrop"
-        className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
+        className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] lg:hidden"
         onClick={onClose}
       />
 
       <aside
         data-testid="thread-panel-root"
-        aria-label="Thread"
+        aria-label={t('chat.thread')}
         // Width staging mirrors ``RightContextRail`` (#329) because the
         // two occupy the same slot — a thread must not resize the chat
         // column relative to the rail it replaced.
         className="
           fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-full flex-col
-          border-l border-[var(--color-border)] bg-white shadow-deep
+          border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep
           sm:w-96
-          md:static md:z-auto md:w-72 md:shadow-none lg:w-80 xl:w-96
+          lg:static lg:z-auto lg:w-80 lg:shadow-none xl:w-96
         "
       >
         {/* Header carries the same brand tint the inline layout uses,
@@ -101,19 +103,19 @@ export default function ThreadPanel({
           <div className="flex min-w-0 items-center gap-2">
             <MessagesSquare className="h-4 w-4 shrink-0 text-[var(--color-brand-tint-text)]" />
             <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
-              Thread
+              {t('chat.thread')}
             </h2>
             <span className="text-badge text-[var(--color-brand-tint-text)] opacity-80">
               {replies.length === 0
-                ? 'No replies yet'
-                : `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}
+                ? t('chat.noReplies')
+                : t(replies.length === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count: replies.length })}
             </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5"
-            aria-label="Close thread"
+            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+            aria-label={t('chat.closeThread')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -134,8 +136,8 @@ export default function ThreadPanel({
               <span className="h-px flex-1 bg-[var(--color-border)]" />
               <span className="text-badge text-[var(--color-foreground-subtle)]">
                 {replies.length === 0
-                  ? 'Start of thread'
-                  : `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}
+                  ? t('chat.startThread')
+                  : t(replies.length === 1 ? 'chat.replyCountOne' : 'chat.replyCount', { count: replies.length })}
               </span>
               <span className="h-px flex-1 bg-[var(--color-border)]" />
             </div>
@@ -162,7 +164,7 @@ export default function ThreadPanel({
             mentionUsers={mentionUsers}
             mentionRooms={mentionRooms}
             roomId={roomId}
-            placeholder="Reply to thread…"
+            placeholder={t('chat.replyPlaceholder')}
             autoFocus
             draftKey={threadDraftKey(root.id)}
           />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useSystemVersion, useUpdateStatus } from '@/hooks/useSystemVersion'
@@ -22,6 +22,10 @@ import SidebarRoomMenu from '@/components/SidebarRoomMenu'
 import SidebarAdminMenu from '@/components/SidebarAdminMenu'
 import AgentSettingsMenu from '@/components/AgentSettingsMenu'
 import AgentSettingsDialog from '@/components/AgentSettingsDialog'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { LocaleToggle } from '@/i18n/LocaleToggle'
+import { ThemeToggle } from '@/theme/ThemeToggle'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
   Pin, PinOff, GripVertical, PanelLeftClose,
@@ -140,13 +144,20 @@ interface SidebarProps {
   /** Mobile off-canvas open state. Desktop (md+) is always visible. */
   open?: boolean
   onClose?: () => void
+  /** Requests from the empty chat state reuse the sidebar's dialogs. */
+  createProjectRequest?: number
+  createRoomRequest?: number
 }
 
 export default function Sidebar({
   selectedRoom,
   open = false,
   onClose,
+  createProjectRequest = 0,
+  createRoomRequest = 0,
 }: SidebarProps) {
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
   const { user, logout } = useAuth()
   // #115 — desktop collapse state/toggle/Ctrl+B now live in a shared
   // provider so every page hosting <Sidebar> gets identical behaviour
@@ -217,6 +228,27 @@ export default function Sidebar({
   const [roomProjectId, setRoomProjectId] = useState('')
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
   const [roomDialogOpen, setRoomDialogOpen] = useState(false)
+  const [roomNeedsProjectChoice, setRoomNeedsProjectChoice] = useState(false)
+  const [roomFromEmptyState, setRoomFromEmptyState] = useState(false)
+  const lastProjectRequest = useRef(0)
+  const lastRoomRequest = useRef(0)
+
+  useEffect(() => {
+    if (createProjectRequest === 0 || createProjectRequest === lastProjectRequest.current) return
+    lastProjectRequest.current = createProjectRequest
+    setNewProjectName('')
+    setProjectDialogOpen(true)
+  }, [createProjectRequest])
+
+  useEffect(() => {
+    if (createRoomRequest === 0 || createRoomRequest === lastRoomRequest.current) return
+    lastRoomRequest.current = createRoomRequest
+    setRoomProjectId(projects.length === 1 ? projects[0].id : '')
+    setRoomNeedsProjectChoice(projects.length > 1)
+    setRoomFromEmptyState(true)
+    setNewRoomName('')
+    setRoomDialogOpen(true)
+  }, [createRoomRequest, projects])
   // Delete-project confirmation target. ``null`` means the dialog
   // is closed. When set, the dialog shows the cascade warning if
   // the project has any rooms (``rooms[id].length > 0``) and a
@@ -263,11 +295,12 @@ export default function Sidebar({
   // not line up with ChatPage's single-room context. Keeping it
   // inlined keeps the two call sites independently evolvable.
   const handleDeleteRoom = useCallback(async (roomId: string, projectId: string, roomName: string) => {
-    const ok = window.confirm(
-      `이 룸 "${roomName}"을(를) 삭제하시겠습니까?\n\n` +
-        '룸의 모든 메시지가 사라지며, 하위 룸들은 최상위로 이동합니다. ' +
-        '되돌릴 수 없습니다.',
-    )
+    const ok = await confirm({
+      title: t('chat.deleteRoomTitle', { name: roomName }),
+      description: t('chat.deleteRoomDescription'),
+      confirmLabel: t('chat.delete'),
+      destructive: true,
+    })
     if (!ok) return
     try {
       const resp = await apiFetch(`/api/v1/rooms/${roomId}`, { method: 'DELETE' })
@@ -280,16 +313,16 @@ export default function Sidebar({
         if (selectedRoom === roomId) navigate('/')
         return
       }
-      let detail = `Failed to delete room (${resp.status})`
+      let detail = t('chat.failedDeleteRoom', { status: resp.status })
       try {
         const body = await resp.json()
         if (body && typeof body.detail === 'string') detail = body.detail
       } catch { /* ignore body parse */ }
-      window.alert(detail)
+      notify({ message: detail, tone: 'error' })
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
     }
-  }, [fetchRooms, navigate, selectedRoom])
+  }, [fetchRooms, navigate, selectedRoom, t, confirm, notify])
 
   // ``editRoomId`` alone isn't enough for the refetch-after-save
   // callback — we need the project id too. Build a room→project
@@ -334,21 +367,28 @@ export default function Sidebar({
         return next
       })
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      notify({ message: err instanceof Error ? err.message : String(err), tone: 'error' })
     }
-  }, [deleteProject, navigate, rooms, selectedRoom])
+  }, [deleteProject, navigate, rooms, selectedRoom, notify])
 
   const handleCreateRoom = async () => {
     if (!newRoomName.trim() || !roomProjectId) return
     try {
-      await createRoom(roomProjectId, newRoomName.trim())
+      const room = await createRoom(roomProjectId, newRoomName.trim())
       setNewRoomName('')
       setRoomDialogOpen(false)
+      if (roomFromEmptyState && room?.id) {
+        navigate(`/rooms/${room.id}`)
+        onClose?.()
+      }
+      setRoomFromEmptyState(false)
     } catch { /* ignore */ }
   }
 
   const openNewRoomDialog = (projectId: string) => {
     setRoomProjectId(projectId)
+    setRoomNeedsProjectChoice(false)
+    setRoomFromEmptyState(false)
     setNewRoomName('')
     setRoomDialogOpen(true)
   }
@@ -365,7 +405,7 @@ export default function Sidebar({
       {open && (
         <button
           type="button"
-          aria-label="Close sidebar"
+          aria-label={t('chat.closeSidebar')}
           className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
           onClick={onClose}
         />
@@ -376,17 +416,23 @@ export default function Sidebar({
         aria-hidden={collapsed || undefined}
         className={`
           fixed inset-y-0 left-0 z-40 flex h-full w-64 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface-alt)]
-          transform transition-all duration-200 ease-out
+          transform ${open ? 'transition-transform duration-200 ease-out' : 'transition-none'}
           ${open ? 'translate-x-0 shadow-deep' : '-translate-x-full'}
           ${collapsed
             ? 'md:-translate-x-full md:w-0 md:overflow-hidden md:border-r-0'
             : 'md:static md:z-auto md:translate-x-0 md:w-64'}
         `}
       >
-      {/* Header — brand wordmark removed (#435): app identity lives in the
-          room switcher / breadcrumb, not a sidebar logo. The h-14 row is
-          kept for the collapse / close controls, pinned to the right. */}
-      <div className="flex h-14 items-center justify-end px-4">
+      {/* A consistent home target anchors navigation even in an empty workspace. */}
+      <div className="flex h-14 items-center justify-between gap-2 px-3">
+        <button
+          type="button"
+          onClick={() => go('/')}
+          aria-label={t('chat.goHome')}
+          className="flex min-h-11 min-w-0 items-center rounded-[var(--radius-sm)] px-2 text-left text-[15px] font-bold tracking-tight text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
+        >
+          <span className="truncate">Anygarden</span>
+        </button>
         <div className="flex items-center gap-1">
           {/* Desktop collapse trigger (#106). Paired with the
               main-area floating expand button so users can toggle
@@ -394,19 +440,19 @@ export default function Sidebar({
               the X close button to the right. */}
           <button
             type="button"
-            className="hidden md:inline-flex rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+            className="hidden h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors md:inline-flex"
             onClick={toggleCollapsed}
-            aria-label="Collapse sidebar"
+            aria-label={t('chat.collapseSidebar')}
             data-testid="sidebar-collapse"
-            title="Collapse sidebar (⌘B)"
+            title={t('chat.collapseSidebarShortcut')}
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
           <button
             type="button"
-            className="md:hidden rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5"
+            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] md:hidden"
             onClick={onClose}
-            aria-label="Close sidebar"
+            aria-label={t('chat.closeSidebar')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -425,7 +471,7 @@ export default function Sidebar({
             <div className="mb-2">
               <div className="flex items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)]">
                 <Pin className="h-3 w-3" />
-                Pinned
+                {t('chat.pinned')}
               </div>
               <DndContext
                 sensors={sensors}
@@ -469,10 +515,10 @@ export default function Sidebar({
                   in on hover without nesting interactive elements
                   (which would be invalid HTML). ``relative`` anchors
                   the menu's absolute-positioned popover. */}
-              <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-black/5 transition-colors">
+              <div className="group relative flex items-center rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] transition-colors">
                 <button
                   onClick={() => toggleProject(project.id)}
-                  className="text-sm font-medium flex flex-1 min-w-0 items-center px-2 py-1.5 text-[var(--color-foreground)]"
+                  className="text-sm font-medium flex min-h-11 flex-1 min-w-0 items-center px-2 text-[var(--color-foreground)]"
                 >
                   {expandedProjects.has(project.id)
                     ? <ChevronDown className="mr-1 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
@@ -503,10 +549,10 @@ export default function Sidebar({
 
                   <button
                     onClick={() => openNewRoomDialog(project.id)}
-                    className="flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1 text-[14px] font-medium text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-colors"
+                    className="flex min-h-11 w-full items-center rounded-[var(--radius-sm)] px-2 text-[14px] font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
-                    <span>New Room</span>
+                    <span>{t('chat.newRoom')}</span>
                   </button>
                 </div>
               )}
@@ -515,7 +561,7 @@ export default function Sidebar({
 
           {projects.length === 0 && (
             <p className="text-caption text-[var(--color-foreground-muted)] px-2 py-4 text-center">
-              No projects yet
+              {t('chat.noProjects')}
             </p>
           )}
         </div>
@@ -525,18 +571,18 @@ export default function Sidebar({
       <div className="p-2">
         <Dialog open={projectDialogOpen} onOpenChange={setProjectDialogOpen}>
           <DialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="w-full justify-start text-[var(--color-foreground-muted)]">
+            <Button variant="ghost" size="sm" className="min-h-11 w-full justify-start text-[var(--color-foreground-muted)]">
               <Plus className="mr-2 h-4 w-4" />
-              New Project
+              {t('chat.newProject')}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Create Project</DialogTitle>
+              <DialogTitle>{t('chat.createProject')}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
               <Input
-                placeholder="Project name"
+                placeholder={t('chat.projectName')}
                 value={newProjectName}
                 onChange={e => setNewProjectName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
@@ -544,7 +590,7 @@ export default function Sidebar({
             </div>
             <DialogFooter>
               <Button onClick={handleCreateProject} disabled={!newProjectName.trim()}>
-                Create
+                {t('chat.create')}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -568,22 +614,39 @@ export default function Sidebar({
       )}
 
       {/* New Room dialog */}
-      <Dialog open={roomDialogOpen} onOpenChange={setRoomDialogOpen}>
+      <Dialog open={roomDialogOpen} onOpenChange={(next) => {
+        setRoomDialogOpen(next)
+        if (!next) setRoomFromEmptyState(false)
+      }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Room</DialogTitle>
+            <DialogTitle>{t('chat.createRoom')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {roomNeedsProjectChoice && (
+              <div className="space-y-2">
+                <label htmlFor="sidebar-new-room-project" className="block text-sm font-medium">{t('chat.project')}</label>
+                <select
+                  id="sidebar-new-room-project"
+                  value={roomProjectId}
+                  onChange={(event) => setRoomProjectId(event.target.value)}
+                  className="h-11 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm"
+                >
+                  <option value="">{t('chat.selectProject')}</option>
+                  {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+                </select>
+              </div>
+            )}
             <Input
-              placeholder="Room name"
+              placeholder={t('chat.roomName')}
               value={newRoomName}
               onChange={e => setNewRoomName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleCreateRoom()}
             />
           </div>
           <DialogFooter>
-            <Button onClick={handleCreateRoom} disabled={!newRoomName.trim()}>
-              Create
+            <Button onClick={handleCreateRoom} disabled={!newRoomName.trim() || !roomProjectId}>
+              {t('chat.create')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -599,29 +662,24 @@ export default function Sidebar({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete project</DialogTitle>
+            <DialogTitle>{t('chat.deleteProject')}</DialogTitle>
           </DialogHeader>
           {deleteProjectTarget && (() => {
             const roomCount = (rooms[deleteProjectTarget.id] ?? []).length
             return (
               <div className="space-y-2 py-2 text-sm text-[var(--color-foreground)]">
                 {roomCount === 0 ? (
-                  <p>
-                    프로젝트 <strong>&ldquo;{deleteProjectTarget.name}&rdquo;</strong>를 삭제하시겠습니까?
-                  </p>
+                  <p>{t('chat.deleteProjectEmptyPrompt', { name: deleteProjectTarget.name })}</p>
                 ) : (
-                  <p>
-                    프로젝트 <strong>&ldquo;{deleteProjectTarget.name}&rdquo;</strong>와
-                    {' '}하위 room <strong>{roomCount}개</strong>가 모두 삭제됩니다.
-                  </p>
+                  <p>{t('chat.deleteProjectRoomsPrompt', { name: deleteProjectTarget.name, count: roomCount })}</p>
                 )}
-                <p className="text-[var(--color-foreground-muted)]">이 작업은 되돌릴 수 없습니다.</p>
+                <p className="text-[var(--color-foreground-muted)]">{t('chat.cannotUndo')}</p>
               </div>
             )
           })()}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDeleteProjectTarget(null)}>
-              취소
+              {t('chat.cancel')}
             </Button>
             <Button
               variant="destructive"
@@ -630,7 +688,7 @@ export default function Sidebar({
                 if (deleteProjectTarget) void handleDeleteProject(deleteProjectTarget.id)
               }}
             >
-              삭제
+              {t('chat.delete')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -646,12 +704,12 @@ export default function Sidebar({
         <div className="border-t border-[var(--color-border)] px-2 py-2">
           <button
             onClick={() => setAgentsExpanded(prev => !prev)}
-            className="flex w-full items-center gap-1 px-2 py-1 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+            className="flex min-h-11 w-full items-center gap-1 px-2 text-badge uppercase text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
           >
             {agentsExpanded
               ? <ChevronDown className="h-3 w-3" />
               : <ChevronRight className="h-3 w-3" />}
-            Agents
+            {t('chat.agents')}
           </button>
           {agentsExpanded && (
             isAdmin ? (
@@ -669,10 +727,10 @@ export default function Sidebar({
                       key={dm.id}
                       onClick={() => go(`/rooms/${dm.id}`)}
                       data-testid={`sidebar-dm-${dm.id}`}
-                      className={`flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                      className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-[14px] font-medium transition-colors ${
                         selectedRoom === dm.id
-                          ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                          : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                          ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
+                          : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
                       }`}
                     >
                       <EntityAvatar
@@ -692,12 +750,17 @@ export default function Sidebar({
         </div>
       )}
 
+      <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
+        <LocaleToggle compact />
+        <ThemeToggle className="min-h-11 min-w-11" />
+      </div>
+
       {/* User info */}
       <div className="relative flex items-center justify-between gap-2 border-t border-[var(--color-border)] px-3 py-2">
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-xs text-[var(--color-foreground-muted)]">{user?.email}</span>
           {serverVersion && (
-            <span className="truncate text-[11px] text-[var(--color-foreground-subtle)]" title="Server version">
+            <span className="truncate text-[11px] text-[var(--color-foreground-subtle)]" title={t('chat.serverVersion')}>
               anygarden v{serverVersion}
             </span>
           )}
@@ -710,7 +773,7 @@ export default function Sidebar({
               onGo={go}
             />
           )}
-          <Button variant="ghost" size="icon" onClick={logout} title="Logout" className="min-h-11 min-w-11">
+          <Button variant="ghost" size="icon" onClick={logout} title={t('chat.logout')} aria-label={t('chat.logout')} className="min-h-11 min-w-11">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
@@ -760,6 +823,7 @@ function RoomTreeNodeView({
   onRename,
   onDelete,
 }: Omit<RoomTreeBranchProps, 'nodes' | 'projectId'> & { node: RoomTreeNode }) {
+  const { t } = useLocale()
   // Cap the padding so that at depth >= 4 the label stays visible.
   // Deep threads are rare in practice and the user can still use
   // the room header's parent breadcrumb for navigation.
@@ -776,14 +840,14 @@ function RoomTreeNodeView({
       <div
         className={`group relative flex w-full items-center rounded-[var(--radius-sm)] mb-0.5 ${
           isSelected
-            ? 'bg-white shadow-whisper'
-            : 'hover:bg-black/5'
+            ? 'bg-[var(--color-surface)] shadow-whisper'
+            : 'hover:bg-[var(--color-surface-hover)]'
         }`}
       >
         <button
           onClick={() => onGo(`/rooms/${node.room.id}`)}
           style={{ paddingLeft: `${indentPx + 8}px` }}
-          className={`flex min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+          className={`flex min-h-11 min-w-0 flex-1 items-center pr-2 text-[14px] font-medium transition-colors ${
             isSelected
               ? 'text-[var(--color-foreground)]'
               : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -798,10 +862,10 @@ function RoomTreeNodeView({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onPin(node.room.id) }}
-            title="Pin to top"
-            aria-label={`Pin ${node.room.name}`}
+            title={t('chat.pinToTop')}
+            aria-label={t('chat.pinRoom', { name: node.room.name })}
             data-testid={`sidebar-pin-${node.room.id}`}
-            className="shrink-0 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
           >
             <Pin className="h-3 w-3" />
           </button>
@@ -886,6 +950,8 @@ function AgentDMListAdmin({
   selectedRoom: string | null
   onGo: (path: string) => void
 }) {
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
   const {
     agents,
     deleteAgent,
@@ -972,10 +1038,12 @@ function AgentDMListAdmin({
 
   const handleDeleteDM = useCallback(
     async (roomId: string, displayName: string) => {
-      const ok = window.confirm(
-        `이 대화 "${displayName}"을(를) 삭제하시겠습니까?\n\n` +
-          '대화의 모든 메시지가 사라집니다. 되돌릴 수 없습니다.',
-      )
+      const ok = await confirm({
+        title: t('chat.deleteConversationTitle', { name: displayName }),
+        description: t('chat.deleteConversationDescription'),
+        confirmLabel: t('chat.delete'),
+        destructive: true,
+      })
       if (!ok) return
       const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
         method: 'DELETE',
@@ -989,16 +1057,16 @@ function AgentDMListAdmin({
         if (selectedRoom === roomId) onGo('/')
         return
       }
-      let detail = `Failed to delete DM (${resp.status})`
+      let detail = t('chat.failedDeleteConversation', { status: resp.status })
       try {
         const body = await resp.json()
         if (body && typeof body.detail === 'string') detail = body.detail
       } catch {
         /* ignore */
       }
-      window.alert(detail)
+      notify({ message: detail, tone: 'error' })
     },
-    [fetchAgentDMs, onGo, selectedRoom],
+    [fetchAgentDMs, onGo, selectedRoom, t, confirm, notify],
   )
 
   const handleOpenSettings = (agentId: string) => {
@@ -1008,7 +1076,12 @@ function AgentDMListAdmin({
   }
 
   const handleDeleteAgent = async (agentId: string): Promise<boolean> => {
-    if (!confirm('Delete this agent? This cannot be undone.')) return false
+    if (!await confirm({
+      title: t('chat.deleteAgentTitle'),
+      description: t('chat.deleteAgentDescription'),
+      confirmLabel: t('chat.delete'),
+      destructive: true,
+    })) return false
     await deleteAgent(agentId)
     // Delete cascades the DM room server-side. Refresh the sidebar
     // DM list so the row disappears immediately instead of lingering
@@ -1082,8 +1155,8 @@ function AgentDMListAdmin({
             <div
               className={`group relative flex w-full items-center rounded-[var(--radius-sm)] transition-colors ${
                 soloIsSelected
-                  ? 'bg-white shadow-whisper'
-                  : 'hover:bg-black/5'
+                  ? 'bg-[var(--color-surface)] shadow-whisper'
+                  : 'hover:bg-[var(--color-surface-hover)]'
               }`}
             >
               <button
@@ -1096,7 +1169,7 @@ function AgentDMListAdmin({
                     ? `sidebar-dm-${soloDM.id}`
                     : `sidebar-agent-${agent.id}`
                 }
-                className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                className={`flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
                   soloIsSelected
                     ? 'text-[var(--color-foreground)]'
                     : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1150,7 +1223,7 @@ function AgentDMListAdmin({
                 // making the agent row appear twice as tall. Pairing
                 // with ``items-center gap-0.5`` keeps the ``+`` and
                 // ``⋯`` buttons side-by-side at 24×24 each.
-                className="mr-1 inline-flex shrink-0 items-center gap-0.5 opacity-0 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
+                className="mr-1 inline-flex shrink-0 items-center gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 transition-opacity"
                 data-testid={`sidebar-agent-actions-${agent.id}`}
               >
                 <button
@@ -1158,9 +1231,9 @@ function AgentDMListAdmin({
                     e.stopPropagation()
                     void handleCreateDM(agent.id)
                   }}
-                  title="새 대화"
-                  aria-label="새 대화"
-                  className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/10 hover:text-[var(--color-foreground)]"
+                  title={t('chat.newConversation')}
+                  aria-label={t('chat.newConversation')}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6"
                   data-testid={`sidebar-new-dm-${agent.id}`}
                 >
                   <Plus className="h-3.5 w-3.5" />
@@ -1182,7 +1255,7 @@ function AgentDMListAdmin({
               </span>
             </div>
             {hasMultipleDMs && isExpanded && (
-              <div className="ml-5 flex flex-col gap-0.5 border-l border-black/5 pl-1.5">
+              <div className="ml-5 flex flex-col gap-0.5 border-l border-[var(--color-border-subtle)] pl-1.5">
                 {agentDms.map(dm => {
                   const isSel = selectedRoom === dm.id
                   const label = dm.name.replace(/^DM:\s*/, '')
@@ -1191,23 +1264,23 @@ function AgentDMListAdmin({
                       key={dm.id}
                       className={`group relative flex min-w-0 items-center rounded-[var(--radius-sm)] ${
                         isSel
-                          ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                          : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                          ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
+                          : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
                       }`}
                     >
                       <button
                         onClick={() => onGo(`/rooms/${dm.id}`)}
                         data-testid={`sidebar-dm-${dm.id}`}
-                        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1 text-[13px] font-medium transition-colors"
+                        className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-1 text-[13px] font-medium transition-colors"
                       >
                         <MessageSquare className="h-3 w-3 shrink-0" />
                         <span className="min-w-0 truncate">{label}</span>
                         {dm.ephemeral && (
                           <span
                             className="shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
-                            title="임시 세션 — 장기 기억에 저장되지 않습니다"
+                            title={t('chat.temporarySession')}
                           >
-                            임시
+                            {t('chat.temporaryShort')}
                           </span>
                         )}
                         {dm.has_updates && <UpdateDot className="ml-auto" />}
@@ -1233,10 +1306,10 @@ function AgentDMListAdmin({
             key={dm.id}
             onClick={() => onGo(`/rooms/${dm.id}`)}
             data-testid={`sidebar-dm-${dm.id}`}
-            className={`flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+            className={`flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
               isSel
-                ? 'bg-white shadow-whisper text-[var(--color-foreground)]'
-                : 'text-[var(--color-foreground-muted)] hover:bg-black/5 hover:text-[var(--color-foreground)]'
+                ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
+                : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
             }`}
           >
             <EntityAvatar
@@ -1323,6 +1396,7 @@ function PinnedRoomItem({
   onGo: (path: string) => void
   onUnpin: () => void
 }) {
+  const { t } = useLocale()
   const isSelected = selectedRoom === room.id
   // ``useSortable`` wires each item into the parent
   // ``SortableContext``. ``attributes`` + ``listeners`` go on the
@@ -1345,24 +1419,24 @@ function PinnedRoomItem({
       style={style}
       className={`group relative flex w-full items-center rounded-[var(--radius-sm)] ${
         isSelected
-          ? 'bg-white shadow-whisper'
-          : 'hover:bg-black/5'
+          ? 'bg-[var(--color-surface)] shadow-whisper'
+          : 'hover:bg-[var(--color-surface-hover)]'
       }`}
     >
       <button
         type="button"
         {...attributes}
         {...listeners}
-        title="Drag to reorder"
-        aria-label={`Reorder ${room.name}`}
+        title={t('chat.dragToReorder')}
+        aria-label={t('chat.reorderRoom', { name: room.name })}
         data-testid={`sidebar-drag-${room.id}`}
-        className="cursor-grab touch-none rounded p-1 text-[var(--color-foreground-subtle)] opacity-0 group-hover:opacity-100 hover:bg-black/5 focus:opacity-100 active:cursor-grabbing"
+        className="flex h-11 w-11 cursor-grab touch-none items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] focus:opacity-100 active:cursor-grabbing md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
       >
         <GripVertical className="h-3 w-3" />
       </button>
       <button
         onClick={() => onGo(`/rooms/${room.id}`)}
-        className={`flex min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+        className={`flex min-h-11 min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
           isSelected
             ? 'text-[var(--color-foreground)]'
             : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1376,10 +1450,10 @@ function PinnedRoomItem({
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onUnpin() }}
-        title="Unpin"
-        aria-label={`Unpin ${room.name}`}
+        title={t('chat.unpin')}
+        aria-label={t('chat.unpinRoom', { name: room.name })}
         data-testid={`sidebar-unpin-${room.id}`}
-        className="mr-1 opacity-0 group-hover:opacity-100 rounded p-1 text-[var(--color-foreground-subtle)] hover:bg-black/5 hover:text-[var(--color-foreground)] transition-opacity"
+        className="mr-1 flex h-11 w-11 items-center justify-center rounded text-[var(--color-foreground-subtle)] opacity-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-opacity md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"
       >
         <PinOff className="h-3 w-3" />
       </button>

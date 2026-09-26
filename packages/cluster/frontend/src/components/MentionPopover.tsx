@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 export interface MentionOption {
   id: string
@@ -22,6 +23,7 @@ interface MentionPopoverProps {
 export default function MentionPopover({
   options, position, selectedIndex, onSelect, onClose,
 }: MentionPopoverProps) {
+  const { t } = useLocale()
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function MentionPopover({
   return (
     <div
       ref={listRef}
-      className="absolute z-50 max-h-48 w-56 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white shadow-sm"
+      className="absolute z-50 max-h-48 w-56 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-sm"
       style={{ bottom: position.top, left: position.left }}
     >
       {options.map((option, i) => {
@@ -47,10 +49,10 @@ export default function MentionPopover({
         return (
           <button
             key={option.id}
-            className={`flex w-full items-start gap-2 px-3 py-1.5 text-sm text-left transition-colors ${
+            className={`flex min-h-11 w-full items-start gap-2 px-3 py-1.5 text-sm text-left transition-colors ${
               i === selectedIndex
-                ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand)]'
-                : 'text-[var(--color-foreground)] hover:bg-black/[0.03]'
+                ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-text)]'
+                : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'
             }`}
             onMouseDown={(e) => { e.preventDefault(); onSelect(option) }}
           >
@@ -67,10 +69,10 @@ export default function MentionPopover({
               <span className="flex items-center gap-2">
                 <span className="truncate">{option.display}</span>
                 {option.kind === 'agent' && (
-                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">agent</span>
+                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">{t('chat.agentLabel')}</span>
                 )}
                 {option.kind === 'file' && (
-                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">file</span>
+                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">{t('chat.fileLabel')}</span>
                 )}
               </span>
               {hasDesc && (

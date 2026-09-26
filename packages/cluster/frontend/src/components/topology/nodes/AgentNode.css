@@ -16,10 +16,7 @@
   width: 140px;
   height: 44px;
   border-radius: 12px;
-  /* 12px horizontal padding follows the 8px base spacing grid
-     (DESIGN.md §6) with a +4 offset to leave breathing room
-     between the glyph and the left edge without starving the
-     flex label of width. */
+  /* Reserve breathing room without starving the flex label. */
   padding: 0 12px;
   display: flex;
   align-items: center;
@@ -57,10 +54,8 @@
 
 /**
  * #309 — host-access (trusted) marker. Positioned in the top-right
- * corner so it doesn't compete with the lifecycle dot on the right
- * edge. Color is muted (orange-ish warning) rather than the brand
- * blue because this is a *security* signal, not an action affordance,
- * and DESIGN.md §2 reserves the brand color for interactive accent.
+ * corner so it doesn't compete with the lifecycle dot on the right.
+ * The warning token distinguishes host access from the teal action accent.
  */
 .agent-node__trusted {
   position: absolute;
@@ -73,9 +68,9 @@
   justify-content: center;
   font-size: 10px;
   line-height: 1;
-  color: #c2410c;
-  background: #fff7ed;
-  border: 1px solid rgba(194, 65, 12, 0.3);
+  color: var(--color-warning);
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning);
   border-radius: 50%;
   pointer-events: none;
 }
@@ -86,10 +81,10 @@
 
 @keyframes topology-agent-pulse {
   0%, 100% {
-    box-shadow: 0 0 0 0 rgba(0, 117, 222, 0.35), 0 1px 2px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 0 0 0 var(--color-topology-accent-soft), var(--shadow-card);
   }
   50% {
-    box-shadow: 0 0 0 4px rgba(0, 117, 222, 0), 0 1px 2px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 0 0 4px transparent, var(--shadow-card);
   }
 }
 

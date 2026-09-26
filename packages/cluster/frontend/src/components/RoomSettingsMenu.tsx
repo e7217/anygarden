@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Activity, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Overflow menu that groups the room's admin-scoped actions into a
@@ -18,7 +19,7 @@ import { Activity, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, Octago
  * its handler is provided, matching the previous "show when
  * permitted" semantics. Dangerous actions (``onStopAllAgents``)
  * are rendered in a distinct destructive row at the bottom with a
- * separator, per the Slack-style chat-UX convention.
+ * separator so destructive actions remain distinct.
  */
 
 export interface RoomSettingsMenuProps {
@@ -54,48 +55,49 @@ export default function RoomSettingsMenu({
   onStopAllAgents,
   onDeleteRoom,
 }: RoomSettingsMenuProps) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
   const safeActions = [
     onSearch && {
-      label: 'Search messages',
+      label: t('chat.searchMessages'),
       icon: <Search className="h-4 w-4" />,
       onClick: onSearch,
       testId: 'room-menu-search',
     },
     onCreateSubRoom && {
-      label: 'Create sub-room',
+      label: t('chat.createSubRoom'),
       icon: <FolderPlus className="h-4 w-4" />,
       onClick: onCreateSubRoom,
       testId: 'room-menu-new-sub-room',
     },
     onEditRoom && {
-      label: 'Edit room',
+      label: t('chat.editRoom'),
       icon: <Settings className="h-4 w-4" />,
       onClick: onEditRoom,
       testId: 'room-menu-edit',
     },
     onManageInvites && {
-      label: 'Invite links',
+      label: t('chat.inviteLinks'),
       icon: <Link2 className="h-4 w-4" />,
       onClick: onManageInvites,
       testId: 'room-menu-invites',
     },
     onManageAgents && {
-      label: 'Manage agents',
+      label: t('chat.manageAgents'),
       icon: <UserPlus className="h-4 w-4" />,
       onClick: onManageAgents,
       testId: 'room-menu-agents',
     },
     onShowArtifacts && {
-      label: 'Artifacts',
+      label: t('chat.artifacts'),
       icon: <ImageIcon className="h-4 w-4" />,
       onClick: onShowArtifacts,
       testId: 'room-menu-artifacts',
     },
     onShowRoomActivity && {
-      label: 'Room activity',
+      label: t('chat.roomActivity'),
       icon: <Activity className="h-4 w-4" />,
       onClick: onShowRoomActivity,
       testId: 'room-menu-activity',
@@ -150,9 +152,11 @@ export default function RoomSettingsMenu({
     <div ref={rootRef} className="relative">
       <Button
         variant="ghost"
-        size="sm"
+        size="icon"
+        className="min-h-11 min-w-11"
         onClick={() => setOpen((v) => !v)}
-        title="Room settings"
+        title={t('chat.roomSettings')}
+        aria-label={t('chat.roomSettings')}
         // Paired with ``role="group"`` on the flyout — ``dialog``
         // is the honest haspopup value when we aren't implementing
         // full menu-role semantics.
@@ -170,8 +174,8 @@ export default function RoomSettingsMenu({
           // no such promise — screen readers announce the labelled
           // group and the button children stay naturally Tab-able.
           role="group"
-          aria-label="Room settings"
-          className="absolute right-0 top-9 z-40 w-52 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white shadow-lg"
+          aria-label={t('chat.roomSettings')}
+          className="absolute right-0 top-full z-40 mt-1 w-52 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
         >
           <ul className="py-1">
             {safeActions.map((a) => (
@@ -180,7 +184,7 @@ export default function RoomSettingsMenu({
                   type="button"
                   onClick={() => handleSelect(a.onClick)}
                   data-testid={a.testId}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-black/5 cursor-pointer"
+                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] cursor-pointer"
                 >
                   {a.icon}
                   <span>{a.label}</span>
@@ -203,10 +207,10 @@ export default function RoomSettingsMenu({
                   // obvious. The divider above further separates it
                   // from the safe-action group so a stray click is
                   // less likely.
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <OctagonX className="h-4 w-4" />
-                  <span>Stop all agents</span>
+                  <span>{t('chat.stopAllAgents')}</span>
                 </button>
               </li>
             )}
@@ -221,10 +225,10 @@ export default function RoomSettingsMenu({
                   // this prop on the same admin/owner check the
                   // server enforces, and to prompt for confirmation
                   // before actually firing the DELETE.
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                  className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4" />
-                  <span>Delete room</span>
+                  <span>{t('chat.deleteRoom')}</span>
                 </button>
               </li>
             )}

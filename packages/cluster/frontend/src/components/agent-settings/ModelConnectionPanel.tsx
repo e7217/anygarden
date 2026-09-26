@@ -6,13 +6,14 @@ import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import { applyEndpoint, getEndpoint, switchPiToNative, type EndpointConfiguration } from '@/lib/engineEndpoints'
 import DirectEndpointPanel from './DirectEndpointPanel'
 import PiNativeAuthPanel from './PiNativeAuthPanel'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 export type ConnectionState =
   | { agentId: string; status: 'loading' }
   | { agentId: string; status: 'error' }
   | { agentId: string; status: 'ready'; config: EndpointConfiguration }
 
-const selectClass = 'flex min-h-11 w-full rounded border border-[var(--color-border-strong)] bg-white px-3 text-sm'
+const selectClass = 'flex min-h-11 w-full rounded border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 text-sm text-[var(--color-foreground)]'
 const providerPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 type UpdateAgent = (id: string, patch: {
@@ -26,6 +27,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
   fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
   onConnectionChange: (state: ConnectionState) => void
 }) {
+  const { t } = useLocale()
   const [connection, setConnection] = useState<EndpointConfiguration | null>(null)
   const [loadStatus, setLoadStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [mode, setMode] = useState<'native' | 'direct'>('native')
@@ -91,7 +93,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
 
   async function saveNative() {
     if (!providerPattern.test(provider) || !model.trim()) {
-      setError('Enter a valid provider ID and model ID.')
+      setError(t('admin.modelConnection.validProviderModel'))
       return
     }
     if (!connection?.base_url && provider === agent.provider && model.trim() === agent.model) return
@@ -99,7 +101,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
     try {
       if (connection?.base_url) {
         if (!nativeKey && storedNativeProvider !== provider) {
-          setError('Enter the API key for this native provider before switching.')
+          setError(t('admin.modelConnection.nativeKeyRequired'))
           return
         }
         const previous = connection
@@ -111,7 +113,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
             const response = await apiFetch(`/api/v1/agents/${agent.id}/pi-auth`, {
               method: 'PUT', body: JSON.stringify({ value: key }),
             })
-            if (!response.ok) throw new Error('The provider key could not be saved')
+            if (!response.ok) throw new Error(t('admin.modelConnection.keySaveFailed'))
             setStoredNativeProvider(provider)
           } catch {
             // Re-read before rollback: the first request may have succeeded even
@@ -126,10 +128,10 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
                 })
                 restored = true
               } catch { /* current state is shown after refresh below */ }
-              if (restored) throw new Error('Provider key was not saved; the previous direct connection was restored. Retry the switch.')
-              throw new Error('Provider key was not saved, and the direct connection could not be restored. Check the current connection and retry.')
+              if (restored) throw new Error(t('admin.modelConnection.keyRestored'))
+              throw new Error(t('admin.modelConnection.keyRestoreFailed'))
             }
-            throw new Error('Provider key was not saved. Check the current connection and retry.')
+            throw new Error(t('admin.modelConnection.keyRetry'))
           }
         }
       } else {
@@ -139,9 +141,9 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
       }
       await updateAgent(agent.id, {})
       await refresh()
-      setNotice('Native provider and model saved.')
+      setNotice(t('admin.modelConnection.nativeSaved'))
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Unable to save connection')
+      setError(cause instanceof Error ? cause.message : t('admin.modelConnection.saveFailed'))
       try { await refresh() } catch { /* load error is displayed below */ }
     } finally { setBusy(false) }
   }
@@ -149,25 +151,34 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
   async function saveModel(value: string) {
     setBusy(true); setError('')
     try { await updateAgent(agent.id, { model: value || null, model_set: true }) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save model') }
+    catch (cause) { setError(cause instanceof Error ? cause.message : t('admin.modelConnection.saveModelFailed')) }
     finally { setBusy(false) }
   }
 
   async function saveReasoning(value: string) {
     setBusy(true); setError('')
     try { await updateAgent(agent.id, { reasoning_effort: value || null, reasoning_effort_set: true }) }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Unable to save reasoning') }
+    catch (cause) { setError(cause instanceof Error ? cause.message : t('admin.modelConnection.saveReasoningFailed')) }
     finally { setBusy(false) }
   }
 
-  if (loadStatus === 'loading') return <p role="status">Loading model connection…</p>
-  if (loadStatus === 'error' || !connection) return <p role="alert">Unable to load model connection. Close and reopen settings to retry.</p>
+  if (loadStatus === 'loading') return <p role="status">{t('admin.modelConnection.loading')}</p>
+  if (loadStatus === 'error' || !connection) return <p role="alert">{t('admin.modelConnection.loadFailed')}</p>
 
   const isPi = agent.engine === 'pi-cli'
   const activeDirect = Boolean(connection.base_url)
+  const reasoningLabels: Record<string, string> = {
+    minimal: t('admin.machines.reasoning.minimal'),
+    low: t('admin.machines.reasoning.low'),
+    medium: t('admin.machines.reasoning.medium'),
+    high: t('admin.machines.reasoning.high'),
+    xhigh: t('admin.machines.reasoning.xhigh'),
+    max: t('admin.machines.reasoning.max'),
+    ultra: t('admin.machines.reasoning.ultra'),
+  }
   return <div className="space-y-4">
     {isPi && <div className="space-y-1">
-      <label htmlFor="pi-connection-mode" className="block text-sm font-medium">Connection type</label>
+      <label htmlFor="pi-connection-mode" className="block text-sm font-medium">{t('admin.modelConnection.connectionType')}</label>
       <select id="pi-connection-mode" className={selectClass} value={mode} disabled={busy}
         onChange={event => {
           const next = event.target.value as 'native' | 'direct'
@@ -175,7 +186,7 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
           if (next === 'native' && activeDirect) { setProvider(''); setModel('') }
           if (next === 'direct' && !activeDirect) { setNativeKey('') }
         }}>
-        <option value="native">Pi provider</option><option value="direct">Direct model server</option>
+        <option value="native">{t('admin.modelConnection.piProvider')}</option><option value="direct">{t('admin.modelConnection.directServer')}</option>
       </select>
     </div>}
     {error && <p role="alert" className="text-sm text-[var(--color-warning)]">{error}</p>}
@@ -184,39 +195,39 @@ export default function ModelConnectionPanel({ agent, updateAgent, fetchEngineCa
       <DirectEndpointPanel key={agent.id} agentId={agent.id} engine={agent.engine} nativeCredentialProvider={storedNativeProvider}
         onSaved={async () => { await updateAgent(agent.id, {}); await refresh() }} />
     ) : isPi ? <div className="space-y-3">
-      <label className="block text-sm">Provider ID
-        <Input aria-label="Agent provider" value={provider} maxLength={64} onChange={event => setProvider(event.target.value)} disabled={busy} />
+      <label className="block text-sm">{t('admin.modelConnection.providerId')}
+        <Input aria-label={t('admin.modelConnection.agentProvider')} value={provider} maxLength={64} onChange={event => setProvider(event.target.value)} disabled={busy} />
       </label>
-      <label className="block text-sm">Model ID
-        <Input aria-label="Agent model" value={model} list="pi-native-models" onChange={event => setModel(event.target.value)} disabled={busy} />
+      <label className="block text-sm">{t('admin.modelConnection.modelId')}
+        <Input aria-label={t('admin.modelConnection.agentModel')} value={model} list="pi-native-models" onChange={event => setModel(event.target.value)} disabled={busy} />
       </label>
       <datalist id="pi-native-models">{catalog?.models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</datalist>
       {activeDirect && <>
-        <p className="text-sm">Switching removes the direct connection. The previous endpoint credential remains stored.</p>
-        <label className="block text-sm">Native provider API key {storedNativeProvider === provider ? '(already stored)' : '(required)'}
-          <Input aria-label="Native provider API key" type="password" autoComplete="new-password" value={nativeKey} onChange={event => setNativeKey(event.target.value)} disabled={busy} />
+        <p className="text-sm">{t('admin.modelConnection.switchWarning')}</p>
+        <label className="block text-sm">{t('admin.modelConnection.nativeKey')} {storedNativeProvider === provider ? t('admin.modelConnection.alreadyStored') : t('admin.modelConnection.required')}
+          <Input aria-label={t('admin.modelConnection.nativeKey')} type="password" autoComplete="new-password" value={nativeKey} onChange={event => setNativeKey(event.target.value)} disabled={busy} />
         </label>
       </>}
       <Button className="min-h-11" disabled={busy || !providerPattern.test(provider) || !model.trim() || (activeDirect && !nativeKey && storedNativeProvider !== provider)}
-        onClick={() => void saveNative()}>{activeDirect ? 'Switch to Pi provider' : 'Apply provider and model'}</Button>
+        onClick={() => void saveNative()}>{activeDirect ? t('admin.modelConnection.switchToPi') : t('admin.modelConnection.applyProvider')}</Button>
       {!activeDirect && <PiNativeAuthPanel key={`${agent.id}-${agent.provider ?? ''}`} agentId={agent.id} provider={agent.provider ?? null} onSaved={() => updateAgent(agent.id, {})} />}
     </div> : <div className="space-y-3">
-      <label className="block text-sm">Model
-        <select aria-label="Agent model" className={selectClass} value={agent.model ?? ''} disabled={busy || !catalog}
+      <label className="block text-sm">{t('admin.modelConnection.model')}
+        <select aria-label={t('admin.modelConnection.agentModel')} className={selectClass} value={agent.model ?? ''} disabled={busy || !catalog}
           onChange={event => void saveModel(event.target.value)}>
-          <option value="">Default ({catalog?.default_model ?? 'engine default'})</option>
+          <option value="">{t('admin.modelConnection.defaultModel', { model: catalog?.default_model ?? t('admin.modelConnection.engineDefault') })}</option>
           {catalog?.models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          {agent.model && !catalog?.models.some(item => item.id === agent.model) && <option value={agent.model}>Current: {agent.model}</option>}
+          {agent.model && !catalog?.models.some(item => item.id === agent.model) && <option value={agent.model}>{t('admin.modelConnection.currentModel', { model: agent.model })}</option>}
         </select>
       </label>
     </div>}
-    {catalog && <label className="block text-sm">Reasoning
-      <select aria-label="Reasoning effort" className={selectClass} value={agent.reasoning_effort ?? ''} disabled={busy || !reasoningLevels.length}
+    {catalog && <label className="block text-sm">{t('admin.modelConnection.reasoning')}
+      <select aria-label={t('admin.modelConnection.reasoningEffort')} className={selectClass} value={agent.reasoning_effort ?? ''} disabled={busy || !reasoningLevels.length}
         onChange={event => void saveReasoning(event.target.value)}>
-        <option value="">Default</option>
-        {reasoningLevels.map(level => <option key={level} value={level}>{level}</option>)}
+        <option value="">{t('admin.modelConnection.default')}</option>
+        {reasoningLevels.map(level => <option key={level} value={level}>{reasoningLabels[level] ?? level}</option>)}
       </select>
     </label>}
-    {activeDirect && <p className="text-xs text-[var(--color-foreground-muted)]">Stored direct connections remain available for existing agents. Disabling one returns to the engine default.</p>}
+    {activeDirect && <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.modelConnection.directStoredInfo')}</p>}
   </div>
 }

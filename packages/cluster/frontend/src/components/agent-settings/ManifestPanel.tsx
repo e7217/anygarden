@@ -25,8 +25,7 @@
  * - Changes take effect on the NEXT spawn, not immediately — the
  *   running subprocess is not hot-reloaded.
  *
- * Style: follows DESIGN.md (warm neutral palette, whisper borders,
- * near-black text, single-accent brand color).
+ * Style: follows DESIGN.md's teal tokens and light/dark surfaces.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -48,6 +47,8 @@ import { deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, AgentFile, AttachedSkill, SkillPreview } from '@/hooks/useAgents'
 import { BookOpen, ExternalLink, Lock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 // Allowed top-level prefixes from the server-side whitelist.
 // Must stay in sync with ``anygarden-server/anygarden/agent_files.py``.
@@ -82,13 +83,13 @@ const ALLOWED_EXTENSIONS: readonly string[] = [
 ]
 
 // Friendly label for each prefix grouping in the file list.
-const PREFIX_LABELS: Record<string, string> = {
-  'skills/': 'Skills',
-  '.codex/': 'Codex config',
-  '.claude/': 'Claude Code config',
-  '.gemini/': 'Gemini CLI config',
-  '.openhands/': 'OpenHands config',
-}
+const PREFIX_LABEL_KEYS = {
+  'skills/': 'admin.manifest.prefix.skills',
+  '.codex/': 'admin.manifest.prefix.codex',
+  '.claude/': 'admin.manifest.prefix.claude',
+  '.gemini/': 'admin.manifest.prefix.gemini',
+  '.openhands/': 'admin.manifest.prefix.openhands',
+} as const
 
 // Issue #112 — engine → permissible prefixes. An agent's ``engine``
 // is fixed at creation, so only the matching CLI's config dir is
@@ -249,10 +250,10 @@ export function isSkillDirNode(node: TreeNode): boolean {
 
 // Friendly label for the top-level prefix dir nodes. For every
 // other depth, the raw directory name is used.
-function dirLabelFor(node: Extract<TreeNode, { kind: 'dir' }>, depth: number): string {
+function dirLabelFor(node: Extract<TreeNode, { kind: 'dir' }>, depth: number, t: ReturnType<typeof useLocale>['t']): string {
   if (depth === 0) {
-    const key = `${node.name}/`  // PREFIX_LABELS keys carry the trailing slash
-    return PREFIX_LABELS[key] ?? node.name
+    const key = `${node.name}/` as keyof typeof PREFIX_LABEL_KEYS
+    return PREFIX_LABEL_KEYS[key] ? t(PREFIX_LABEL_KEYS[key]) : node.name
   }
   return node.name
 }
@@ -291,10 +292,11 @@ interface RenderTreeNodeArgs {
   onToggle: (dirPath: string) => void
   onRemove: (path: string) => void
   onAddInSkill: (skillName: string) => void
+  t: ReturnType<typeof useLocale>['t']
 }
 
 function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
-  const { node, depth, selectedPath, expandedPaths, onSelect, onToggle, onRemove, onAddInSkill } = args
+  const { node, depth, selectedPath, expandedPaths, onSelect, onToggle, onRemove, onAddInSkill, t } = args
   // Consistent indent per depth — dense enough to keep ~5 levels
   // visible in the 240px tree column. ``paddingLeft`` is inline so
   // the depth math doesn't have to live in Tailwind's class
@@ -338,7 +340,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
               onRemove(f.path)
             }}
             className="opacity-0 group-hover:opacity-100 transition-opacity"
-            title={`Remove ${f.path}`}
+            title={t('admin.manifest.removeFile', { path: f.path })}
           >
             <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
           </button>
@@ -350,7 +352,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
   // Directory node.
   const isOpen = expandedPaths.has(node.path)
   const isSkill = isSkillDirNode(node)
-  const label = dirLabelFor(node, depth)
+  const label = dirLabelFor(node, depth, t)
   const fileCount = countFilesRec(node)
   return (
     <div key={node.path}>
@@ -380,8 +382,8 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
               e.stopPropagation()
               onAddInSkill(node.name)
             }}
-            className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-black/5"
-            title={`Add file in ${node.path}`}
+            className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-[var(--color-surface-hover)]"
+            title={t('admin.manifest.addFileIn', { path: node.path })}
             data-testid={`agent-edit-add-in-skill-${node.name}`}
           >
             <Plus className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" />
@@ -503,6 +505,8 @@ export default function ManifestPanel({
   fetchSkillPreview,
   onNavigateAway,
 }: Props) {
+  const { t } = useLocale()
+  const { confirm: confirmAction } = useFeedback()
   const navigate = useNavigate()
   const [files, setFiles] = useState<WorkingFile[]>([])
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -777,7 +781,7 @@ export default function ManifestPanel({
     )
   }
 
-  const handleAddFile = () => {
+  const handleAddFile = async () => {
     const path = newFilePath.trim()
     if (!path) return
     // AGENTS.md is a virtual entry that always lives at the top of
@@ -786,7 +790,7 @@ export default function ManifestPanel({
     // so the admin sees a clear message instead of a confusing
     // "file already exists" or prefix-validation error.
     if (path === AGENTS_MD_PATH) {
-      setError(`${AGENTS_MD_PATH} already exists at the top of the tree`)
+      setError(t('admin.manifest.agentsMdExists'))
       return
     }
     // Client-side validation mirrors a slice of the server-side
@@ -802,11 +806,11 @@ export default function ManifestPanel({
     // so this check is a UX affordance.
     const engineAllowed = allowedPrefixesForEngine(agent?.engine)
     if (!engineAllowed.some(p => path.startsWith(p))) {
-      setError(`path must start with one of: ${engineAllowed.join(', ')}`)
+      setError(t('admin.manifest.pathPrefix', { prefixes: engineAllowed.join(', ') }))
       return
     }
     if (!ALLOWED_EXTENSIONS.some(ext => path.endsWith(ext))) {
-      setError(`extension must be one of: ${ALLOWED_EXTENSIONS.join(', ')}`)
+      setError(t('admin.manifest.extension', { extensions: ALLOWED_EXTENSIONS.join(', ') }))
       return
     }
     const uploadContent = pendingContent
@@ -815,11 +819,11 @@ export default function ManifestPanel({
     // Manual "New file" rejects duplicates to match the original
     // behavior. Upload is explicit content, so we offer to overwrite.
     if (existsVisible && !isUpload) {
-      setError(`file ${path} already exists`)
+      setError(t('admin.manifest.fileExists', { path }))
       return
     }
     if (existsVisible && isUpload) {
-      const ok = window.confirm(`Overwrite existing ${path}?`)
+      const ok = await confirmAction({ title: t('admin.manifest.overwriteTitle'), description: t('admin.manifest.confirmOverwrite', { path }), destructive: true })
       if (!ok) return
     }
 
@@ -940,12 +944,12 @@ export default function ManifestPanel({
   const handleCreateSkill = () => {
     const slug = slugifySkillName(newSkillName)
     if (!slug) {
-      setError('skill name must contain at least one alphanumeric character')
+      setError(t('admin.manifest.skillNameInvalid'))
       return
     }
     const path = `skills/${slug}/SKILL.md`
     if (files.some(f => f.path === path && !f.deleted)) {
-      setError(`skill "${slug}" already exists`)
+      setError(t('admin.manifest.skillExists', { name: slug }))
       return
     }
     setFiles(prev => [
@@ -1001,7 +1005,7 @@ export default function ManifestPanel({
     try {
       content = await decodeUtf8Strict(file)
     } catch {
-      setError(`${file.name}: not a valid UTF-8 text file (binary is not supported)`)
+      setError(t('admin.manifest.invalidUpload', { name: file.name }))
       return
     }
     // Default path lands under ``skills/`` because that's the most
@@ -1105,20 +1109,19 @@ export default function ManifestPanel({
   return (
     <div className="flex h-full flex-col" data-testid="manifest-panel">
       <p className="text-caption text-[var(--color-foreground-muted)] pb-2">
-        Update the agent's system prompt and on-disk files. Changes take
-        effect on the next spawn — restart the agent to apply.
+        {t('admin.manifest.description')}
       </p>
       {loading ? (
           <div className="py-8 text-center text-caption text-[var(--color-foreground-muted)]">
-            Loading…
+            {t('common.loading')}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto py-2 space-y-5">
             {/* Files tree + editor ----------------------------------- */}
             <section className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Files</Label>
-                <div className="flex items-center gap-1">
+                <Label>{t('admin.manifest.files')}</Label>
+                <div className="flex flex-wrap items-center justify-end gap-1">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1126,7 +1129,7 @@ export default function ManifestPanel({
                     data-testid="agent-edit-upload"
                   >
                     <Upload className="mr-1 h-4 w-4" />
-                    Upload
+                    {t('admin.manifest.upload')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -1144,7 +1147,7 @@ export default function ManifestPanel({
                     data-testid="agent-edit-toggle-new-file"
                   >
                     <Plus className="mr-1 h-4 w-4" />
-                    New file
+                    {t('admin.manifest.newFile')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -1160,7 +1163,7 @@ export default function ManifestPanel({
                     data-testid="agent-edit-toggle-new-skill"
                   >
                     <FolderPlus className="mr-1 h-4 w-4" />
-                    New skill
+                    {t('admin.manifest.newSkill')}
                   </Button>
                 </div>
               </div>
@@ -1176,37 +1179,38 @@ export default function ManifestPanel({
               />
 
               {showNewFileForm ? (
-                <div className="flex gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+                <div className="flex flex-wrap gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
                   {pendingContent !== null ? (
                     <Badge
                       variant="outline"
                       className="bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)] border-[color:color-mix(in_srgb,var(--color-brand)_20%,transparent)] shrink-0"
                       data-testid="agent-edit-upload-badge"
                     >
-                      Upload
+                      {t('admin.manifest.upload')}
                     </Badge>
                   ) : null}
                   <Input
                     value={newFilePath}
                     onChange={e => setNewFilePath(e.target.value)}
                     placeholder="skills/greeting/SKILL.md"
+                    className="min-w-0 flex-1 basis-full sm:basis-auto"
                     onKeyDown={e => {
                       if (e.key === 'Enter') {
                         e.preventDefault()
-                        handleAddFile()
+                        void handleAddFile()
                       }
                     }}
                     data-testid="agent-edit-new-file-path"
                   />
-                  <Button size="sm" onClick={handleAddFile}>Add</Button>
+                  <Button size="sm" onClick={() => void handleAddFile()}>{t('admin.manifest.add')}</Button>
                   <Button size="sm" variant="ghost" onClick={handleCancelNewFile}>
-                    Cancel
+                    {t('common.cancel')}
                   </Button>
                 </div>
               ) : null}
 
               {showNewSkillForm ? (
-                <div className="flex gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+                <div className="flex flex-wrap gap-2 items-center bg-[var(--color-surface-alt)] rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
                   <span className="shrink-0 font-mono text-xs text-[var(--color-foreground-muted)]">
                     skills/
                   </span>
@@ -1227,20 +1231,20 @@ export default function ManifestPanel({
                     /SKILL.md
                   </span>
                   <Button size="sm" onClick={handleCreateSkill} data-testid="agent-edit-create-skill">
-                    Create
+                    {t('common.create')}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={handleCancelNewSkill}>
-                    Cancel
+                    {t('common.cancel')}
                   </Button>
                 </div>
               ) : null}
 
-              <div className="grid grid-cols-[240px_1fr] gap-3 min-h-[280px]">
+              <div className="grid min-w-0 grid-cols-1 gap-3 min-h-[280px] sm:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
                 {/* Left: file tree */}
-                <div className="overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)]">
+                <div className="max-h-64 min-w-0 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-background)] sm:max-h-none">
                   {treeRoots.length === 0 ? (
                     <div className="p-4 text-caption text-[var(--color-foreground-subtle)]">
-                      No files yet. Click "New file" to add one.
+                      {t('admin.manifest.none')}
                     </div>
                   ) : (
                     <div className="py-1">
@@ -1254,6 +1258,7 @@ export default function ManifestPanel({
                           onToggle: toggleExpanded,
                           onRemove: handleRemoveFile,
                           onAddInSkill: handleAddInSkill,
+                          t,
                         }),
                       )}
                       {/* Issue #133 — read-only section for library
@@ -1276,7 +1281,7 @@ export default function ManifestPanel({
                               <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             )}
                             <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                            <span>Attached skills</span>
+                            <span>{t('admin.manifest.attachedSkills')}</span>
                             <span className="text-[10px] text-[var(--color-foreground-subtle)] normal-case tracking-normal">
                               ({attachedSkills.length})
                             </span>
@@ -1313,7 +1318,7 @@ export default function ManifestPanel({
                 </div>
 
                 {/* Right: file content editor */}
-                <div className="flex flex-col">
+                <div className="flex min-w-0 flex-col">
                   {selectedFile ? (
                     <>
                       <div className="mb-1 flex items-center justify-between gap-2">
@@ -1324,11 +1329,11 @@ export default function ManifestPanel({
                           type="button"
                           onClick={handleDownload}
                           className="inline-flex items-center gap-1 text-caption text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
-                          title={`Download ${basename(selectedFile.path)}`}
+                          title={t('admin.manifest.downloadFile', { name: basename(selectedFile.path) })}
                           data-testid="agent-edit-download"
                         >
                           <Download className="h-3.5 w-3.5" />
-                          Download
+                          {t('admin.manifest.download')}
                         </button>
                       </div>
                       <textarea
@@ -1338,7 +1343,7 @@ export default function ManifestPanel({
                         spellCheck={false}
                         placeholder={
                           selectedFile.virtual
-                            ? '# Agent role and rules\n\nDefine the agent\'s role, instructions, and any skill usage conventions here.'
+                            ? t('admin.manifest.agentsMdPlaceholder')
                             : undefined
                         }
                         data-testid="agent-edit-file-content"
@@ -1363,11 +1368,11 @@ export default function ManifestPanel({
                           data-testid="agent-edit-view-in-skills"
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
-                          View in Skills
+                          {t('admin.manifest.viewInSkills')}
                         </button>
                       </div>
                       <div className="mb-2 text-[11px] text-[var(--color-foreground-muted)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] rounded-[var(--radius-xs)] px-2 py-1">
-                        Managed by the Skills library — edit via the Skills admin page.
+                        {t('admin.manifest.libraryManaged')}
                       </div>
                       {selectedAttachedPreview ? (
                         <>
@@ -1381,7 +1386,7 @@ export default function ManifestPanel({
                           {selectedAttachedPreview.extra_files.length > 0 ? (
                             <div className="mt-2">
                               <div className="text-[10px] uppercase tracking-wider text-[var(--color-foreground-muted)] mb-1">
-                                Extra files ({selectedAttachedPreview.extra_files.length})
+                                {t('admin.manifest.extraFiles', { count: selectedAttachedPreview.extra_files.length })}
                               </div>
                               <ul className="rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs max-h-28 max-w-full overflow-auto">
                                 {selectedAttachedPreview.extra_files.map(p => (
@@ -1398,13 +1403,13 @@ export default function ManifestPanel({
                           className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-xs)]"
                           data-testid="agent-edit-attached-skill-loading"
                         >
-                          Loading…
+                          {t('common.loading')}
                         </div>
                       )}
                     </>
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-caption text-[var(--color-foreground-subtle)] border border-[var(--color-border)] rounded-[var(--radius-md)]">
-                      Select a file on the left, or click "New file" to add one.
+                      {t('admin.manifest.selectFile')}
                     </div>
                   )}
                 </div>
@@ -1425,7 +1430,7 @@ export default function ManifestPanel({
           disabled={!hasChanges || saving || loading}
           data-testid="agent-edit-save"
         >
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? t('admin.manifest.saving') : t('common.save')}
         </Button>
       </div>
     </div>

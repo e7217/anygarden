@@ -57,6 +57,10 @@ async function stubApi(page: Page, loginStatus = 200) {
 }
 
 test.describe('authentication browser smoke', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('anygarden_locale', 'en'))
+  })
+
   test('signs in, persists the session, and opens the empty workspace', async ({ page }) => {
     await stubApi(page)
     await page.goto('/login')
@@ -68,6 +72,8 @@ test.describe('authentication browser smoke', () => {
     await expect(page).toHaveURL(/\/$/)
     await expect(page.getByRole('heading', { name: 'Welcome to Anygarden' })).toBeVisible()
     await expect(page.getByTitle('Server version')).toHaveText('anygarden v0.18.0')
+    await page.getByRole('button', { name: 'Create Project' }).click()
+    await expect(page.getByRole('dialog', { name: 'Create Project' })).toBeVisible()
     await expect
       .poll(() => page.evaluate(() => localStorage.getItem('anygarden_token')))
       .toBe('e2e-token')
@@ -82,6 +88,6 @@ test.describe('authentication browser smoke', () => {
     await page.getByRole('button', { name: 'Sign In' }).click()
 
     await expect(page).toHaveURL(/\/login$/)
-    await expect(page.getByText('Invalid email or password')).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveText('Could not sign in. Check your email and password.')
   })
 })

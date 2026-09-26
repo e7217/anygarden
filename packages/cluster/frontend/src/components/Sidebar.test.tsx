@@ -4,6 +4,7 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
+import { ThemeProvider } from '@/theme/ThemeProvider'
 
 // Sidebar pulls in a chain of provider-backed hooks. For the
 // collapse/expand behaviour (#106/#115) we only care about the root
@@ -178,10 +179,12 @@ function CurrentPath() {
 
 function renderSidebar(path = '/', onClose?: () => void) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Sidebar selectedRoom={null} open={Boolean(onClose)} onClose={onClose} />
-      <CurrentPath />
-    </MemoryRouter>,
+    <ThemeProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Sidebar selectedRoom={null} open={Boolean(onClose)} onClose={onClose} />
+        <CurrentPath />
+      </MemoryRouter>
+    </ThemeProvider>,
   )
 }
 
@@ -274,7 +277,7 @@ describe('Sidebar — update indicators (#385)', () => {
     renderSidebar()
 
     expect(screen.getByTestId('sidebar-room-r1')).toBeInTheDocument()
-    expect(screen.getByLabelText('읽지 않은 업데이트 있음')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unread updates')).toBeInTheDocument()
   })
 
   it('omits the dot when a room has no unread updates', () => {
@@ -294,7 +297,7 @@ describe('Sidebar — update indicators (#385)', () => {
 
     renderSidebar()
 
-    expect(screen.queryByLabelText('읽지 않은 업데이트 있음')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Unread updates')).not.toBeInTheDocument()
   })
 
   it('aggregates DM update dots on collapsed multi-DM agent rows', () => {
@@ -332,7 +335,7 @@ describe('Sidebar — update indicators (#385)', () => {
     renderSidebar()
 
     expect(screen.getByTestId('sidebar-agent-a1')).toBeInTheDocument()
-    expect(screen.getByLabelText('읽지 않은 업데이트 있음')).toBeInTheDocument()
+    expect(screen.getByLabelText('Unread updates')).toBeInTheDocument()
   })
 })
 

@@ -32,6 +32,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
+import { useLocale } from '@/i18n/LocaleProvider'
 import {
   Dialog,
   DialogContent,
@@ -73,14 +74,6 @@ export const STATUS_ORDER: readonly Status[] = [
 
 const ACTIVE_STATUSES: readonly Status[] = ['todo', 'in_progress', 'blocked']
 const TERMINAL_STATUSES: readonly Status[] = ['done', 'failed']
-
-const STATUS_LABEL: Record<Status, string> = {
-  todo: 'Todo',
-  in_progress: 'In Progress',
-  blocked: 'Blocked',
-  done: 'Done',
-  failed: 'Failed',
-}
 
 const STATUS_ICON: Record<Status, typeof Circle> = {
   todo: Circle,
@@ -130,6 +123,14 @@ export function groupTasksByStatus(
 }
 
 export default function TasksPanel({ agentId }: { agentId: string | null }) {
+  const { t } = useLocale()
+  const statusLabels: Record<Status, string> = {
+    todo: t('admin.tasks.status.todo'),
+    in_progress: t('admin.tasks.status.inProgress'),
+    blocked: t('admin.tasks.status.blocked'),
+    done: t('admin.tasks.status.done'),
+    failed: t('admin.tasks.status.failed'),
+  }
   const [tasks, setTasks] = useState<AgentTask[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showAll, setShowAll] = useState<Partial<Record<Status, boolean>>>({})
@@ -221,8 +222,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
   if (error === 'admin_only') {
     return (
       <p className="text-sm text-[var(--color-foreground-muted)]">
-        Admin-only view. (Tasks aggregation across rooms requires admin
-        access.)
+        {t('admin.tasks.adminOnly')}
       </p>
     )
   }
@@ -230,7 +230,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
   if (tasks === null) {
     return (
       <p className="text-sm text-[var(--color-foreground-subtle)]">
-        Loading tasks…
+        {t('admin.tasks.loading')}
       </p>
     )
   }
@@ -238,7 +238,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
   if (tasks.length === 0) {
     return (
       <p className="text-sm text-[var(--color-foreground-muted)]">
-        No tasks assigned.
+        {t('admin.tasks.none')}
       </p>
     )
   }
@@ -273,7 +273,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
               />
               <Icon className="h-3 w-3 text-[var(--color-foreground-muted)]" />
               <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
-                {STATUS_LABEL[status]}
+                {statusLabels[status]}
               </span>
               <span className="text-[11px] text-[var(--color-foreground-subtle)]">
                 ({total})
@@ -289,37 +289,37 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                   className="ml-auto text-[11px] text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                   data-testid={`tasks-clear-all-${status}`}
                 >
-                  Clear all
+                  {t('admin.tasks.clearAll')}
                 </button>
               ) : null}
             </summary>
             {total === 0 ? null : (
               <div className="mt-1 max-h-80 overflow-y-auto pr-1">
                 <ul className="space-y-1">
-                  {visible.map(t => (
+                  {visible.map(task => (
                     <li
-                      key={t.id}
-                      data-testid={`agent-task-row-${t.id}`}
+                      key={task.id}
+                      data-testid={`agent-task-row-${task.id}`}
                       className="group/row flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
                     >
                       <span className="flex-1 truncate text-sm text-[var(--color-foreground)]">
-                        {t.title}
+                        {task.title}
                       </span>
                       <button
                         type="button"
-                        onClick={() => navigate(`/rooms/${t.room_id}`)}
-                        className="inline-flex max-w-[12rem] items-center rounded-full border border-[rgba(0,0,0,0.1)] bg-white px-2 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
-                        title={`Open ${t.room_name}`}
+                        onClick={() => navigate(`/rooms/${task.room_id}`)}
+                        className="inline-flex max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
+                        title={t('admin.tasks.openRoom', { name: task.room_name })}
                       >
-                        <span className="truncate">{t.room_name}</span>
+                        <span className="truncate">{task.room_name}</span>
                       </button>
-                      {terminal && !t.source_message_id ? (
+                      {terminal && !task.source_message_id ? (
                         <button
                           type="button"
-                          onClick={() => handleDelete(t.id)}
+                          onClick={() => handleDelete(task.id)}
                           className="opacity-0 group-hover/row:opacity-100 transition-opacity text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
-                          aria-label={`Delete ${t.title}`}
-                          data-testid={`agent-task-delete-${t.id}`}
+                          aria-label={t('admin.tasks.delete', { title: task.title })}
+                          data-testid={`agent-task-delete-${task.id}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -336,7 +336,7 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                     className="mt-1.5 w-full rounded-[var(--radius-sm)] py-1 text-[11px] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-foreground)] transition-colors"
                     data-testid={`tasks-show-all-${status}`}
                   >
-                    Show all ({total})
+                    {t('admin.tasks.showAll', { count: total })}
                   </button>
                 ) : null}
               </div>
@@ -353,11 +353,12 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Clear all {confirmClear ? STATUS_LABEL[confirmClear] : ''} tasks</DialogTitle>
+            <DialogTitle>{t('admin.tasks.clearTitle', { status: confirmClear ? statusLabels[confirmClear] : '' })}</DialogTitle>
             <DialogDescription>
-              {confirmCount} {confirmClear ? STATUS_LABEL[confirmClear].toLowerCase() : ''} task
-              {confirmCount === 1 ? '' : 's'} will be permanently deleted from this agent.
-              This cannot be undone.
+              {t(confirmCount === 1 ? 'admin.tasks.clearDescriptionOne' : 'admin.tasks.clearDescription', {
+                count: confirmCount,
+                status: confirmClear ? statusLabels[confirmClear].toLowerCase() : '',
+              })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -365,18 +366,18 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
               type="button"
               onClick={() => setConfirmClear(null)}
               disabled={busy}
-              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white px-3 py-1.5 text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-alt)] transition-colors"
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-1.5 text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)] transition-colors"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="button"
               onClick={() => confirmClear && handleClearAll(confirmClear)}
               disabled={busy}
-              className="rounded-[var(--radius-sm)] bg-[var(--color-foreground)] px-3 py-1.5 text-sm text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="rounded-[var(--radius-sm)] bg-[var(--color-brand)] px-3 py-1.5 text-sm text-[var(--color-on-brand)] hover:bg-[var(--color-brand-hover)] transition-colors disabled:opacity-50"
               data-testid="tasks-clear-all-confirm"
             >
-              {busy ? 'Clearing…' : 'Clear'}
+              {busy ? t('admin.tasks.clearing') : t('admin.tasks.clear')}
             </button>
           </DialogFooter>
         </DialogContent>

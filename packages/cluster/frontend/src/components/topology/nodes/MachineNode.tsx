@@ -1,6 +1,7 @@
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import {
+  ACCENT,
   BORDER,
   SHADOW_SOFT,
   SURFACE,
@@ -8,20 +9,21 @@ import {
   TEXT_PRIMARY,
   machineStatusColor,
 } from '../constants'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Machine node: 136×56 rounded card with status dot + name + agent count.
  *
- * Visual style — DESIGN.md §4 Cards: ``1px solid rgba(0,0,0,0.1)``
- * whisper border, warm white surface, sub-0.05 shadow, near-black text.
+ * Surface, border, shadow, and text resolve through shared theme tokens.
  */
 function MachineNodeInner({ data, selected }: NodeProps) {
+  const { t } = useLocale()
   const status = (data?.status as string | undefined) ?? 'offline'
   const label = (data?.label as string | undefined) ?? 'machine'
   const agentCount = (data?.agent_count as number | undefined) ?? 0
 
   const dotColor = machineStatusColor(status)
-  const outline = selected ? '1px solid #0075de' : BORDER
+  const outline = selected ? `2px solid ${ACCENT}` : BORDER
 
   return (
     <div
@@ -41,7 +43,7 @@ function MachineNodeInner({ data, selected }: NodeProps) {
         color: TEXT_PRIMARY,
         transition: 'box-shadow 180ms, border-color 180ms',
       }}
-      aria-label={`Machine ${label}, status ${status}`}
+      aria-label={t('topology.machineNode', { name: label, status })}
     >
       <Handle
         type="target"
@@ -88,7 +90,7 @@ function MachineNodeInner({ data, selected }: NodeProps) {
           fontWeight: 400,
         }}
       >
-        {agentCount} {agentCount === 1 ? 'agent' : 'agents'}
+        {t(agentCount === 1 ? 'topology.agentCountOne' : 'topology.agentCountMany', { count: agentCount })}
       </div>
       <Handle
         type="source"

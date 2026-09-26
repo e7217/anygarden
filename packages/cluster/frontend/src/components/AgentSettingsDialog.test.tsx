@@ -120,7 +120,7 @@ describe('AgentSettingsDialog', () => {
 
   it('marks the header presence dot offline when machine_online is false', () => {
     setup(true, makeAgent({ actual_state: 'running', machine_online: false }))
-    expect(screen.getAllByLabelText('오프라인 · unreachable').length).toBeGreaterThan(0)
+    expect(screen.getAllByLabelText('Offline · unreachable').length).toBeGreaterThan(0)
   })
 })
 

@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { UsageSection } from './UsageSection'
 import { apiFetch } from '@/lib/api'
+import { LocaleProvider } from '@/i18n/LocaleProvider'
+import { LocaleToggle } from '@/i18n/LocaleToggle'
 
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
 afterEach(() => { cleanup(); vi.resetAllMocks() })
@@ -33,5 +35,25 @@ describe('Usage screen', () => {
     vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify(report)))
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(screen.getByText('saved-model')).toBeTruthy())
+  })
+
+  it('switches visible copy to Korean without changing the loaded usage data', async () => {
+    localStorage.setItem('anygarden_locale', 'en')
+    vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify(report)))
+    render(
+      <LocaleProvider>
+        <LocaleToggle compact />
+        <UsageSection />
+      </LocaleProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('saved-model')).toBeTruthy())
+    expect(screen.getByRole('heading', { name: 'Usage' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '한국어' }))
+
+    expect(screen.getByRole('heading', { name: '사용량' })).toBeTruthy()
+    expect(screen.getByText('모델별')).toBeTruthy()
+    expect(screen.getByText('saved-model')).toBeTruthy()
+    expect(apiFetch).toHaveBeenCalledTimes(1)
   })
 })

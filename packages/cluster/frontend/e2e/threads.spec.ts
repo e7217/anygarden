@@ -111,6 +111,13 @@ async function stubApi(page: Page) {
             kind: 'user',
             user_id: user.id,
           },
+          {
+            id: 'part-agent',
+            display_name: 'Long representative agent name',
+            kind: 'agent',
+            agent_id: 'agent-1',
+            online: false,
+          },
         ],
       })
     }
@@ -197,6 +204,7 @@ const threadTrigger = (page: Page) =>
 
 test.describe('thread composer contract', () => {
   test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('anygarden_locale', 'en'))
     await stubWebSocket(page)
     await stubApi(page)
   })
@@ -346,6 +354,45 @@ test.describe('thread composer contract', () => {
     const controlsBox = await controls.boundingBox()
     expect(controlsBox).not.toBeNull()
     expect(box!.x + box!.width).toBeLessThanOrEqual(controlsBox!.x + 1)
+  })
+
+  test('room navigation and actions remain clickable at key widths', async ({ page }) => {
+    await openRoom(page)
+
+    for (const width of [375, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 800 })
+      const title = page.getByRole('heading', { name: 'e2e-room', level: 2 })
+      await expect(title).toBeVisible()
+      const titleBox = await title.boundingBox()
+      expect(titleBox).not.toBeNull()
+      expect(titleBox!.width).toBeGreaterThan(60)
+      expect(titleBox!.x + titleBox!.width).toBeLessThanOrEqual(width)
+
+      const settings = page.getByTestId('room-header-settings-menu-trigger')
+      await settings.click()
+      await expect(page.getByRole('group', { name: 'Room settings' })).toBeVisible()
+      await page.keyboard.press('Escape')
+
+      if (width < 768) {
+        await page.getByRole('button', { name: 'Open sidebar' }).click()
+        await expect(page.getByTestId('sidebar-root')).not.toHaveClass(/-translate-x-full/)
+        await page.getByTestId('sidebar-root').getByRole('button', { name: 'Close sidebar' }).click()
+      }
+    }
+  })
+
+  test('context rail overlays the chat at tablet width', async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 800 })
+    await openRoom(page)
+
+    const header = page.getByRole('heading', { name: 'e2e-room', level: 2 }).locator('..').locator('..')
+    const before = await header.boundingBox()
+    await page.getByTestId('right-rail-toggle').click()
+    await expect(page.getByTestId('right-rail-root')).toBeVisible()
+    const after = await header.boundingBox()
+    expect(before).not.toBeNull()
+    expect(after).not.toBeNull()
+    expect(after!.width).toBe(before!.width)
   })
 
   test('the mobile backdrop closes the thread, restores focus, and drops the draft', async ({

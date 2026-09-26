@@ -14,6 +14,8 @@ import { Button } from '@/components/ui/button'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
 import { autoRouteUnassigned } from '@/lib/routing'
 import type { Participant } from '@/pages/ChatPage'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 interface TasksSectionProps {
   roomId: string
@@ -33,14 +35,6 @@ const STATUS_ICON: Record<string, typeof Circle> = {
   blocked: PauseCircle,
   failed: XCircle,
 }
-const STATUS_LABEL: Record<string, string> = {
-  todo: 'Todo',
-  in_progress: 'In Progress',
-  done: 'Done',
-  blocked: 'Blocked',
-  failed: 'Failed',
-}
-
 /**
  * Compact tasks panel for the right rail (#302). Shares the
  * ``useRoomTasks`` hook with ``TaskPanel`` so the legacy panel and
@@ -57,7 +51,19 @@ const STATUS_LABEL: Record<string, string> = {
  * the chip is read-only — there is only one valid choice.
  */
 export default function TasksSection({ roomId, participants }: TasksSectionProps) {
-  const { tasks, refresh, create, claim, requeue, update, remove } = useRoomTasks(roomId)
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
+  const statusLabel = (status: string): string => {
+    switch (status) {
+      case 'todo': return t('tasks.todo')
+      case 'in_progress': return t('tasks.inProgress')
+      case 'done': return t('tasks.done')
+      case 'blocked': return t('tasks.blocked')
+      case 'failed': return t('tasks.failed')
+      default: return status
+    }
+  }
+  const { tasks, loading, error, refresh, create, claim, requeue, update, remove } = useRoomTasks(roomId)
   const [newTitle, setNewTitle] = useState('')
   const [newAssignee, setNewAssignee] = useState<string>('')
   const [adding, setAdding] = useState(false)
@@ -113,7 +119,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       const routedCount = result.routed.length
       const skippedCount = result.skipped.length
       if (routedCount === 0 && skippedCount === 0) {
-        setRouteMessage('No tasks to route')
+        setRouteMessage(t('tasks.noRoute'))
       } else {
         const routedNames = result.routed
           .map((r) => {
@@ -129,10 +135,9 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         const breakdown = Object.entries(routedNames)
           .map(([name, n]) => `${n} → ${name}`)
           .join(', ')
-        const suffix =
-          skippedCount > 0 ? ` (${skippedCount} skipped)` : ''
+        const suffix = skippedCount > 0 ? ` (${t('tasks.skipped', { count: skippedCount })})` : ''
         setRouteMessage(
-          routedCount > 0 ? `Routed: ${breakdown}${suffix}` : `${skippedCount} skipped`,
+          routedCount > 0 ? t('tasks.routed', { names: breakdown, suffix }) : t('tasks.skipped', { count: skippedCount }),
         )
       }
       // refetch is implicit via the WS task.updated stream from
@@ -141,7 +146,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       await refresh()
     } catch (e) {
       setRouteMessage(
-        e instanceof Error ? e.message : 'Auto-route failed',
+        e instanceof Error ? e.message : t('tasks.routeFailed'),
       )
     } finally {
       setRouting(false)
@@ -177,7 +182,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       await update(task.id, { status: 'done' })
     } else {
       await requeue(task.id, {
-        reason: 'Requeued from right rail',
+        reason: t('tasks.requeuedReason'),
         assignee_participant_id: task.assignee_participant_id,
       })
     }
@@ -189,7 +194,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       await update(task.id, { assignee_participant_id: assignee })
     } else {
       await requeue(task.id, {
-        reason: 'Reassigned from right rail',
+        reason: t('tasks.reassignedReason'),
         assignee_participant_id: assignee,
       })
     }
@@ -198,13 +203,20 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   const submitNew = async () => {
     if (!newTitle.trim()) return
     setAdding(true)
-    await create({
-      title: newTitle.trim(),
-      assignee_participant_id: newAssignee || null,
-    })
-    setNewTitle('')
-    if (!singleAgentId) setNewAssignee('')
-    setAdding(false)
+    try {
+      const created = await create({
+        title: newTitle.trim(),
+        assignee_participant_id: newAssignee || null,
+      })
+      if (created) {
+        setNewTitle('')
+        if (!singleAgentId) setNewAssignee('')
+      }
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' })
+    } finally {
+      setAdding(false)
+    }
   }
 
   const renderRow = (task: Task) => {
@@ -216,23 +228,23 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
       <div
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
-        className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+        className={`group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-hover)] ${task.source_message_id ? '' : 'pr-10 lg:pr-2'}`}
       >
         <button
           onClick={() => cycleStatus(task)}
-          aria-label={`Cycle status (current: ${STATUS_LABEL[task.status] ?? task.status})`}
+          aria-label={t('tasks.cycle', { status: statusLabel(task.status) })}
           className="shrink-0"
         >
           <Icon
             className={`h-4 w-4 ${
               task.status === 'done'
-                ? 'text-green-600'
+                ? 'text-[var(--color-success)]'
                 : task.status === 'in_progress'
-                  ? 'text-[var(--color-brand)]'
+                  ? 'text-[var(--color-status-online)]'
                   : task.status === 'failed'
-                    ? 'text-rose-600'
-                    : task.status === 'blocked'
-                      ? 'text-amber-600'
+                    ? 'text-[var(--color-danger)]'
+                  : task.status === 'blocked'
+                      ? 'text-[var(--color-warning)]'
                       : 'text-[var(--color-foreground-subtle)]'
             }`}
           />
@@ -261,7 +273,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           <span
             aria-hidden="true"
             className="block min-w-0 max-w-full truncate text-right text-[11px] text-[var(--color-foreground-subtle)] group-hover:invisible group-focus-within:invisible"
-            title={assignee?.display_name ?? 'Unassigned'}
+            title={assignee?.display_name ?? t('tasks.unassigned')}
           >
             {assignee?.display_name ?? '—'}
           </span>
@@ -270,10 +282,10 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             onChange={(e) => reassign(task, e.target.value)}
             onClick={(e) => e.stopPropagation()}
             className="absolute inset-0 min-w-0 max-w-full opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity appearance-none bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border-0 focus:ring-0 truncate pr-5"
-            aria-label={`Reassign ${task.title}`}
+            aria-label={t('tasks.reassign', { name: task.title })}
             data-testid={`right-rail-task-assignee-${task.id}`}
           >
-            <option value="">— Unassigned —</option>
+            <option value="">— {t('tasks.unassigned')} —</option>
             {agentParticipants.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.display_name}
@@ -288,9 +300,11 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             column visually aligned. */}
         {!task.source_message_id ? (
           <button
-            onClick={() => remove(task.id)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-[var(--color-destructive)]/10 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)] transition-all"
-            aria-label={`Delete ${task.title}`}
+            onClick={async () => {
+              if (await confirm({ title: t('tasks.deleteTitle'), description: t('tasks.deleteConfirm', { name: task.title }), confirmLabel: t('tasks.deleteTitle'), destructive: true })) await remove(task.id)
+            }}
+            className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-all hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+            aria-label={t('tasks.delete', { name: task.title })}
           >
             <Trash2 className="h-3 w-3" />
           </button>
@@ -302,8 +316,8 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   return (
     <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          Tasks
+        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+          {t('chat.tasks')}
         </h3>
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] text-[var(--color-foreground-subtle)]">
@@ -316,14 +330,14 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             type="button"
             onClick={handleAutoRoute}
             disabled={routing || unassignedCount === 0}
-            aria-label="Auto-route unassigned tasks via room representative"
+            aria-label={t('tasks.autoRoute')}
             title={
               unassignedCount === 0
-                ? 'No unassigned tasks'
-                : `Auto-route ${unassignedCount} unassigned task${unassignedCount === 1 ? '' : 's'}`
+                ? t('tasks.noUnassigned')
+                : t('tasks.autoRouteCount', { count: unassignedCount })
             }
             data-testid="right-rail-auto-route-button"
-            className="rounded-[var(--radius-sm)] p-0.5 text-[var(--color-foreground-muted)] hover:bg-black/5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex min-h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {routing ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -343,9 +357,11 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         </p>
       )}
       <div className="min-w-0 px-1">
-        {tasks.length === 0 && (
+        {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{error.match(/HTTP (\d+)/) ? t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '' }) : error}</p>}
+        {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+        {!loading && !error && tasks.length === 0 && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
-            No tasks yet
+            {t('tasks.empty')}
           </div>
         )}
         {STATUS_ORDER.map((status) => {
@@ -354,7 +370,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           return (
             <div key={status} className="mb-1 min-w-0">
               <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-                {STATUS_LABEL[status]}
+                {statusLabel(status)}
               </div>
               {items.map(renderRow)}
             </div>
@@ -371,7 +387,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submitNew()}
-          placeholder="Add a task…"
+          placeholder={t('tasks.addPlaceholder')}
           className="min-w-0 w-full bg-transparent text-[13px] outline-none placeholder:text-[var(--color-foreground-subtle)]"
         />
         <div className="flex min-w-0 items-center gap-2">
@@ -380,10 +396,10 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             onChange={(e) => setNewAssignee(e.target.value)}
             disabled={singleAgentRoom || agentParticipants.length === 0}
             className="min-w-0 flex-1 bg-transparent text-[11px] text-[var(--color-foreground-muted)] outline-none border border-[var(--color-border)] rounded-[var(--radius-sm)] px-1.5 py-0.5 truncate disabled:opacity-70"
-            aria-label="Pick assignee"
+            aria-label={t('tasks.pickAssignee')}
             data-testid="right-rail-task-create-assignee"
           >
-            <option value="">— Unassigned —</option>
+            <option value="">— {t('tasks.unassigned')} —</option>
             {agentParticipants.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.display_name}
@@ -395,7 +411,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             size="sm"
             onClick={submitNew}
             disabled={adding || !newTitle.trim()}
-            aria-label="Create task"
+            aria-label={t('tasks.create')}
             className="shrink-0"
           >
             <Plus className="h-4 w-4" />

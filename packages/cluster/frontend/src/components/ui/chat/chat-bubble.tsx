@@ -34,11 +34,11 @@ const ChatBubble = React.forwardRef<HTMLDivElement, ChatBubbleProps>(
 );
 ChatBubble.displayName = "ChatBubble";
 
-interface ChatBubbleAvatarProps { src?: string; fallback?: string; className?: string; }
+interface ChatBubbleAvatarProps { src?: string; fallback?: string; alt?: string; className?: string; }
 
-const ChatBubbleAvatar: React.FC<ChatBubbleAvatarProps> = ({ src, fallback, className }) => (
+const ChatBubbleAvatar: React.FC<ChatBubbleAvatarProps> = ({ src, fallback, alt = '', className }) => (
   <Avatar className={className}>
-    <AvatarImage src={src} alt="Avatar" />
+    <AvatarImage src={src} alt={alt} />
     <AvatarFallback>{fallback}</AvatarFallback>
   </Avatar>
 );
@@ -46,8 +46,8 @@ const ChatBubbleAvatar: React.FC<ChatBubbleAvatarProps> = ({ src, fallback, clas
 const chatBubbleMessageVariants = cva("p-4", {
   variants: {
     variant: {
-      received: "bg-secondary text-secondary-foreground rounded-r-lg rounded-tl-lg",
-      sent: "bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg",
+      received: "bg-[var(--color-message-received)] text-[var(--color-message-foreground)] rounded-r-lg rounded-tl-lg",
+      sent: "bg-[var(--color-message-sent)] text-[var(--color-message-foreground)] rounded-l-lg rounded-tr-lg",
     },
     layout: {
       default: "",
@@ -92,7 +92,7 @@ const ChatBubbleActionWrapper = React.forwardRef<HTMLDivElement, ChatBubbleActio
     <div
       ref={ref}
       className={cn(
-        "absolute top-1/2 -translate-y-1/2 flex opacity-0 group-hover:opacity-100 transition-opacity duration-200",
+        "absolute top-1/2 -translate-y-1/2 flex opacity-100 transition-opacity duration-200 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100",
         variant === "sent" ? "-left-1 -translate-x-full flex-row-reverse" : "-right-1 translate-x-full",
         className,
       )}

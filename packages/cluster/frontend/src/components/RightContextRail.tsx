@@ -6,6 +6,7 @@ import TasksSection from '@/components/right-rail/TasksSection'
 import FilesSection from '@/components/right-rail/FilesSection'
 import GoalsSection from '@/components/right-rail/GoalsSection'
 import type { Participant } from '@/pages/ChatPage'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface RightContextRailProps {
   roomId: string | null
@@ -36,6 +37,7 @@ export default function RightContextRail({
   open,
   onClose,
 }: RightContextRailProps) {
+  const { t } = useLocale()
   const { collapsed } = useRightSidebarLayout()
 
   // #312 — pass full agent participants (not just ids) to
@@ -68,8 +70,8 @@ export default function RightContextRail({
       {open && (
         <button
           type="button"
-          aria-label="Close context rail"
-          className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
+          aria-label={t('chat.closeContext')}
+          className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] lg:hidden"
           onClick={onClose}
         />
       )}
@@ -77,7 +79,7 @@ export default function RightContextRail({
       <aside
         data-testid="right-rail-root"
         aria-hidden={collapsed && !open ? true : undefined}
-        aria-label="Room context rail"
+        aria-label={t('chat.contextRail')}
         // #329 — width is staged across breakpoints so the rail no
         // longer eats a fixed 384px below xl: w-72 (288px) on the
         // mobile drawer and md desktop, w-80 (320px) on lg, full
@@ -87,19 +89,19 @@ export default function RightContextRail({
           transform transition-all duration-200 ease-out
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
-            ? 'md:translate-x-full md:w-0 md:overflow-hidden md:border-l-0'
-            : 'md:static md:z-auto md:translate-x-0 md:w-72 lg:w-80 xl:w-96'}
+            ? 'lg:translate-x-full lg:w-0 lg:overflow-hidden lg:border-l-0'
+            : 'lg:static lg:z-auto lg:translate-x-0 lg:w-80 xl:w-96'}
         `}
       >
         <div className="flex h-12 items-center justify-between border-b border-[var(--color-border)] px-3">
           <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-foreground-muted)]">
-            Context
+            {t('chat.context')}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="md:hidden rounded-[var(--radius-sm)] p-1 text-[var(--color-foreground-muted)] hover:bg-black/5"
-            aria-label="Close context rail"
+            className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] lg:hidden"
+            aria-label={t('chat.closeContext')}
           >
             <X className="h-4 w-4" />
           </button>

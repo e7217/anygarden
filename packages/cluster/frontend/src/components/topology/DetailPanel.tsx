@@ -6,6 +6,13 @@ import { Badge } from '@/components/ui/badge'
 import AgentRoomsDialog from '@/components/AgentRoomsDialog'
 import type { GraphNode, NodeKind } from './types'
 import { TEXT_MUTED, TEXT_PRIMARY, TEXT_SUBTLE } from './constants'
+import { useLocale } from '@/i18n/LocaleProvider'
+import type { MessageKey } from '@/i18n/messages'
+
+const kindKeys: Record<NodeKind, MessageKey> = {
+  user: 'topology.kindUser', machine: 'topology.kindMachine',
+  agent: 'topology.kindAgent', room: 'topology.kindRoom', project: 'topology.kindProject',
+}
 
 interface Props {
   selected: GraphNode | null
@@ -20,14 +27,16 @@ interface Props {
  * ``/admin/machines``, ``/rooms/<id>``).
  */
 export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
+  const { t } = useLocale()
   if (!selected) return null
 
   return (
     <aside
+      className="topology-detail-panel"
       style={{
         width: 320,
         flex: '0 0 320px',
-        borderLeft: '1px solid rgba(0,0,0,0.1)',
+        borderLeft: '1px solid var(--color-border)',
         background: 'var(--color-surface)',
         padding: 16,
         display: 'flex',
@@ -36,7 +45,7 @@ export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
         overflowY: 'auto',
         animation: 'topology-slide-in 180ms ease-out',
       }}
-      aria-label={`${selected.kind} detail`}
+      aria-label={t('topology.detail', { kind: t(kindKeys[selected.kind]) })}
     >
       <header
         style={{
@@ -56,7 +65,7 @@ export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
               color: TEXT_MUTED,
             }}
           >
-            {selected.kind}
+            {t(kindKeys[selected.kind])}
           </div>
           <div
             style={{
@@ -77,7 +86,7 @@ export default function DetailPanel({ selected, onClose, isAdmin }: Props) {
           variant="ghost"
           size="icon"
           onClick={onClose}
-          aria-label="Close detail"
+          aria-label={t('topology.closeDetail')}
         >
           <X className="h-4 w-4" />
         </Button>
@@ -129,21 +138,22 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function MachineDetail({ selected, isAdmin }: { selected: GraphNode; isAdmin: boolean }) {
+  const { t } = useLocale()
   const d = selected.data as Record<string, unknown>
   const navigate = useNavigate()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Field label="Status" value={<Badge variant="secondary">{String(d.status ?? 'unknown')}</Badge>} />
-      <Field label="Hostname" value={d.hostname as string} />
-      <Field label="Daemon version" value={d.daemon_version as string} />
-      <Field label="Agents" value={d.agent_count as number} />
+      <Field label={t('topology.status')} value={<Badge variant="secondary">{String(d.status ?? t('common.unknown'))}</Badge>} />
+      <Field label={t('topology.hostname')} value={d.hostname as string} />
+      <Field label={t('topology.daemonVersion')} value={d.daemon_version as string} />
+      <Field label={t('topology.agents')} value={d.agent_count as number} />
       {isAdmin && (
         <Button
           variant="outline"
           onClick={() => navigate('/admin/machines')}
         >
           <ExternalLink className="h-4 w-4" />
-          Manage machines
+          {t('topology.manageMachines')}
         </Button>
       )}
     </div>
@@ -151,22 +161,23 @@ function MachineDetail({ selected, isAdmin }: { selected: GraphNode; isAdmin: bo
 }
 
 function AgentDetail({ selected }: { selected: GraphNode }) {
+  const { t } = useLocale()
   const d = selected.data as Record<string, unknown>
   const [roomsOpen, setRoomsOpen] = useState(false)
   const rawId = selected.id.startsWith('a_') ? selected.id.slice(2) : selected.id
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Field label="Engine" value={d.engine as string} />
-      <Field label="Model" value={d.model as string} />
+      <Field label={t('topology.engine')} value={d.engine as string} />
+      <Field label={t('topology.model')} value={d.model as string} />
       <Field
-        label="State"
-        value={<Badge variant="secondary">{String(d.actual_state ?? 'unknown')}</Badge>}
+        label={t('topology.state')}
+        value={<Badge variant="secondary">{String(d.actual_state ?? t('common.unknown'))}</Badge>}
       />
-      <Field label="Desired" value={d.desired_state as string} />
-      <Field label="Last heartbeat" value={d.last_heartbeat_at as string} />
-      <Field label="Last crash" value={d.last_crash_reason as string} />
+      <Field label={t('topology.desired')} value={d.desired_state as string} />
+      <Field label={t('topology.lastHeartbeat')} value={d.last_heartbeat_at as string} />
+      <Field label={t('topology.lastCrash')} value={d.last_crash_reason as string} />
       <Button variant="outline" onClick={() => setRoomsOpen(true)}>
-        View rooms
+        {t('topology.viewRooms')}
       </Button>
       <AgentRoomsDialog
         open={roomsOpen}
@@ -178,42 +189,45 @@ function AgentDetail({ selected }: { selected: GraphNode }) {
 }
 
 function RoomDetail({ selected }: { selected: GraphNode }) {
+  const { t } = useLocale()
   const d = selected.data as Record<string, unknown>
   const navigate = useNavigate()
   const rawId = selected.id.startsWith('r_') ? selected.id.slice(2) : selected.id
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Field label="Type" value={d.is_dm ? 'Direct message' : 'Channel'} />
-      <Field label="Participants" value={d.participant_count as number} />
-      {d.parent_room_id ? <Field label="Parent room" value={String(d.parent_room_id)} /> : null}
+      <Field label={t('topology.type')} value={d.is_dm ? t('topology.directMessage') : t('topology.channel')} />
+      <Field label={t('topology.participants')} value={d.participant_count as number} />
+      {d.parent_room_id ? <Field label={t('topology.parentRoom')} value={String(d.parent_room_id)} /> : null}
       {d.representative_agent_id ? (
-        <Field label="Representative agent" value={String(d.representative_agent_id)} />
+        <Field label={t('topology.representativeAgent')} value={String(d.representative_agent_id)} />
       ) : null}
       <Button variant="default" onClick={() => navigate(`/rooms/${rawId}`)}>
         <ExternalLink className="h-4 w-4" />
-        Open chat
+        {t('topology.openChat')}
       </Button>
     </div>
   )
 }
 
 function UserDetail({ selected }: { selected: GraphNode }) {
+  const { t } = useLocale()
   const d = selected.data as Record<string, unknown>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Field label="Email / label" value={selected.label} />
-      <Field label="Display name" value={d.display_name as string} />
-      <Field label="Admin" value={d.is_admin ? 'Yes' : 'No'} />
+      <Field label={t('topology.emailLabel')} value={selected.label} />
+      <Field label={t('topology.displayName')} value={d.display_name as string} />
+      <Field label={t('topology.admin')} value={d.is_admin ? t('topology.yes') : t('topology.no')} />
     </div>
   )
 }
 
 function ProjectDetail({ selected }: { selected: GraphNode }) {
+  const { t } = useLocale()
   const d = selected.data as Record<string, unknown>
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <Field label="Name" value={selected.label} />
-      <Field label="Description" value={d.description as string} />
+      <Field label={t('topology.name')} value={selected.label} />
+      <Field label={t('topology.description')} value={d.description as string} />
     </div>
   )
 }

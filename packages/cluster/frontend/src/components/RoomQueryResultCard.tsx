@@ -12,7 +12,7 @@
 //     responses: [{ participant_id, content }, ...] }
 //
 // Visual contract:
-//   * left 3px accent bar (brand blue) to visually anchor the
+//   * left 3px accent bar (quiet teal) to visually anchor the
 //     card to the room-query family — same treatment as the
 //     forward variant in MessageBubble.
 //   * header: source badge ``↪ #<target> · N/M 응답`` +
@@ -34,6 +34,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronUp, UserX } from 'lucide-react'
 import type { RoomQueryResultMeta } from '@/lib/room-query'
 import MarkdownContent from '@/components/MarkdownContent'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 interface RoomQueryResultCardProps {
   result: RoomQueryResultMeta
@@ -46,8 +47,8 @@ interface RoomQueryResultCardProps {
 /** Last-6-char fallback for unknown participant ids (agent left
  * the room, cross-room query, etc.). Matches the ``↪ #room``
  * fallback used elsewhere for room ids. */
-function nameFallback(pid: string): string {
-  if (!pid) return '알 수 없음'
+function nameFallback(pid: string, unknown: string): string {
+  if (!pid) return unknown
   return pid.slice(-6)
 }
 
@@ -56,7 +57,8 @@ export default function RoomQueryResultCard({
   participantNames,
   targetRoomName,
 }: RoomQueryResultCardProps) {
-  const displayRoom = targetRoomName ?? `#${result.target_room_id.slice(-6)}`
+  const { t } = useLocale()
+  const displayRoom = targetRoomName ?? result.target_room_id.slice(-6)
   const missing = Math.max(result.expected - result.responded, 0)
 
   let header: React.ReactNode
@@ -65,7 +67,7 @@ export default function RoomQueryResultCard({
       <div className="flex items-center gap-2 text-xs text-[var(--color-foreground-muted)]">
         <UserX className="h-3.5 w-3.5" aria-hidden="true" />
         <span>
-          ↪ #{displayRoom} · 대상 방에 응답할 에이전트가 없음
+          ↪ #{displayRoom} · {t('chat.noTargetAgents')}
         </span>
       </div>
     )
@@ -78,13 +80,13 @@ export default function RoomQueryResultCard({
         </span>
         <span>·</span>
         <span>
-          {result.responded}/{result.expected} 응답
+          {t('chat.respondedCount', { count: `${result.responded}/${result.expected}` })}
         </span>
         {result.status === 'timeout' && missing > 0 && (
           <>
             <span>·</span>
             <span className="text-[var(--color-warning)]">
-              {missing}명 미응답
+              {t('chat.missingResponses', { count: missing })}
             </span>
           </>
         )}
@@ -94,7 +96,7 @@ export default function RoomQueryResultCard({
 
   return (
     <div
-      className="relative w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white pl-4 pr-3 py-3"
+      className="relative w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] pl-4 pr-3 py-3"
       data-testid={`room-query-result-${result.query_id}`}
       data-status={result.status}
     >
@@ -108,8 +110,8 @@ export default function RoomQueryResultCard({
       {result.responses.length === 0 ? (
         <p className="text-sm text-[var(--color-foreground-muted)]">
           {result.status === 'solo'
-            ? '이 방에서 응답할 에이전트를 찾지 못했습니다.'
-            : '아직 응답이 도착하지 않았습니다.'}
+            ? t('chat.noAgentResponse')
+            : t('chat.noResponsesYet')}
         </p>
       ) : (
         <div className="flex flex-col gap-2">
@@ -125,7 +127,7 @@ export default function RoomQueryResultCard({
               displayName={
                 r.name ||
                 participantNames.get(r.participant_id) ||
-                nameFallback(r.participant_id)
+                nameFallback(r.participant_id, t('chat.unknown'))
               }
               content={r.content}
             />
@@ -156,7 +158,7 @@ function ResponseCard({ participantId, displayName, content }: ResponseCardProps
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-3 py-2 text-left text-xs text-[var(--color-foreground-muted)] hover:bg-black/[0.02] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
+        className="flex min-h-11 w-full items-center justify-between px-3 py-2 text-left text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ring)]"
         aria-expanded={expanded}
         aria-controls={panelId}
       >

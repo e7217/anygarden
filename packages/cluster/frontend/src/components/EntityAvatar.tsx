@@ -4,6 +4,7 @@ import { EngineGlyph } from '@/components/EngineGlyph'
 import { getAvatarTone, getInitials } from '@/lib/avatar'
 import { lookupLucideIcon } from '@/lib/avatar-options'
 import { cn } from '@/lib/utils'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 export type EntityAvatarSize = 'xs' | 'sm' | 'md' | 'lg'
 export type EntityKind = 'user' | 'agent' | 'guest' | 'room'
@@ -111,6 +112,13 @@ export function EntityAvatar({
   className,
   'data-testid': testId,
 }: EntityAvatarProps) {
+  const { t } = useLocale()
+  const kindLabel = {
+    user: t('common.entityKindUser'),
+    agent: t('common.entityKindAgent'),
+    guest: t('common.entityKindGuest'),
+    room: t('common.entityKindRoom'),
+  }[kind]
   const tone = getAvatarTone(id)
   const initials = getInitials(name)
   const px = SIZE_PX[size]
@@ -138,7 +146,7 @@ export function EntityAvatar({
       style={wrapperStyle}
       data-testid={testId}
       data-guest={isGuest ? 'true' : undefined}
-      aria-label={`${kind} ${name}`}
+      aria-label={`${kindLabel} ${name}`}
     >
       <Avatar
         className={cn(
@@ -179,7 +187,7 @@ export function EntityAvatar({
       </Avatar>
       {showGlyph && (
         <span
-          className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-white border border-[var(--color-border)]"
+          className="absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)]"
           style={{ width: badgePx, height: badgePx }}
           data-testid="entity-avatar-engine-glyph"
           aria-hidden="true"

@@ -113,7 +113,7 @@ function renderInlineTokens(
       parts.push(
         <span
           key={`${keyPrefix}-u-${match.index}`}
-          className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium"
+          className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand-text)] font-medium"
         >
           @{name}
         </span>
@@ -125,7 +125,7 @@ function renderInlineTokens(
         <a
           key={`${keyPrefix}-r-${match.index}`}
           href={room ? `/rooms/${room.id}` : '#'}
-          className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium hover:underline"
+          className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-link)] font-medium hover:underline"
           onClick={(e) => {
             if (!room) e.preventDefault()
           }}
@@ -146,7 +146,7 @@ function renderInlineTokens(
           <span
             key={`${keyPrefix}-f-${match.index}`}
             data-file-reference={resolved.candidate.id}
-            className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand)] font-medium"
+            className="inline-flex items-center rounded-[3px] bg-[var(--color-brand)]/10 px-1 text-[var(--color-brand-text)] font-medium"
             title={storageName ? `memory/shared/${storageName}` : resolved.candidate.name}
           >
             ${resolved.token}

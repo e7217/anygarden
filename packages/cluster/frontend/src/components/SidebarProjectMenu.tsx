@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { MoreHorizontal, Trash2 } from 'lucide-react'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
  * Hover-revealed overflow menu for a sidebar project row.
@@ -26,6 +27,7 @@ export interface SidebarProjectMenuProps {
 }
 
 export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProjectMenuProps) {
+  const { t } = useLocale()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -70,11 +72,11 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
           e.stopPropagation()
           setOpen((v) => !v)
         }}
-        className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-black/10 hover:text-[var(--color-foreground)]"
+        className="flex h-11 w-11 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] md:h-6 md:w-6"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label="Project actions"
-        title="Project actions"
+        aria-label={t('chat.projectActions')}
+        title={t('chat.projectActions')}
         data-testid={`sidebar-project-menu-${projectId}`}
       >
         <MoreHorizontal className="h-4 w-4" />
@@ -82,8 +84,8 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
       {open && (
         <div
           role="group"
-          aria-label="Project actions"
-          className="absolute right-2 z-40 mt-1 w-40 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white shadow-lg"
+          aria-label={t('chat.projectActions')}
+          className="absolute right-2 z-40 mt-1 w-40 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
         >
           <ul className="py-1">
             <li>
@@ -91,10 +93,10 @@ export default function SidebarProjectMenu({ projectId, onDelete }: SidebarProje
                 type="button"
                 onClick={pick(onDelete)}
                 data-testid={`sidebar-project-menu-delete-${projectId}`}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                className="flex min-h-11 w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
-                <span>Delete project</span>
+                <span>{t('chat.deleteProject')}</span>
               </button>
             </li>
           </ul>

@@ -7,6 +7,8 @@ import GoalForm, {
 } from '@/components/goal-form/GoalForm'
 import type { Goal } from '@/lib/goals'
 import type { Participant } from '@/pages/ChatPage'
+import { useLocale } from '@/i18n/LocaleProvider'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
 
 interface GoalsSectionProps {
   roomId: string
@@ -18,23 +20,10 @@ interface GoalsSectionProps {
   agentParticipants: Participant[]
 }
 
-function formatNextRun(iso: string | null): string {
-  if (!iso) return '—'
-  const target = new Date(iso).getTime()
-  const delta = target - Date.now()
-  if (delta < 0) return 'overdue'
-  const m = Math.round(delta / 60_000)
-  if (m < 60) return `in ${m}m`
-  const h = Math.round(m / 60)
-  if (h < 24) return `in ${h}h`
-  const d = Math.round(h / 24)
-  return `in ${d}d`
-}
-
 function statusDot(status: Goal['status']): string {
   switch (status) {
     case 'active':
-      return 'bg-[var(--color-brand)]'
+      return 'bg-[var(--color-status-online)]'
     case 'paused':
       return 'bg-[var(--color-foreground-subtle)]'
     case 'failed':
@@ -54,9 +43,31 @@ export default function GoalsSection({
   roomId,
   agentParticipants,
 }: GoalsSectionProps) {
-  const { goals, refresh, remove, runNow, pause, resume } =
+  const { t } = useLocale()
+  const { confirm, notify } = useFeedback()
+  const { goals, loading, error, refresh, remove, runNow, pause, resume } =
     useRoomGoals(roomId)
   const [showForm, setShowForm] = useState(false)
+
+  const formatNextRun = (iso: string | null): string => {
+    if (!iso) return '—'
+    const delta = new Date(iso).getTime() - Date.now()
+    if (delta < 0) return t('goals.overdue')
+    const minutes = Math.round(delta / 60_000)
+    if (minutes < 60) return t('goals.inMinutes', { count: minutes })
+    const hours = Math.round(minutes / 60)
+    if (hours < 24) return t('goals.inHours', { count: hours })
+    return t('goals.inDays', { count: Math.round(hours / 24) })
+  }
+  const statusLabel = (status: Goal['status']) => {
+    switch (status) {
+      case 'active': return t('goals.statusActive')
+      case 'paused': return t('goals.statusPaused')
+      case 'completed': return t('goals.statusCompleted')
+      case 'failed': return t('goals.statusFailed')
+      case 'abandoned': return t('goals.statusAbandoned')
+    }
+  }
 
   // #312 — derive {id, name} options for the form. Map back to
   // ``Agent.id`` (not Participant.id) because Goal.assignee_agent_id
@@ -72,6 +83,11 @@ export default function GoalsSection({
   )
   const hasCandidates = formAgents.length > 0
 
+  const runAction = async (action: () => Promise<unknown>) => {
+    try { await action() }
+    catch (error) { notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' }) }
+  }
+
   // Map agent_id → display_name so the goal rows can show the
   // assignee name without an extra fetch. Agents that have left the
   // room since the goal was created keep the goal pointing at their
@@ -85,8 +101,8 @@ export default function GoalsSection({
   return (
     <section className="flex min-w-0 flex-col">
       <header className="flex items-baseline justify-between px-3 py-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-          Responsibilities
+        <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
+          {t('chat.responsibilities')}
         </h3>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-[var(--color-foreground-subtle)]">
@@ -96,8 +112,8 @@ export default function GoalsSection({
             <button
               type="button"
               onClick={() => setShowForm((v) => !v)}
-              aria-label={showForm ? 'Cancel new goal' : 'Add a goal'}
-              className="rounded-[var(--radius-sm)] p-0.5 text-[var(--color-foreground-muted)] hover:bg-black/5"
+              aria-label={showForm ? t('goals.cancelGoal') : t('goals.addGoal')}
+              className="flex min-h-9 min-w-9 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
             >
               <Plus
                 className={`h-3.5 w-3.5 transition-transform ${showForm ? 'rotate-45' : ''}`}
@@ -108,7 +124,7 @@ export default function GoalsSection({
       </header>
 
       {showForm && hasCandidates && (
-        <div className="mx-1 mb-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-white">
+        <div className="mx-1 mb-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)]">
           <GoalForm
             roomAgents={formAgents}
             defaultReportRoomId={roomId}
@@ -122,20 +138,22 @@ export default function GoalsSection({
       )}
 
       <div className="min-w-0 px-1">
-        {goals.length === 0 && !showForm && (
+        {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{t('goals.loadFailed')} {error}</p>}
+        {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
+        {!loading && !error && goals.length === 0 && !showForm && (
           <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
-            No goals yet
+            {t('goals.empty')}
           </div>
         )}
         {goals.map((g) => (
           <div
             key={g.id}
             data-testid={`right-rail-goal-row-${g.id}`}
-            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
+            className="group relative flex min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 pb-10 pt-1.5 hover:bg-[var(--color-surface-hover)] lg:py-1.5"
           >
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
-              title={g.status}
+              title={statusLabel(g.status)}
             />
             <div className="min-w-0 flex-1">
               <p
@@ -155,20 +173,21 @@ export default function GoalsSection({
                 data-testid={`right-rail-goal-assignee-${g.id}`}
                 title={
                   agentNameById[g.assignee_agent_id] ??
-                  `agent ${g.assignee_agent_id.slice(0, 6)}`
+                  `${t('goals.agent')} ${g.assignee_agent_id.slice(0, 6)}`
                 }
               >
                 {agentNameById[g.assignee_agent_id] ??
-                  `agent ${g.assignee_agent_id.slice(0, 6)}`}
+                  `${t('goals.agent')} ${g.assignee_agent_id.slice(0, 6)}`}
               </p>
               <p className="truncate text-[10px] text-[var(--color-foreground-subtle)]">
-                {g.trigger_type}
+                {statusLabel(g.status)} ·{' '}
+                {t(g.trigger_type === 'cron' ? 'goals.cron' : g.trigger_type === 'interval' ? 'goals.interval' : 'goals.manual')}
                 {g.trigger_type !== 'manual' && (
-                  <> · next {formatNextRun(g.next_run_at)}</>
+                  <> · {t('goals.next', { time: formatNextRun(g.next_run_at) })}</>
                 )}
                 {g.consecutive_failures > 0 && (
                   <span className="ml-1 text-[var(--color-destructive)]">
-                    · {g.consecutive_failures} fail
+                    · {t('goals.failCount', { count: g.consecutive_failures })}
                   </span>
                 )}
               </p>
@@ -181,14 +200,14 @@ export default function GoalsSection({
                 state paints the same surface, so the cluster blends
                 seamlessly. ``shadow-sm`` gives a faint lift so the
                 cluster reads as floating over the row, not glued. */}
-            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-[var(--color-surface-alt)] rounded-[var(--radius-sm)] shadow-sm">
+            <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] opacity-100 shadow-sm transition-opacity lg:bottom-auto lg:right-2 lg:top-1/2 lg:-translate-y-1/2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
               <Button
                 variant="ghost"
                 size="icon"
-                title="Run now"
-                aria-label={`Run ${g.title} now`}
-                onClick={() => runNow(g.id)}
-                className="h-6 w-6"
+                title={t('goals.runNow', { name: g.title })}
+                aria-label={t('goals.runNow', { name: g.title })}
+                onClick={() => void runAction(() => runNow(g.id))}
+                className="h-9 w-9"
               >
                 <Zap className="h-3 w-3" />
               </Button>
@@ -196,10 +215,10 @@ export default function GoalsSection({
                 <Button
                   variant="ghost"
                   size="icon"
-                  title="Pause"
-                  aria-label={`Pause ${g.title}`}
-                  onClick={() => pause(g.id)}
-                  className="h-6 w-6"
+                  title={t('goals.pause', { name: g.title })}
+                  aria-label={t('goals.pause', { name: g.title })}
+                  onClick={() => void runAction(() => pause(g.id))}
+                  className="h-9 w-9"
                 >
                   <Pause className="h-3 w-3" />
                 </Button>
@@ -207,10 +226,10 @@ export default function GoalsSection({
                 <Button
                   variant="ghost"
                   size="icon"
-                  title="Resume"
-                  aria-label={`Resume ${g.title}`}
-                  onClick={() => resume(g.id)}
-                  className="h-6 w-6"
+                  title={t('goals.resume', { name: g.title })}
+                  aria-label={t('goals.resume', { name: g.title })}
+                  onClick={() => void runAction(() => resume(g.id))}
+                  className="h-9 w-9"
                 >
                   <Play className="h-3 w-3" />
                 </Button>
@@ -218,12 +237,12 @@ export default function GoalsSection({
               <Button
                 variant="ghost"
                 size="icon"
-                title="Delete"
-                aria-label={`Delete ${g.title}`}
-                onClick={() => {
-                  if (confirm(`Delete goal "${g.title}"?`)) remove(g.id)
+                title={t('goals.delete', { name: g.title })}
+                aria-label={t('goals.delete', { name: g.title })}
+                onClick={async () => {
+                  if (await confirm({ title: t('goals.deleteTitle'), description: t('goals.deleteConfirm', { name: g.title }), confirmLabel: t('goals.deleteTitle'), destructive: true })) await runAction(() => remove(g.id))
                 }}
-                className="h-6 w-6 text-[var(--color-destructive)]/70 hover:text-[var(--color-destructive)]"
+                className="h-9 w-9 text-[var(--color-destructive)] hover:text-[var(--color-destructive)]"
               >
                 <Trash2 className="h-3 w-3" />
               </Button>

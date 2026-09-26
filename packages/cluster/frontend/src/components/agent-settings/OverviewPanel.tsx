@@ -30,15 +30,16 @@ import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import type { ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
+import { useLocale } from '@/i18n/LocaleProvider'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
 
-function connectionSummary(agent: Agent, state?: ConnectionState | null, defaultModel?: string): string {
-  if (!state || state.agentId !== agent.id || state.status === 'loading') return 'Loading connection…'
-  if (state.status === 'error') return 'Connection unavailable'
-  if (state.config.base_url) return `Direct model server · ${state.config.model ?? 'Unknown model'}`
-  if (agent.engine === 'pi-cli') return `Pi provider · ${state.config.provider ?? 'No provider'} · ${state.config.model ?? 'No model'}`
-  return `Codex CLI · ${state.config.model ?? defaultModel ?? 'Default model'}`
+function connectionSummary(agent: Agent, state: ConnectionState | null | undefined, defaultModel: string | undefined, t: ReturnType<typeof useLocale>['t']): string {
+  if (!state || state.agentId !== agent.id || state.status === 'loading') return t('admin.overview.loadingConnection')
+  if (state.status === 'error') return t('admin.overview.connectionUnavailable')
+  if (state.config.base_url) return t('admin.overview.directSummary', { model: state.config.model ?? t('admin.overview.unknownModel') })
+  if (agent.engine === 'pi-cli') return t('admin.overview.piSummary', { provider: state.config.provider ?? t('admin.overview.noProvider'), model: state.config.model ?? t('admin.overview.noModel') })
+  return t('admin.overview.codexSummary', { model: state.config.model ?? defaultModel ?? t('admin.overview.defaultModel') })
 }
 // ``loading`` while the catalog fetch is in flight, ``unavailable``
 // once it resolves with ``null`` (engine not in the static catalog or
@@ -99,6 +100,7 @@ interface Props {
 }
 
 export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, connectionState }: Props) {
+  const { t } = useLocale()
   const [showPicker, setShowPicker] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
@@ -179,14 +181,27 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
         className="flex h-full items-center justify-center text-caption text-[var(--color-foreground-subtle)]"
         data-testid="overview-panel-empty"
       >
-        No agent selected
+        {t('admin.overview.noAgent')}
       </div>
     )
   }
 
   const machineOffline = agent.machine_online === false
   const agentOnline = deriveAgentOnline(agent.actual_state, { machineOffline })
-  const displayState = agentStatusLabel(agent.actual_state, { machineOffline })
+  const rawDisplayState = agentStatusLabel(agent.actual_state, { machineOffline })
+  const stateLabels: Record<string, string> = {
+    unreachable: t('admin.agentSettings.state.unreachable'),
+    unknown: t('admin.agentSettings.state.unknown'),
+    running: t('admin.agentSettings.state.running'),
+    starting: t('admin.agentSettings.state.starting'),
+    stopping: t('admin.agentSettings.state.stopping'),
+    stopped: t('admin.agentSettings.state.stopped'),
+    idle: t('admin.agentSettings.state.idle'),
+    pending: t('admin.agentSettings.state.pending'),
+    crashed: t('admin.agentSettings.state.crashed'),
+    failed: t('admin.agentSettings.state.failed'),
+  }
+  const displayState = stateLabels[rawDisplayState] ?? rawDisplayState
 
   const commitName = async () => {
     const trimmed = nameDraft.trim()
@@ -239,7 +254,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
     const trimmed = turnTimeoutDraft.trim()
     const nextVal = trimmed === '' ? null : Number(trimmed)
     if (nextVal !== null && (!Number.isInteger(nextVal) || nextVal <= 0)) {
-      setTurnTimeoutError('초 단위 양의 정수를 입력하세요.')
+      setTurnTimeoutError(t('admin.overview.timeoutInvalid'))
       return
     }
     if ((agent.turn_timeout_sec ?? null) === nextVal) {
@@ -305,7 +320,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
           type="button"
           onClick={() => setShowPicker(v => !v)}
           aria-expanded={showPicker}
-          aria-label="Change avatar"
+          aria-label={t('admin.overview.changeAvatar')}
           data-testid="overview-avatar-trigger"
           className="rounded-full ring-offset-2 transition hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
         >
@@ -335,7 +350,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               }
             }}
             disabled={nameSaving}
-            aria-label="Agent name"
+            aria-label={t('admin.overview.agentName')}
             data-testid="overview-name-input"
             className="text-base font-medium"
           />
@@ -368,13 +383,13 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             disabled={descriptionSaving}
             maxLength={200}
             rows={2}
-            placeholder="e.g. Implementation worker. Carries out assigned build tasks."
-            aria-label="Agent description"
+            placeholder={t('admin.overview.descriptionPlaceholder')}
+            aria-label={t('admin.overview.agentDescription')}
             data-testid="overview-description-input"
             className="flex w-full resize-none rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] disabled:opacity-60"
           />
           <div className="flex items-center justify-between text-[11px] text-[var(--color-foreground-subtle)]">
-            <span>Visible to other agents (LLM roster) and users (mention popover, participants list).</span>
+            <span>{t('admin.overview.descriptionVisibility')}</span>
             <span data-testid="overview-description-counter">{descriptionDraft.length}/200</span>
           </div>
           {/* #644 — every agent now receives the room roster, so this
@@ -389,8 +404,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               className="text-[11px] text-[var(--color-warning)]"
               data-testid="overview-description-empty-hint"
             >
-              Teammates see only this agent&apos;s name until you write one —
-              their model has no basis for deciding what to ask it.
+              {t('admin.overview.descriptionEmpty')}
             </div>
           ) : null}
           {descriptionError ? (
@@ -431,7 +445,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             variant="ghost"
             size="icon"
             onClick={() => void handleCopyId()}
-            title="Copy agent ID"
+            title={t('admin.overview.copyId')}
             data-testid="overview-copy-id"
           >
             {copyState === 'ok' ? (
@@ -445,19 +459,19 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               className="text-xs text-[var(--color-success)]"
               data-testid="overview-copy-feedback"
             >
-              Copied
+              {t('admin.overview.copied')}
             </span>
           ) : copyState === 'fallback' ? (
             <span
               className="text-xs text-[var(--color-foreground-muted)]"
               data-testid="overview-copy-feedback"
             >
-              Clipboard unavailable — text selected
+              {t('admin.overview.clipboardUnavailable')}
             </span>
           ) : null}
         </dd>
 
-        <dt className="text-[var(--color-foreground-muted)]">Engine</dt>
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.engine')}</dt>
         <dd className="flex items-center gap-2 text-[var(--color-foreground)]">
           <span>{agent.engine}</span>
           {catalogState.kind === 'ready' && catalogState.catalog.deprecated ? (
@@ -466,15 +480,15 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               className={DEPRECATED_BADGE_CSS}
               title={catalogState.catalog.deprecation_note ?? undefined}
             >
-              Deprecated
+              {t('admin.overview.deprecated')}
             </Badge>
           ) : null}
         </dd>
 
         {(agent.engine === 'pi-cli' || agent.engine === 'codex-cli') && (
           <>
-            <dt className="text-[var(--color-foreground-muted)]">Connection</dt>
-            <dd data-testid="overview-connection-summary">{connectionSummary(agent, connectionState, catalogState.kind === 'ready' ? catalogState.catalog.default_model : undefined)}</dd>
+            <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.connection')}</dt>
+            <dd data-testid="overview-connection-summary">{connectionSummary(agent, connectionState, catalogState.kind === 'ready' ? catalogState.catalog.default_model : undefined, t)}</dd>
           </>
         )}
 
@@ -482,7 +496,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             Engine-agnostic, so it renders for every agent (outside the
             catalog-gated Model/Reasoning block). Blur-commits; the range is
             validated server-side and a 422 surfaces in ``turnTimeoutError``. */}
-        <dt className="text-[var(--color-foreground-muted)]">Turn timeout</dt>
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.turnTimeout')}</dt>
         <dd>
           <input
             type="number"
@@ -493,8 +507,8 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             onChange={e => setTurnTimeoutDraft(e.target.value)}
             onBlur={() => void handleTurnTimeoutCommit()}
             disabled={configSaving}
-            placeholder="Default"
-            aria-label="Turn timeout in seconds"
+            placeholder={t('admin.overview.default')}
+            aria-label={t('admin.overview.timeoutLabel')}
             data-testid="overview-turn-timeout-input"
             className={SELECT_CSS}
           />
@@ -508,7 +522,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             </div>
           ) : (
             <p className="mt-1 text-[11px] text-[var(--color-foreground-muted)]">
-              응답 최대 대기 시간(초). 비우면 기본값, 재시작 시 적용.
+              {t('admin.overview.timeoutHelp')}
             </p>
           )}
         </dd>
@@ -520,20 +534,20 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             the select so non-admins see the current value, but the
             change is rejected at the API. ``trusted`` carries an
             inline ⚠ to flag host access. */}
-        <dt className="text-[var(--color-foreground-muted)]">Permission</dt>
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.permission')}</dt>
         <dd>
           <select
             value={agent.permission_level ?? ''}
             onChange={e => void handlePermissionLevelChange(e.target.value)}
             disabled={configSaving}
-            aria-label="Agent permission tier"
+            aria-label={t('admin.overview.permissionTier')}
             data-testid="overview-permission-select"
             className={SELECT_CSS}
           >
-            <option value="">Default (standard)</option>
-            <option value="restricted">Restricted — read-only</option>
-            <option value="standard">Standard — workspace only</option>
-            <option value="trusted">⚠ Trusted — host access</option>
+            <option value="">{t('admin.overview.permissionDefault')}</option>
+            <option value="restricted">{t('admin.overview.permissionRestricted')}</option>
+            <option value="standard">{t('admin.overview.permissionStandard')}</option>
+            <option value="trusted">{t('admin.overview.permissionTrusted')}</option>
           </select>
           {configError && <p role="alert" data-testid="overview-config-error">{configError}</p>}
           {agent.permission_level === 'trusted' ? (
@@ -541,12 +555,12 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
               className="mt-1 text-[11px] text-[var(--color-foreground-muted)]"
               data-testid="overview-permission-trusted-warning"
             >
-              호스트 정보·명령 접근 가능. 신중히 사용하세요.
+              {t('admin.overview.trustedWarning')}
             </p>
           ) : null}
         </dd>
 
-        <dt className="text-[var(--color-foreground-muted)]">State</dt>
+        <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.state')}</dt>
         <dd className="flex items-center gap-2">
           <PresenceDot
             variant="agent"
