@@ -5,6 +5,7 @@ import TypingIndicator from './TypingIndicator'
 
 const participants = {
   agent: { id: 'agent', kind: 'agent', display_name: 'Codex' },
+  agent2: { id: 'agent2', kind: 'agent', display_name: 'Pi' },
   human: { id: 'human', kind: 'user', display_name: 'Mina' },
 } as Parameters<typeof TypingIndicator>[0]['participants']
 
@@ -19,5 +20,12 @@ describe('TypingIndicator', () => {
     render(<TypingIndicator typingUsers={new Set(['human'])}
       participants={participants} myParticipantId={null} />)
     expect(screen.getByText('Mina is typing…')).toBeTruthy()
+  })
+
+  it('shows separate stages for concurrent agents', () => {
+    render(<TypingIndicator typingUsers={new Set(['agent', 'agent2'])}
+      typingStages={{ agent: 'writing', agent2: 'preparing' }}
+      participants={participants} myParticipantId={null} />)
+    expect(screen.getByText('Codex · 응답 작성 중…, Pi · 응답 준비 중…')).toBeTruthy()
   })
 })
