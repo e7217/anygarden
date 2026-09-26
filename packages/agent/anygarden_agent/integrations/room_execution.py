@@ -37,6 +37,7 @@ from anygarden_agent.runtime.handler_wrapper import (
     EngineTimeoutError,
     EngineTurn,
 )
+from anygarden_agent.runtime.workspace_receipt import report_workspace
 
 PI_EXECUTABLE_ENV = "ANYGARDEN_PI_EXECUTABLE"
 PI_PATH_OPT_IN_ENV = "ANYGARDEN_PI_USE_PATH"
@@ -138,6 +139,17 @@ class RoomExecutionAdapter(CodexCliAdapter):
                     "UNSUPPORTED_RUNTIME": runtime.unsupported_detail(),
                 }.get(reason, "check Pi agent settings")
                 raise ValueError(f"{reason}: {guidance}")
+        if self._engine == "pi-cli" and self._permission_level != "restricted":
+            from anygarden_agent.runtime.execution.pi_self_tools import (
+                TOKEN_ENV,
+                prepare_pi_self_tools,
+            )
+
+            runtime.self_tools_config = await prepare_pi_self_tools(
+                self._root,
+                server_url=self._client._server_url,
+                token=self._environment.get(TOKEN_ENV),
+            )
         self._manager = LocalExecutionManager(
             self._root / ".anygarden-execution" / self._engine,
             runtime,
@@ -145,6 +157,17 @@ class RoomExecutionAdapter(CodexCliAdapter):
         )
         self._room_thread_ids = (
             load_sessions(self._root) if self._engine == "codex-cli" else {}
+        )
+        self._report_workspace(self._workspace())
+
+    def _workspace(self):
+        workspace = self._root / "workspace"
+        return workspace if workspace.is_dir() else self._root
+
+    def _report_workspace(self, workspace):
+        report_workspace(
+            self._root, workspace, generation=self._launch.generation,
+            engine=self._engine, permission_level=self._permission_level or "standard",
         )
 
     def _authorized(self, scope):
@@ -180,9 +203,8 @@ class RoomExecutionAdapter(CodexCliAdapter):
     async def _call_codex(self, prompt, room_id):
         # The inherited name is the prompt adapter seam, not an engine choice.
         msg = self._turn_metadata.get() or {}
-        workspace = self._root / "workspace"
-        if not workspace.is_dir():
-            workspace = self._root
+        workspace = self._workspace()
+        self._report_workspace(workspace)
         authority = hashlib.sha256(self._client._server_url.encode()).hexdigest()
         tier = self._permission_level or "standard"
         policy_epoch = int.from_bytes(hashlib.sha256(tier.encode()).digest()[:4], "big")

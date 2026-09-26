@@ -10,9 +10,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import AfterValidator, BaseModel, Field, model_validator
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,11 +43,13 @@ from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.rooms.roster import broadcast_roster_for_agent
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
+from anygarden.workspaces.managed_router import router as managed_workspace_router
 
 if TYPE_CHECKING:
     from anygarden.scheduler.machine_bus import MachineBus
 
 router = APIRouter(prefix="/api/v1/agents", tags=["agents"])
+router.include_router(managed_workspace_router)
 logger = logging.getLogger(__name__)
 
 
@@ -1672,24 +1674,63 @@ async def bulk_delete_agent_tasks(
 @router.get("/{agent_id}/activity", response_model=list[ActivityLogOut])
 async def get_agent_activity(
     agent_id: str,
-    limit: int = 50,
-    outcome: Optional[str] = None,
-    engine: Optional[str] = None,
-    identity: Identity = Depends(get_admin_identity),
-    db: AsyncSession = Depends(get_db),
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    outcome: str | None = None,
+    engine: str | None = None,
+    before_timestamp: datetime | None = None,
+    before_id: Annotated[str | None, Query(min_length=1, max_length=36)] = None,
+    after_timestamp: datetime | None = None,
+    after_id: Annotated[str | None, Query(max_length=36)] = None,
 ):
-    """Return recent activity events for an agent.
+    """Return activity as a backwards-compatible list, with keyset pagination.
 
-    #447 — optional ``outcome`` / ``engine`` filters hit the first-class
-    indexed columns so callers can narrow to (e.g.) failed turns without
-    parsing ``details``.
+    Default and ``before_timestamp`` + ``before_id`` use descending time/ID;
+    ``after_timestamp`` + ``after_id`` use ascending time/ID for lossless
+    incremental catch-up. Boundaries are exclusive and must be supplied as
+    pairs; before and after cannot be combined. An empty after_id replays the
+    boundary timestamp, allowing clients to deduplicate same-time arrivals.
+    See docs/activity-history.md for the complete cursor contract.
     """
+    before = before_timestamp is not None or before_id is not None
+    after = after_timestamp is not None or after_id is not None
+    if (
+        (before_timestamp is None) != (before_id is None)
+        or (after_timestamp is None) != (after_id is None)
+        or (before and after)
+    ):
+        raise HTTPException(status_code=422, detail="Supply one complete activity cursor pair")
+    timestamp = before_timestamp if before else after_timestamp
+    if timestamp is not None:
+        if timestamp.tzinfo is None:
+            raise HTTPException(
+                status_code=422, detail="Activity cursor timestamp must include a timezone"
+            )
+        timestamp = timestamp.astimezone(UTC)
     stmt = (
         select(ActivityLog)
         .where(ActivityLog.agent_id == agent_id)
-        .order_by(ActivityLog.timestamp.desc())
+        .order_by(
+            ActivityLog.timestamp.asc() if after else ActivityLog.timestamp.desc(),
+            ActivityLog.id.asc() if after else ActivityLog.id.desc(),
+        )
         .limit(limit)
     )
+    if before:
+        stmt = stmt.where(
+            or_(
+                ActivityLog.timestamp < timestamp,
+                and_(ActivityLog.timestamp == timestamp, ActivityLog.id < before_id),
+            )
+        )
+    elif after:
+        stmt = stmt.where(
+            or_(
+                ActivityLog.timestamp > timestamp,
+                and_(ActivityLog.timestamp == timestamp, ActivityLog.id > after_id),
+            )
+        )
     if outcome is not None:
         stmt = stmt.where(ActivityLog.outcome == outcome)
     if engine is not None:
@@ -1700,7 +1741,9 @@ async def get_agent_activity(
             id=r.id,
             agent_id=r.agent_id,
             event_type=r.event_type,
-            timestamp=r.timestamp.isoformat(),
+            timestamp=r.timestamp.replace(tzinfo=r.timestamp.tzinfo or UTC)
+            .astimezone(UTC)
+            .isoformat(timespec="microseconds"),
             request_id=r.request_id,
             outcome=r.outcome,
             engine=r.engine,

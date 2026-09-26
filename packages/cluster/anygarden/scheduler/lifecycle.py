@@ -1734,6 +1734,16 @@ class AgentLifecycle:
                     overlays=overlays,
                 )
 
+        # Pi has no native MCP manifest. Its local room adapter loads the
+        # trusted self-tools extension explicitly and uses this same scoped
+        # agent API credential (never the ChatClient transport token).
+        if (
+            mcp_engine == "pi-cli"
+            and self._cluster_external_url
+            and agent.permission_level != "restricted"
+        ):
+            anygarden_token = self._acquire_anygarden_token(db, agent.id)
+
         # Sub-rooms
         sub_rooms_info: list[dict[str, str | None]] = []
         if rooms:

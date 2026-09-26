@@ -25,6 +25,7 @@ vi.mock('@/lib/api', () => ({ apiFetch: vi.fn(async (path: string, init?: Reques
   mocks.calls.push({ path, method, body })
   const response = (value: unknown, status = 200) => ({ ok: status < 400, status, json: async () => value })
   if (mocks.failure && method !== 'GET') return response({ detail: mocks.failure }, 409)
+  if (path.startsWith('/api/v1/agents/agent-1/workspace?')) return response({ status: 'not_ready', machine_id: 'machine-1', machine_name: 'Worker', agent_state: 'stopped', snapshot: null })
   if (path === '/api/v1/auth/me') return response(mocks.viewer)
   if (path === '/api/v1/agents/agent-1') return response({ placed_on_machine_id: 'machine-1' })
   if (path === '/api/v1/agents/agent-1/rooms') return response(mocks.roomIds.map(room_id => ({ room_id, room_name: room_id === 'room-1' ? 'Engineering' : 'Other room' })))

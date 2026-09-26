@@ -3,14 +3,15 @@
 Usage in chat:
     @에이전트 /delegate 서브룸이름 작업내용
 
-v1: single response = completion (first reply from sub-room is the result).
-v2 (future): sub-room agent sends ``/done result`` to signal completion.
+The first correlated terminal response from a target agent completes the task.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -54,52 +55,73 @@ async def execute_delegate(
     msg: dict[str, Any],
     delegate: DelegateRequest,
 ) -> None:
-    """Execute the delegate workflow: forward task to sub-room.
-
-    Non-blocking: sends the task and returns immediately.  A background
-    callback captures the first sub-room reply and posts it back to
-    the parent room automatically.  The adapter's ``_handle`` function
-    is NOT blocked, so the agent can keep processing other messages
-    in the main room while the sub-room works.
-
-    Flow:
-    1. Find the named sub-room under the current (parent) room.
-    2. Post confirmation to the parent room.
-    3. Send the task to the sub-room with [DELEGATED] prefix.
-    4. Register a one-shot callback that fires when the sub-room
-       agent replies → posts the result back to the parent room.
-    """
+    """Forward without blocking the parent handler while the target works."""
     room_id = msg.get("room_id", "")
+    request_id = (msg.get("metadata") or {}).get("request_id")
+    parent_metadata = {
+        key: value for key, value in (msg.get("metadata") or {}).items()
+        if key in {"request_id", "turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key"}
+    }
+    proof = {key: value for key, value in parent_metadata.items()
+             if key in {"turn_attempt", "turn_generation", "turn_lease"}}
+    thread_root_id = msg.get("root_message_id")
+    delegation_id = str(uuid.uuid4())
+    upstream_id = (msg.get("metadata") or {}).get("delegation_id") or delegation_id
+    await client.sendLifecycle(room_id, request_id, event="handler_started", **proof)
 
-    # 1. Find sub-room
-    sub_room_id = await client.find_sub_room(room_id, delegate.sub_room_name)
-    if not sub_room_id:
+    async def failed(content: str) -> None:
+        metadata = {**parent_metadata, "delegation_id": upstream_id, "delegation_outcome": "failed"}
         await client.send(
-            room_id,
-            f"서브룸 '{delegate.sub_room_name}' 를 찾을 수 없습니다",
+            room_id, content, metadata=metadata, thread_root_id=thread_root_id,
         )
+        await client.sendLifecycle(room_id, request_id, event="handler_finished", outcome="failed", **proof)
+
+    cancel: Callable[[], None] | None = None
+    try:
+        sub_room_id = await client.find_sub_room(room_id, delegate.sub_room_name)
+        if not sub_room_id:
+            await failed(f"서브룸 '{delegate.sub_room_name}' 를 찾을 수 없습니다")
+            return
+        participants = await client.get_room_participants(sub_room_id)
+        candidates = [
+            p for p in participants
+            if p.get("kind") == "agent" and p.get("id")
+            and p["id"] not in client._my_participant_ids
+            and (not client._agent_id or p.get("agent_id") != client._agent_id)
+            and p.get("role") in {"member", "admin", "owner"}
+        ]
+        if not candidates:
+            await failed(f"서브룸 '{delegate.sub_room_name}' 에 작업을 받을 에이전트가 없습니다")
+            return
+        target = min(candidates, key=lambda p: (not p.get("online", False), p["id"]))["id"]
+        if sub_room_id not in client._tasks:
+            await client.join_room(sub_room_id)
+        await client.wait_for_room(sub_room_id)
+
+        # Subscribe before sending: a fast agent can reply during send().
+        cancel = _register_reply_callback(
+            client, room_id, sub_room_id, delegate.sub_room_name,
+            delegation_id=delegation_id, target_participant_ids={target},
+            parent_request_id=request_id, thread_root_id=thread_root_id,
+            parent_metadata=parent_metadata, upstream_delegation_id=upstream_id,
+        )
+        await client.send(
+            sub_room_id, f"[DELEGATED] <@user:{target}> {delegate.task}",
+            metadata={"delegation_id": delegation_id, "delegation_target_participant_id": target},
+        )
+    except asyncio.CancelledError:
+        if cancel:
+            cancel()
+        raise
+    except Exception:
+        if cancel:
+            cancel()
+        logger.exception("delegate.forward_failed", sub_room=delegate.sub_room_name)
+        await failed(f"서브룸 '{delegate.sub_room_name}' 에 작업을 전달하지 못했습니다. 연결 상태를 확인해 주세요.")
         return
-
-    # Ensure we're connected to the sub-room
-    if sub_room_id not in client._tasks:
-        await client.join_room(sub_room_id)
-        await asyncio.sleep(1)
-
-    # 2. Confirm in parent room (immediate)
     await client.send(
-        room_id,
-        f"서브룸 '{delegate.sub_room_name}' 에 작업을 전달했습니다",
-    )
-
-    # 3. Send task to sub-room
-    await client.send(sub_room_id, f"[DELEGATED] {delegate.task}")
-
-    # 4. Register async callback — does NOT block _handle
-    _register_reply_callback(
-        client,
-        parent_room_id=room_id,
-        sub_room_id=sub_room_id,
-        sub_room_name=delegate.sub_room_name,
+        room_id, f"서브룸 '{delegate.sub_room_name}' 에 작업을 전달했습니다",
+        thread_root_id=thread_root_id,
     )
 
 
@@ -108,60 +130,102 @@ def _register_reply_callback(
     parent_room_id: str,
     sub_room_id: str,
     sub_room_name: str,
-) -> None:
-    """Register a one-shot message handler that captures the first
-    sub-room reply and reports it back to the parent room.
-
-    The handler auto-removes itself after firing once or after a
-    timeout (5 minutes).  This is fire-and-forget — the caller
-    does not await anything.
-    """
-    my_pids = client._my_participant_ids
+    *,
+    delegation_id: str,
+    target_participant_ids: set[str],
+    parent_request_id: str | None = None,
+    parent_metadata: dict[str, Any] | None = None,
+    upstream_delegation_id: str | None = None,
+    thread_root_id: str | None = None,
+    timeout: float = 300,
+) -> Callable[[], None]:
+    """Collect one matching agent result; return cleanup for failed sends."""
     fired = False
+    timer: asyncio.Task | None = None
+    parent_metadata = dict(parent_metadata or {})
+    proof = {key: value for key, value in parent_metadata.items()
+             if key in {"turn_attempt", "turn_generation", "turn_lease"}}
+    pending: tuple[str, str] | None = None
+    delivering = False
+    failures = 0
 
-    async def _on_reply(msg: dict[str, Any]) -> None:
+    def cancel() -> None:
         nonlocal fired
-        if fired:
-            return
-        if msg.get("room_id") != sub_room_id:
-            return
-        sender = msg.get("participant_id")
-        if sender and sender in my_pids:
-            return  # skip own messages
         fired = True
-        content = msg.get("content", "")
-        logger.info(
-            "delegate.reply_captured",
-            sub_room=sub_room_name,
-            content_len=len(content),
-        )
-        await client.send(
-            parent_room_id,
-            f"서브룸 '{sub_room_name}' 결과:\n{content}",
-        )
-        # Clean up: remove this handler
         try:
-            client._message_handlers.remove(_on_reply)
+            client._delegate_result_handlers.remove(_on_reply)
         except ValueError:
             pass
+        if timer is not None and timer is not asyncio.current_task():
+            timer.cancel()
+        client._delegation_cleanups.discard(cancel)
 
-    client._message_handlers.append(_on_reply)
+    async def report(content: str, outcome: str) -> None:
+        metadata = {**parent_metadata, "delegation_id": upstream_delegation_id or delegation_id, "delegation_outcome": outcome}
+        if parent_request_id:
+            metadata["request_id"] = parent_request_id
+        await client.send(
+            parent_room_id, content, metadata=metadata, thread_root_id=thread_root_id,
+        )
+        await client.sendLifecycle(
+            parent_room_id, parent_request_id, event="handler_finished", outcome=outcome,
+            **proof,
+        )
 
-    # Safety timeout: remove the handler after 5 minutes if no reply
+    async def deliver() -> None:
+        nonlocal delivering, failures
+        if fired or delivering or pending is None:
+            return
+        if proof.get("turn_lease") and any(
+            client._turn_context.get(parent_request_id, {}).get(key) != value
+            for key, value in proof.items()
+        ):
+            # A retry owns a new lease. A late child must never finish it.
+            cancel()
+            return
+        delivering = True
+        try:
+            await report(*pending)
+            cancel()
+        except Exception:  # noqa: BLE001 — retain the result after transport failure
+            failures += 1
+            logger.warning("delegate.result_delivery_failed", attempts=failures, sub_room=sub_room_name)
+            if failures >= 3:
+                cancel()
+        finally:
+            delivering = False
+
+    async def _on_reply(msg: dict[str, Any]) -> None:
+        nonlocal pending
+        metadata = msg.get("metadata") or {}
+        outcome = metadata.get("delegation_outcome")
+        if (
+            fired or pending is not None or msg.get("room_id") != sub_room_id
+            or msg.get("participant_id") not in target_participant_ids
+            or msg.get("participant_id") in client._my_participant_ids
+            or metadata.get("delegation_id") != delegation_id
+            or outcome not in {"ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted"}
+        ):
+            return
+        content = msg.get("content", "")
+        label = {"ok": "결과", "cancelled": "작업 취소", "timeout": "시간 초과"}.get(outcome, "작업 실패")
+        pending = (f"서브룸 '{sub_room_name}' {label}:\n{content}", outcome)
+        await deliver()
+
+    client._delegate_result_handlers.append(_on_reply)
+    client._delegation_cleanups.add(cancel)
+
     async def _cleanup() -> None:
-        await asyncio.sleep(300)
-        if not fired:
-            logger.warning(
-                "delegate.reply_timeout",
-                sub_room=sub_room_name,
-            )
-            await client.send(
-                parent_room_id,
-                f"서브룸 '{sub_room_name}' 에서 5분 내 응답이 없습니다",
-            )
-            try:
-                client._message_handlers.remove(_on_reply)
-            except ValueError:
-                pass
+        nonlocal pending
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not fired:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0 and pending is None:
+                pending = (f"서브룸 '{sub_room_name}' 의 위임 작업 응답 시간이 초과되었습니다", "timeout")
+            if pending is not None:
+                await deliver()
+            if not fired:
+                await asyncio.sleep(min(1, remaining) if remaining > 0 else 1)
 
-    asyncio.get_running_loop().create_task(_cleanup())
+    timer = asyncio.get_running_loop().create_task(_cleanup())
+    return cancel

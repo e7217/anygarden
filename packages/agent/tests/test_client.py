@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -236,6 +237,77 @@ class TestChatClientSend:
         assert lifecycle["turn_lease"] == "lease-1"
 
 
+@pytest.mark.asyncio
+async def test_explicit_old_proof_is_not_replaced_or_allowed_to_clear_new_context():
+    client = ChatClient("ws://test", token="test")
+    ws = AsyncMock()
+    client._connections["room"] = ws
+    client._turn_context["request"] = {"turn_attempt": 2, "turn_generation": 1, "turn_lease": "new"}
+    old = {"request_id": "request", "turn_attempt": 1, "turn_generation": 1, "turn_lease": "old"}
+    await client.send("room", "old result", old)
+    assert json.loads(ws.send.call_args.args[0])["metadata"]["turn_lease"] == "old"
+    await client.sendLifecycle("room", "request", "handler_finished", outcome="ok",
+                               turn_attempt=1, turn_generation=1, turn_lease="old")
+    assert client._turn_context["request"]["turn_lease"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_new_attempt_reuses_seq_but_duplicate_and_old_replay_do_not_run():
+    client = ChatClient("ws://test", token="test")
+    handler = AsyncMock()
+    client.on_message(handler)
+    def frame(attempt):
+        return {"type": "message", "seq": 7, "participant_id": "user", "content": "work",
+                "metadata": {"request_id": "request", "turn_attempt": attempt,
+                             "turn_generation": 1, "turn_lease": f"lease-{attempt}"}}
+    for attempt in (1, 1, 2, 1, 2):
+        await client._process_frame("room", frame(attempt))
+    assert handler.await_count == 2
+    assert client._turn_context["request"]["turn_lease"] == "lease-2"
+
+
+@pytest.mark.asyncio
+async def test_socket_reader_delivers_result_while_previous_engine_handler_is_busy():
+    from anygarden_agent.integrations.delegate import _register_reply_callback
+
+    client = ChatClient("ws://test", token="test")
+    entered, release, reported = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    client.sendLifecycle = AsyncMock()
+
+    async def send(*args, **kwargs):
+        assert kwargs["metadata"]["delegation_outcome"] == "ok"
+        reported.set()
+
+    client.send = AsyncMock(side_effect=send)
+
+    async def slow_handler(data):
+        entered.set()
+        await release.wait()
+
+    client.on_message(slow_handler)
+    _register_reply_callback(client, "parent", "room", "worker room", timeout=1,
+                             delegation_id="d1", target_participant_ids={"worker"})
+
+    class Socket:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def __aiter__(self):
+            yield json.dumps({"type": "message", "seq": 1, "participant_id": "user", "content": "other work"})
+            await entered.wait()
+            yield json.dumps({"type": "message", "seq": 2, "participant_id": "worker", "content": "finished",
+                              "metadata": {"delegation_id": "d1", "delegation_outcome": "ok"}})
+            await reported.wait()
+
+    with patch("anygarden_agent.client.ws_connect", return_value=Socket()):
+        await asyncio.wait_for(client._room_loop("room"), 0.5)
+    assert reported.is_set()
+    assert not release.is_set()
+    await client.close()
+    assert not client._handler_tasks
+
+
 class TestWebSocketKeepalive:
     """Issue #190 — codex turns can legitimately run 5+ minutes; the
     websockets library's default ``ping_interval=20, ping_timeout=20``
@@ -308,7 +380,23 @@ class TestWebSocketUrlScheme:
         with patch("anygarden_agent.client.ws_connect", side_effect=fake_ws_connect):
             await client._room_loop("room-1")
 
-        assert captured == [expected]
+        assert captured == [expected + "?ready=1"]
+
+
+@pytest.mark.asyncio
+async def test_wait_for_room_requires_subscription_ready_not_just_welcome():
+    client = ChatClient("ws://test", token="test")
+    client._connections["room"] = AsyncMock()
+    client._tasks["room"] = asyncio.create_task(asyncio.sleep(10))
+    waiting = asyncio.create_task(client.wait_for_room("room", timeout=1))
+    await client._process_frame("room", {"type": "welcome", "participant_id": "self"})
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    await client._process_frame("room", {"type": "room_ready", "room_id": "other"})
+    assert not waiting.done()
+    await client._process_frame("room", {"type": "room_ready", "room_id": "room"})
+    await waiting
+    await client.close()
 
 
 class TestIsTaskInitContent:

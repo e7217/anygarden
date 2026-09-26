@@ -20,7 +20,7 @@
  * relevant event — incremental merging would shave ~10 LOC of UI
  * code without changing the user-facing latency.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   CheckCircle2,
@@ -31,6 +31,7 @@ import {
   ChevronRight,
   Trash2,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { apiFetch } from '@/lib/api'
 import { useLocale } from '@/i18n/LocaleProvider'
 import {
@@ -122,7 +123,7 @@ export function groupTasksByStatus(
   return out
 }
 
-export default function TasksPanel({ agentId }: { agentId: string | null }) {
+export default function TasksPanel({ agentId, onNavigateAway }: { agentId: string | null; onNavigateAway?: () => void }) {
   const { t } = useLocale()
   const statusLabels: Record<Status, string> = {
     todo: t('admin.tasks.status.todo'),
@@ -131,33 +132,43 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
     done: t('admin.tasks.status.done'),
     failed: t('admin.tasks.status.failed'),
   }
-  const [tasks, setTasks] = useState<AgentTask[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const scope = useMemo(() => ({ agentId, active: true, request: 0 }), [agentId])
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const [snapshot, setSnapshot] = useState<{ scope: typeof scope; tasks: AgentTask[] | null; error: string | null; loading: boolean }>(
+    () => ({ scope, tasks: null, error: null, loading: Boolean(agentId) }),
+  )
+  const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope])
+  const current = snapshot.scope === scope ? snapshot : { tasks: null, error: null, loading: Boolean(agentId) }
+  const { tasks, error, loading } = current
   const [showAll, setShowAll] = useState<Partial<Record<Status, boolean>>>({})
   const [confirmClear, setConfirmClear] = useState<Status | null>(null)
   const [busy, setBusy] = useState(false)
   const navigate = useNavigate()
 
   const fetchTasks = useCallback(async () => {
-    if (!agentId) return
-    const resp = await apiFetch(`/api/v1/agents/${agentId}/tasks`)
-    if (resp.status === 403) {
-      setError('admin_only')
-      setTasks([])
-      return
+    if (!agentId || !isCurrent()) return
+    const request = ++scope.request
+    const accepts = () => isCurrent() && scope.request === request
+    setSnapshot(previous => ({ scope, tasks: previous.scope === scope ? previous.tasks : null, error: null, loading: true }))
+    try {
+      const response = await apiFetch(`/api/v1/agents/${agentId}/tasks`)
+      if (!response.ok) throw new Error(response.status === 403 ? 'admin_only' : 'load_failed')
+      const tasks = await response.json() as AgentTask[]
+      if (accepts()) setSnapshot({ scope, tasks, error: null, loading: false })
+    } catch (error) {
+      if (accepts()) setSnapshot(previous => ({ ...previous, loading: false, error: error instanceof Error && error.message === 'admin_only' ? 'admin_only' : t('agentSetup.tasksLoadFailed') }))
     }
-    if (!resp.ok) {
-      setError('error')
-      setTasks([])
-      return
-    }
-    setError(null)
-    setTasks(await resp.json())
-  }, [agentId])
+  }, [agentId, scope, isCurrent, t])
 
   useEffect(() => {
-    fetchTasks()
-  }, [fetchTasks])
+    scope.active = true
+    setBusy(false)
+    setConfirmClear(null)
+    setShowAll({})
+    void fetchTasks()
+    return () => { scope.active = false }
+  }, [scope, fetchTasks])
 
   // #266 — subscribe to the WS task fanout so the panel stays live
   // without polling. We refetch any time a task event mentions our
@@ -178,76 +189,38 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
 
   const grouped = useMemo(() => groupTasksByStatus(tasks ?? []), [tasks])
 
-  const handleDelete = useCallback(
-    async (taskId: string) => {
-      const resp = await apiFetch(`/api/v1/tasks/${taskId}`, { method: 'DELETE' })
-      if (!resp.ok) {
-        // eslint-disable-next-line no-console
-        console.error(`[TasksPanel] delete ${taskId} failed: ${resp.status}`)
-        return
+  const deleteTasks = useCallback(async (path: string) => {
+    if (!isCurrent() || busy) return
+    setBusy(true)
+    try {
+      const response = await apiFetch(path, { method: 'DELETE' })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      if (isCurrent()) await fetchTasks()
+    } catch (error) {
+      if (isCurrent()) {
+        ++scope.request
+        setSnapshot(previous => ({ ...previous, loading: false, error: t('agentSetup.tasksSaveFailed', { error: error instanceof Error ? error.message : String(error) }) }))
       }
-      // The WS fanout in delete_task should refresh us, but refetch
-      // explicitly so the row disappears even if the listener missed
-      // the event (e.g. tab just regained focus).
-      await fetchTasks()
-    },
-    [fetchTasks],
-  )
-
-  const handleClearAll = useCallback(
-    async (status: Status) => {
-      if (!agentId) return
-      setBusy(true)
-      try {
-        const resp = await apiFetch(
-          `/api/v1/agents/${agentId}/tasks?status=${status}`,
-          { method: 'DELETE' },
-        )
-        if (!resp.ok) {
-          // eslint-disable-next-line no-console
-          console.error(`[TasksPanel] clear ${status} failed: ${resp.status}`)
-          return
-        }
-        await fetchTasks()
-      } finally {
-        setBusy(false)
-        setConfirmClear(null)
-      }
-    },
-    [agentId, fetchTasks],
-  )
+    } finally {
+      if (isCurrent()) { setBusy(false); setConfirmClear(null) }
+    }
+  }, [busy, scope, isCurrent, fetchTasks, t])
+  const handleDelete = (taskId: string) => deleteTasks(`/api/v1/tasks/${taskId}`)
+  const handleClearAll = (status: Status) => deleteTasks(`/api/v1/agents/${agentId}/tasks?status=${status}`)
 
   if (!agentId) return null
-
-  if (error === 'admin_only') {
-    return (
-      <p className="text-sm text-[var(--color-foreground-muted)]">
-        {t('admin.tasks.adminOnly')}
-      </p>
-    )
-  }
-
-  if (tasks === null) {
-    return (
-      <p className="text-sm text-[var(--color-foreground-subtle)]">
-        {t('admin.tasks.loading')}
-      </p>
-    )
-  }
-
-  if (tasks.length === 0) {
-    return (
-      <p className="text-sm text-[var(--color-foreground-muted)]">
-        {t('admin.tasks.none')}
-      </p>
-    )
-  }
 
   const confirmCount = confirmClear ? grouped[confirmClear].length : 0
 
   return (
     <div className="space-y-2">
-      {STATUS_ORDER.map(status => {
+      <div className="flex items-center justify-between gap-3">
+        {loading && <p role="status" className="text-sm text-[var(--color-foreground-muted)]">{t('admin.tasks.loading')}</p>}
+        <Button className="ml-auto" variant="outline" size="sm" disabled={loading || busy} onClick={() => void fetchTasks()}>{error ? t('common.retry') : t('common.refresh')}</Button>
+      </div>
+      {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error === 'admin_only' ? t('admin.tasks.adminOnly') : error}</p>}
+      {!loading && !error && tasks?.length === 0 && <p className="text-sm text-[var(--color-foreground-muted)]">{t('admin.tasks.none')}</p>}
+      {(tasks?.length ? STATUS_ORDER : []).map(status => {
         const rows = grouped[status]
         const total = rows.length
         const Icon = STATUS_ICON[status]
@@ -286,7 +259,8 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                     e.stopPropagation()
                     setConfirmClear(status)
                   }}
-                  className="ml-auto text-[11px] text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                  disabled={busy || loading}
+                  className="ml-auto min-h-[var(--control-sm-height)] text-[11px] text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                   data-testid={`tasks-clear-all-${status}`}
                 >
                   {t('admin.tasks.clearAll')}
@@ -307,8 +281,8 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                       </span>
                       <button
                         type="button"
-                        onClick={() => navigate(`/rooms/${task.room_id}`)}
-                        className="inline-flex max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
+                        onClick={() => { onNavigateAway?.(); navigate(`/rooms/${task.room_id}`) }}
+                        className="inline-flex min-h-[var(--control-sm-height)] max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
                         title={t('admin.tasks.openRoom', { name: task.room_name })}
                       >
                         <span className="truncate">{task.room_name}</span>
@@ -316,8 +290,9 @@ export default function TasksPanel({ agentId }: { agentId: string | null }) {
                       {terminal && !task.source_message_id ? (
                         <button
                           type="button"
-                          onClick={() => handleDelete(task.id)}
-                          className="opacity-0 group-hover/row:opacity-100 transition-opacity text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
+                          disabled={busy || loading}
+                          onClick={() => void handleDelete(task.id)}
+                          className="inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center transition-opacity text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
                           aria-label={t('admin.tasks.delete', { title: task.title })}
                           data-testid={`agent-task-delete-${task.id}`}
                         >

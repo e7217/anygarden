@@ -569,6 +569,11 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
             request_id=request_id,
             run_engine=run_engine,
             thread_root_id=msg.get("root_message_id"),
+            delegation_id=(msg.get("metadata") or {}).get("delegation_id"),
+            turn_context={
+                key: value for key, value in (msg.get("metadata") or {}).items()
+                if key in {"turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key"}
+            },
         )
 
     return adapter

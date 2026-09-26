@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import ManagedWorkspacePanel from './ManagedWorkspacePanel'
 import { Link } from 'react-router-dom'
-import { ExternalLink, FolderOpen, Loader2, Plus, RefreshCw } from 'lucide-react'
+import { ExternalLink, Loader2, Plus, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -131,10 +132,7 @@ export default function WorkspacePanel({ agentId, onNavigateAway }: { agentId: s
   }
 
   return <div className="space-y-4" data-testid="workspace-panel">
-    <div className="flex items-start gap-3">
-      <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-foreground-muted)]" />
-      <div className="space-y-1"><p className="text-sm font-medium">{t('agentSetup.managedWorkspace')}</p><p className="text-sm leading-relaxed text-[var(--color-foreground-muted)]">{t('agentSetup.managedWorkspaceHint')}</p></div>
-    </div>
+    <ManagedWorkspacePanel agentId={agentId} />
     <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-sm font-medium">{t('agentSetup.externalWorkspaces')}</h3>

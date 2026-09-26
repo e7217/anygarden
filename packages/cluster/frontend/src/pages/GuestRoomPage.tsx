@@ -6,10 +6,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
-import { apiFetch } from '@/lib/api'
+import { useRoomParticipants } from '@/hooks/useRoomParticipants'
 import { clearAuthSession, getAuthToken, isGuestSession } from '@/lib/authStorage'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import type { Participant } from '@/pages/ChatPage'
 import type { MentionOption } from '@/components/MentionPopover'
 import { Hash, LogOut, Settings2, Users } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -35,15 +34,15 @@ export default function GuestRoomPage() {
   const { t } = useLocale()
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
-  const [participants, setParticipants] = useState<Record<string, Participant>>({})
-  const [myParticipantId, setMyParticipantId] = useState<string | null>(null)
-  const [roomName, setRoomName] = useState<string>('')
-  const [initError, setInitError] = useState<string | null>(null)
   const [participantsOpen, setParticipantsOpen] = useState(false)
 
   const isGuest = isGuestSession()
   const boundRoomId = localStorage.getItem('anygarden_guest_room_id')
   const displayName = localStorage.getItem('anygarden_guest_display_name') ?? ''
+  const scope = isGuest && getAuthToken() && (!boundRoomId || boundRoomId === roomId) ? roomId ?? null : null
+  const { participants, name: roomName, errorStatus, loaded, loading, refresh } = useRoomParticipants(scope)
+  const myParticipantId = Object.values(participants).find(p => p.is_anonymous && p.display_name === displayName)?.id ?? null
+  const initError = errorStatus ? t('guest.loadFailed', { status: errorStatus }) : null
 
   // Defend against stale URLs — a guest with a valid JWT but typing a
   // different room UUID into the address bar must be bounced.
@@ -57,65 +56,15 @@ export default function GuestRoomPage() {
     }
   }, [roomId, boundRoomId, isGuest, navigate])
 
-  // Load room + participants. Uses ``apiFetch`` which auto-attaches
-  // the guest JWT from localStorage. The server gates this endpoint
-  // by the JWT's ``room_id`` claim (§11.5).
   useEffect(() => {
-    if (!roomId) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const resp = await apiFetch(`/api/v1/rooms/${roomId}`)
-        if (cancelled) return
-        if (resp.status === 401 || resp.status === 403) {
-          // Token expired, revoked, or the bound room was deleted.
-          // Clear the whole local auth slot instead of restoring the
-          // prelogin stash: that token may be expired and would cause
-          // the registered-user WebSocket to reconnect with stale auth.
-          clearAuthSession()
-          navigate('/login', { replace: true })
-          return
-        }
-        if (!resp.ok) {
-          throw new Error(t('guest.loadFailed', { status: resp.status }))
-        }
-        const room = await resp.json()
-        setRoomName(room.name ?? '')
-        const pMap: Record<string, Participant> = {}
-        let myPid: string | null = null
-        for (const p of room.participants ?? []) {
-          pMap[p.id] = {
-            id: p.id,
-            display_name: p.display_name ?? p.id.slice(0, 8),
-            kind: p.kind ?? 'user',
-            user_id: p.user_id,
-            agent_id: p.agent_id,
-            role: p.role,
-            is_anonymous: Boolean(p.is_anonymous),
-          }
-          // Guest self-participant match is by display_name +
-          // user_id-anchored role since we don't carry user_id from
-          // the JWT into this page. The room payload already
-          // excludes other users' JWT claims so this is safe.
-          if (p.display_name === displayName && p.user_id) {
-            myPid = p.id
-          }
-        }
-        setParticipants(pMap)
-        setMyParticipantId(myPid)
-      } catch (err) {
-        if (!cancelled) {
-          setInitError(err instanceof Error ? err.message : String(err))
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
+    if (errorStatus === 401 || errorStatus === 403) {
+      clearAuthSession()
+      navigate('/login', { replace: true })
     }
-  }, [roomId, displayName, t])
+  }, [errorStatus, navigate])
 
   const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(
-    roomId ?? null,
+    scope,
   )
 
   // Surface every participant in the ``@``-autocomplete: the server
@@ -142,7 +91,7 @@ export default function GuestRoomPage() {
     navigate('/login', { replace: true })
   }, [navigate])
 
-  if (initError) {
+  if (initError && !loaded) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <div className="max-w-sm space-y-4 text-center">
@@ -150,7 +99,10 @@ export default function GuestRoomPage() {
           <div className="text-sm text-[var(--color-foreground-muted)]">
             {initError}
           </div>
-          <Button onClick={handleLogout} variant="outline">
+          <Button onClick={() => void refresh()} disabled={loading} variant="outline">
+            {t('common.retry')}
+          </Button>
+          <Button onClick={handleLogout} variant="ghost">
             {t('guest.leave')}
           </Button>
         </div>
@@ -160,6 +112,12 @@ export default function GuestRoomPage() {
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--color-background)]">
+      {initError && (
+        <div role="alert" className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2 text-sm">
+          <span>{initError}</span>
+          <Button variant="ghost" size="sm" onClick={() => void refresh()} disabled={loading}>{t('common.retry')}</Button>
+        </div>
+      )}
       {/* Minimal top bar. No sidebar toggle, no admin widgets. */}
       <div className="relative">
         <div className="flex h-14 items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 md:px-6">

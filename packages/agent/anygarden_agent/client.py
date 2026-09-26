@@ -167,18 +167,22 @@ class ChatClient:
         # message reaches the handlers exactly once. Bounded so a long-
         # lived room can't grow this set without limit; old seqs age out
         # via the deque and are evicted from the set in lock-step.
-        self._seen_seqs: dict[str, set[int]] = {}
-        self._seen_seq_order: dict[str, collections.deque[int]] = {}
+        self._seen_seqs: dict[str, set[Any]] = {}
+        self._seen_seq_order: dict[str, collections.deque[Any]] = {}
         self._seen_seqs_maxlen: int = 256
         # room_id -> websocket connection
         self._connections: dict[str, Any] = {}
+        self._ready_rooms: set[str] = set()
         # request_id -> server-issued durable turn lease metadata.
         self._turn_context: dict[str, dict[str, Any]] = {}
         # room_id -> asyncio task
         self._tasks: dict[str, asyncio.Task] = {}
+        self._handler_tasks: set[asyncio.Task] = set()
 
         # Callbacks
         self._message_handlers: list[MessageHandler] = []
+        self._delegate_result_handlers: list[MessageHandler] = []
+        self._delegation_cleanups: set[Callable[[], None]] = set()
         self._join_handlers: list[Callable[..., Any]] = []
 
         # Self-echo filtering: nonces of messages we sent
@@ -306,6 +310,17 @@ class ChatClient:
         task = asyncio.create_task(self._room_loop(room_id))
         self._tasks[room_id] = task
 
+    async def wait_for_room(self, room_id: str, timeout: float = 10) -> None:
+        """Wait for an active subscription before sending a delegated task."""
+        async def connected() -> None:
+            while room_id not in self._connections or room_id not in self._ready_rooms:
+                task = self._tasks.get(room_id)
+                if task is None or task.done():
+                    raise RuntimeError(f"Not connected to room {room_id}")
+                await asyncio.sleep(0.05)
+
+        await asyncio.wait_for(connected(), timeout)
+
     def _note_seq(self, room_id: str, seq: int) -> None:
         """Advance this room's cursor and persist it for the next process.
 
@@ -352,7 +367,8 @@ class ChatClient:
         metadata = dict(metadata) if metadata else {}
         request_id = metadata.get("request_id")
         if isinstance(request_id, str):
-            metadata.update(self._turn_context.get(request_id, {}))
+            for key, value in self._turn_context.get(request_id, {}).items():
+                metadata.setdefault(key, value)
         metadata["_nonce"] = nonce
         self._sent_nonces.add(nonce)
         frame = SendFrame(
@@ -432,7 +448,9 @@ class ChatClient:
             if event == "handler_finished" and payload.get("outcome") not in {
                 "queued",
                 "retrying",
-            }:
+            } and (
+                frame.turn_lease == self._turn_context.get(request_id, {}).get("turn_lease")
+            ):
                 self._turn_context.pop(request_id, None)
 
     async def find_sub_room(self, parent_room_id: str, name: str) -> str | None:
@@ -504,7 +522,9 @@ class ChatClient:
     async def close(self) -> None:
         """Close all connections and cancel tasks."""
         self._running = False
-        tasks = list(self._tasks.values())
+        for cancel in list(self._delegation_cleanups):
+            cancel()
+        tasks = [*self._tasks.values(), *self._handler_tasks]
         for task in tasks:
             task.cancel()
         # Wait for tasks to finish cancellation
@@ -516,6 +536,7 @@ class ChatClient:
             except Exception:
                 pass
         self._connections.clear()
+        self._ready_rooms.clear()
         adapter = getattr(self, "_execution_adapter", None)
         if adapter is not None:
             await adapter.stop()
@@ -659,7 +680,7 @@ class ChatClient:
             self._recent_msgs[room_id] = buf
         buf.append({"sender": sender, "hash": h})
 
-    def _mark_seq_seen(self, room_id: str, seq: int) -> bool:
+    def _mark_seq_seen(self, room_id: str, seq: int, delivery: tuple | None = None) -> bool:
         """Record ``seq`` as dispatched for ``room_id``.
 
         Issue #445 Wave 0 — returns ``True`` if this seq was already
@@ -672,16 +693,17 @@ class ChatClient:
         """
         if seq <= 0:
             return False
+        key = (seq, *delivery) if delivery is not None else seq
         seen = self._seen_seqs.get(room_id)
         if seen is None:
             seen = set()
             self._seen_seqs[room_id] = seen
             self._seen_seq_order[room_id] = collections.deque()
-        if seq in seen:
+        if key in seen:
             return True
         order = self._seen_seq_order[room_id]
-        seen.add(seq)
-        order.append(seq)
+        seen.add(key)
+        order.append(key)
         while len(order) > self._seen_seqs_maxlen:
             seen.discard(order.popleft())
         return False
@@ -709,7 +731,7 @@ class ChatClient:
             return False
         return True
 
-    async def _process_frame(self, room_id: str, data: dict[str, Any]) -> None:
+    async def _process_frame(self, room_id: str, data: dict[str, Any], *, background_handlers: bool = False) -> None:
         """Handle a single incoming WS frame (called from _room_loop)."""
         msg_type = data.get("type")
         if msg_type == "message":
@@ -747,18 +769,6 @@ class ChatClient:
             # Soft filter: skip our own echoes via nonce
             msg_meta = data.get("metadata") or {}
             request_id = msg_meta.get("request_id")
-            if isinstance(request_id, str):
-                self._turn_context[request_id] = {
-                    key: msg_meta[key]
-                    for key in (
-                        "turn_attempt",
-                        "turn_generation",
-                        "turn_lease",
-                        "turn_idempotency_key",
-                        "turn_protocol",
-                    )
-                    if key in msg_meta
-                }
             nonce = msg_meta.get("_nonce")
             if nonce and nonce in self._sent_nonces:
                 self._sent_nonces.discard(nonce)
@@ -774,6 +784,23 @@ class ChatClient:
                     self._agent_turn_count[room_id] = (
                         self._agent_turn_count.get(room_id, 0) + 1
                     )
+                return
+
+            # Turn counter: track consecutive agent-only messages.
+            # Terminal delegation results are control messages. Deliver them
+            # before loop guards or a slow engine handler can discard/delay
+            # an already completed child, and never wake another engine.
+            if msg_meta.get("delegation_id") and msg_meta.get("delegation_outcome") in {
+                "ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted",
+            }:
+                if self._mark_seq_seen(room_id, seq):
+                    return
+                data["room_id"] = room_id
+                for handler in list(self._delegate_result_handlers):
+                    try:
+                        await handler(data)
+                    except Exception:
+                        logger.exception("delegate.result_handler_failed", room_id=room_id)
                 return
 
             # Turn counter: track consecutive agent-only messages.
@@ -849,25 +876,40 @@ class ChatClient:
             # reconnect replays it via ``since_seq``. Check last, right
             # before invoking handlers, so a replayed+live duplicate
             # reaches handlers exactly once.
-            if self._mark_seq_seen(room_id, seq):
+            delivery = None
+            if isinstance(request_id, str) and isinstance(msg_meta.get("turn_lease"), str):
+                # Retrying a durable turn reuses the message sequence but
+                # owns a new attempt. Deduplicate redelivery, not retries.
+                delivery = (request_id, msg_meta.get("turn_attempt"), msg_meta["turn_lease"])
+            if self._mark_seq_seen(room_id, seq, delivery):
                 logger.debug("ws.duplicate_seq_skipped", room_id=room_id, seq=seq)
                 return
 
-            # Issue #445 Wave 0 — iterate over a list() snapshot so a
-            # handler that deregisters itself mid-dispatch (one-shot
-            # delegate / room_query callbacks pop themselves off
-            # ``_message_handlers``) cannot shift the list out from under
-            # the loop and cause the following handler to be skipped.
-            for handler in list(self._message_handlers):
-                try:
-                    await handler(data)
-                except Exception as exc:
-                    logger.error("handler.message_error", error=str(exc))
-                    # #482 — count the swallowed handler failure so the
-                    # error rate is measurable; dispatch still continues
-                    # to the remaining handlers (one bad handler must not
-                    # kill the loop).
-                    metrics.client_handler_error_total.inc()
+            if isinstance(request_id, str):
+                incoming = {key: msg_meta[key] for key in (
+                    "turn_attempt", "turn_generation", "turn_lease",
+                    "turn_idempotency_key", "turn_protocol",
+                ) if key in msg_meta}
+                previous = self._turn_context.get(request_id, {})
+                old_attempt, new_attempt = previous.get("turn_attempt"), incoming.get("turn_attempt")
+                if isinstance(old_attempt, int) and isinstance(new_attempt, int) and old_attempt > new_attempt:
+                    return
+                if incoming.get("turn_lease") or not previous.get("turn_lease"):
+                    self._turn_context[request_id] = incoming
+
+            if background_handlers and len(self._handler_tasks) < 64:
+                # Keep reading control/results while an engine works. The
+                # supervisor owns the bounded per-room turn queue; this cap
+                # also bounds custom handlers, with backpressure at capacity.
+                task = asyncio.create_task(self._dispatch_message_handlers(data))
+                self._handler_tasks.add(task)
+                task.add_done_callback(self._handler_tasks.discard)
+                await asyncio.sleep(0)
+            else:
+                await self._dispatch_message_handlers(data)
+        elif msg_type == "room_ready":
+            if data.get("room_id") == room_id:
+                self._ready_rooms.add(room_id)
         elif msg_type == "welcome":
             pid = data.get("participant_id")
             if pid:
@@ -977,6 +1019,15 @@ class ChatClient:
         elif msg_type == "error":
             logger.warning("ws.server_error", detail=data.get("detail"))
 
+    async def _dispatch_message_handlers(self, data: dict[str, Any]) -> None:
+        # Snapshot: one-shot callbacks can remove themselves during delivery.
+        for handler in list(self._message_handlers):
+            try:
+                await handler(data)
+            except Exception as exc:
+                logger.error("handler.message_error", error=str(exc))
+                metrics.client_handler_error_total.inc()
+
     async def _room_loop(self, room_id: str) -> None:
         """Reconnection loop with exponential backoff + since_seq recovery."""
         delay = 1.0
@@ -999,7 +1050,7 @@ class ChatClient:
                 if ws_base.startswith(("http://", "https://")):
                     ws_base = "ws" + ws_base[len("http"):]
                 ws_url = f"{ws_base}/ws/rooms/{room_id}"
-                query: list[str] = []
+                query: list[str] = ["ready=1"]
                 if since > 0:
                     query.append(f"since_seq={since}")
                 if self._generation is not None:
@@ -1053,7 +1104,7 @@ class ChatClient:
                             logger.warning("ws.bad_frame", length=len(raw) if raw else 0)
                             continue
 
-                        await self._process_frame(room_id, data)
+                        await self._process_frame(room_id, data, background_handlers=True)
 
             except websockets.exceptions.InvalidStatusCode as exc:
                 # 403/4003 = not a member of this room. Don't retry —
@@ -1102,6 +1153,7 @@ class ChatClient:
                 logger.error("ws.unexpected_error", room_id=room_id, error=str(exc))
             finally:
                 self._connections.pop(room_id, None)
+                self._ready_rooms.discard(room_id)
 
             if not self._running:
                 break

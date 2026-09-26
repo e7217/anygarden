@@ -4,7 +4,7 @@
 // gets the grouping right, so we pin the pure function here.
 import { describe, it, expect } from 'vitest'
 
-import { activityErrorMessage, splitLogs, turnLabel } from './ActivityPanel'
+import { activityErrorMessage, splitLogs, turnDotClass, turnLabel } from './ActivityPanel'
 
 describe('activityErrorMessage', () => {
   it('explains classified engine failures without exposing raw details', () => {
@@ -219,5 +219,41 @@ describe('splitLogs', () => {
     ]).turns[0]
     expect(legacy.finalOutcome).toBeNull()
     expect(turnLabel(legacy)).toBe('orphaned')
+  })
+})
+
+
+describe('queued and retrying activity', () => {
+  it.each(['queued', 'retrying'])('displays %s as ongoing with a neutral status', outcome => {
+    const turn = splitLogs([
+      row({ id: 'a', event_type: 'message_received', request_id: 'request' }),
+      row({ id: 'b', event_type: 'handler_finished', request_id: 'request', details: { outcome, error: 'transient error', duration_ms: 50 } }),
+    ]).turns[0]
+    expect(turn.outcome).toBe('in_flight')
+    expect(turnLabel(turn)).toBe(outcome)
+    expect(turnDotClass(turn)).toBe('bg-[var(--color-foreground-muted)]')
+    expect(turn.error).toBeNull()
+    expect(turn.durationMs).toBeNull()
+  })
+
+  it('orders tied event timestamps by ID, clears retry state on start, and displays final success', () => {
+    const rows = [
+      row({ id: 'c', event_type: 'handler_started', request_id: 'request' }),
+      row({ id: 'b', event_type: 'handler_finished', request_id: 'request', details: { outcome: 'retrying', error: 'transient error' } }),
+      row({ id: 'a', event_type: 'message_received', request_id: 'request' }),
+    ]
+    const running = splitLogs(rows).turns[0]
+    expect(running.events.map(event => event.id)).toEqual(['a', 'b', 'c'])
+    expect(turnLabel(running)).toBe('in flight')
+    const finished = splitLogs([...rows, row({ id: 'd', event_type: 'handler_finished', request_id: 'request', details: { outcome: 'ok', duration_ms: 60 } })]).turns[0]
+    expect(turnLabel(finished)).toBe('responded')
+    expect(finished.durationMs).toBe(60)
+    expect(finished.error).toBeNull()
+  })
+
+  it('orders tied turn timestamps consistently by first event ID', () => {
+    const rows = [row({ id: 'a', request_id: 'older-id' }), row({ id: 'z', request_id: 'newer-id' })]
+    expect(splitLogs(rows).turns.map(turn => turn.requestId)).toEqual(['newer-id', 'older-id'])
+    expect(splitLogs([...rows].reverse()).turns.map(turn => turn.requestId)).toEqual(['newer-id', 'older-id'])
   })
 })

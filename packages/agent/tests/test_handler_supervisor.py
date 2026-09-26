@@ -24,6 +24,7 @@ import pytest
 
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
+    EngineCancelledError,
     EngineTimeoutError,
     EngineTurn,
     RoomHandlerSupervisor,
@@ -875,3 +876,107 @@ async def test_non_transient_failure_not_retried(monkeypatch):
         e["outcome"] for e in client.lifecycle_events if e["event"] == "handler_finished"
     ]
     assert handler_outcomes == ["failed"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["ok", "failed", "timeout", "cancelled", "empty"])
+async def test_delegated_turn_returns_correlation_for_every_terminal_outcome(outcome):
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex", 1)
+
+    async def run_engine():
+        if outcome == "failed":
+            raise EngineError("failed")
+        if outcome == "timeout":
+            raise EngineTimeoutError("timeout")
+        if outcome == "cancelled":
+            raise EngineCancelledError(EngineTurn(None))
+        return "answer" if outcome == "ok" else None
+
+    await sup.dispatch("room", None, run_engine, delegation_id="delegated-1")
+    assert len(client.sends) == 1
+    assert client.sends[0][2] == {
+        "delegation_id": "delegated-1",
+        "delegation_outcome": "failed" if outcome == "empty" else outcome,
+    }
+
+
+@pytest.mark.asyncio
+async def test_queued_delegations_keep_their_own_identity_and_rejections(monkeypatch):
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_MAX_QUEUE_DEPTH", 1)
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex", 1)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def first():
+        entered.set()
+        await release.wait()
+        return "first"
+
+    async def later():
+        return "second"
+
+    running = asyncio.create_task(sup.dispatch("room", "r1", first, delegation_id="d1"))
+    await entered.wait()
+    await sup.dispatch("room", "r2", later, delegation_id="d2")
+    await sup.dispatch("room", "r3", later, delegation_id="d3")
+    release.set()
+    await running
+    assert [(m[2]["delegation_id"], m[2]["delegation_outcome"]) for m in client.sends] == [
+        ("d3", "rejected"), ("d1", "ok"), ("d2", "ok"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
+    import anygarden_agent.runtime.handler_wrapper as hw
+
+    monkeypatch.setattr(hw, "_QUEUE_ITEM_TTL_SEC", 0)
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex", 1)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def first():
+        entered.set()
+        await release.wait()
+        return "first"
+
+    async def stale():
+        pytest.fail("stale queued engine must not execute")
+
+    running = asyncio.create_task(sup.dispatch("room", "r1", first, delegation_id="d1"))
+    await entered.wait()
+    await sup.dispatch("room", "r2", stale, delegation_id="d2")
+    release.set()
+    await running
+    assert client.sends[-1][2] == {"request_id": "r2", "delegation_id": "d2", "delegation_outcome": "rejected"}
+
+
+@pytest.mark.asyncio
+async def test_queued_attempts_keep_immutable_response_and_lifecycle_proof():
+    client = _FakeClient()
+    sup = RoomHandlerSupervisor(client, "codex", 1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    old = {"turn_attempt": 1, "turn_generation": 1, "turn_lease": "old"}
+    new = {"turn_attempt": 2, "turn_generation": 1, "turn_lease": "new"}
+
+    async def first():
+        entered.set()
+        await release.wait()
+        return "old result"
+
+    async def later():
+        return "new result"
+
+    running = asyncio.create_task(sup.dispatch("room", "same-request", first, turn_context=old))
+    await entered.wait()
+    await sup.dispatch("room", "same-request", later, turn_context=new)
+    old["turn_lease"] = "mutated-after-dispatch"
+    new["turn_lease"] = "mutated-after-enqueue"
+    release.set()
+    await running
+    assert [send[2]["turn_lease"] for send in client.sends] == ["old", "new"]
+    finished = [e for e in client.lifecycle_events if e["event"] == "handler_finished" and e["outcome"] == "ok"]
+    assert [e["turn_lease"] for e in finished] == ["old", "new"]

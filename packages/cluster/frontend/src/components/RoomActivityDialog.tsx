@@ -68,6 +68,9 @@ export default function RoomActivityDialog({
       timeout: 'rooms.outcomeTimeout',
       cancelled: 'rooms.outcomeCancelled',
       rejected: 'rooms.outcomeRejected',
+      queued: 'admin.activity.outcome.queued',
+      retrying: 'admin.activity.outcome.retrying',
+      retry_exhausted: 'admin.activity.outcome.retryExhausted',
     } as const
     return outcome in keys ? t(keys[outcome as keyof typeof keys]) : outcome
   }
