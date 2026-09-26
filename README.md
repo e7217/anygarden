@@ -123,6 +123,15 @@ dependencies.
 | npm | `anygarden-frontend` | [`packages/cluster/frontend/`](packages/cluster/frontend) | Vite web UI built into the server package |
 | npm | `@anygarden/agent-ts` | [`packages/agent-ts/`](packages/agent-ts) | TypeScript room transport client; it does not execute Codex/Pi |
 
+This table describes source packages, not five separate installation steps.
+For a single-host `anygarden start`, install `anygarden[server,agent]`: the
+`[server]` extra includes machine supervision code, which the node runs
+in-process, while `[agent]` supplies the Python agent runtime. No separate
+machine daemon is started. For remote hosts, install `anygarden[server]` on the
+server and `anygarden[machine]` on each worker; a worker launches
+`anygarden-agent` for an agent process, fetching it with `uvx` if it is not
+installed locally. Neither setup needs `@anygarden/agent-ts`.
+
 ## Docs
 
 - Integrated local node (`anygarden start`) — [`docs/runbook/local-node.md`](docs/runbook/local-node.md)
