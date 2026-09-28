@@ -743,3 +743,117 @@ async def test_generation_change_drains_then_retries_on_new_generation(
         assert agent.pending_generation is None
         assert attempt is not None and attempt.generation == 4
     assert bus.frames[-1][1]["generation"] == 4
+
+
+def _skipped_frame(env, request_id: str, metadata: dict, **overrides) -> SimpleNamespace:
+    fields = {
+        "request_id": request_id,
+        "room_id": env["room"],
+        "event": "handler_finished",
+        "outcome": "skipped",
+        "turn_attempt": metadata.get("turn_attempt"),
+        "turn_generation": metadata.get("turn_generation"),
+        "turn_lease": metadata.get("turn_lease"),
+    }
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+@pytest.mark.asyncio
+async def test_skipped_lifecycle_closes_turn_without_redispatch(turn_env) -> None:
+    # #720 — an agent that declines a delivered turn must close it; left
+    # leased, it blocked later deliveries until the lease expired.
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    metadata = manager.frames[0].metadata
+    async with turn_env["factory"]() as db:
+        assert await record_lifecycle(
+            db, agent_id=turn_env["agent"],
+            frame=_skipped_frame(turn_env, request_id, metadata),
+        )
+        await db.commit()
+
+    result = await recover_stalled_turns(
+        turn_env["factory"], manager,
+        now=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    assert result.redispatched == 0
+    assert result.failed == 0
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        attempt = await db.scalar(
+            select(AgentTurnAttempt).where(AgentTurnAttempt.turn_id == request_id)
+        )
+        assert turn is not None and turn.state == "completed"
+        assert turn.terminal_reason == "agent_skipped"
+        assert turn.completed_at is not None
+        assert attempt is not None and attempt.state == "completed"
+        assert attempt.outcome == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_skipped_turn_unblocks_next_pending_turn(turn_env) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    async with turn_env["factory"]() as db:
+        trigger = await append_message(
+            db, turn_env["room"], turn_env["user_participant"], "follow-up",
+        )
+        follow_up = await create_turn(
+            db,
+            room_id=turn_env["room"],
+            participant_id=turn_env["agent_participant"],
+            agent_id=turn_env["agent"],
+            trigger_message_id=trigger.id,
+        )
+        follow_up_id = follow_up.request_id
+        await db.commit()
+    # The open first turn fences the follow-up.
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 0
+
+    async with turn_env["factory"]() as db:
+        assert await record_lifecycle(
+            db, agent_id=turn_env["agent"],
+            frame=_skipped_frame(turn_env, request_id, manager.frames[0].metadata),
+        )
+        await db.commit()
+
+    assert await deliver_pending_outbox(turn_env["factory"], manager) == 1
+    assert manager.frames[-1].metadata["request_id"] == follow_up_id
+
+
+@pytest.mark.asyncio
+async def test_skipped_with_wrong_lease_is_fenced(turn_env) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env)
+    metadata = manager.frames[0].metadata
+    async with turn_env["factory"]() as db:
+        accepted = await record_lifecycle(
+            db, agent_id=turn_env["agent"],
+            frame=_skipped_frame(turn_env, request_id, metadata, turn_lease="forged"),
+        )
+        await db.commit()
+    assert not accepted
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        assert turn is not None and turn.state == "leased"
+
+
+@pytest.mark.asyncio
+async def test_skipped_closes_legacy_delivery(turn_env) -> None:
+    request_id, _, manager = await _create_and_deliver(turn_env, generation=None)
+    metadata = manager.frames[0].metadata
+    assert "turn_lease" not in metadata
+    async with turn_env["factory"]() as db:
+        assert await record_lifecycle(
+            db, agent_id=turn_env["agent"],
+            frame=_skipped_frame(turn_env, request_id, metadata),
+        )
+        await db.commit()
+    async with turn_env["factory"]() as db:
+        turn = await db.get(AgentTurn, request_id)
+        assert turn is not None and turn.state == "completed"
+        assert turn.terminal_reason == "agent_skipped"
+
+
+def test_skipped_is_not_a_task_redispatch_outcome() -> None:
+    from anygarden.ws.handler import _REDISPATCH_OUTCOMES
+
+    assert "skipped" not in _REDISPATCH_OUTCOMES

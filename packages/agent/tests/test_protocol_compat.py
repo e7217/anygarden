@@ -109,6 +109,7 @@ class TestLifecycleFrame:
             "queued",
             "retrying",
             "retry_exhausted",
+            "skipped",
         ):
             f = sdk_frames.LifecycleFrame(
                 request_id="r",
@@ -126,7 +127,8 @@ class TestLifecycleFrame:
 
         from anygarden.ws.protocol import LifecycleFrame as ClusterLifecycleFrame
 
-        for outcome in ("queued", "retrying", "retry_exhausted"):
+        # #720 adds ``skipped``: the agent declined a delivered turn.
+        for outcome in ("queued", "retrying", "retry_exhausted", "skipped"):
             agent_frame = sdk_frames.LifecycleFrame(
                 request_id="r-new",
                 room_id="room-1",

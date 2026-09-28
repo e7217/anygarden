@@ -73,6 +73,23 @@ describe('latestTurnHealth', () => {
     expect(health).toMatchObject({ status: 'failed', category: 'policy', code: 'POLICY_DENIED' })
   })
 
+  it('ignores turns the agent declined (#720) and reports the newest real one', () => {
+    const health = latestTurnHealth(turns(
+      row('real', 'handler_started', '2026-09-28T01:00:00.000000Z'),
+      row('real', 'handler_finished', '2026-09-28T01:00:02.000000Z', { outcome: 'ok' }),
+      row('skip', 'message_received', '2026-09-28T02:00:00.000000Z'),
+      row('skip', 'handler_finished', '2026-09-28T02:00:01.000000Z', { outcome: 'skipped' }),
+    ))
+    expect(health.status).toBe('succeeded')
+    expect(health.turn?.requestId).toBe('real')
+  })
+
+  it('reports none when every turn was declined', () => {
+    expect(latestTurnHealth(turns(
+      row('skip', 'handler_finished', '2026-09-28T02:00:01.000000Z', { outcome: 'skipped' }),
+    )).status).toBe('none')
+  })
+
   it('distinguishes succeeded, in-flight and cancelled turns', () => {
     expect(latestTurnHealth(turns(
       row('a', 'handler_started', '2026-09-28T02:00:00.000000Z'),

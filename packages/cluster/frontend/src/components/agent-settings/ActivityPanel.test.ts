@@ -257,3 +257,15 @@ describe('queued and retrying activity', () => {
     expect(splitLogs([...rows].reverse()).turns.map(turn => turn.requestId)).toEqual(['newer-id', 'older-id'])
   })
 })
+
+
+describe('skipped activity (#720)', () => {
+  it('labels a declined turn neutrally, not as a failure', () => {
+    const turn = splitLogs([
+      row({ id: 'a', event_type: 'message_received', request_id: 'request' }),
+      row({ id: 'b', event_type: 'handler_finished', request_id: 'request', details: { outcome: 'skipped' } }),
+    ]).turns[0]
+    expect(turnLabel(turn)).toBe('skipped')
+    expect(turnDotClass(turn)).toBe('bg-[var(--color-foreground-muted)]')
+  })
+})

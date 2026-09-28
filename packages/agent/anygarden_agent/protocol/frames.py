@@ -108,6 +108,10 @@ class LifecycleFrame(BaseModel):
             "queued",
             "retrying",
             "retry_exhausted",
+            # #720 — the agent's policy declined a delivered turn (SKIP or
+            # INGEST_ONLY). Closes the durable turn without a reply, retry
+            # or task redispatch so it cannot block later deliveries.
+            "skipped",
         ]
     ] = None
     duration_ms: Optional[int] = None
