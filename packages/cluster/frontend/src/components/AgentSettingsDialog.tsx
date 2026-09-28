@@ -31,6 +31,7 @@ import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-s
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
+import RecentTurnSummary from '@/components/agent-settings/RecentTurnSummary'
 import TasksPanel from '@/components/agent-settings/TasksPanel'
 import GoalsPanel from '@/components/agent-settings/GoalsPanel'
 import WorkspacePanel from '@/components/agent-settings/WorkspacePanel'
@@ -184,12 +185,14 @@ export default function AgentSettingsDialog({
   const bodyRef = useRef<HTMLDivElement>(null)
   const [selectedSection, setSelectedSection] = useState('overview')
   const [activityOpen, setActivityOpen] = useState(false)
+  const [focusRequestId, setFocusRequestId] = useState<string | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState | null>(null)
   const onConnectionChange = useCallback((next: ConnectionState) => setConnectionState(next), [])
   useEffect(() => {
     if (!open) {
       setConnectionState(null)
       setActivityOpen(false)
+      setFocusRequestId(null)
     }
     if (open) setSelectedSection('overview')
   }, [open])
@@ -282,6 +285,16 @@ export default function AgentSettingsDialog({
                 updateAgent={updateAgent}
                 fetchEngineCatalog={fetchEngineCatalog}
                 connectionState={connectionState}
+                recentTurn={
+                  <RecentTurnSummary
+                    agentId={agent?.id ?? null}
+                    active={open}
+                    onShowTurn={requestId => {
+                      setFocusRequestId(requestId)
+                      jumpToSection('activity')
+                    }}
+                  />
+                }
               />
             </Section>
 
@@ -342,7 +355,7 @@ export default function AgentSettingsDialog({
                 the four sections. Collapsed by default keeps Manifest
                 and Rooms closer to the top of the scroll. */}
             <CollapsibleSection id="activity" title={t('admin.agentSettings.activity')} onToggle={setActivityOpen}>
-              <ActivityPanel agentId={agent?.id ?? null} active={open && activityOpen} />
+              <ActivityPanel agentId={agent?.id ?? null} active={open && activityOpen} focusRequestId={focusRequestId} />
             </CollapsibleSection>
           </div>
         </div>

@@ -19,7 +19,7 @@
  * ID text so the admin can copy it manually, and shows "Clipboard
  * unavailable" in place of "Copied".
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -95,9 +95,11 @@ interface Props {
    *  passing; when absent, the rows render in read-only fallback. */
   fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
   connectionState?: ConnectionState | null
+  /** #716 — latest-turn health row rendered right after the process state. */
+  recentTurn?: ReactNode
 }
 
-export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, connectionState }: Props) {
+export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, connectionState, recentTurn }: Props) {
   const { t } = useLocale()
   const [showPicker, setShowPicker] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
@@ -568,6 +570,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
             {displayState}
           </span>
         </dd>
+        {recentTurn}
       </dl>
     </div>
   )
