@@ -597,8 +597,15 @@ class ChatClient:
 
         Self is excluded — an orchestrator handing off to itself would
         be a no-op cycle. Returns an empty string when the roster
-        cache is absent (pre-#221 server) or contains only self,
+        cache is absent (pre-#221 server),
         letting the caller skip the ``system_prompt`` rewrite entirely.
+
+        #733 — self stays out of the peer list but is stated on its own
+        ``You:`` line with its participant id. Messages reach the model
+        with raw ``<@user:{pid}>`` tokens, and without that line a mention
+        of the agent's own id read as an unknown participant. A roster
+        holding only self now yields the room ID and the ``You:`` line
+        (no peer list, no routing guidance).
 
         #644 — the usage paragraph is unconditional. It used to be
         gated on ``agents.collaboration_mode``, but that gate never
@@ -612,25 +619,45 @@ class ChatClient:
         if not roster:
             return ""
         my_pids = self._my_participant_ids
+        self_line: str | None = None
         lines: list[str] = []
         for pid, brief in roster.items():
-            if pid in my_pids:
-                continue
             if not isinstance(brief, dict):
                 continue
             name = brief.get("display_name") or "?"
+            if pid in my_pids:
+                # #733 — ``_my_participant_ids`` spans every room, so the
+                # roster (not the set) decides which pid is ours *here*.
+                if self_line is None:
+                    self_line = (
+                        f"You: {name} (id: {pid}). A <@user:{pid}> token "
+                        "in a message addresses you. Never put that token "
+                        "in your own reply."
+                    )
+                continue
             kind = brief.get("kind") or "user"
             raw_desc = brief.get("description") or ""
             desc = raw_desc.replace("\n", " ").replace("\r", " ").strip()[:200]
             desc_part = f" — {desc}" if desc else ""
             lines.append(f"- {name} (id: {pid}, kind: {kind}){desc_part}")
-        if not lines:
+        if not lines and self_line is None:
             return ""
-        suffix = (
+        header = (
             f"Current room ID: {room_id}. Use this exact value for Anygarden "
             "MCP tools that require room_id; the participant IDs below are "
-            "only for assignee_pid and routing tokens.\n\n"
-            "Room participants. Refer to peers by display name in prose. "
+            "only for assignee_pid and routing tokens."
+        )
+        if self_line is not None:
+            header += "\n\n" + self_line
+        if not lines:
+            # Alone in the room: nobody to route to, so the peer list
+            # and the routing guidance below would be noise.
+            return header
+        suffix = (
+            header
+            + "\n\n"
+            "Room participants (peers, excluding you). Refer to peers by "
+            "display name in prose. "
             "Construct a routing token <@user:PARTICIPANT_ID> ONLY when "
             "intentionally calling a specific peer for a reply — never "
             "when merely listing, recommending, or describing peers.\n"
