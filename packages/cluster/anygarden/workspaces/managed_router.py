@@ -1,4 +1,4 @@
-"""Admin-only browsing of runtime-reported files on the execution machine."""
+"""Admin-only access to runtime-reported files on the execution machine."""
 
 from __future__ import annotations
 
@@ -6,11 +6,14 @@ from typing import Annotated, Literal
 
 from anygarden_machine.managed_workspace import (
     CAPABILITY,
+    EDIT_CAPABILITY,
+    MAX_UPLOAD_ENCODED,
+    PREVIEW_BYTES,
     WorkspaceSnapshot,
     path_parts,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,20 +31,61 @@ class ManagedWorkspaceOut(BaseModel):
     machine_name: str | None = None
     agent_state: str
     snapshot: WorkspaceSnapshot | None = None
+    can_edit: bool = False
+
+
+class FolderInput(BaseModel):
+    path: str = Field(min_length=1, max_length=1024)
+    edit_token: str = Field(min_length=64, max_length=64)
+
+
+class UploadInput(FolderInput):
+    content_base64: str = Field(max_length=MAX_UPLOAD_ENCODED)
+
+
+class TextInput(FolderInput):
+    text: str = Field(max_length=PREVIEW_BYTES)
+    expected_sha256: str = Field(min_length=6, max_length=64)
 
 
 async def _query(
     request: Request,
     db: AsyncSession,
     agent_id: str,
-    operation: Literal["list", "read"],
+    operation: Literal["list", "read", "mkdir", "upload", "write"],
     path: str,
     cursor: str | None,
+    *,
+    edit_token: str | None = None,
+    content_base64: str | None = None,
+    text: str | None = None,
+    expected_sha256: str | None = None,
 ) -> ManagedWorkspaceOut:
     try:
         parts = path_parts(path)
-        if operation == "read" and not parts:
+        if operation != "list" and not parts:
             raise ValueError("file required")
+        if operation in {"mkdir", "upload", "write"} and (
+            edit_token is None
+            or len(edit_token) != 64
+            or any(c not in "0123456789abcdef" for c in edit_token)
+        ):
+            raise ValueError("invalid workspace token")
+        if operation == "write" and (
+            expected_sha256 != "absent"
+            and (
+                expected_sha256 is None
+                or len(expected_sha256) != 64
+                or any(c not in "0123456789abcdef" for c in expected_sha256)
+            )
+        ):
+            raise ValueError("invalid file revision")
+        if (
+            operation == "write"
+            and text is not None
+            and len(text.encode("utf-8")) > PREVIEW_BYTES
+        ):
+            raise ValueError("file too large")
         if cursor is not None and (
             not cursor
             or "/" in cursor
@@ -69,6 +113,10 @@ async def _query(
     if CAPABILITY not in (machine.control_capabilities or []):
         result.status = "unsupported"
         return result
+    result.can_edit = EDIT_CAPABILITY in (machine.control_capabilities or [])
+    if operation in {"mkdir", "upload", "write"} and not result.can_edit:
+        result.status = "unsupported"
+        return result
     # Release the read transaction while waiting on another machine. A fresh
     # read below must observe placement/generation changes during that wait.
     await db.rollback()
@@ -80,6 +128,10 @@ async def _query(
             operation=operation,
             path=path,
             cursor=cursor,
+            edit_token=edit_token,
+            content_base64=content_base64,
+            text=text,
+            expected_sha256=expected_sha256,
         )
     except MachineRequestError as exc:
         result.status = exc.reason
@@ -101,6 +153,8 @@ async def _query(
     result.agent_state = current.actual_state
     result.snapshot = WorkspaceSnapshot.model_validate(raw)
     result.status = result.snapshot.status
+    if operation in {"mkdir", "upload", "write"} and result.status == "conflict":
+        raise HTTPException(409, "File or folder changed. Refresh before saving.")
     return result
 
 
@@ -125,3 +179,63 @@ async def read_managed_workspace(
     path: Annotated[str, Query(min_length=1, max_length=1024)],
 ):
     return await _query(request, db, agent_id, "read", path, None)
+
+
+@router.post("/{agent_id}/workspace/folder", response_model=ManagedWorkspaceOut)
+async def create_managed_folder(
+    agent_id: str,
+    body: FolderInput,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _query(
+        request,
+        db,
+        agent_id,
+        "mkdir",
+        body.path,
+        None,
+        edit_token=body.edit_token,
+    )
+
+
+@router.post("/{agent_id}/workspace/upload", response_model=ManagedWorkspaceOut)
+async def upload_managed_file(
+    agent_id: str,
+    body: UploadInput,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _query(
+        request,
+        db,
+        agent_id,
+        "upload",
+        body.path,
+        None,
+        edit_token=body.edit_token,
+        content_base64=body.content_base64,
+    )
+
+
+@router.put("/{agent_id}/workspace/file", response_model=ManagedWorkspaceOut)
+async def write_managed_file(
+    agent_id: str,
+    body: TextInput,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_admin_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await _query(
+        request,
+        db,
+        agent_id,
+        "write",
+        body.path,
+        None,
+        edit_token=body.edit_token,
+        text=body.text,
+        expected_sha256=body.expected_sha256,
+    )

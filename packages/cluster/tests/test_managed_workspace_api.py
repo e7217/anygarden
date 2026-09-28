@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ from anygarden.scheduler.machine_bus import MachineBus, MachineRequestError
 from anygarden.ws.machine_handler import ws_machine
 from anygarden_agent.runtime.workspace_receipt import report_workspace
 from anygarden_machine.daemon import MachineDaemon
-from anygarden_machine.managed_workspace import CAPABILITY, supported
+from anygarden_machine.managed_workspace import CAPABILITY, EDIT_CAPABILITY, supported
 from fastapi import WebSocketDisconnect
 
 from .test_agents_api import agents_env as _agents_env
@@ -27,7 +28,7 @@ async def seed(env, tmp_path):
     machine_id = env["machine"].id
     async with env["factory"]() as db:
         machine = await db.get(Machine, machine_id)
-        machine.control_capabilities = [CAPABILITY]
+        machine.control_capabilities = [CAPABILITY, EDIT_CAPABILITY]
         agent = Agent(
             id="workspace-agent",
             name="Worker",
@@ -138,6 +139,85 @@ async def test_real_disk_round_trip_and_persistence(workspace_env, tmp_path, del
             base + "/file", params={"path": "folder/result.md"}, headers=headers
         )
         assert preview.json()["snapshot"]["text"] == "actual runtime output"
+        assert preview.json()["can_edit"] is True
+        token = preview.json()["snapshot"]["edit_token"]
+        revision = preview.json()["snapshot"]["sha256"]
+        folder = await env["client"].post(
+            base + "/folder",
+            json={"path": "notes", "edit_token": token},
+            headers=headers,
+        )
+        assert folder.status_code == 200 and (root / "notes").is_dir()
+        created = await env["client"].put(
+            base + "/file",
+            json={
+                "path": "notes/new.md",
+                "text": "made in UI",
+                "edit_token": token,
+                "expected_sha256": "absent",
+            },
+            headers=headers,
+        )
+        assert (
+            created.status_code == 200
+            and created.json()["snapshot"]["text"] == "made in UI"
+        )
+        saved = await env["client"].put(
+            base + "/file",
+            json={
+                "path": "folder/result.md",
+                "text": "edited in UI",
+                "edit_token": token,
+                "expected_sha256": revision,
+            },
+            headers=headers,
+        )
+        assert saved.status_code == 200
+        assert (root / "folder/result.md").read_text() == "edited in UI"
+        upload = await env["client"].post(
+            base + "/upload",
+            json={
+                "path": "notes/data.bin",
+                "edit_token": token,
+                "content_base64": base64.b64encode(b"\0data\xff").decode(),
+            },
+            headers=headers,
+        )
+        assert (
+            upload.status_code == 200
+            and (root / "notes/data.bin").read_bytes() == b"\0data\xff"
+        )
+        assert (
+            await env["client"].put(
+                base + "/file",
+                json={
+                    "path": "folder/result.md",
+                    "text": "stale",
+                    "edit_token": token,
+                    "expected_sha256": revision,
+                },
+                headers=headers,
+            )
+        ).status_code == 409
+        assert (
+            await env["client"].post(
+                base + "/upload",
+                json={
+                    "path": "notes/data.bin",
+                    "edit_token": token,
+                    "content_base64": base64.b64encode(b"oops").decode(),
+                },
+                headers=headers,
+            )
+        ).status_code == 409
+        assert (
+            await env["client"].post(
+                base + "/folder",
+                json={"path": "guest", "edit_token": token},
+                headers={"Authorization": f"Bearer {env['regular_token']}"},
+            )
+        ).status_code == 403
+        assert not (root / "guest").exists()
         assert (
             await env["client"].get(
                 base + "/file", params={"path": ".env"}, headers=headers
@@ -153,7 +233,7 @@ async def test_real_disk_round_trip_and_persistence(workspace_env, tmp_path, del
             "/api/v1/agents/workspace-agent/files", headers=headers
         )
         assert manifest.json() == []
-        assert root.joinpath("folder/result.md").read_text() == "actual runtime output"
+        assert root.joinpath("folder/result.md").read_text() == "edited in UI"
     finally:
         await finish()
 
@@ -194,6 +274,51 @@ async def test_unavailable_states_and_placement_change(workspace_env, tmp_path):
     await env["bus"].register_local(machine_id, receiver)
     assert (await env["client"].get(base, headers=headers)).status_code == 409
     await env["bus"].unregister_local(machine_id, receiver)
+
+
+async def test_read_only_machine_rejects_edits(workspace_env, tmp_path):
+    env = workspace_env
+    machine_id, root = await seed(env, tmp_path)
+    headers = {"Authorization": f"Bearer {env['token']}"}
+    base = "/api/v1/agents/workspace-agent/workspace"
+    async with env["factory"]() as db:
+        machine = await db.get(Machine, machine_id)
+        machine.control_capabilities = [CAPABILITY]
+        await db.commit()
+    token = "a" * 64
+    responses = [
+        await env["client"].post(
+            base + "/folder",
+            json={"path": "notes", "edit_token": token},
+            headers=headers,
+        ),
+        await env["client"].post(
+            base + "/upload",
+            json={
+                "path": "data.bin",
+                "edit_token": token,
+                "content_base64": base64.b64encode(b"data").decode(),
+            },
+            headers=headers,
+        ),
+        await env["client"].put(
+            base + "/file",
+            json={
+                "path": "new.md",
+                "text": "made in UI",
+                "edit_token": token,
+                "expected_sha256": "absent",
+            },
+            headers=headers,
+        ),
+    ]
+    for response in responses:
+        assert response.status_code == 200
+        assert response.json()["status"] == "unsupported"
+        assert response.json()["can_edit"] is False
+    assert not (root / "notes").exists()
+    assert not (root / "data.bin").exists()
+    assert not (root / "new.md").exists()
 
 
 async def test_broker_correlates_machine_agent_generation_and_cleans_timeout_cancel_disconnect():

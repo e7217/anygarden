@@ -2,6 +2,7 @@ import { ArrowUp, FileText, Folder, FolderOpen, Link2, Loader2, RefreshCw } from
 import { Button } from '@/components/ui/button'
 import { useManagedWorkspace } from '@/hooks/useManagedWorkspace'
 import { useLocale } from '@/i18n/LocaleProvider'
+import ManagedWorkspaceEditor from './ManagedWorkspaceEditor'
 
 export default function ManagedWorkspacePanel({ agentId }: { agentId: string | null }) {
   const { t, formatDate } = useLocale()
@@ -50,6 +51,13 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
       {(workspace.folder || workspace.filePath) && <Button variant="outline" size="sm" onClick={() => void workspace.openFolder(workspace.filePath ? workspace.folder : workspace.folder.split('/').slice(0, -1).join('/'))}><ArrowUp />{t('workspace.managed.back')}</Button>}
       {folder?.status === 'ready' && <p className="min-w-0 break-all font-mono text-xs text-[var(--color-foreground-muted)]">/{workspace.folder}</p>}
     </div>
+    {agentId && workspace.filePath === null && folder?.status === 'ready' && folder.can_edit && folder.snapshot?.edit_token && <ManagedWorkspaceEditor
+      key={`${agentId}:${workspace.folder}:directory`}
+      agentId={agentId} folder={workspace.folder} filePath={null}
+      folderData={folder} fileData={file} reloadFolder={() => workspace.openFolder(workspace.folder)}
+      reloadFile={path => workspace.openFile(path)}
+    />}
+    {folder?.status === 'ready' && !folder.can_edit && <p className="text-xs text-[var(--color-foreground-muted)]">{t('workspace.managed.editUnavailable')}</p>}
     {workspace.filePath === null && folder?.status === 'ready' && folder.snapshot && <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]">
       {folder.snapshot.entries.length === 0 && <p className="p-3 text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.empty')}</p>}
       <ul className="max-h-72 overflow-y-auto divide-y divide-[var(--color-border)]">
@@ -65,7 +73,13 @@ export default function ManagedWorkspacePanel({ agentId }: { agentId: string | n
     </div>}
     {workspace.filePath !== null && <div className="space-y-2">
       <p className="break-all font-mono text-xs">{workspace.filePath}</p>
-      {file?.status === 'ready' && file.snapshot?.preview_status === 'text' && <pre className="max-h-80 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs leading-relaxed" aria-label={t('workspace.managed.preview')}><code>{file.snapshot.text}</code></pre>}
+      {agentId && folder?.status === 'ready' && folder.can_edit && folder.snapshot?.edit_token && <ManagedWorkspaceEditor
+        key={`${agentId}:${workspace.filePath}`}
+        agentId={agentId} folder={workspace.folder} filePath={workspace.filePath}
+        folderData={folder} fileData={file} reloadFolder={() => workspace.openFolder(workspace.folder)}
+        reloadFile={path => workspace.openFile(path)}
+      />}
+      {file?.status === 'ready' && file.snapshot?.preview_status === 'text' && (!folder?.can_edit || !file.snapshot.sha256) && <pre className="max-h-80 overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs leading-relaxed" aria-label={t('workspace.managed.preview')}><code>{file.snapshot.text}</code></pre>}
       {file?.status === 'ready' && file.snapshot?.preview_status === 'binary' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.binary')}</p>}
       {file?.status === 'ready' && file.snapshot?.preview_status === 'too_large' && <p className="text-sm text-[var(--color-foreground-muted)]">{t('workspace.managed.tooLarge')}</p>}
     </div>}
