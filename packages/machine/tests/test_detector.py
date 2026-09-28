@@ -205,3 +205,117 @@ async def test_detect_installed_pi_binary(tmp_path, monkeypatch):
     pi = next(engine for engine in engines.engines if engine.engine == "pi-cli")
     assert pi.version == "0.85.1"
     assert pi.path == str(binary)
+
+
+# ── #715 — Codex login status ───────────────────────────────────────
+
+
+class TestCodexLoginStatus:
+    """``codex login status`` reports how the machine's Codex is signed in.
+
+    Agents inherit the machine user's Codex login, so the cluster needs to
+    know whether it exists before an agent's first turn fails. The detector
+    reads only the command's message, never the credential file.
+    """
+
+    def test_parse_known_messages(self) -> None:
+        from anygarden_machine.detector import parse_codex_login_status
+
+        assert parse_codex_login_status("Logged in using ChatGPT\n") == "chatgpt"
+        assert (
+            parse_codex_login_status("Logged in using an API key - sk-proj-***ABCD\n")
+            == "api_key"
+        )
+        assert parse_codex_login_status("Not logged in\n") == "none"
+        assert (
+            parse_codex_login_status("Logged in using personal access token\n")
+            == "other"
+        )
+
+    def test_parse_unrecognised_output_is_unknown(self) -> None:
+        from anygarden_machine.detector import parse_codex_login_status
+
+        assert parse_codex_login_status("") == "unknown"
+        assert parse_codex_login_status("error: unexpected argument") == "unknown"
+
+    def test_parse_ignores_warnings_before_the_status_line(self) -> None:
+        from anygarden_machine.detector import parse_codex_login_status
+
+        output = "WARNING: proceeding, even though we could not create PATH aliases\nNot logged in\n"
+        assert parse_codex_login_status(output) == "none"
+
+    async def test_codex_detection_reports_login_status(self) -> None:
+        version = MagicMock()
+        version.communicate = AsyncMock(return_value=(b"codex-cli 0.157.1\n", b""))
+        version.returncode = 0
+        status = MagicMock()
+        status.communicate = AsyncMock(return_value=(b"", b"Logged in using ChatGPT\n"))
+        status.returncode = 0
+
+        with (
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/codex"),
+            patch(
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
+                side_effect=[version, status],
+            ) as spawn,
+        ):
+            result = await _detect_binary("codex-cli", "codex")
+
+        assert result is not None
+        assert result.version == "codex-cli 0.157.1"
+        assert result.auth == "chatgpt"
+        assert spawn.call_args_list[1].args == ("/usr/bin/codex", "login", "status")
+
+    async def test_codex_not_logged_in_exit_code_is_still_parsed(self) -> None:
+        version = MagicMock()
+        version.communicate = AsyncMock(return_value=(b"codex-cli 0.157.1\n", b""))
+        version.returncode = 0
+        status = MagicMock()
+        status.communicate = AsyncMock(return_value=(b"", b"Not logged in\n"))
+        status.returncode = 1
+
+        with (
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/codex"),
+            patch(
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
+                side_effect=[version, status],
+            ),
+        ):
+            result = await _detect_binary("codex-cli", "codex")
+
+        assert result is not None and result.auth == "none"
+
+    async def test_codex_login_status_failure_keeps_engine_detected(self) -> None:
+        version = MagicMock()
+        version.communicate = AsyncMock(return_value=(b"codex-cli 0.157.1\n", b""))
+        version.returncode = 0
+
+        with (
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/codex"),
+            patch(
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
+                side_effect=[version, OSError("exec failed")],
+            ),
+        ):
+            result = await _detect_binary("codex-cli", "codex")
+
+        assert result is not None
+        assert result.version == "codex-cli 0.157.1"
+        assert result.auth == "unknown"
+
+    async def test_other_engines_report_no_login_status(self) -> None:
+        version = MagicMock()
+        version.communicate = AsyncMock(return_value=(b"claude 2.1\n", b""))
+        version.returncode = 0
+
+        with (
+            patch("anygarden_machine.detector.shutil.which", return_value="/usr/bin/claude"),
+            patch(
+                "anygarden_machine.detector.asyncio.create_subprocess_exec",
+                side_effect=[version],
+            ) as spawn,
+        ):
+            result = await _detect_binary("claude-code", "claude")
+
+        assert result is not None and result.auth is None
+        assert spawn.call_count == 1

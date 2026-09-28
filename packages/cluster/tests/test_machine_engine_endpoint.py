@@ -235,3 +235,98 @@ async def test_status_survives_register_wipe(env):
     st = await _status(env)
     assert st is not None  # survived the wipe
     assert st.update_status == "success"
+
+
+# ── #715: Codex login status ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_register_records_codex_login_status(env):
+    from anygarden.ws.machine_handler import _handle_register
+
+    await _handle_register(
+        env["factory"],
+        env["machine_id"],
+        {
+            "capabilities": [
+                {"engine": "codex-cli", "version": "0.157.1", "auth": "chatgpt"},
+                {"engine": "pi-cli", "version": "0.85.1"},
+            ],
+        },
+    )
+    st = await _status(env)
+    assert st.auth_status == "chatgpt"
+    assert st.auth_checked_at is not None
+    # Engines without a login status get no status row from register.
+    assert await _status(env, "pi-cli") is None
+
+
+@pytest.mark.asyncio
+async def test_check_result_refreshes_login_status(env):
+    from anygarden.ws.machine_handler import (
+        _handle_engine_check_result,
+        _handle_register,
+    )
+
+    await _handle_register(
+        env["factory"],
+        env["machine_id"],
+        {"capabilities": [{"engine": "codex-cli", "version": "0.157.1", "auth": "none"}]},
+    )
+    await _handle_engine_check_result(
+        env["factory"],
+        env["machine_id"],
+        {
+            "engine": "codex-cli",
+            "current_version": "0.157.1",
+            "latest_version": "0.157.1",
+            "auth": "api_key",
+        },
+    )
+    assert (await _status(env)).auth_status == "api_key"
+
+
+@pytest.mark.asyncio
+async def test_result_without_login_status_keeps_previous_value(env):
+    """Older daemons omit ``auth``; that must not erase a known status."""
+    from anygarden.ws.machine_handler import (
+        _handle_engine_check_result,
+        _handle_register,
+    )
+
+    await _handle_register(
+        env["factory"],
+        env["machine_id"],
+        {"capabilities": [{"engine": "codex-cli", "version": "0.157.1", "auth": "chatgpt"}]},
+    )
+    await _handle_engine_check_result(
+        env["factory"],
+        env["machine_id"],
+        {"engine": "codex-cli", "current_version": "0.157.1", "latest_version": "0.158.0"},
+    )
+    assert (await _status(env)).auth_status == "chatgpt"
+
+
+@pytest.mark.asyncio
+async def test_engines_endpoint_exposes_login_status(env):
+    from anygarden.ws.machine_handler import _handle_register
+
+    await _handle_register(
+        env["factory"],
+        env["machine_id"],
+        {
+            "capabilities": [
+                {"engine": "codex-cli", "version": "0.157.1", "auth": "none"},
+                {"engine": "pi-cli", "version": "0.85.1"},
+            ],
+        },
+    )
+    response = await env["client"].get(
+        f"/api/v1/machines/{env['machine_id']}/engines",
+        headers=_auth(env["tokens"]["owner"]),
+    )
+    assert response.status_code == 200
+    rows = {row["engine"]: row for row in response.json()}
+    assert rows["codex-cli"]["auth_status"] == "none"
+    assert rows["codex-cli"]["auth_checked_at"] is not None
+    assert rows["pi-cli"]["auth_status"] is None

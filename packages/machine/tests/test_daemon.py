@@ -118,6 +118,26 @@ class TestRegisterFrame:
         assert "agent_generation_reports_v1" in frame["control_capabilities"]
         assert "workspace_receipt_signing_v1" in frame["control_capabilities"]
 
+    async def test_register_reports_engine_login_status(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#715 — only engines that report a login status carry ``auth``."""
+        from anygarden_machine.detector import DetectionResult, EngineInfo
+
+        sent_frames = _capture_ws(daemon)
+        detection = DetectionResult(
+            engines=[
+                EngineInfo("codex-cli", "codex-cli 0.157.1", "/usr/bin/codex", "chatgpt"),
+                EngineInfo("pi-cli", "0.85.1", "/opt/pi"),
+            ]
+        )
+        with patch("anygarden_machine.daemon.detect_engines", return_value=detection):
+            await daemon._register()
+
+        capabilities = {c["engine"]: c for c in sent_frames[0]["capabilities"]}
+        assert capabilities["codex-cli"]["auth"] == "chatgpt"
+        assert "auth" not in capabilities["pi-cli"]
+
     async def test_register_includes_system_info(self, daemon: MachineDaemon) -> None:
         """_register embeds collected static SystemInfo in the frame (#523)."""
         sent_frames = _capture_ws(daemon)

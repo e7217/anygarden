@@ -59,6 +59,30 @@ class TestEngineCheckHandler:
         assert sent[0]["current_version"] == "0.1.0"
         assert sent[0]["latest_version"] == "0.2.0"
 
+    async def test_reports_codex_login_status(self, daemon: MachineDaemon):
+        """#715 — a check doubles as the admin's "check again" for the login."""
+        sent = _capture_ws(daemon)
+        det = DetectionResult(
+            engines=[
+                EngineInfo(
+                    engine="codex-cli", version="codex 0.1.0", path="/x", auth="none"
+                )
+            ]
+        )
+        with (
+            patch(
+                "anygarden_machine.daemon.detect_engines",
+                AsyncMock(return_value=det),
+            ),
+            patch(
+                "anygarden_machine.engines.channels.NpmGlobal.latest_version",
+                AsyncMock(return_value="0.2.0"),
+            ),
+        ):
+            await daemon._handle_engine_check(EngineCheckFrame(engine="codex-cli"))
+
+        assert sent[0]["auth"] == "none"
+
     async def test_unknown_engine_rejected(self, daemon: MachineDaemon):
         sent = _capture_ws(daemon)
         await daemon._handle_engine_check(EngineCheckFrame(engine="nope"))

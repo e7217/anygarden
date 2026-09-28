@@ -502,6 +502,9 @@ class MachineEngineOut(BaseModel):
     update_available: bool = False
     update_status: Optional[str] = None
     latest_checked_at: Optional[datetime] = None
+    # #715 — codex-cli login status reported by the daemon.
+    auth_status: Optional[str] = None
+    auth_checked_at: Optional[datetime] = None
 
 
 @router.get("/{machine_id}/agents", response_model=list[MachineAgentOut])
@@ -620,6 +623,8 @@ async def list_machine_engines(
                 update_available=st.update_available if st else False,
                 update_status=st.update_status if st else None,
                 latest_checked_at=st.latest_checked_at if st else None,
+                auth_status=st.auth_status if st else None,
+                auth_checked_at=st.auth_checked_at if st else None,
             )
         )
     return result

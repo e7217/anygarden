@@ -24,6 +24,9 @@ class EngineInfo:
     engine: str
     version: str
     path: str
+    # #715 — how the engine is signed in on this machine, for engines whose
+    # agents inherit the machine user's login (only codex-cli today).
+    auth: str | None = None
 
 
 @dataclass
@@ -75,6 +78,49 @@ MANAGED_ENGINES: list[tuple[str, str]] = [
 ]
 
 
+# #715 — ``codex login status`` prints one of these to stderr (codex-cli
+# 0.157; "Not logged in" exits 1). Agents use the machine user's Codex login,
+# so the cluster shows whether it exists before a first turn fails. Only the
+# message is read, never ``auth.json``.
+CODEX_LOGIN_MESSAGES: tuple[tuple[str, str], ...] = (
+    ("Logged in using ChatGPT", "chatgpt"),
+    ("Logged in using an API key", "api_key"),
+    ("Logged in using", "other"),
+    ("Not logged in", "none"),
+)
+
+
+def parse_codex_login_status(output: str) -> str:
+    """Map ``codex login status`` output to chatgpt/api_key/other/none/unknown."""
+    for line in output.splitlines():
+        for prefix, status in CODEX_LOGIN_MESSAGES:
+            if line.strip().startswith(prefix):
+                return status
+    return "unknown"
+
+
+async def _codex_login_status(path: str) -> str:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            path,
+            "login",
+            "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=DETECTION_TIMEOUT
+        )
+    except (asyncio.TimeoutError, OSError) as exc:
+        log.warning("codex_login_status_failed", error=str(exc))
+        return "unknown"
+    return parse_codex_login_status(
+        (stderr or b"").decode(errors="replace")
+        + "\n"
+        + (stdout or b"").decode(errors="replace")
+    )
+
+
 async def _detect_binary(name: str, binary: str) -> EngineInfo | None:
     """Try to detect an engine by running `<binary> --version`."""
     path = shutil.which(binary)
@@ -107,10 +153,11 @@ async def _detect_path(name: str, path: str) -> EngineInfo | None:
         if proc.returncode != 0:
             return None
         version = stdout.decode().strip().split("\n")[0] if stdout else "unknown"
-        return EngineInfo(engine=name, version=version, path=path)
     except (asyncio.TimeoutError, OSError) as exc:
         log.warning("binary_detection_failed", engine=name, error=str(exc))
         return None
+    auth = await _codex_login_status(path) if name == "codex-cli" else None
+    return EngineInfo(engine=name, version=version, path=path, auth=auth)
 
 
 def _detect_python_module(
