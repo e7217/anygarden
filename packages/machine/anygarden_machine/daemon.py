@@ -317,7 +317,10 @@ class MachineDaemon:
             # signing are intentionally absent, so the cluster must reject
             # every write activation from this daemon version.
             control_capabilities=[
-                *([managed_workspace.CAPABILITY] if managed_workspace.supported() else []),
+                *(
+                    [managed_workspace.CAPABILITY, managed_workspace.EDIT_CAPABILITY]
+                    if managed_workspace.supported() else []
+                ),
                 "agent_generation_reports_v1",
                 "direct_endpoint_v1",
                 "pi_native_auth_v1",
@@ -446,14 +449,29 @@ class MachineDaemon:
         lock = self._agent_locks.setdefault(frame.agent_id, asyncio.Lock())
         async with lock:
             running = self._spawner.get_running(frame.agent_id)
-            snapshot = await asyncio.to_thread(
-                managed_workspace.browse,
-                self._manifest_store.agents_root, frame.agent_id, frame.generation,
-                operation=frame.operation, path=frame.path, cursor=frame.cursor,
-                running_generation=self._running_generations.get(frame.agent_id),
-                running_pid=running.pid if running else None,
-                running_started_at=running.started_at if running else None,
-            )
+            kwargs = {
+                "operation": frame.operation,
+                "path": frame.path,
+                "running_generation": self._running_generations.get(frame.agent_id),
+                "running_pid": running.pid if running else None,
+                "running_started_at": running.started_at if running else None,
+            }
+            if frame.operation in {"list", "read"}:
+                snapshot = await asyncio.to_thread(
+                    managed_workspace.browse,
+                    self._manifest_store.agents_root, frame.agent_id, frame.generation,
+                    cursor=frame.cursor, **kwargs,
+                )
+            else:
+                snapshot = await asyncio.to_thread(
+                    managed_workspace.mutate,
+                    self._manifest_store.agents_root, frame.agent_id, frame.generation,
+                    edit_token=frame.edit_token or "",
+                    content_base64=frame.content_base64,
+                    text=frame.text,
+                    expected_sha256=frame.expected_sha256,
+                    **kwargs,
+                )
         await self._send(ManagedWorkspaceResultFrame(
             request_id=frame.request_id, agent_id=frame.agent_id,
             generation=frame.generation, snapshot=snapshot,

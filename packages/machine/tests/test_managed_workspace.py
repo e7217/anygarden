@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 
@@ -222,6 +223,158 @@ def test_missing_receipt_and_unsupported_platform_are_explicit(managed, monkeypa
     assert workspace.browse(roots, "agent-a", 2).status == "not_ready"
     monkeypatch.setattr(workspace, "supported", lambda: False)
     assert workspace.browse(roots, "agent-a", 2).status == "unsupported"
+
+
+def test_create_upload_and_edit_use_actual_managed_disk(managed):
+    roots, agent = managed
+    token = workspace.browse(roots, "agent-a", 2).edit_token
+    assert token
+    folder = workspace.mutate(
+        roots, "agent-a", 2, operation="mkdir", path="notes", edit_token=token
+    )
+    assert folder.status == "ready" and (agent / "notes").is_dir()
+    created = workspace.mutate(
+        roots,
+        "agent-a",
+        2,
+        operation="write",
+        path="notes/todo.md",
+        edit_token=token,
+        text="first",
+        expected_sha256="absent",
+    )
+    assert created.status == "ready" and created.sha256
+    saved = workspace.mutate(
+        roots,
+        "agent-a",
+        2,
+        operation="write",
+        path="notes/todo.md",
+        edit_token=token,
+        text="changed",
+        expected_sha256=created.sha256,
+    )
+    assert saved.text == "changed"
+    assert (agent / "notes" / "todo.md").read_text() == "changed"
+    payload = base64.b64encode(b"\0binary\xff").decode()
+    uploaded = workspace.mutate(
+        roots,
+        "agent-a",
+        2,
+        operation="upload",
+        path="notes/image.bin",
+        edit_token=token,
+        content_base64=payload,
+    )
+    assert uploaded.status == "ready" and uploaded.preview_status == "binary"
+    assert (agent / "notes" / "image.bin").read_bytes() == b"\0binary\xff"
+    assert (
+        workspace.mutate(
+            roots,
+            "agent-a",
+            2,
+            operation="upload",
+            path="notes/image.bin",
+            edit_token=token,
+            content_base64=base64.b64encode(b"overwrite").decode(),
+        ).status
+        == "conflict"
+    )
+    assert (agent / "notes" / "image.bin").read_bytes() == b"\0binary\xff"
+
+
+def test_edits_reject_stale_content_receipt_private_and_unsafe_paths(managed, tmp_path):
+    roots, agent = managed
+    token = workspace.browse(roots, "agent-a", 2).edit_token
+    (agent / "safe.txt").write_text("original")
+    expected = workspace.browse(
+        roots, "agent-a", 2, operation="read", path="safe.txt"
+    ).sha256
+    (agent / "safe.txt").write_text("agent updated")
+    assert (
+        workspace.mutate(
+            roots,
+            "agent-a",
+            2,
+            operation="write",
+            path="safe.txt",
+            edit_token=token,
+            text="web updated",
+            expected_sha256=expected,
+        ).status
+        == "conflict"
+    )
+    assert (agent / "safe.txt").read_text() == "agent updated"
+    receipt = json.loads((agent / workspace.RECEIPT_NAME).read_text())
+    receipt["reported_at"] = "2026-09-27T12:00:00+00:00"
+    (agent / workspace.RECEIPT_NAME).write_text(json.dumps(receipt))
+    assert (
+        workspace.mutate(
+            roots,
+            "agent-a",
+            2,
+            operation="mkdir",
+            path="stale",
+            edit_token=token,
+        ).status
+        == "stale"
+    )
+    assert not (agent / "stale").exists()
+    token = workspace.browse(roots, "agent-a", 2).edit_token
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (agent / "link").symlink_to(outside, target_is_directory=True)
+    (agent / "secret.key").write_text("protected")
+    os.link(agent / "safe.txt", agent / "alias.txt")
+    for path in ("../escape", "link/malicious", "secret.key", "alias.txt", ".env"):
+        assert (
+            workspace.mutate(
+                roots,
+                "agent-a",
+                2,
+                operation="write",
+                path=path,
+                edit_token=token,
+                text="bad",
+                expected_sha256="absent",
+            ).status
+            == "blocked"
+        )
+    assert not (outside / "malicious").exists()
+    assert (agent / "secret.key").read_text() == "protected"
+
+
+def test_upload_limit_and_bad_encoding_do_not_create_files(managed):
+    roots, agent = managed
+    token = workspace.browse(roots, "agent-a", 2).edit_token
+    assert (
+        workspace.mutate(
+            roots,
+            "agent-a",
+            2,
+            operation="upload",
+            path="large.bin",
+            edit_token=token,
+            content_base64=base64.b64encode(
+                b"x" * (workspace.MAX_UPLOAD_BYTES + 1)
+            ).decode(),
+        ).status
+        == "too_large"
+    )
+    assert (
+        workspace.mutate(
+            roots,
+            "agent-a",
+            2,
+            operation="upload",
+            path="bad.bin",
+            edit_token=token,
+            content_base64="!!!",
+        ).status
+        == "blocked"
+    )
+    assert not (agent / "large.bin").exists()
+    assert not (agent / "bad.bin").exists()
 
 
 def test_respawn_materialization_preserves_receipt_and_agent_output(

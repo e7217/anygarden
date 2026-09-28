@@ -11,6 +11,7 @@ export interface ManagedWorkspaceResult {
   machine_id: string | null
   machine_name: string | null
   agent_state: string
+  can_edit?: boolean
   snapshot: null | {
     status: string
     cwd: string | null
@@ -24,6 +25,8 @@ export interface ManagedWorkspaceResult {
     next_cursor: string | null
     text: string | null
     preview_status: 'text' | 'binary' | 'too_large' | null
+    sha256?: string | null
+    edit_token?: string | null
   }
 }
 interface Query { kind: 'directory' | 'file'; path: string; cursor?: string }

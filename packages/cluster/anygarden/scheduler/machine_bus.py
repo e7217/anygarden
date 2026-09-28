@@ -106,7 +106,10 @@ class MachineBus:
 
     async def request_workspace(
         self, machine_id: str, *, agent_id: str, generation: int,
-        operation: str, path: str, cursor: str | None = None, timeout: float = 5,
+        operation: str, path: str, cursor: str | None = None,
+        edit_token: str | None = None, content_base64: str | None = None,
+        text: str | None = None, expected_sha256: str | None = None,
+        timeout: float = 5,
     ) -> dict[str, Any]:
         """Correlate a bounded read query over either owned transport."""
         if len(self._pending) >= 32:
@@ -121,6 +124,10 @@ class MachineBus:
                         "type": "managed_workspace_request", "request_id": request_id,
                         "agent_id": agent_id, "generation": generation,
                         "operation": operation, "path": path, "cursor": cursor,
+                        "edit_token": edit_token,
+                        "content_base64": content_base64,
+                        "text": text,
+                        "expected_sha256": expected_sha256,
                     })
                     if not sent:
                         raise MachineRequestError("offline")
