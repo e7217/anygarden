@@ -102,6 +102,8 @@ class LifecycleFrame(BaseModel):
             "queued",
             "retrying",
             "retry_exhausted",
+            # #720 — agent policy declined the turn; closes it terminally.
+            "skipped",
         ]
     ] = None
     duration_ms: Optional[int] = None

@@ -826,6 +826,21 @@ async def record_lifecycle(
             turn.state = "cancelled"
             turn.terminal_reason = "agent_cancelled"
             turn.completed_at = now
+        elif frame.outcome == "skipped":
+            # #720 — the agent's policy declined this delivery (SKIP /
+            # INGEST_ONLY). That is a deliberate, complete answer: close the
+            # turn now instead of waiting out the lease, and never treat it
+            # as a lost reply that deserves a retry. A turn already in its
+            # completion CAS ("completing") is left to that path.
+            if attempt.state in ACTIVE_ATTEMPT_STATES and turn.state in {
+                "pending", "leased", "retrying",
+            }:
+                attempt.state = "completed"
+                attempt.ended_at = now
+                attempt.outcome = "skipped"
+                turn.state = "completed"
+                turn.terminal_reason = "agent_skipped"
+                turn.completed_at = now
         elif attempt.state in ACTIVE_ATTEMPT_STATES:
             # A terminal lifecycle frame normally follows the agent's visible
             # reply, whose completion CAS has already closed the Turn. If that

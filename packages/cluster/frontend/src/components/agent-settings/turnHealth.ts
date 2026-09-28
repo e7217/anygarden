@@ -44,7 +44,9 @@ export function classifyTurnFailure(error: string | null, outcome: string | null
 
 /** Health of the newest turn; ``turns`` is ordered newest first (splitLogs). */
 export function latestTurnHealth(turns: Turn[]): TurnHealth {
-  const turn = turns[0]
+  // #720 — a turn the agent declined (not addressed to it) says nothing
+  // about whether it can answer; judge the newest turn it actually took.
+  const turn = turns.find(t => t.finalOutcome !== 'skipped')
   if (!turn) return { status: 'none', turn: null, at: null, category: null, code: null }
   const at = new Date(turn.lastTs)
   const base = { turn, at, category: null, code: null }

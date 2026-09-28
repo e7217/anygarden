@@ -41,7 +41,7 @@ export interface Turn {
 }
 
 type TurnOutcome = 'responded' | 'silent' | 'orphaned' | 'in_flight'
-type EngineOutcome = 'ok' | 'failed' | 'timeout' | 'cancelled' | 'rejected' | 'queued' | 'retrying' | 'retry_exhausted'
+type EngineOutcome = 'ok' | 'failed' | 'timeout' | 'cancelled' | 'rejected' | 'queued' | 'retrying' | 'retry_exhausted' | 'skipped'
 
 function str(v: unknown): string | null {
   return typeof v === 'string' ? v : null
@@ -207,7 +207,8 @@ export function turnDotClass(turn: Turn): string {
   const fo = turn.finalOutcome
   if (fo) {
     if (fo === 'ok') return 'bg-[var(--color-success)]'
-    if (fo === 'cancelled' || isPendingOutcome(fo)) return 'bg-[var(--color-foreground-muted)]'
+    // #720 — ``skipped``: the agent's policy declined the turn; not a failure.
+    if (fo === 'cancelled' || fo === 'skipped' || isPendingOutcome(fo)) return 'bg-[var(--color-foreground-muted)]'
     return 'bg-[var(--color-destructive,#d74c4c)]' // failed | timeout | rejected
   }
   return outcomeDotClass(turn.outcome)
@@ -271,6 +272,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
       queued: t('admin.activity.outcome.queued'),
       retrying: t('admin.activity.outcome.retrying'),
       retry_exhausted: t('admin.activity.outcome.retryExhausted'),
+      skipped: t('admin.activity.outcome.skipped'),
     }
     return known[outcome] ?? outcome
   }

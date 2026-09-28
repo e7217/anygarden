@@ -501,10 +501,17 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
         from anygarden_agent.integrations.base import MessagePolicy, decide_policy
 
         policy = decide_policy(msg, client)
-        if policy is MessagePolicy.SKIP:
-            return
-        if policy is MessagePolicy.INGEST_ONLY:
-            await adapter.ingest_context(msg)
+        if policy is not MessagePolicy.RESPOND:
+            if policy is MessagePolicy.INGEST_ONLY:
+                await adapter.ingest_context(msg)
+            # #720 — close a delivered turn we decline; left open it stays
+            # leased and blocks our later deliveries in this room. Frames
+            # without a turn (peer broadcasts, context) carry no request_id.
+            declined_rid = (msg.get("metadata") or {}).get("request_id")
+            if isinstance(declined_rid, str):
+                await client.sendLifecycle(
+                    room_id, declined_rid, event="handler_finished", outcome="skipped",
+                )
             return
 
         from anygarden_agent.integrations.delegate import (
