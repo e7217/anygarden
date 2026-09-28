@@ -176,6 +176,17 @@ class TestPeerMentionSafetyNet:
         assert budget.remaining("room-1") == 1
         assert budget.consume("room-1") is True
 
+    def test_peer_handoff_budget_tracks_woken_participants(self) -> None:
+        # #719 — agents already woken by the human send are remembered
+        # per room until the next user turn resets the budget.
+        budget = PeerHandoffBudget(capacity=2)
+        assert budget.woken("room-1") == frozenset()
+        budget.mark_woken("room-1", ["p1", "p2"])
+        assert budget.woken("room-1") == {"p1", "p2"}
+        assert budget.woken("room-2") == frozenset()
+        budget.reset("room-1")
+        assert budget.woken("room-1") == frozenset()
+
     def test_peer_handoff_budget_consume_count_more_than_remaining(self) -> None:
         budget = PeerHandoffBudget(capacity=3)
         assert budget.consume("room-1", count=4) is False

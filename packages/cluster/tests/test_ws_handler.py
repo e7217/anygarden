@@ -1704,7 +1704,8 @@ class TestActivityLogRequestIdCorrelation:
         frame. The server relays that echo onto ``response_sent``
         ActivityLog (already covered elsewhere) AND — per #222 — must
         also leave it on the stored Message's ``extra_metadata`` so the
-        message row itself is self-describing."""
+        message row itself is self-describing. #719 stores it as
+        ``reply_to_request_id`` so peers never read it as their own turn."""
         from starlette.testclient import TestClient
 
         from anygarden.db.models import Message
@@ -1734,7 +1735,8 @@ class TestActivityLogRequestIdCorrelation:
                 select(Message).where(Message.id == msg_id)
             )).scalar_one()
             assert stored.extra_metadata is not None
-            assert stored.extra_metadata["request_id"] == "rid-echo-test"
+            assert stored.extra_metadata["reply_to_request_id"] == "rid-echo-test"
+            assert "request_id" not in stored.extra_metadata
 
 
 # ── A→B causal link (#431) ───────────────────────────────────────────
@@ -2457,7 +2459,8 @@ class TestAgentCausalLink:
             assert turn.state == "completed"
             assert turn.accepted_message_id == message_id
             stored = await db.get(Message, message_id)
-            assert stored.extra_metadata["request_id"] == proof["request_id"]
+            assert stored.extra_metadata["reply_to_request_id"] == proof["request_id"]
+            assert "request_id" not in stored.extra_metadata
             assert not {"turn_attempt", "turn_generation", "turn_lease"} & stored.extra_metadata.keys()
             assert (await db.get(Message, message_id)).extra_metadata[
                 "delegation_outcome"
@@ -2727,9 +2730,45 @@ class TestAgentCausalLink:
         )
         async with env["sf"]() as db:
             stored = await db.get(Message, message_id)
-            assert stored.extra_metadata["request_id"] == "forged-request"
+            assert stored.extra_metadata["reply_to_request_id"] == "forged-request"
             assert stored.extra_metadata["custom_label"] == "preserved"
-            assert not ((proof.keys() - {"request_id"}) & stored.extra_metadata.keys())
+            assert not (proof.keys() & stored.extra_metadata.keys())
+
+    @pytest.mark.asyncio
+    async def test_peer_frame_does_not_carry_sender_request_id(
+        self, make_room
+    ) -> None:
+        """#719 — B must never receive A's turn id as ``request_id``;
+        otherwise B's reply tries to complete A's turn and is dropped."""
+        from starlette.testclient import TestClient
+
+        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        room_url = f"/ws/rooms/{env['room_id']}"
+        with (
+            TestClient(env["app"]) as client,
+            client.websocket_connect(
+                room_url, subprotocols=["anygarden.v1", f"bearer.{env['tokens']['B']}"],
+            ) as peer_ws,
+            client.websocket_connect(
+                room_url, subprotocols=["anygarden.v1", f"bearer.{env['tokens']['A']}"],
+            ) as sender_ws,
+        ):
+            peer_ws.receive_text()  # welcome
+            sender_ws.receive_text()  # welcome
+            sender_ws.send_text(json.dumps({
+                "type": "send",
+                "content": f"<@user:{env['parts']['B']}> 소개해 주세요",
+                "metadata": {"request_id": "rid-of-A"},
+            }))
+            for _ in range(10):
+                frame = json.loads(peer_ws.receive_text())
+                if frame.get("type") == "message" and "소개해" in frame.get("content", ""):
+                    break
+            else:  # pragma: no cover
+                pytest.fail("peer never received the message")
+        meta = frame.get("metadata") or {}
+        assert "request_id" not in meta
+        assert meta["reply_to_request_id"] == "rid-of-A"
 
 class TestWelcomeRoomSeq:
     """A reconnecting agent needs a baseline to ask ``since_seq`` from.

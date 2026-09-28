@@ -251,15 +251,29 @@ class PeerHandoffBudget:
     for what is, in practice, a per-process cap. Single-process
     Anygarden deployments see exact accounting; multi-process would see
     ±1 slop, which is the same slop already accepted upstream.
+
+    It also remembers which agent participants the current user turn
+    already woke (#719). Those agents are answering the same question,
+    so a peer mention aimed at them would only make them answer twice.
     """
 
     def __init__(self, capacity: int = MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN) -> None:
         self._capacity = capacity
         self._remaining: dict[str, int] = {}
+        self._woken: dict[str, frozenset[str]] = {}
 
     def reset(self, room_id: str) -> None:
-        """Restore the room's quota to the configured capacity."""
+        """Restore the room's quota and forget the previous turn's wakes."""
         self._remaining[room_id] = self._capacity
+        self._woken.pop(room_id, None)
+
+    def mark_woken(self, room_id: str, participant_ids: Iterable[str]) -> None:
+        """Record the agent participants the current user turn woke."""
+        self._woken[room_id] = frozenset(participant_ids)
+
+    def woken(self, room_id: str) -> frozenset[str]:
+        """Agent participants already woken in the room's current user turn."""
+        return self._woken.get(room_id, frozenset())
 
     def consume(self, room_id: str, count: int = 1) -> bool:
         """Try to consume *count* slots. Returns True if allowed."""

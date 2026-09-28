@@ -209,6 +209,7 @@ class TestPeerMentionStamping:
             await db.commit()
             await db.refresh(peer_part)
             peer_pid = peer_part.id
+            sender_pid = sender_part.id
 
         with TestClient(app) as client:
             # Connect as the human user first to drive the budget
@@ -221,10 +222,12 @@ class TestPeerMentionStamping:
                 subprotocols=["anygarden.v1", f"bearer.{token}"],
             ) as user_ws:
                 user_ws.receive_text()  # welcome
-                # First user message (resets budget to capacity).
+                # First user message (resets budget to capacity). It
+                # addresses only the sender so the peer is not already
+                # woken by this turn (#719 would drop that mention).
                 user_ws.send_text(json.dumps({
                     "type": "send",
-                    "content": "Hi everyone",
+                    "content": f"<@user:{sender_pid}> Hi",
                 }))
                 user_ws.receive_text()  # echo
 
@@ -257,3 +260,110 @@ class TestPeerMentionStamping:
                 assert meta.get("peer_depth") == 1
                 assert meta.get("kind") == "peer_query"
                 assert meta.get("peer_blocked") is None
+
+
+async def _seed_sender_and_peer(sf, room) -> tuple[str, str, str]:
+    """Seed two running agents in *room*; return (sender_token, sender_pid, peer_pid)."""
+    async with sf() as db:
+        sender = Agent(name="sender", engine="codex", actual_state="running")
+        peer = Agent(name="peer", engine="codex", actual_state="running")
+        db.add_all([sender, peer])
+        await db.flush()
+        sender_part = Participant(room_id=room.id, agent_id=sender.id, role="member")
+        peer_part = Participant(room_id=room.id, agent_id=peer.id, role="member")
+        db.add_all([sender_part, peer_part])
+        await db.flush()
+        sender_token_plain = generate_token()
+        token_hash, lookup_hint = hash_agent_token(sender_token_plain)
+        db.add(AgentToken(
+            agent_id=sender.id, token_hash=token_hash, lookup_hint=lookup_hint,
+        ))
+        await db.commit()
+        return sender_token_plain, sender_part.id, peer_part.id
+
+
+def _user_send(client, room_id: str, token: str, content: str) -> None:
+    with client.websocket_connect(
+        f"/ws/rooms/{room_id}", subprotocols=["anygarden.v1", f"bearer.{token}"],
+    ) as user_ws:
+        user_ws.receive_text()  # welcome
+        user_ws.send_text(json.dumps({"type": "send", "content": content}))
+        user_ws.receive_text()  # echo
+
+
+def _agent_send_and_capture(client, room_id: str, token: str, content: str, marker: str) -> dict:
+    with client.websocket_connect(
+        f"/ws/rooms/{room_id}", subprotocols=["anygarden.v1", f"bearer.{token}"],
+    ) as agent_ws:
+        agent_ws.receive_text()  # welcome
+        agent_ws.send_text(json.dumps({"type": "send", "content": content}))
+        for _ in range(10):
+            msg = json.loads(agent_ws.receive_text())
+            if msg.get("type") == "message" and marker in msg.get("content", ""):
+                return msg
+    pytest.fail("agent send was never echoed back")  # pragma: no cover
+
+
+class TestRedundantPeerWake:
+    """#719 — a peer mention must not re-wake an agent that the same
+    user turn already woke; that agent is answering the same question."""
+
+    @pytest.mark.asyncio
+    async def test_peer_mention_to_already_woken_agent_is_stripped(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            # No mention in a mentioned_only room → every agent is woken.
+            _user_send(client, room.id, ws_env["token"], "각자 무엇을 할 수 있나")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token,
+                f"저는 코드를 봅니다. <@user:{peer_pid}> 소개해 주세요", "코드를 봅니다",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert f"<@user:{peer_pid}>" not in msg["content"]
+        assert "소개해 주세요" in msg["content"]
+        assert meta.get("peer_redundant") is True
+        assert "mentions" not in meta
+        assert meta.get("kind") is None
+        budget = app.state.peer_handoff_budget
+        assert budget.remaining(room.id) == budget._capacity
+
+    @pytest.mark.asyncio
+    async def test_peer_mention_to_unwoken_agent_still_allowed(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            # The human addresses only the sender; the peer stays asleep.
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 도와줘")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 의견 부탁", "의견 부탁",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert f"<@user:{peer_pid}>" in msg["content"]
+        assert meta.get("peer_depth") == 1
+        assert meta.get("kind") == "peer_query"
+        assert meta.get("peer_redundant") is None
+
+    @pytest.mark.asyncio
+    async def test_non_mentioned_only_room_does_not_mark_woken(self, ws_env) -> None:
+        from anygarden.db.models import Room
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        async with sf() as db:
+            (await db.get(Room, room.id)).speaker_strategy = "round_robin"
+            await db.commit()
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "각자 무엇을 할 수 있나")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 차례", "차례",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_redundant") is None
+        assert meta.get("peer_depth") == 1
