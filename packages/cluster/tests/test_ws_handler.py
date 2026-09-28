@@ -804,6 +804,25 @@ class TestWelcomeParticipantsRoster:
                 assert user_entry.get("description") is None
 
 
+def _receive_skipping_roster(ws, skipped: list[dict] | None = None) -> dict:
+    """Next frame that is not a roster refresh (#732).
+
+    A ``#room`` mention auto-joins the target's representative into the
+    *source* room, which changes that room's roster, so a
+    ``room_settings_changed`` snapshot can precede the ``message`` echo.
+    Skipped frames are appended to *skipped* for tests that assert them.
+    """
+    while True:
+        frame = json.loads(ws.receive_text())
+        if frame.get("type") == "room_settings_changed" and frame.get(
+            "participants"
+        ) is not None:
+            if skipped is not None:
+                skipped.append(frame)
+            continue
+        return frame
+
+
 class TestRoomQueryMetadata:
     """Tests for #room mention → room_query metadata attachment."""
 
@@ -894,7 +913,14 @@ class TestRoomQueryMetadata:
                     "type": "send",
                     "content": f"<#room:{target.id}> API 설계 의견?",
                 }))
-                msg = json.loads(ws.receive_text())
+                roster_frames: list[dict] = []
+                msg = _receive_skipping_roster(ws, roster_frames)
+                # #732 — the representative's auto-join changed the
+                # source room's roster, so its subscribers are told.
+                assert [f["room_id"] for f in roster_frames] == [source.id]
+                assert "rep-bot" in {
+                    p["display_name"] for p in roster_frames[0]["participants"]
+                }
                 assert msg["type"] == "message"
                 meta = msg.get("metadata", {})
                 assert "room_query" in meta
@@ -989,7 +1015,7 @@ class TestRoomQueryMetadata:
                         "type": "send",
                         "content": f"<#room:{target_room.id}> ping",
                     }))
-                    msg = json.loads(ws.receive_text())
+                    msg = _receive_skipping_roster(ws)
                     assert msg["type"] == "message"
                     assert msg["metadata"]["room_query"]["source_participant_name"] == "noname"
 
@@ -1041,7 +1067,7 @@ class TestRoomQueryMetadata:
                     "type": "send",
                     "content": f"<#room:{target.id}> 의견?",
                 }))
-                msg = json.loads(ws.receive_text())
+                msg = _receive_skipping_roster(ws)
                 assert msg["type"] == "message"
                 meta = msg.get("metadata") or {}
                 # Mention parsing still records what the agent wrote,
@@ -1075,7 +1101,7 @@ class TestRoomQueryMetadata:
                     "type": "send",
                     "content": f"[ROOM_QUERY] <#room:{target.id}> 의견?",
                 }))
-                msg = json.loads(ws.receive_text())
+                msg = _receive_skipping_roster(ws)
                 assert msg["type"] == "message"
                 meta = msg.get("metadata") or {}
                 # User-typed prefix is just text — routing proceeds.
@@ -1109,7 +1135,7 @@ class TestRoomQueryMetadata:
                     "type": "send",
                     "content": f"<#room:{norep.id}> 아무 질문",
                 }))
-                msg = json.loads(ws.receive_text())
+                msg = _receive_skipping_roster(ws)
                 meta = msg.get("metadata", {})
                 assert "room_query" not in meta
 
@@ -1174,7 +1200,7 @@ class TestRoomQueryMetadata:
                         "type": "send",
                         "content": f"<#room:{target.id}> 의견 요청",
                     }))
-                    msg = json.loads(user_ws.receive_text())
+                    msg = _receive_skipping_roster(user_ws)
                     assert msg["type"] == "message"
 
                 # Agent's target-room WS must receive a JoinRoomOut
@@ -1248,7 +1274,7 @@ class TestRoomQueryMetadata:
                     "content": f"<#room:{target.id}> 질문",
                 }))
                 # First: the message itself
-                msg = json.loads(ws.receive_text())
+                msg = _receive_skipping_roster(ws)
                 assert msg["type"] == "message"
                 # Second: error about offline agent
                 err = json.loads(ws.receive_text())

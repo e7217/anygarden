@@ -21,12 +21,23 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from anygarden.app import create_app
+from anygarden.auth.invite_token import hash_invite_token
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, Base, Participant, Project, Room, User
+from anygarden.db.models import (
+    Agent,
+    Base,
+    Participant,
+    Project,
+    Room,
+    RoomInviteLink,
+    User,
+)
+from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.ws.manager import ConnectionManager
@@ -297,3 +308,151 @@ class TestAgentMetadataBroadcast:
             assert resp.status_code == 200
 
         assert _roster_frames(captured) == []
+
+
+class TestEveryMembershipPathBroadcasts:
+    """#732 — ``broadcast_roster`` used to fire only from the two
+    ``/rooms/{id}/participants`` routes. Every other path that inserts
+    or deletes a ``Participant`` left the room's seated agents with a
+    stale roster until they reconnected. Each test below pins one path.
+    """
+
+    @staticmethod
+    def _auth(roster_env) -> dict[str, str]:
+        return {"Authorization": f"Bearer {roster_env['token']}"}
+
+    @pytest.mark.asyncio
+    async def test_create_agent_with_rooms_broadcasts_roster(
+        self, roster_env
+    ) -> None:
+        app, room = roster_env["app"], roster_env["room"]
+        captured = _spy_on_broadcast(app)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/agents",
+                json={"name": "pm-bot", "engine": "codex", "rooms": [room.id]},
+                headers=self._auth(roster_env),
+            )
+            assert resp.status_code == 201, resp.text
+
+        frames = [f for f in _roster_frames(captured) if f.room_id == room.id]
+        assert len(frames) == 1
+        names = {p.display_name for p in frames[0].participants}
+        assert names == {"seated-bot", "pm-bot"}
+
+    @pytest.mark.asyncio
+    async def test_add_agent_room_broadcasts_roster(self, roster_env) -> None:
+        app, room, spare = (
+            roster_env["app"],
+            roster_env["room"],
+            roster_env["spare"],
+        )
+        captured = _spy_on_broadcast(app)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/v1/agents/{spare.id}/rooms",
+                json={"room_id": room.id},
+                headers=self._auth(roster_env),
+            )
+            assert resp.status_code == 201, resp.text
+
+        frames = _roster_frames(captured)
+        assert len(frames) == 1
+        names = {p.display_name for p in frames[0].participants}
+        assert names == {"seated-bot", "spare-bot"}
+
+    @pytest.mark.asyncio
+    async def test_remove_agent_room_broadcasts_roster(self, roster_env) -> None:
+        app, room, seated = (
+            roster_env["app"],
+            roster_env["room"],
+            roster_env["seated"],
+        )
+        async with app.state.session_factory() as db:
+            db.add(
+                Participant(
+                    room_id=room.id,
+                    agent_id=roster_env["spare"].id,
+                    role="member",
+                )
+            )
+            await db.commit()
+        captured = _spy_on_broadcast(app)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete(
+                f"/api/v1/agents/{seated.id}/rooms/{room.id}",
+                headers=self._auth(roster_env),
+            )
+            assert resp.status_code == 200, resp.text
+
+        frames = _roster_frames(captured)
+        assert len(frames) == 1
+        names = {p.display_name for p in frames[0].participants}
+        assert names == {"spare-bot"}
+
+    @pytest.mark.asyncio
+    async def test_ensure_agent_in_room_broadcasts_only_on_insert(
+        self, roster_env
+    ) -> None:
+        """The ``#room`` auto-join calls the helper on every query; an
+        idempotent re-run leaves the roster unchanged, so it must stay
+        silent (#644's "quiet unless cached state changed" rule)."""
+        app, room, spare = (
+            roster_env["app"],
+            roster_env["room"],
+            roster_env["spare"],
+        )
+        captured = _spy_on_broadcast(app)
+        manager = app.state.connection_manager
+
+        async with app.state.session_factory() as db:
+            _, created = await ensure_agent_in_room(
+                db, manager, room_id=room.id, agent_id=spare.id
+            )
+            assert created
+            _, created = await ensure_agent_in_room(
+                db, manager, room_id=room.id, agent_id=spare.id
+            )
+            assert not created
+
+        assert len(_roster_frames(captured)) == 1
+
+    @pytest.mark.asyncio
+    async def test_guest_invite_join_broadcasts_roster(self, roster_env) -> None:
+        app, room = roster_env["app"], roster_env["room"]
+        token_plain = "inv_" + "r" * 40
+        token_hash, hint = hash_invite_token(token_plain)
+        async with app.state.session_factory() as db:
+            admin_id = (
+                await db.execute(select(User.id).where(User.is_admin.is_(True)))
+            ).scalar_one()
+            db.add(
+                RoomInviteLink(
+                    room_id=room.id,
+                    created_by_user_id=admin_id,
+                    token_hash=token_hash,
+                    lookup_hint=hint,
+                    max_uses=1,
+                )
+            )
+            await db.commit()
+        captured = _spy_on_broadcast(app)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/auth/guest",
+                json={"token": token_plain, "display_name": "Alice"},
+            )
+            assert resp.status_code == 201, resp.text
+
+        frames = _roster_frames(captured)
+        assert len(frames) == 1
+        guests = [p for p in frames[0].participants if p.kind == "guest"]
+        assert [g.display_name for g in guests] == ["Alice"]

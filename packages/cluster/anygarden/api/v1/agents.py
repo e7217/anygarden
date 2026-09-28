@@ -41,7 +41,7 @@ from anygarden.engines.validation import (
 )
 from anygarden.rooms.authorization import Capability, require_capability
 from anygarden.rooms.membership import ensure_agent_in_room
-from anygarden.rooms.roster import broadcast_roster_for_agent
+from anygarden.rooms.roster import broadcast_roster, broadcast_roster_for_agent
 from anygarden.task_service import release_participant_tasks, source_thread_root_id
 from anygarden.workspaces.managed_router import router as managed_workspace_router
 
@@ -608,6 +608,17 @@ async def create_agent(
     await db.commit()
     await db.refresh(agent)
     created_out = _agent_to_out(agent, request.app.state.machine_bus)
+
+    # #732 — the rows above bypass ``ensure_agent_in_room`` to keep the
+    # creation atomic, so push the refreshed roster to the agents
+    # already seated in each requested room here. Best-effort: the
+    # agent is durable by now and a failed push must not fail the create.
+    manager = getattr(request.app.state, "connection_manager", None)
+    for room_id in body.rooms:
+        try:
+            await broadcast_roster(manager, db, room_id=room_id)
+        except Exception:
+            logger.exception("Roster broadcast after agent create failed", extra={"room_id": room_id})
 
     # Agent always has at least the DM room → start immediately.
     lifecycle = request.app.state.agent_lifecycle
@@ -1410,6 +1421,10 @@ async def remove_agent_room(
     )
     await db.delete(participant)
     await db.commit()
+
+    # #732 — the peers left in the room still list this agent.
+    manager = getattr(request.app.state, "connection_manager", None)
+    await broadcast_roster(manager, db, room_id=room_id)
 
     # Check if agent has any remaining rooms
     remaining = await db.execute(
