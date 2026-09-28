@@ -96,9 +96,8 @@ describe('AgentSettingsDialog recent turn health (#716)', () => {
     serve(failedTurn('POLICY_DENIED'))
     renderDialog()
     fireEvent.click(await screen.findByTestId('overview-recent-turn-details'))
-    const activity = screen.getByTestId('agent-settings-section-activity') as HTMLDetailsElement
-    expect(activity.open).toBe(true)
-    fireEvent(activity, new Event('toggle'))
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+    const activity = screen.getByTestId('agent-settings-section-activity')
     const row = await waitFor(() => {
       const found = activity.querySelector('[data-request-id="turn-new"]')
       expect(found).not.toBeNull()

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useMemo, useState } from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import { MemoryRouter } from 'react-router-dom'
 
@@ -11,9 +11,8 @@ vi.mock('@/components/EngineGlyph', () => ({
   ),
 }))
 
-// The single-page dialog mounts every panel simultaneously (#165),
-// so the Activity and Rooms panels fire their data-fetch effects on
-// render. jsdom's URL parser chokes on relative paths in
+// The dialog keeps every tab panel mounted (#165, #715), so the
+// Activity and Rooms panels fire their data-fetch effects on render. jsdom's URL parser chokes on relative paths in
 // ``fetch(/api/...)``, so stub apiFetch to resolve with empty
 // payloads — these tests don't assert on panel contents.
 vi.mock('@/lib/api', () => ({
@@ -27,6 +26,11 @@ import AgentSettingsDialog from './AgentSettingsDialog'
 import type { Agent } from '@/hooks/useAgents'
 
 afterEach(() => cleanup())
+
+// Radix tabs activate on mousedown, not click.
+function selectTab(name: string) {
+  fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0, ctrlKey: false })
+}
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -69,56 +73,53 @@ function setup(open: boolean = true, agent: Agent = makeAgent()) {
 }
 
 describe('AgentSettingsDialog', () => {
-  it('stacks all four sections vertically when open', async () => {
+  it('mounts every tab panel while open so unsaved edits survive tab switches', async () => {
     setup()
     expect(screen.getByTestId('agent-settings-section-overview')).toBeInTheDocument()
     expect(screen.getByTestId('agent-settings-section-manifest')).toBeInTheDocument()
     expect(screen.getByTestId('agent-settings-section-rooms')).toBeInTheDocument()
+    expect(screen.getByTestId('agent-settings-section-workspace')).toBeInTheDocument()
     expect(screen.getByTestId('agent-settings-section-activity')).toBeInTheDocument()
-
-    // All panels are mounted simultaneously — Manifest edits survive
-    // scrolling to other sections because no section unmounts. The
-    // Activity panel is mounted but hidden inside a collapsed
-    // `<details>`; the DOM node is still present.
     expect(screen.getByTestId('overview-panel')).toBeInTheDocument()
     expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
     expect(screen.getByTestId('rooms-panel')).toBeInTheDocument()
     expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
   })
 
-  it('renders sections in document order (Overview → Manifest → Rooms → Activity)', () => {
+  it('groups the destinations into four tabs and opens Settings first (#715)', () => {
     setup()
-    const ids = [
-      'agent-settings-section-overview',
-      'agent-settings-section-manifest',
-      'agent-settings-section-rooms',
-      'agent-settings-section-activity',
-    ]
-    const nodes = ids.map(id => screen.getByTestId(id))
-    // Walk the pairs with compareDocumentPosition and require each
-    // later node to follow the previous one in the DOM.
-    for (let i = 0; i < nodes.length - 1; i++) {
-      const relation = nodes[i].compareDocumentPosition(nodes[i + 1])
-      expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    }
+    const tabs = screen.getAllByRole('tab').map(tab => tab.textContent)
+    expect(tabs).toEqual(['Settings', 'Work', 'Workspace', 'Activity'])
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true')
+    const panelOf = (id: string) => screen.getByTestId(`agent-settings-section-${id}`).closest('[role="tabpanel"]')
+    expect(panelOf('overview')).toHaveAttribute('data-state', 'active')
+    expect(panelOf('manifest')).toBe(panelOf('overview'))
+    expect(panelOf('rooms')).toHaveAttribute('data-state', 'inactive')
+    expect(panelOf('goals')).toBe(panelOf('rooms'))
+    expect(panelOf('tasks')).toBe(panelOf('rooms'))
+    expect(panelOf('workspace')).toHaveAttribute('data-state', 'inactive')
+    expect(panelOf('activity')).toHaveAttribute('data-state', 'inactive')
   })
 
-  it('collapses the Activity section by default (admin can expand on demand)', () => {
-    setup()
-    const activitySection = screen.getByTestId('agent-settings-section-activity') as HTMLDetailsElement
-    expect(activitySection.tagName.toLowerCase()).toBe('details')
-    expect(activitySection.open).toBe(false)
-  })
-
-  it('opens the activity log from the section navigation without unmounting edits', async () => {
+  it('switches views with the tabs without unmounting edits', async () => {
     setup()
     const name = screen.getByTestId('overview-name-input') as HTMLInputElement
     fireEvent.change(name, { target: { value: 'Draft name' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Activity' }))
-    expect((screen.getByTestId('agent-settings-section-activity') as HTMLDetailsElement).open).toBe(true)
+    selectTab('Activity')
+    expect(screen.getByRole('tab', { name: 'Activity' })).toHaveAttribute('aria-selected', 'true')
+    const activity = screen.getByTestId('agent-settings-section-activity').closest('[role="tabpanel"]')
+    expect(activity).toHaveAttribute('data-state', 'active')
+    selectTab('Settings')
+    expect(screen.getByTestId('overview-name-input')).toBe(name)
     expect(name).toHaveValue('Draft name')
     expect(await screen.findByTestId('manifest-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('workspace-panel')).toBeInTheDocument()
+  })
+
+  it('offers in-page links that scroll within Settings instead of tabs', () => {
+    setup()
+    const sections = screen.getByRole('navigation', { name: 'Sections on this page' })
+    fireEvent.click(within(sections).getByRole('button', { name: 'Instructions' }))
+    expect(screen.getByRole('tab', { name: 'Settings' })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('does not render any panel content when closed', () => {
