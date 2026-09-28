@@ -704,12 +704,8 @@ async def add_participant(
             role=body.role,
         )
 
-    # #644 — both branches above notify the *newcomer* (JoinRoomOut /
-    # RoomMembershipChangedOut). The agents already seated in the room
-    # get nothing, so their LLM roster silently omits whoever just
-    # joined. One snapshot to the room fixes both branches at once.
-    await broadcast_roster(manager, db, room_id=room_id)
-
+    # #644 / #732 — both helpers also push the refreshed roster to the
+    # agents already seated in the room, so no broadcast is needed here.
     return participant
 
 

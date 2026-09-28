@@ -10,7 +10,10 @@ connect-time snapshot: a peer that joined afterwards stayed invisible, a
 peer that left lingered, and an edited ``description`` never reached
 anyone. #644 adds :func:`broadcast_roster`, which every mutation that
 changes a rendered roster line calls to push a fresh snapshot to the
-room.
+room. #732 moved the membership calls into ``rooms.membership`` so the
+shared add helpers cover every caller; the paths that write
+``Participant`` rows directly (agent create/room removal, guest invite
+join, ``remove_participant``) call it themselves after their commit.
 
 This module sits below both ``ws.handler`` (welcome assembly) and
 ``rooms.router`` / ``api.v1.agents`` (the mutation sites) so all three

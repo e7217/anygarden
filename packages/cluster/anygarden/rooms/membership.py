@@ -12,6 +12,11 @@ forgot the frame, which is what issue #50 set out to fix.
 
 These helpers collapse all three call sites onto the same primitive so
 a fourth path added tomorrow can't regress the invariant.
+
+#732 — the same reasoning covers the *room's* side: agents already
+seated in the room cache its roster and only learn about a newcomer
+from a ``room_settings_changed`` snapshot. The helpers push that
+snapshot too, so every caller gets it without remembering to.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.db.models import Participant, Room
 from anygarden.observability.metrics import agent_joinroom_drop_total
 from anygarden.rooms.authorization import require_active_room, validate_room_role
+from anygarden.rooms.roster import broadcast_roster
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
 
@@ -137,6 +143,12 @@ async def ensure_agent_in_room(
                     )
                 await manager.send_to(pid, frame)
 
+    # #732 — refresh the seated peers' roster. Only on insert: the
+    # ``#room`` auto-join re-runs this helper on every query, and an
+    # unchanged roster must not put a frame on the wire.
+    if created:
+        await broadcast_roster(manager, db, room_id=room_id)
+
     return participant, created
 
 
@@ -237,5 +249,8 @@ async def add_user_to_room(
             )
             for pid in other_pids:
                 await manager.send_to(pid, frame)
+
+    # #732 — see ``ensure_agent_in_room``.
+    await broadcast_roster(manager, db, room_id=room_id)
 
     return participant

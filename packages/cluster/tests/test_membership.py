@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Agent, Participant, Project, Room, User
 from anygarden.rooms.membership import add_user_to_room, ensure_agent_in_room
-from anygarden.ws.protocol import JoinRoomOut, RoomMembershipChangedOut
+from anygarden.ws.protocol import (
+    JoinRoomOut,
+    RoomMembershipChangedOut,
+    RoomSettingsChangedOut,
+)
 
 
 @dataclass
@@ -33,9 +37,14 @@ class FakeConnectionManager:
 
     sends: list[_Send] = field(default_factory=list)
     connected: set[str] | None = None
+    # #732 — room-wide roster refreshes, as ``(room_id, frame)``.
+    broadcasts: list[tuple[str, Any]] = field(default_factory=list)
 
     async def send_to(self, participant_id: str, frame: Any) -> None:
         self.sends.append(_Send(participant_id=participant_id, frame=frame))
+
+    async def broadcast(self, room_id: str, frame: Any, **_: Any) -> None:
+        self.broadcasts.append((room_id, frame))
 
     async def connected_participant_ids(self) -> set[str]:
         # Tests that don't wire ``connected`` get a permissive view so
@@ -119,6 +128,12 @@ class TestEnsureAgentInRoom:
         )
         assert created_first is True
         assert created_second is False
+        # #732 — only the insert changes the roster, so only it
+        # refreshes the room.
+        assert [room_id for room_id, _ in manager.broadcasts] == [room.id]
+        frame = manager.broadcasts[0][1]
+        assert isinstance(frame, RoomSettingsChangedOut)
+        assert [p.agent_id for p in frame.participants] == [agent.id]
 
         count = (
             await db.execute(
@@ -273,6 +288,8 @@ class TestAddUserToRoom:
         assert part.user_id == user.id
         assert part.room_id == room.id
         assert manager.sends == []
+        # #732 — the room's seated agents get the refreshed roster.
+        assert [room_id for room_id, _ in manager.broadcasts] == [room.id]
 
     @pytest.mark.asyncio
     async def test_broadcasts_added_to_other_user_pids(

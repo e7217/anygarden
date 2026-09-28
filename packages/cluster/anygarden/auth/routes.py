@@ -356,6 +356,12 @@ async def accept_guest_invite(
         for pid in other_pids:
             await manager.send_to(pid, frame)
 
+        # #732 — the frame above refreshes users' sidebars; the agents
+        # seated in the room need the roster snapshot to see the guest.
+        from anygarden.rooms.roster import broadcast_roster
+
+        await broadcast_roster(manager, db, room_id=invite.room_id)
+
     return GuestAuthResponse(
         token=jwt_token,
         user_id=guest.id,
