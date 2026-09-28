@@ -68,8 +68,10 @@ class PiRuntime:
         """pi --print --mode json with the minimal ambient surface.
 
         The prompt is delivered on stdin (never argv) so option-looking prompt
-        text cannot be parsed as flags. Resume uses ``--resume <handle>`` with
-        the previous native session id; the session directory is pinned into
+        text cannot be parsed as flags. Resume uses ``--session <handle>`` with
+        the previous native session id (``--resume`` is a bare flag that opens
+        Pi's interactive session selector and never settles in JSON mode, see
+        #714); the session directory is pinned into
         the sandboxed home so a resumed handle resolves inside the isolated
         workspace. ``--api-key`` is deliberately never used: provider
         credentials travel only via the caller-staged environment.
@@ -97,7 +99,7 @@ class PiRuntime:
         if invocation.model:
             cmd += ["--model", invocation.model]
         if session:
-            cmd += ["--resume", session]
+            cmd += ["--session", session]
         return cmd
 
     @staticmethod

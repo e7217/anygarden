@@ -44,6 +44,28 @@ revision. A process restart with unchanged selection resumes its stored handle.
 Changing one of these boundaries starts a different session. A failed or unknown
 turn is never automatically retried in a fresh native session.
 
+Pi resumes a stored handle with `--session <id>`. Before #714 the runtime passed
+`--resume <id>`; in Pi 0.85.1 `--resume` is a bare flag that opens the interactive
+session selector, so every second turn in a conversation ended as
+`unknown / missing_terminal_event` without an answer.
+
+### Recovering a scope blocked by an `unknown` receipt
+
+An `unknown` outcome means the runtime cannot prove whether the engine applied
+the turn. The manager therefore fences that session scope: later turns in the
+same scope fail with `POLICY_DENIED` before launching the engine, even while the
+agent process stays Online. This fence is intentional and is not cleared in place.
+
+To recover, stop the agent and start it again (the agent settings Stop and Start
+actions, or the lifecycle API). A stop advances the agent's launch generation, and
+the generation is part of the session scope, so the next turn opens a new scope
+and a new native session. The fenced receipt and its events remain in
+`.anygarden-execution/<engine>` as evidence. The new session does not carry
+over the blocked session's native history, and the uncertain turn is not
+replayed: resend any request that still needs an answer. Do not delete the
+receipt database to clear a fence, because that also discards the evidence and
+the other scopes' native handles.
+
 Old Codex `.anygarden-engine-sessions.json` maps rooms to handles without recording
 provider/model. At most once per room, the upgrade can import a handle when all
 of the following are true:
