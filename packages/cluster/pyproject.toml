@@ -137,10 +137,3 @@ anygarden-agent = { workspace = true }
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# Slow tests (E2E against real external subprocesses like codex CLI)
-# are registered here and excluded from the default run. Opt in with
-# ``uv run pytest -m slow`` when you want to exercise the full stack.
-markers = [
-    "slow: end-to-end tests that shell out to real external binaries (codex, claude, gemini); skipped by default",
-]
-addopts = "-m 'not slow'"

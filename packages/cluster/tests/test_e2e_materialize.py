@@ -12,8 +12,7 @@ spinning up actual subprocesses:
    preserved because skills are runtime-owned after initial seed
 6. Drop a runtime file under the agent root between spawns, assert it survives
 
-The full subprocess E2E lives in scripts/e2e_multiprocess.py; this
-test deliberately stays at the Python library level so the
+This test deliberately stays at the Python library level so the
 reconciliation contract can be checked in under a second.
 """
 
