@@ -335,6 +335,18 @@ async def _upsert_engine_status(
     return row
 
 
+def _record_auth_status(status: MachineEngineStatus, report: dict[str, Any]) -> None:
+    """Store a reported engine login status (#715).
+
+    Only reports that carry ``auth`` change it, so an older daemon that
+    omits the field never erases a status a newer one reported.
+    """
+    auth = report.get("auth")
+    if isinstance(auth, str):
+        status.auth_status = auth[:16]
+        status.auth_checked_at = datetime.now(timezone.utc)
+
+
 async def _handle_engine_check_result(
     session_factory,
     machine_id: str,
@@ -359,6 +371,7 @@ async def _handle_engine_check_result(
         status.latest_version = latest
         status.latest_checked_at = datetime.now(timezone.utc)
         status.latest_error = data.get("error")
+        _record_auth_status(status, data)
         status.update_available = (
             is_update_available(current, latest) if current else False
         )
@@ -477,6 +490,10 @@ async def _handle_register(
                     version=version,
                 )
             )
+            if isinstance(eng, dict) and isinstance(eng.get("auth"), str):
+                _record_auth_status(
+                    await _upsert_engine_status(db, machine_id, name), eng
+                )
 
         db.add(
             MachineActivityLog(

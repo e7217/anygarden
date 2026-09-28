@@ -639,6 +639,14 @@ class MachineEngineStatus(Base):
     update_started_at: Mapped[Optional[datetime]] = mapped_column(
         UtcDateTime, nullable=True, default=None
     )
+    # #715 — how the machine's engine is signed in (codex-cli only:
+    # chatgpt/api_key/other/none/unknown). NULL until a daemon reports it.
+    auth_status: Mapped[Optional[str]] = mapped_column(
+        String(16), nullable=True, default=None
+    )
+    auth_checked_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
 
 
 class MachineToken(Base):

@@ -302,7 +302,13 @@ class MachineDaemon:
         """Send register frame with detected capabilities + system info."""
         detection = await detect_engines()
         capabilities = [
-            {"engine": e.engine, "version": e.version, "path": e.path}
+            {
+                "engine": e.engine,
+                "version": e.version,
+                "path": e.path,
+                # #715 — only engines that report a login status carry it.
+                **({"auth": e.auth} if isinstance(e.auth, str) else {}),
+            }
             for e in detection.engines
         ]
         # Static system info (issue #523) — best-effort, never blocks register.
@@ -1345,15 +1351,17 @@ class MachineDaemon:
             return
 
         detection = await detect_engines()
-        current_raw = next(
-            (e.version for e in detection.engines if e.engine == engine), None
-        )
+        detected = next((e for e in detection.engines if e.engine == engine), None)
+        current_raw = detected.version if detected else None
         current = lifecycle.channel.normalize(current_raw) if current_raw else None
         latest_raw = await lifecycle.channel.latest_version(lifecycle.package)
         latest = lifecycle.channel.normalize(latest_raw) if latest_raw else None
         await self._send(
             EngineCheckResultFrame(
-                engine=engine, current_version=current, latest_version=latest
+                engine=engine,
+                current_version=current,
+                latest_version=latest,
+                auth=detected.auth if detected else None,
             ).model_dump()
         )
 

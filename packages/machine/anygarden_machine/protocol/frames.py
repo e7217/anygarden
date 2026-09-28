@@ -459,6 +459,9 @@ class EngineCheckResultFrame(BaseModel):
     current_version: str | None = None
     latest_version: str | None = None
     error: str | None = None
+    # #715 — codex-cli login status (chatgpt/api_key/other/none/unknown);
+    # ``None`` for engines without one and from older daemons.
+    auth: str | None = None
 
 
 class EngineUpdateResultFrame(BaseModel):
