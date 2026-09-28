@@ -1,4 +1,4 @@
-.PHONY: install dev server server-dev frontend test lint e2e e2e-setup clean
+.PHONY: install dev server server-dev frontend test lint e2e-setup clean
 
 install:                ## Install all dependencies
 	uv sync --dev
@@ -28,9 +28,6 @@ test:                   ## Run backend tests
 
 lint:                   ## Run linter
 	uv run ruff check anygarden tests
-
-e2e:                    ## Run full E2E pipeline test
-	uv run python scripts/e2e_full_pipeline.py
 
 # Deliberately without --with-deps (which CI uses): that switch shells out to
 # sudo apt-get and fails on any workstation without passwordless sudo. Run
