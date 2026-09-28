@@ -27,7 +27,7 @@ from anygarden.db.models import (
 )
 from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import replay_since_seq
-from anygarden.messages.metadata import strip_turn_proof
+from anygarden.messages.metadata import REPLY_REQUEST_ID_KEY, strip_turn_proof
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
 from anygarden.rooms.authorization import (
@@ -1488,6 +1488,36 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             agent_participants=agent_participants,
                         )
                     ]
+                    # #719 — the user turn already woke these peers; they
+                    # are answering the same question, so re-waking them
+                    # only makes them answer twice. Drop the mention
+                    # without spending the handoff budget.
+                    already_woken = peer_handoff_budget.woken(room_id)
+                    redundant = [
+                        m for m in peer_mentions if str(m.get("id")) in already_woken
+                    ]
+                    if redundant:
+                        frame_in.content = strip_peer_mentions_from_content(
+                            frame_in.content,
+                            peer_pids={str(m["id"]) for m in redundant},
+                        )
+                        mentions = [m for m in mentions if m not in redundant]
+                        if mentions:
+                            metadata["mentions"] = mentions
+                        else:
+                            metadata.pop("mentions", None)
+                        peer_mentions = [
+                            m for m in peer_mentions if m not in redundant
+                        ]
+                        metadata["peer_redundant"] = True
+                        logger.warning(
+                            "ws.peer_mention_redundant",
+                            room_id=room_id,
+                            sender_agent_id=sender_agent_id,
+                            target_participant_ids=sorted(
+                                str(m["id"]) for m in redundant
+                            ),
+                        )
                     if peer_mentions:
                         ok = peer_handoff_budget.consume(room_id)
                         used = (
@@ -1746,8 +1776,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
                         # Consume proof above, but never expose it as another
                         # participant's invocation through broadcast/history.
-                        # The echoed request ID remains correlation metadata.
-                        metadata = strip_turn_proof(metadata, keep_request_id=True)
+                        # The echoed request ID remains correlation metadata
+                        # under ``reply_to_request_id`` so peers never read it
+                        # as their own turn (#719).
+                        metadata = strip_turn_proof(metadata, correlate_reply=True)
 
                     room_row = (
                         await db.execute(
@@ -2028,7 +2060,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     if identity and identity.kind == "agent":
                         echoed_rid = None
                         if isinstance(metadata, dict):
-                            raw = metadata.get("request_id")
+                            raw = metadata.get(REPLY_REQUEST_ID_KEY)
                             if isinstance(raw, str):
                                 echoed_rid = raw
                         if not (
@@ -2140,6 +2172,27 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 )
                             )).all()
                         )
+                        # #719 — remember which agents this user turn wakes so
+                        # a peer mention cannot wake them a second time. This
+                        # mirrors the agent-side ``decide_policy``: explicit
+                        # mentions wake only their targets; an unaddressed
+                        # message wakes everyone in ``mentioned_only`` rooms.
+                        # Anything less certain records nobody, so legitimate
+                        # peer asks are never suppressed.
+                        if (
+                            identity.kind == "user"
+                            and not is_thread_reply
+                            and peer_handoff_budget is not None
+                        ):
+                            if mentioned_participant_ids:
+                                peer_handoff_budget.mark_woken(room_id, (
+                                    pid for pid, _ in agent_parts
+                                    if pid in mentioned_participant_ids
+                                ))
+                            elif not mentions and speaker_strategy == "mentioned_only":
+                                peer_handoff_budget.mark_woken(
+                                    room_id, (pid for pid, _ in agent_parts)
+                                )
                         # #516 — of the agents expected to respond, which
                         # can't? Collected here, warned in-room after broadcast.
                         if agent_parts:
