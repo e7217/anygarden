@@ -8,6 +8,8 @@ import { useLocale } from '@/i18n/LocaleProvider'
 interface Props {
   agentId: string | null
   active?: boolean
+  /** #716 — expand and scroll to this turn (from the Overview summary). */
+  focusRequestId?: string | null
 }
 
 // A turn is the cluster's bookkeeping unit for "one user input → agent
@@ -230,7 +232,7 @@ function eventDetail(evt: ActivityLog, localizeError: (error: string) => string)
   return parts.join(' · ')
 }
 
-export default function ActivityPanel({ agentId, active = true }: Props) {
+export default function ActivityPanel({ agentId, active = true, focusRequestId = null }: Props) {
   const { t, formatDate } = useLocale()
   const activity = useAgentActivity(agentId, active)
   const { logs } = activity
@@ -239,6 +241,13 @@ export default function ActivityPanel({ agentId, active = true }: Props) {
   useEffect(() => { setExpanded(new Set()) }, [agentId])
 
   const { turns, system } = useMemo(() => splitLogs(logs), [logs])
+  const focusLoaded = !!focusRequestId && turns.some(turn => turn.requestId === focusRequestId)
+  useEffect(() => {
+    if (!focusRequestId || !focusLoaded) return
+    setExpanded(prev => new Set(prev).add(focusRequestId))
+    const row = document.querySelector(`[data-request-id="${CSS.escape(focusRequestId)}"]`)
+    row?.scrollIntoView?.({ block: 'nearest' })
+  }, [focusRequestId, focusLoaded])
   const localizeError = (error: string) => {
     const known: Record<string, string> = {
       AUTH_MISSING: t('admin.activity.authMissing'),
@@ -308,6 +317,7 @@ export default function ActivityPanel({ agentId, active = true }: Props) {
                   key={turn.requestId}
                   className="rounded border border-[var(--color-border)] bg-[var(--color-surface)]"
                   data-testid="activity-turn-row"
+                  data-request-id={turn.requestId}
                 >
                   <button
                     type="button"
