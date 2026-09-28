@@ -160,8 +160,10 @@ async def test_second_execution_resumes_native_session(tmp_path, invocation, exe
         await m.start(replace(invocation, execution_id="execution-2"))
         await done(m, "execution-2")
         resumed = calls(invocation)[1]
-        assert "--resume" in resumed["argv"]
-        assert resumed["argv"][resumed["argv"].index("--resume") + 1] == (
+        # Pi's --resume is a bare flag that opens the interactive selector;
+        # --session <id> is the option that opens a specific session (#714).
+        assert "--resume" not in resumed["argv"]
+        assert resumed["argv"][resumed["argv"].index("--session") + 1] == (
             "native-pi-session"
         )
     finally:
