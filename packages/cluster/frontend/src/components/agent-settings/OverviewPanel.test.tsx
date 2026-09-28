@@ -310,7 +310,7 @@ describe('OverviewPanel', () => {
     const view = render(<OverviewPanel agent={agent} updateAgent={vi.fn()} connectionState={{ agentId: agent.id, status: 'ready', config: {
       provider: 'local', model: 'local-model', base_url: 'http://local/v1', api_protocol: 'responses', credential_ref: null,
     } }} />)
-    expect(screen.getByTestId('overview-connection-summary')).toHaveTextContent('Direct model server · local-model')
+    expect(screen.getByTestId('overview-connection-summary')).toHaveTextContent('local (my server) · local-model')
     view.rerender(<OverviewPanel agent={agent} updateAgent={vi.fn()} connectionState={{ agentId: agent.id, status: 'error' }} />)
     expect(screen.getByTestId('overview-connection-summary')).toHaveTextContent('Connection unavailable')
     expect(screen.queryByLabelText('Endpoint base URL')).toBeNull()

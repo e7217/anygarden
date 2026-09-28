@@ -47,16 +47,24 @@ async function openPiDialog() {
   fireEvent.click(newAgent)
   await waitFor(() => expect(document.querySelector('option[value="pi-cli"]')).not.toBeNull())
   fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'pi-cli' } })
-  await screen.findByLabelText('Provider (required)')
+  await screen.findByLabelText('Provider ID')
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local qwen' } })
-  fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'qwen-llm' } })
-  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'direct' } })
-  fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'qwen-llm' } })
+  clickNext()
+  fireEvent.change(screen.getByLabelText('Provider ID'), { target: { value: 'qwen-llm' } })
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'direct' } })
+  fireEvent.change(screen.getByLabelText('Provider ID'), { target: { value: 'qwen-llm' } })
+}
+
+const clickNext = () => fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+/** Leaves the model step and submits from the access step. */
+function createFromModelStep() {
+  clickNext()
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
 }
 
 it('creates a keyless Pi agent with its endpoint in one request after loading models', async () => {
   await openPiDialog()
-  const submit = screen.getByRole('button', { name: 'Create Agent' })
+  const submit = screen.getByRole('button', { name: 'Next' })
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://10.0.0.5:8000/v1' } })
   expect(screen.getByLabelText('API protocol')).toHaveValue('chat-completions')
   expect(submit).toBeDisabled() // model is required for a direct endpoint
@@ -66,7 +74,7 @@ it('creates a keyless Pi agent with its endpoint in one request after loading mo
   expect(document.querySelector('#pi-models option[value="qwen3.8-27b-fp8"]')).not.toBeNull()
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'qwen3.8-27b-fp8' } })
   expect(submit).toBeEnabled()
-  fireEvent.click(submit)
+  createFromModelStep()
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
     name: 'Local qwen', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'qwen-llm', model: 'qwen3.8-27b-fp8', rooms: [],
     endpoint: { base_url: 'http://10.0.0.5:8000/v1', api_protocol: 'chat-completions' },
@@ -85,7 +93,7 @@ it('stores a new API key and binds it after creation', async () => {
   await screen.findByText(/2 models found/)
   expect(mocks.calls.find(c => c.path === '/api/v1/engine-endpoints/models')?.body).toEqual({ base_url: 'http://10.0.0.5:8000/v1', api_key: 'sk-local-123' })
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'llama-local' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  createFromModelStep()
   await waitFor(() => expect(mocks.calls.some(c => c.method === 'PUT')).toBe(true))
   const createCall = mocks.createAgent.mock.calls[0][0]
   expect(JSON.stringify(createCall)).not.toContain('sk-local-123')
@@ -101,7 +109,7 @@ it('blocks creation for an invalid base URL', async () => {
   await openPiDialog()
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://user:pw@10.0.0.5/v1' } })
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'm' } })
-  expect(screen.getByRole('button', { name: 'Create Agent' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Load models' })).toBeDisabled()
   expect(screen.getByText(/HTTP\(S\) URL without credentials/)).toBeInTheDocument()
 })
@@ -112,11 +120,12 @@ it('keeps direct server fields out of the Codex creation path', async () => {
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
   fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'codex-cli' } })
-  expect(screen.queryByLabelText('Connection type')).toBeNull()
+  expect(screen.queryByLabelText('Provider')).toBeNull()
   expect(screen.queryByLabelText('Base URL')).toBeNull()
-  expect(screen.queryByLabelText('Provider (required)')).toBeNull()
+  expect(screen.queryByLabelText('Provider ID')).toBeNull()
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Codex worker' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  clickNext()
+  createFromModelStep()
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalled())
   expect(mocks.createAgent.mock.calls[0][0]).not.toHaveProperty('endpoint')
 })
@@ -125,11 +134,11 @@ it('drops hidden Pi direct values when switching back to native', async () => {
   await openPiDialog()
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://10.0.0.5:8000/v1' } })
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'old-direct-model' } })
-  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'native' } })
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'native' } })
   expect(screen.queryByLabelText('Base URL')).toBeNull()
-  fireEvent.change(screen.getByLabelText('Provider (required)'), { target: { value: 'zai' } })
+  fireEvent.change(screen.getByLabelText('Provider ID'), { target: { value: 'zai' } })
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'glm-5.3-flash' } })
-  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
+  createFromModelStep()
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalled())
   expect(mocks.createAgent.mock.calls[0][0]).toEqual({
     name: 'Local qwen', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'zai', model: 'glm-5.3-flash', rooms: [],

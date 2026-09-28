@@ -39,7 +39,7 @@ type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
 function connectionSummary(agent: Agent, state: ConnectionState | null | undefined, defaultModel: string | undefined, t: ReturnType<typeof useLocale>['t']): string {
   if (!state || state.agentId !== agent.id || state.status === 'loading') return t('admin.overview.loadingConnection')
   if (state.status === 'error') return t('admin.overview.connectionUnavailable')
-  if (state.config.base_url) return t('admin.overview.directSummary', { model: state.config.model ?? t('admin.overview.unknownModel') })
+  if (state.config.base_url) return t('admin.overview.directSummary', { provider: state.config.provider ?? t('admin.overview.noProvider'), model: state.config.model ?? t('admin.overview.unknownModel') })
   if (agent.engine === 'pi-cli') return t('admin.overview.piSummary', { provider: state.config.provider ?? t('admin.overview.noProvider'), model: state.config.model ?? t('admin.overview.noModel') })
   return t('admin.overview.codexSummary', { model: state.config.model ?? defaultModel ?? t('admin.overview.defaultModel') })
 }

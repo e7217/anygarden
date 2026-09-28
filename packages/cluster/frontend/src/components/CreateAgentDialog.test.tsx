@@ -1,17 +1,29 @@
 // @vitest-environment jsdom
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 import CreateAgentDialog from './CreateAgentDialog'
 import type { Agent } from '@/hooks/useAgents'
 
-const mocks = vi.hoisted(() => ({ discover: vi.fn() }))
+const mocks = vi.hoisted(() => ({ discover: vi.fn(), apiFetch: vi.fn() }))
+vi.mock('@/lib/api', () => ({ apiFetch: mocks.apiFetch }))
 vi.mock('@/lib/engineEndpoints', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/engineEndpoints')>(),
   discoverEndpointModels: mocks.discover,
 }))
 
 afterEach(cleanup)
+beforeEach(() => {
+  mocks.apiFetch.mockResolvedValue({ ok: true, json: async () => [{ engine: 'codex-cli', auth_status: 'chatgpt' }] })
+})
+
+const next = () => fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+/** Fills the required basics and walks to the requested step. */
+function goToStep(step: 2 | 3, name = 'Reviewer') {
+  fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } })
+  next()
+  if (step === 3) next()
+}
 
 function setup(overrides: Partial<React.ComponentProps<typeof CreateAgentDialog>> = {}) {
   const agent = { id: 'new-agent', name: 'Reviewer', engine: 'codex-cli' } as Agent
@@ -36,6 +48,7 @@ it('sends role, permission, room membership, and the selected machine together',
   const { props, agent } = setup()
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reviewer' } })
   fireEvent.change(screen.getByLabelText('Agent description'), { target: { value: 'Reviews pull requests' } })
+  next(); next()
   fireEvent.change(screen.getByLabelText('Agent permission tier'), { target: { value: 'restricted' } })
   fireEvent.click(screen.getByLabelText('# Engineering'))
   fireEvent.click(screen.getByLabelText('↳ Review'))
@@ -55,6 +68,7 @@ it('sends role, permission, room membership, and the selected machine together',
 
 it('does not report an empty room list while loading', () => {
   setup({ projects: [], roomsByProject: {}, roomsStatus: 'loading' })
+  goToStep(3)
   expect(screen.getByRole('status')).toHaveTextContent('Loading')
   expect(screen.queryByText(/No project rooms are available/)).toBeNull()
 })
@@ -62,6 +76,7 @@ it('does not report an empty room list while loading', () => {
 it('offers a retry when shared rooms cannot be loaded', () => {
   const onRetryRooms = vi.fn().mockResolvedValue(undefined)
   setup({ projects: [], roomsByProject: {}, roomsStatus: 'error', onRetryRooms })
+  goToStep(3)
   expect(screen.getByRole('alert')).toHaveTextContent('Rooms could not be loaded')
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   expect(onRetryRooms).toHaveBeenCalledOnce()
@@ -72,6 +87,7 @@ it('retains the completed form on a rejected creation so it can be corrected', a
   const { props } = setup({ createAgent })
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reviewer' } })
   fireEvent.change(screen.getByLabelText('Agent description'), { target: { value: 'Reviews changes' } })
+  next(); next()
   fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Selected machine must be online and connected')
   expect(screen.getByLabelText('Agent description')).toHaveValue('Reviews changes')
@@ -82,7 +98,7 @@ it('retains the completed form on a rejected creation so it can be corrected', a
 it('reuses the same request id after an uncertain create response, including edited retries', async () => {
   const createAgent = vi.fn().mockRejectedValue(new Error('Network error'))
   setup({ createAgent })
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reviewer' } })
+  goToStep(3)
   fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   await screen.findByRole('alert')
   const key = createAgent.mock.calls[0][0].request_id
@@ -103,10 +119,11 @@ const catalog = {
 
 it.each(['ultra', 'high'])('keeps only reasoning supported after switching models: %s', async effort => {
   const { props } = setup({ fetchEngineCatalog: vi.fn().mockResolvedValue(catalog) })
-  fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Reviewer' } })
+  goToStep(2)
   fireEvent.change(await screen.findByLabelText('Reasoning Effort'), { target: { value: effort } })
   fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'gpt-6-luna' } })
   expect(screen.getByLabelText('Reasoning Effort')).toHaveValue(effort === 'high' ? 'high' : '')
+  next()
   fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   await waitFor(() => expect(props.createAgent).toHaveBeenCalledOnce())
   expect(vi.mocked(props.createAgent).mock.calls[0][0].reasoning_effort).toBe(effort === 'high' ? 'high' : undefined)
@@ -116,10 +133,11 @@ it('ignores a direct model lookup that finishes after switching back to native P
   let resolve!: (value: { models: { id: string }[]; reachable_from: string }) => void
   mocks.discover.mockReturnValue(new Promise(done => { resolve = done }))
   setup({ engines: [{ engine: 'pi-cli' }] })
-  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'direct' } })
+  goToStep(2)
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'direct' } })
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://localhost:8000/v1' } })
   fireEvent.click(screen.getByRole('button', { name: 'Load models' }))
-  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'native' } })
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'native' } })
   await act(async () => { resolve({ models: [{ id: 'stale-model' }], reachable_from: 'server' }) })
   expect(screen.getByLabelText('Model (required)')).toHaveValue('')
 })
@@ -128,7 +146,8 @@ it('ignores an old endpoint lookup after its URL changes', async () => {
   let resolve!: (value: { models: { id: string }[]; reachable_from: string }) => void
   mocks.discover.mockReturnValue(new Promise(done => { resolve = done }))
   setup({ engines: [{ engine: 'pi-cli' }] })
-  fireEvent.change(screen.getByLabelText('Connection type'), { target: { value: 'direct' } })
+  goToStep(2)
+  fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'direct' } })
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://old-server/v1' } })
   fireEvent.click(screen.getByRole('button', { name: 'Load models' }))
   fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'http://new-server/v1' } })
@@ -136,4 +155,37 @@ it('ignores an old endpoint lookup after its URL changes', async () => {
   expect(screen.getByLabelText('Model (required)')).toHaveValue('')
   expect(screen.getByRole('button', { name: 'Load models' })).toBeEnabled()
   expect(screen.queryByRole('status')).toBeNull()
+})
+
+it('walks through basics, engine and model, then access, keeping earlier input (#715)', () => {
+  setup()
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  expect(screen.getByText('Runs on Studio')).toBeInTheDocument()
+  goToStep(2)
+  expect(screen.getByLabelText('Engine')).toBeVisible()
+  expect(screen.getByLabelText('Name')).not.toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  expect(screen.getByLabelText('Name')).toHaveValue('Reviewer')
+  next(); next()
+  expect(screen.getByLabelText('Agent permission tier')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Create Agent' })).toBeEnabled()
+})
+
+it('requires a Pi provider and model before leaving the model step', () => {
+  setup({ engines: [{ engine: 'pi-cli' }] })
+  goToStep(2)
+  expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+  fireEvent.change(screen.getByLabelText('Provider ID'), { target: { value: 'zai' } })
+  fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'glm-5.3-flash' } })
+  expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled()
+})
+
+it("shows the machine's Codex login next to the Codex model", async () => {
+  mocks.apiFetch.mockResolvedValue({ ok: true, json: async () => [{ engine: 'codex-cli', auth_status: 'none' }] })
+  setup()
+  goToStep(2)
+  expect(await screen.findByTestId('codex-login-status')).toHaveTextContent('Sign-in required')
+  expect(mocks.apiFetch).toHaveBeenCalledWith('/api/v1/machines/chosen-machine/engines')
+  // A missing login is a warning, not a blocker: the agent can be signed in later.
+  expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled()
 })

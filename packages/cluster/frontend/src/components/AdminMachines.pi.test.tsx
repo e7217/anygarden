@@ -31,6 +31,8 @@ vi.mock('@/components/EntityAvatar', () => ({ EntityAvatar: () => null }))
 import AdminMachines from './AdminMachines'
 afterEach(() => { cleanup(); vi.clearAllMocks(); mocks.piVersion = '0.85.1' })
 
+const clickNext = () => fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+
 async function selectPiEngine() {
   await waitFor(() => expect(document.querySelector('option[value="pi-cli"]')).not.toBeNull())
   fireEvent.change(screen.getByLabelText('Engine'), { target: { value: 'pi-cli' } })
@@ -42,10 +44,12 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
   await selectPiEngine()
-  const provider = await screen.findByLabelText('Provider (required)')
+  const provider = await screen.findByLabelText('Provider ID')
   expect(screen.getByText(/save a Pi provider API key before starting/)).toBeInTheDocument()
   fireEvent.change(screen.getByPlaceholderText('Agent name'), { target: { value: 'Local worker' } })
-  const submit = screen.getByRole('button', { name: 'Create Agent' })
+  clickNext()
+  // The model step cannot be left until the provider and model are valid.
+  const submit = screen.getByRole('button', { name: 'Next' })
   expect(provider).toHaveValue('')
   expect(submit).toBeDisabled()
   fireEvent.change(provider, { target: { value: '--help' } })
@@ -54,6 +58,7 @@ it('requires an explicit provider and submits custom provider/model from Pi crea
   fireEvent.change(screen.getByLabelText('Model (required)'), { target: { value: 'local-model-v2' } })
   expect(submit).toBeEnabled()
   fireEvent.click(submit)
+  fireEvent.click(screen.getByRole('button', { name: 'Create Agent' }))
   await waitFor(() => expect(mocks.createAgent).toHaveBeenCalledWith({
     name: 'Local worker', engine: 'pi-cli', machine_id: 'm1', request_id: expect.any(String), provider: 'my-local', model: 'local-model-v2', rooms: [],
   }))
@@ -66,7 +71,7 @@ it('warns before creation when the machine Pi version fails the adapter gate (#6
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
   await selectPiEngine()
-  await screen.findByLabelText('Provider (required)')
+  await screen.findByLabelText('Provider ID')
   expect(await screen.findByText(/has pi-cli 0\.87\.1, but this build requires 0\.85\.1/)).toBeInTheDocument()
 })
 
@@ -76,6 +81,6 @@ it('shows no version warning for the supported Pi version', async () => {
   await waitFor(() => expect(newAgent).toBeEnabled())
   fireEvent.click(newAgent)
   await selectPiEngine()
-  await screen.findByLabelText('Provider (required)')
+  await screen.findByLabelText('Provider ID')
   expect(screen.queryByText(/but this build requires/)).not.toBeInTheDocument()
 })
