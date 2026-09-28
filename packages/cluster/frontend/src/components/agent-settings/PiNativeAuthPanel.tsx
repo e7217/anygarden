@@ -48,23 +48,22 @@ export default function PiNativeAuthPanel({ agentId, provider, onSaved }: {
   }
 
   const active = status?.configured && status.provider === provider
-  return <section className="space-y-3 rounded border border-[var(--color-border)] p-3" aria-label={t('admin.piAuth.title')}>
-    <h3 className="font-medium">{t('admin.piAuth.title')}</h3>
+  // Rendered inside the model connection form, so no card or heading of its own.
+  return <section className="space-y-2" aria-label={t('admin.piAuth.title')}>
     <p className="text-sm text-[var(--color-foreground-muted)]">
       {active ? t('admin.piAuth.stored', { provider: provider ?? '', revision: status.revision ?? '' }) : status?.provider
         ? t('admin.piAuth.otherStored', { stored: status.provider, selected: provider ?? t('admin.piAuth.selectedProvider') })
         : t('admin.piAuth.noneStored')}
     </p>
-    <p className="text-sm">{t('admin.piAuth.description')}</p>
-    {error && <p role="alert">{error}</p>}
-    {notice && <p role="status">{notice}</p>}
+    {error && <p role="alert" className="text-sm text-[var(--color-destructive)]">{error}</p>}
+    {notice && <p role="status" className="text-sm">{notice}</p>}
     <fieldset disabled={busy || !provider} className="space-y-2">
-      <label className="block">{t('admin.piAuth.providerKey')}
+      <label className="block space-y-1 text-sm font-medium">{t('admin.piAuth.providerKey')}
         <Input aria-label={t('admin.piAuth.keyLabel')} type="password" autoComplete="off" value={value} onChange={event => setValue(event.target.value)} />
       </label>
-      <div className="flex gap-2">
-        <Button onClick={() => void update('PUT')} disabled={!value}>{t('admin.piAuth.saveKey')}</Button>
-        {status?.provider && <Button variant="outline" onClick={() => void update('DELETE')}>{t('admin.piAuth.removeKey')}</Button>}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" onClick={() => void update('PUT')} disabled={!value}>{t('admin.piAuth.saveKey')}</Button>
+        {status?.provider && <Button variant="ghost" onClick={() => void update('DELETE')}>{t('admin.piAuth.removeKey')}</Button>}
       </div>
     </fieldset>
   </section>

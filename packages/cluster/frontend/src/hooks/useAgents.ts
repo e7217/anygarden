@@ -63,7 +63,7 @@ export interface EngineModel {
   // "builtin" (static engines/catalog.py entry) or "gateway"
   // (registered in the LLM Gateway page). Absent on older servers —
   // treat undefined as "builtin".
-  source?: 'builtin' | 'gateway';
+  source?: 'builtin';
 }
 
 export interface EngineCatalog {

@@ -80,7 +80,7 @@ it('shows Pi native fields and authentication only in native mode', async () => 
 
 it('switches Pi direct to native and saves the key through the write-only API', async () => {
   setup(pi)
-  fireEvent.change(await screen.findByLabelText('Connection type'), { target: { value: 'native' } })
+  fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'native' } })
   fireEvent.change(screen.getByLabelText('Agent provider'), { target: { value: 'zai' } })
   fireEvent.change(screen.getByLabelText('Agent model'), { target: { value: 'glm-5.3-flash' } })
   fireEvent.change(screen.getByLabelText('Native provider API key'), { target: { value: 'secret-value' } })
@@ -94,7 +94,7 @@ it('switches Pi direct to native and saves the key through the write-only API', 
 it('restores the prior direct connection when native key storage fails', async () => {
   mocks.failKey = true
   setup(pi)
-  fireEvent.change(await screen.findByLabelText('Connection type'), { target: { value: 'native' } })
+  fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'native' } })
   fireEvent.change(screen.getByLabelText('Agent provider'), { target: { value: 'zai' } })
   fireEvent.change(screen.getByLabelText('Agent model'), { target: { value: 'glm-5.3-flash' } })
   fireEvent.change(screen.getByLabelText('Native provider API key'), { target: { value: 'secret-value' } })
@@ -126,4 +126,39 @@ it.each(['ultra', 'high'])('updates model and any incompatible reasoning atomica
     model: 'gpt-6-luna', model_set: true,
     ...(effort === 'ultra' ? { reasoning_effort: null, reasoning_effort_set: true } : {}),
   }))
+})
+
+it('lets a Codex agent add a model server from the provider list (#715)', async () => {
+  mocks.endpoint = { provider: null, model: 'gpt-5.3-codex', base_url: null, api_protocol: null, credential_ref: null }
+  setup(codex)
+  const source = await screen.findByLabelText('Provider')
+  expect(screen.getByRole('option', { name: "Machine's Codex login (OpenAI)" })).toBeInTheDocument()
+  fireEvent.change(source, { target: { value: 'direct' } })
+  expect(await screen.findByLabelText('Direct model connection')).toBeInTheDocument()
+  expect(screen.queryByLabelText('Reasoning effort')).toBeNull()
+})
+
+it('names the configured server in the provider list', async () => {
+  setup(codex)
+  expect(await screen.findByRole('option', { name: 'local · local (my server)' })).toBeInTheDocument()
+  expect(screen.queryByRole('option', { name: '+ Add model server…' })).toBeNull()
+})
+
+it('switches a Codex server connection back to the machine login', async () => {
+  setup(codex)
+  fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'native' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Use Codex login' }))
+  await waitFor(() => expect(mocks.apiFetch).toHaveBeenCalledWith('/api/v1/agents/a1/endpoint', {
+    method: 'PUT', body: JSON.stringify({ base_url: null, model: null }),
+  }))
+  expect(await screen.findByRole('status')).toHaveTextContent("machine's Codex login")
+})
+
+it('hides reasoning for Pi, whose catalog has no levels', async () => {
+  mocks.endpoint = { provider: 'zai', model: 'glm-5.3-flash', base_url: null, api_protocol: null, credential_ref: null }
+  render(<ModelConnectionPanel agent={{ ...pi, provider: 'zai', model: 'glm-5.3-flash' }} updateAgent={updateAgent}
+    fetchEngineCatalog={vi.fn().mockResolvedValue({ engine: 'pi-cli', default_model: '', models: [], reasoning_levels: [] })}
+    onConnectionChange={onConnectionChange} />)
+  expect(await screen.findByLabelText('Pi provider authentication')).toBeInTheDocument()
+  expect(screen.queryByLabelText('Reasoning effort')).toBeNull()
 })

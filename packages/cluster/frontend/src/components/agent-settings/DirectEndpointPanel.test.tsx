@@ -35,16 +35,20 @@ describe('direct endpoint editor', () => {
     await waitFor(() => expect(saved).toHaveBeenCalledOnce())
     expect(calls.find(c => c.method === 'PUT')?.body).toEqual({ ...config, model: 'custom-model' })
   })
-  it('clears entered keys after write and displays only stored references', async () => {
+  it('asks for a key only after choosing to add one, then shows only the stored reference', async () => {
     const { calls } = setup()
-    const key = await screen.findByLabelText('New endpoint API key')
+    const auth = await screen.findByLabelText('Endpoint credential')
+    expect(screen.queryByLabelText('New endpoint API key')).toBeNull()
+    fireEvent.change(auth, { target: { value: '__new_key' } })
+    const key = screen.getByLabelText('New endpoint API key')
     expect(key).toHaveAttribute('type', 'password')
     fireEvent.change(key, { target: { value: 'fake-test-key' } })
     fireEvent.click(screen.getByRole('button', { name: 'Store new credential' }))
     await screen.findByRole('option', { name: /stored \(revision 1\)/ })
-    expect(key).toHaveValue('')
+    expect(screen.queryByLabelText('New endpoint API key')).toBeNull()
     expect(calls.find(c => c.method === 'POST')?.body).toEqual({ label: 'Endpoint credential', value: 'fake-test-key' })
     expect(screen.queryByText('fake-test-key')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Replace key' })).toBeInTheDocument()
   })
   it('shows server capability errors without claiming a successful save', async () => {
     const { saved } = setup()
@@ -54,11 +58,20 @@ describe('direct endpoint editor', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Connect a compatible machine first')
     expect(saved).not.toHaveBeenCalled()
   })
-  it('resets an existing Codex direct connection to the CLI default', async () => {
-    const { calls, saved } = setup()
-    fireEvent.click(await screen.findByRole('button', { name: 'Disable direct connection' }))
-    await waitFor(() => expect(saved).toHaveBeenCalledOnce())
-    expect(calls.find(c => c.method === 'PUT')?.body).toEqual({ base_url: null, model: null })
+  it('fills the provider ID from the server host when it is left empty', async () => {
+    const calls: Array<{url: string; method: string; body: unknown}> = []
+    vi.mocked(apiFetch).mockImplementation(async (url, init) => {
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ url, method, body })
+      if (method === 'PUT') return new Response(JSON.stringify(body))
+      return new Response(JSON.stringify(url.endsWith('/credentials') ? [] : { provider: null, model: null, base_url: null, api_protocol: null, credential_ref: null }))
+    })
+    render(<DirectEndpointPanel agentId="a" engine="pi-cli" onSaved={vi.fn().mockResolvedValue(undefined)} />)
+    fireEvent.change(await screen.findByLabelText('Endpoint base URL'), { target: { value: 'http://10.50.21.211:18000/v1/' } })
+    fireEvent.change(screen.getByLabelText('Endpoint model'), { target: { value: 'qwen3.8-27b-fp8' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply connection' }))
+    await waitFor(() => expect(calls.find(c => c.method === 'PUT')?.body).toMatchObject({ provider: '10.50.21.211', model: 'qwen3.8-27b-fp8' }))
   })
 })
 
@@ -90,6 +103,9 @@ describe('direct endpoint status and model discovery (#685)', () => {
     expect(await screen.findByText(/2 models found/)).toBeInTheDocument()
     expect(calls.find(c => c.url === '/api/v1/engine-endpoints/models')?.body).toEqual({ base_url: 'http://localhost:8000/v1' })
     expect(screen.queryByText(/is not in the list served/)).not.toBeInTheDocument()
+    // Loaded models become a select; other IDs are typed after "Enter manually…".
+    expect(screen.getByLabelText('Endpoint model').tagName).toBe('SELECT')
+    fireEvent.change(screen.getByLabelText('Endpoint model'), { target: { value: '__manual_model' } })
     fireEvent.change(screen.getByLabelText('Endpoint model'), { target: { value: 'typo-model' } })
     expect(screen.getByText(/"typo-model" is not in the list served by this endpoint/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Apply connection' })).toBeEnabled()
