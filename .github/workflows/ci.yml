@@ -13,6 +13,9 @@ jobs:
   test-linux:
     name: Test (Linux)
     runs-on: ubuntu-latest
+    # A healthy run takes ~12 min. Without a cap a hung test holds the
+    # runner for GitHub's 6h default (#726).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
