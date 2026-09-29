@@ -124,6 +124,54 @@ describe('useWebSocket reconnect guards', () => {
     expect(sockets).toHaveLength(1)
   })
 
+  it('does not auto-reconnect after being superseded (4040) by another connection', () => {
+    render(<Harness />)
+
+    act(() => {
+      sockets[0].onclose?.(closeEvent(4040))
+      vi.advanceTimersByTime(30_000)
+    })
+
+    expect(sockets).toHaveLength(1)
+  })
+
+  it('reconnects a superseded socket once when the tab becomes visible or focused', () => {
+    render(<Harness />)
+    act(() => {
+      sockets[0].onclose?.(closeEvent(4040))
+    })
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(sockets).toHaveLength(2)
+
+    // Only a superseded socket is revived — focus on a live one is a no-op.
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(sockets).toHaveLength(2)
+
+    act(() => {
+      sockets[1].onclose?.(closeEvent(4040))
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(sockets).toHaveLength(3)
+  })
+
+  it('stops listening for visibility after unmount', () => {
+    const { unmount } = render(<Harness />)
+    act(() => {
+      sockets[0].onclose?.(closeEvent(4040))
+    })
+    unmount()
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(sockets).toHaveLength(1)
+  })
+
   it('clears a pending reconnect timer on unmount', () => {
     const { unmount } = render(<Harness />)
     expect(sockets).toHaveLength(1)

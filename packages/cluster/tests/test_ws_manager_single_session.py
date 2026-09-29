@@ -147,3 +147,149 @@ async def test_distinct_participants_coexist() -> None:
     )
     await mgr.broadcast("room-1", frame)
     assert a.sent and b.sent
+
+
+# ---------------------------------------------------------------------------
+# Issue #731 — human sessions (``exclusive=False``) may hold several sockets
+# for the same participant (one per tab/device). Only agents keep the #79
+# single-session policy.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingPresence:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, bool]] = []
+
+    async def publish(self, room_id, participant_id, *, online, last_seen_at) -> None:
+        self.events.append((room_id, participant_id, online))
+
+
+def _message(room_id: str = "room-1"):
+    from datetime import UTC, datetime
+
+    from anygarden.ws.protocol import MessageOut
+
+    return MessageOut(
+        id="m-1",
+        room_id=room_id,
+        participant_id="other",
+        content="hi",
+        seq=1,
+        created_at=datetime.now(UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_exclusive_sockets_coexist_and_all_receive_broadcasts() -> None:
+    mgr = ConnectionManager()
+    tab_a = _RecordingWS()
+    tab_b = _RecordingWS()
+
+    await mgr.subscribe("room-1", "p-1", tab_a, user_id="u-1", exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", tab_b, user_id="u-1", exclusive=False)  # type: ignore[arg-type]
+
+    assert tab_a.closed is None
+    assert tab_b.closed is None
+    assert mgr.active_connections == 2
+    await mgr.broadcast("room-1", _message())
+    assert len(tab_a.sent) == 1
+    assert len(tab_b.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_closing_one_tab_keeps_participant_online() -> None:
+    mgr = ConnectionManager()
+    presence = _RecordingPresence()
+    mgr.set_presence_service(presence)  # type: ignore[arg-type]
+    tab_a = _RecordingWS()
+    tab_b = _RecordingWS()
+
+    await mgr.subscribe("room-1", "p-1", tab_a, exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", tab_b, exclusive=False)  # type: ignore[arg-type]
+    assert presence.events == [("room-1", "p-1", True)]
+
+    await mgr.unsubscribe("p-1", websocket=tab_a)  # type: ignore[arg-type]
+    assert await mgr.is_connected("p-1")
+    assert mgr.last_seen_at("p-1") is None
+    assert presence.events == [("room-1", "p-1", True)]
+    await mgr.broadcast("room-1", _message())
+    assert tab_a.sent == []
+    assert len(tab_b.sent) == 1
+
+    await mgr.unsubscribe("p-1", websocket=tab_b)  # type: ignore[arg-type]
+    assert not await mgr.is_connected("p-1")
+    assert mgr.last_seen_at("p-1") is not None
+    assert presence.events[-1] == ("room-1", "p-1", False)
+    assert mgr.active_connections == 0
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_unknown_socket_is_noop() -> None:
+    mgr = ConnectionManager()
+    tab_a = _RecordingWS()
+    stranger = _RecordingWS()
+
+    await mgr.subscribe("room-1", "p-1", tab_a, exclusive=False)  # type: ignore[arg-type]
+    await mgr.unsubscribe("p-1", websocket=stranger)  # type: ignore[arg-type]
+
+    assert await mgr.is_connected("p-1")
+
+
+@pytest.mark.asyncio
+async def test_send_to_and_push_to_users_reach_every_tab() -> None:
+    mgr = ConnectionManager()
+    tab_a = _RecordingWS()
+    tab_b = _RecordingWS()
+    await mgr.subscribe("room-1", "p-1", tab_a, user_id="u-1", exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", tab_b, user_id="u-1", exclusive=False)  # type: ignore[arg-type]
+
+    assert await mgr.send_to("p-1", _message()) is True
+    assert len(tab_a.sent) == 1 and len(tab_b.sent) == 1
+
+    await mgr.push_to_users({"u-1"}, _message())
+    assert len(tab_a.sent) == 2 and len(tab_b.sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_send_to_succeeds_if_any_tab_accepts() -> None:
+    mgr = ConnectionManager()
+    dead = _RecordingWS()
+    live = _RecordingWS()
+    await mgr.subscribe("room-1", "p-1", dead, exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", live, exclusive=False)  # type: ignore[arg-type]
+    dead.closed = (1006, "")
+
+    assert await mgr.send_to("p-1", _message()) is True
+    assert len(live.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_revoke_room_closes_every_tab() -> None:
+    mgr = ConnectionManager()
+    tab_a = _RecordingWS()
+    tab_b = _RecordingWS()
+    await mgr.subscribe("room-1", "p-1", tab_a, exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", tab_b, exclusive=False)  # type: ignore[arg-type]
+
+    assert await mgr.revoke_room("room-1") == 1
+    assert tab_a.closed is not None and tab_a.closed[0] == 4003
+    assert tab_b.closed is not None and tab_b.closed[0] == 4003
+    assert not await mgr.is_connected("p-1")
+    assert mgr.active_connections == 0
+
+
+@pytest.mark.asyncio
+async def test_exclusive_subscribe_supersedes_every_non_exclusive_socket() -> None:
+    """An agent-style (exclusive) subscribe evicts all prior sockets of the
+    participant, not just the latest one."""
+    mgr = ConnectionManager()
+    tab_a = _RecordingWS()
+    tab_b = _RecordingWS()
+    agent = _RecordingWS()
+    await mgr.subscribe("room-1", "p-1", tab_a, exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", tab_b, exclusive=False)  # type: ignore[arg-type]
+    await mgr.subscribe("room-1", "p-1", agent)  # type: ignore[arg-type]
+
+    assert tab_a.closed == (4040, "superseded")
+    assert tab_b.closed == (4040, "superseded")
+    assert mgr.active_connections == 1
