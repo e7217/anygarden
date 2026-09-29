@@ -125,15 +125,6 @@ class Room(Base):
         default="mentioned_only",
         server_default=sa_text("'mentioned_only'"),
     )
-    # D-1 (#624) — which wake triggers reach channel-participating agents:
-    # subset of {"message", "mention", "reminder"}. Default keeps the
-    # historical behavior (mention/reminder wake, plain messages ingest).
-    wake_triggers: Mapped[list] = mapped_column(
-        JSON,
-        nullable=False,
-        default=lambda: ["mention", "reminder"],
-        server_default=sa_text('\'["mention", "reminder"]\''),
-    )
     # Issue #159 Phase A — the agent that drives handoffs when
     # ``speaker_strategy='orchestrator'``. Kept separate from
     # ``representative_agent_id`` (cross-room query role) so the two

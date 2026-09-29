@@ -98,7 +98,6 @@ class TestStaleCatchupGuard:
             "content": "<@user:my-pid-123> 확인 부탁합니다",
             "metadata": {
                 "mentions": [{"type": "user", "id": "my-pid-123"}],
-                "wake_trigger": "mention",
             },
         }
         if created_at is not None:
