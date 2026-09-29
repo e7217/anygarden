@@ -166,7 +166,6 @@ def message(request="req", thread=None):
         "root_message_id": thread,
         "metadata": {
             "request_id": request,
-            "wake_trigger": "mention",
             "mentions": [{"type": "legacy", "name": "agent"}],
         },
         "sender_kind": "human",

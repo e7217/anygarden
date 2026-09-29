@@ -160,7 +160,6 @@ async def _write_message(
         capability=Capability.MESSAGE_SEND,
         allow_shared=allow_shared,
     )
-    room_wake_triggers = list(getattr(access.room, "wake_triggers", None) or [])
     metadata = dict(body.metadata) if body.metadata else {}
     if "delegation_target_participant_id" in metadata:
         raise HTTPException(
@@ -204,16 +203,6 @@ async def _write_message(
     )
     if mentions:
         metadata["mentions"] = mentions
-
-    # D-1 (#624) — server-stamped wake classification. "mention" when the
-    # message addresses someone; "message" only when the room opted in to
-    # plain-message wakes; otherwise NO stamp — the frame still delivers to
-    # humans/agents, but agents fall back to the legacy judgment chain
-    # (backward compatibility, architect condition 4).
-    if mentions:
-        metadata["wake_trigger"] = "mention"
-    elif room_wake_triggers and "message" in room_wake_triggers:
-        metadata["wake_trigger"] = "message"
 
     if allow_shared or any(k in metadata for k in ("interaction", "interaction_resolution")):
         from anygarden.interactions import LookupError as _Lookup  # noqa: F401

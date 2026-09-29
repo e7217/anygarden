@@ -728,22 +728,6 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     if mentioned_me:
         return MessagePolicy.RESPOND
 
-    # D-1 (#624) — server-stamped wake classification. The server computed
-    # this stamp from the room's ``wake_triggers`` policy and its own
-    # mention/grant computation (architect GO, task #74 conditions ①③):
-    # "reminder"/"message" stamps are explicit wake instructions, so they
-    # short-circuit the strategy tail (a reminder wake must not be silenced
-    # by round_robin/orchestrator SKIPs). "mention"-stamped frames fall
-    # through to the legacy mention rules (rule 5's not-for-us SKIP keeps
-    # working), and unstamped frames take the legacy chain unchanged
-    # (backward compatibility, condition ④). Reaction events never carry
-    # this stamp — they are structurally excluded from wake paths.
-    wake_trigger = metadata.get("wake_trigger")
-    if wake_trigger in ("reminder", "message") and not metadata.get("ingest_only"):
-        # Defense in depth: the server never stamps ingest_only frames, but
-        # the passive-ingest contract wins if they ever coexist.
-        return MessagePolicy.RESPOND
-
     # 4a. Strategy-forced RESPOND (#233). The server has already
     # singled this agent out as the rightful speaker for this frame
     # — either by pinning us as the room's orchestrator (O1 path)
