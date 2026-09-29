@@ -42,3 +42,42 @@ def test_parse_mixed_id_and_legacy_drops_legacy():
     """
     result = parse_mentions("<@user:abc123> please also check @Alice's report")
     assert result == [{"type": "user", "id": "abc123"}]
+
+
+# ── @everyone (#739) ─────────────────────────────────────────────────
+
+
+def test_parse_everyone_alone():
+    assert parse_mentions("@everyone 오늘 회의 몇 시?") == [{"type": "everyone"}]
+
+
+def test_parse_everyone_is_recognised_alongside_id_tokens():
+    result = parse_mentions("<@user:a1> and @everyone take a look")
+    assert result == [{"type": "user", "id": "a1"}, {"type": "everyone"}]
+
+
+def test_parse_everyone_is_not_a_legacy_mention():
+    result = parse_mentions("@everyone and @Alice")
+    assert result == [{"type": "everyone"}, {"type": "legacy", "name": "Alice"}]
+
+
+def test_parse_everyone_deduplicated():
+    assert parse_mentions("@everyone @everyone hi") == [{"type": "everyone"}]
+
+
+def test_parse_everyone_requires_word_boundaries():
+    assert parse_mentions("@everyone123 hi") == [
+        {"type": "legacy", "name": "everyone123"}
+    ]
+    assert parse_mentions("mail a@everyone.com") == []
+    assert parse_mentions("@everyone-bot hi") == [
+        {"type": "legacy", "name": "everyone-bot"}
+    ]
+
+
+def test_parse_everyone_is_lowercase_only():
+    assert parse_mentions("@Everyone hi") == [{"type": "legacy", "name": "Everyone"}]
+
+
+def test_parse_everyone_at_sentence_end():
+    assert parse_mentions("thanks @everyone.") == [{"type": "everyone"}]

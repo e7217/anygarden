@@ -94,6 +94,21 @@ def _validate_turn_timeout(value: Optional[int]) -> Optional[int]:
 TurnTimeoutSec = Annotated[Optional[int], AfterValidator(_validate_turn_timeout)]
 
 
+# #739 — ``@everyone`` calls every agent in a room, so no agent may be
+# named ``everyone`` (the mention would be ambiguous).
+_RESERVED_AGENT_NAMES = frozenset({"everyone"})
+
+
+def _validate_agent_name(value: str | None) -> str | None:
+    if value is not None and value.strip().casefold() in _RESERVED_AGENT_NAMES:
+        raise ValueError(f"'{value.strip()}' is a reserved name; choose another")
+    return value
+
+
+AgentName = Annotated[str, AfterValidator(_validate_agent_name)]
+OptionalAgentName = Annotated[str | None, AfterValidator(_validate_agent_name)]
+
+
 ProviderName = Annotated[
     str, Field(min_length=1, max_length=64, pattern=PROVIDER_PATTERN)
 ]
@@ -101,7 +116,7 @@ ProviderName = Annotated[
 
 class AgentCreate(BaseModel):
     engine: str
-    name: str
+    name: AgentName
     # Optional initial placement. Omitted keeps automatic scheduling; normal
     # restart/failover policy still applies after this initial placement.
     machine_id: str | None = None
@@ -177,7 +192,7 @@ class AgentUpdate(BaseModel):
     lifecycle events rather than a silent PUT.
     """
 
-    name: Optional[str] = None
+    name: OptionalAgentName = None
     agents_md: Optional[str] = None
     agents_md_set: bool = False
     reasoning_effort: Optional[str] = None

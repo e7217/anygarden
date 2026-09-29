@@ -37,7 +37,18 @@ interface MessageInputProps {
    * layouts share one key per thread, which is what keeps a draft alive
    * across a panel/inline switch. Omitted = no draft retention. */
   draftKey?: string
+  /** #739 — show a quiet reminder under the input while the draft calls
+   * no one. Enabled for ``mentioned_only`` rooms with two or more agents,
+   * where an unmentioned message gets no agent reply. */
+  showMentionHint?: boolean
 }
+
+/** Id of the synthetic ``@everyone`` option; it inserts a literal keyword
+ * rather than a ``<@user:id>`` token. */
+const EVERYONE_OPTION_ID = '__everyone__'
+/** Same boundaries as the server's ``parse_mentions`` (#739). */
+const EVERYONE_PATTERN = /(?<!\w)@everyone(?![\w-])/
+const USER_TOKEN_PATTERN = /<@user:[^>]+>/
 
 interface Attachment {
   id: string
@@ -66,7 +77,7 @@ interface TrackedFileReference {
 export default function MessageInput({
   onSend, onTyping, disabled,
   mentionUsers = [], mentionRooms = [],
-  roomId, placeholder, autoFocus, draftKey,
+  roomId, placeholder, autoFocus, draftKey, showMentionHint = false,
 }: MessageInputProps) {
   const { t } = useLocale()
   const [value, setValue] = useState(() => readDraft(draftKey))
@@ -131,8 +142,25 @@ export default function MessageInput({
     [roomFiles],
   )
 
+  // #739 — ``@everyone`` leads the @ list whenever the room has an agent
+  // to call; it is filtered by the query like any other option.
+  const atOptions = useMemo<MentionOption[]>(
+    () => mentionUsers.some(o => o.kind === 'agent')
+      ? [
+          {
+            id: EVERYONE_OPTION_ID,
+            display: 'everyone',
+            kind: 'everyone',
+            description: t('chat.everyoneDescription'),
+          },
+          ...mentionUsers,
+        ]
+      : mentionUsers,
+    [mentionUsers, t],
+  )
+
   const currentOptions = mention?.type === '@'
-    ? mentionUsers
+    ? atOptions
     : mention?.type === '#'
       ? mentionRooms
       : fileOptions
@@ -175,14 +203,17 @@ export default function MessageInput({
     }
     const prefix = mention.type === '@' ? '@' : '#'
     const displayText = `${prefix}${option.display}`
-    const tokenType = mention.type === '@' ? 'user' : 'room'
-    const token = insertMentionToken(tokenType, option.id)
     // Show readable name in textarea, track mapping for send-time conversion
     const before = value.slice(0, mention.startIndex)
     const after = value.slice(mention.startIndex + 1 + mention.query.length)
     const newValue = before + displayText + ' ' + after
     setValue(newValue)
-    trackedMentions.current.push({ displayText, token })
+    // ``@everyone`` stays literal text; the server expands it (#739).
+    if (option.kind !== 'everyone') {
+      const tokenType = mention.type === '@' ? 'user' : 'room'
+      const token = insertMentionToken(tokenType, option.id)
+      trackedMentions.current.push({ displayText, token })
+    }
     setMention(null)
     setTimeout(() => {
       const el = textareaRef.current
@@ -405,6 +436,20 @@ export default function MessageInput({
     }
   }
 
+  // #739 — the draft calls no one: no user token (picked or typed), no
+  // ``@name`` of a room member, and no ``@everyone``. Slash commands are
+  // not messages, so they never show the hint.
+  const trimmedValue = value.trim()
+  const draftCallsNoOne = showMentionHint
+    && trimmedValue.length > 0
+    && !trimmedValue.startsWith('/')
+    && !EVERYONE_PATTERN.test(value)
+    && !USER_TOKEN_PATTERN.test(value)
+    && !trackedMentions.current.some(
+      m => m.token.startsWith('<@user:') && value.includes(m.displayText),
+    )
+    && !mentionUsers.some(o => value.includes(`@${o.display}`))
+
   return (
     <div className="border-t border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
       <div className="relative mx-auto flex w-full max-w-3xl flex-col gap-2">
@@ -502,6 +547,14 @@ export default function MessageInput({
             <Send className="h-4 w-4" />
           </Button>
         </div>
+        {draftCallsNoOne && (
+          <p
+            data-testid="mention-hint"
+            className="text-xs text-[var(--color-foreground-muted)]"
+          >
+            {t('chat.mentionHint')}
+          </p>
+        )}
       </div>
     </div>
   )

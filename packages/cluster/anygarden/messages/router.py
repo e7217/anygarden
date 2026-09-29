@@ -29,7 +29,7 @@ from anygarden.messages.service import (
     get_thread_messages,
     get_thread_roots,
 )
-from anygarden.orchestration.rules import parse_mentions
+from anygarden.orchestration.rules import expand_room_mentions, parse_mentions
 from anygarden.rooms.authorization import Capability, require_capability
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["messages"])
@@ -96,6 +96,47 @@ async def _read_access(
     )
 
 
+async def _expand_room_mentions(
+    db: AsyncSession,
+    *,
+    room: Any,
+    mentions: list[dict[str, Any]],
+    sender_pid: str | None,
+    sender_is_human: bool,
+    is_thread_reply: bool,
+) -> list[dict[str, Any]]:
+    """#739 — same ``@everyone`` / one-agent expansion as the WS path."""
+    strategy = getattr(room, "speaker_strategy", None) or "mentioned_only"
+    needs_lookup = any(m.get("type") == "everyone" for m in mentions) or (
+        sender_is_human
+        and not is_thread_reply
+        and strategy == "mentioned_only"
+        and not any(m.get("type") in ("user", "legacy") for m in mentions)
+    )
+    if not needs_lookup:
+        return mentions
+    agent_pids = list(
+        (
+            await db.execute(
+                select(Participant.id)
+                .where(
+                    Participant.room_id == room.id,
+                    Participant.agent_id.isnot(None),
+                )
+                .order_by(Participant.joined_at, Participant.id)
+            )
+        ).scalars()
+    )
+    return expand_room_mentions(
+        mentions,
+        agent_pids=agent_pids,
+        sender_pid=sender_pid,
+        sender_is_human=sender_is_human,
+        is_thread_reply=is_thread_reply,
+        speaker_strategy=strategy,
+    )
+
+
 async def _write_message(
     *,
     request: Request,
@@ -153,6 +194,14 @@ async def _write_message(
         mentions = [
             mention for mention in mentions if mention.get("type") in {"user", "legacy"}
         ]
+    mentions = await _expand_room_mentions(
+        db,
+        room=access.room,
+        mentions=mentions,
+        sender_pid=access.participant.id if access.participant else None,
+        sender_is_human=identity.kind in {"user", "guest"},
+        is_thread_reply=thread_root_id is not None,
+    )
     if mentions:
         metadata["mentions"] = mentions
 

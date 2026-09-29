@@ -500,6 +500,11 @@ class ShaTrackedInjector:
         return "\n\n".join(parts)
 
 
+# #739 — literal ``@everyone`` as the server's ``parse_mentions`` reads it
+# (lowercase, not part of a longer name or an e-mail address).
+_EVERYONE_IN_CONTENT = re.compile(r"(?<!\w)@everyone(?![\w-])")
+
+
 def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     """Unified 3-state gate: how should the agent handle this message?
 
@@ -545,9 +550,12 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
         branches already ran in rule 4a; reaching here means we
         sit out (``round_robin`` SKIP, ``orchestrator`` O3 SKIP
         when an orchestrator exists).
-    6. No addressable mentions + human sender → RESPOND. Covers 1:1
-       DMs and "no one in particular" broadcasts on
-       ``mentioned_only`` rooms, which was the pre-#159 default.
+    6. No addressable mentions + human sender → INGEST_ONLY (SKIP when
+       the agent opted out of the context window) (#739). The server
+       expands ``@everyone`` and the implicit call in a one-agent
+       ``mentioned_only`` room into explicit ``user`` mentions
+       (``via: "everyone" | "sole_agent"``), which rule 4 answers, so
+       an unmentioned message here is addressed to nobody.
     7. Agent sender, no mention → SKIP (ignore unaddressed agent
        chatter so agents don't ping-pong forever).
     """
@@ -614,6 +622,11 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
 
     def _is_reflected_in_content(m: dict[str, Any]) -> bool:
         """Reject forged mention metadata on the thread wake boundary."""
+        if m.get("type") == "user" and m.get("via") == "everyone":
+            # #739 — the server expanded ``@everyone`` into this entry, so
+            # the literal keyword (not a ``<@user:ID>`` token) is what the
+            # content carries.
+            return _EVERYONE_IN_CONTENT.search(content) is not None
         if m.get("type") == "user":
             target = m.get("id")
             return isinstance(target, str) and f"<@user:{target}>" in content
@@ -834,12 +847,16 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
             # lets the orchestrator genuinely sequence the room.
             return MessagePolicy.SKIP
 
-    # 6. No addressable mention. Humans talking generally to the
-    # room keep the historical "everyone replies" behaviour; this
-    # preserves the 1:1 DM UX where no explicit mention is needed.
+    # 6. No addressable mention from a human (#739). The message is
+    # addressed to nobody in particular, so keep it as context without
+    # replying — the same treatment as an unmentioned thread reply. The
+    # server already turned ``@everyone`` and a one-agent room into
+    # explicit mentions (rule 3), so a 1:1 room still gets its answer.
     sender_is_agent = bool(metadata.get("_nonce"))
     if not sender_is_agent:
-        return MessagePolicy.RESPOND
+        if getattr(client, "_context_window_opt_out", False):
+            return MessagePolicy.SKIP
+        return MessagePolicy.INGEST_ONLY
 
     # 7. Agent sender, no mention → skip. The ambient-ingestion
     # promotion that Stage B performed here has moved to the

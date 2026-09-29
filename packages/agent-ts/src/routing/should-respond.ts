@@ -13,7 +13,8 @@
 //      ``room_query`` metadata → true (with #61 gate).
 //   4. Server-parsed explicit mention matching this agent → true.
 //   5. Explicit mentions exist but NOT for us → false.
-//   6. No addressable mentions + human sender → true.
+//   6. No addressable mentions + human sender → false (#739). The server
+//      expands ``@everyone`` and a one-agent room into explicit mentions.
 //   7. Agent sender, no mention → false.
 
 import type { MessageOut } from "../protocol/frames.js";
@@ -32,6 +33,8 @@ export interface RoutingContext {
 interface UserMention {
   type: "user";
   id: string;
+  /** Set when the server expanded ``@everyone`` / a one-agent room (#739). */
+  via?: string;
 }
 
 interface LegacyMention {
@@ -55,6 +58,9 @@ function isAddressable(m: Mention): m is UserMention | LegacyMention {
  * Escape a string for use as a literal in a regex. Kept tiny on
  * purpose — matches the Python ``re.escape`` surface we use.
  */
+// #739 — literal ``@everyone`` as the server's ``parse_mentions`` reads it.
+const EVERYONE_IN_CONTENT = /(?<!\w)@everyone(?![\w-])/;
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -96,6 +102,9 @@ export function shouldRespond(msg: MessageOut, ctx: RoutingContext): boolean {
   };
 
   const isReflectedInContent = (m: UserMention | LegacyMention): boolean => {
+    if (m.type === "user" && m.via === "everyone") {
+      return EVERYONE_IN_CONTENT.test(content);
+    }
     if (m.type === "user") {
       return content.includes(`<@user:${m.id}>`);
     }
@@ -147,10 +156,7 @@ export function shouldRespond(msg: MessageOut, ctx: RoutingContext): boolean {
   // 4. Mentions present but not for us → stay out.
   if (addressable.length > 0) return false;
 
-  // 5. No addressable mentions. Humans talking generally → respond.
-  const senderIsAgent = typeof metadata["_nonce"] === "string";
-  if (!senderIsAgent) return true;
-
-  // 6. Agent sender, no mention → skip.
+  // 5. No addressable mentions → nobody was addressed, so stay out
+  //    whether the sender is a human (#739) or an agent.
   return false;
 }

@@ -57,7 +57,9 @@ from anygarden.orchestration.rules import (
     CooldownManager,
     GuestRoomAggregateLimiter,
     TypingTracker,
+    expand_room_mentions,
     is_peer_mention,
+    names_agent_in_content,
     parse_mentions,
     strip_peer_mentions_from_content,
 )
@@ -1361,6 +1363,52 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             )
                             continue
 
+                # #739 — ``@everyone`` and the implicit call in a one-agent
+                # ``mentioned_only`` room become ordinary user mentions here,
+                # before the peer safety net below, so an agent's
+                # ``@everyone`` is still subject to depth/budget and every
+                # later step reuses the explicit-mention path.
+                sender_is_human_for_expand = (
+                    identity is not None and identity.kind in {"user", "guest"}
+                )
+                if any(m.get("type") == "everyone" for m in mentions) or (
+                    sender_is_human_for_expand
+                    and frame_in.thread_root_id is None
+                    and not any(
+                        m.get("type") in ("user", "legacy") for m in mentions
+                    )
+                ):
+                    async with session_factory() as expand_db:
+                        expand_strategy = (
+                            await expand_db.execute(
+                                select(Room.speaker_strategy).where(
+                                    Room.id == room_id
+                                )
+                            )
+                        ).scalar_one_or_none() or "mentioned_only"
+                        expand_agent_pids = list(
+                            (
+                                await expand_db.execute(
+                                    select(Participant.id)
+                                    .where(
+                                        Participant.room_id == room_id,
+                                        Participant.agent_id.isnot(None),
+                                    )
+                                    .order_by(
+                                        Participant.joined_at, Participant.id
+                                    )
+                                )
+                            ).scalars()
+                        )
+                    mentions = expand_room_mentions(
+                        mentions,
+                        agent_pids=expand_agent_pids,
+                        sender_pid=participant.id,
+                        sender_is_human=sender_is_human_for_expand,
+                        is_thread_reply=frame_in.thread_root_id is not None,
+                        speaker_strategy=expand_strategy,
+                    )
+
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
                 # Speaker nomination is always recomputed by this send's
                 # server dispatcher. No client can stamp it into a broadcast.
@@ -2172,27 +2220,70 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 )
                             )).all()
                         )
+                        # #739 — in ``mentioned_only`` rooms a root message
+                        # wakes only the agents it mentions. ``@everyone`` and
+                        # the one-agent room were already expanded into user
+                        # mentions above, so an unaddressed message wakes
+                        # nobody (agents ingest it as context). Round-robin
+                        # and orchestrator rooms keep their dispatcher.
+                        # Task-init prefixes keep their eager room-wide
+                        # behaviour and a ``#room`` query still wakes the
+                        # representative that forwards it, as in the
+                        # agent's ``decide_policy``.
+                        room_query_meta = metadata.get("room_query")
+                        room_query_rep = (
+                            room_query_meta.get("representative_agent_id")
+                            if isinstance(room_query_meta, dict)
+                            else None
+                        )
+                        if (
+                            not is_thread_reply
+                            and speaker_strategy == "mentioned_only"
+                            and not frame_in.content.startswith(
+                                ("[DELEGATED]", "[ROOM_QUERY]")
+                            )
+                        ):
+                            # Legacy ``@Name`` mentions (and names with
+                            # spaces) are matched by name, as the agent's
+                            # ``decide_policy`` does.
+                            named_pids: set[str] = set()
+                            if "@" in frame_in.content:
+                                name_rows = (await db.execute(
+                                    select(Participant.id, Agent.name)
+                                    .join(Agent, Agent.id == Participant.agent_id)
+                                    .where(Participant.room_id == room_id)
+                                )).all()
+                                named_pids = {
+                                    pid
+                                    for pid, name in name_rows
+                                    if names_agent_in_content(
+                                        name, frame_in.content
+                                    )
+                                }
+                            agent_parts = [
+                                (pid, aid)
+                                for pid, aid in agent_parts
+                                if pid in mentioned_participant_ids
+                                or pid in named_pids
+                                or (room_query_rep is not None and aid == room_query_rep)
+                            ]
                         # #719 — remember which agents this user turn wakes so
                         # a peer mention cannot wake them a second time. This
                         # mirrors the agent-side ``decide_policy``: explicit
-                        # mentions wake only their targets; an unaddressed
-                        # message wakes everyone in ``mentioned_only`` rooms.
-                        # Anything less certain records nobody, so legitimate
-                        # peer asks are never suppressed.
+                        # mentions (including the expanded ``@everyone`` and
+                        # one-agent calls) wake only their targets. Anything
+                        # else records nobody, so legitimate peer asks are
+                        # never suppressed.
                         if (
                             identity.kind == "user"
                             and not is_thread_reply
                             and peer_handoff_budget is not None
+                            and mentioned_participant_ids
                         ):
-                            if mentioned_participant_ids:
-                                peer_handoff_budget.mark_woken(room_id, (
-                                    pid for pid, _ in agent_parts
-                                    if pid in mentioned_participant_ids
-                                ))
-                            elif not mentions and speaker_strategy == "mentioned_only":
-                                peer_handoff_budget.mark_woken(
-                                    room_id, (pid for pid, _ in agent_parts)
-                                )
+                            peer_handoff_budget.mark_woken(room_id, (
+                                pid for pid, _ in agent_parts
+                                if pid in mentioned_participant_ids
+                            ))
                         # #516 — of the agents expected to respond, which
                         # can't? Collected here, warned in-room after broadcast.
                         if agent_parts:

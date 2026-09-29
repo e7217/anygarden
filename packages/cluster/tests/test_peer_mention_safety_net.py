@@ -314,8 +314,8 @@ class TestRedundantPeerWake:
         sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
 
         with TestClient(app) as client:
-            # No mention in a mentioned_only room → every agent is woken.
-            _user_send(client, room.id, ws_env["token"], "각자 무엇을 할 수 있나")
+            # @everyone in a mentioned_only room → every agent is woken (#739).
+            _user_send(client, room.id, ws_env["token"], "@everyone 각자 무엇을 할 수 있나")
             msg = _agent_send_and_capture(
                 client, room.id, sender_token,
                 f"저는 코드를 봅니다. <@user:{peer_pid}> 소개해 주세요", "코드를 봅니다",
@@ -367,3 +367,66 @@ class TestRedundantPeerWake:
         meta = msg.get("metadata") or {}
         assert meta.get("peer_redundant") is None
         assert meta.get("peer_depth") == 1
+
+    @pytest.mark.asyncio
+    async def test_unmentioned_message_wakes_nobody_so_peer_ask_survives(
+        self, ws_env
+    ) -> None:
+        """#737/#739 — an unaddressed human message wakes no agent, so a
+        peer mention that follows must reach its target intact."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "각자 무엇을 할 수 있나")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 의견 부탁", "의견 부탁",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert f"<@user:{peer_pid}>" in msg["content"]
+        assert meta.get("peer_redundant") is None
+        assert meta.get("peer_depth") == 1
+        assert app.state.peer_handoff_budget.woken(room.id) == frozenset()
+
+
+class TestAgentEveryone:
+    """#739 — an agent's ``@everyone`` expands into peer mentions and is
+    therefore held to the same depth/budget as any other peer ask."""
+
+    @pytest.mark.asyncio
+    async def test_agent_everyone_is_a_peer_query_excluding_itself(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, "@everyone 확인 부탁", "확인 부탁",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("mentions") == [
+            {"type": "user", "id": peer_pid, "via": "everyone"}
+        ]
+        assert meta.get("peer_depth") == 1
+        assert meta.get("kind") == "peer_query"
+        assert sender_pid not in {m["id"] for m in meta["mentions"]}
+
+    @pytest.mark.asyncio
+    async def test_second_agent_everyone_in_same_turn_is_blocked(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, _peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            _agent_send_and_capture(
+                client, room.id, sender_token, "@everyone 첫 요청", "첫 요청",
+            )
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, "@everyone 두 번째", "두 번째",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_blocked") is True
+        assert "mentions" not in meta

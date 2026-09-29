@@ -81,6 +81,7 @@ JWT는 `Authorization: Bearer` 헤더로 모든 REST 엔드포인트에 통과�
 | 메시지 발신/수신 (자기 룸) | ✅ | ✅ | ✅ |
 | `@agent` 멘션 | ✅ | n/a | ✅ |
 | `#room` 멘션 | ✅ | ✅ | ❌ (silently dropped) |
+| `@everyone` 멘션 (#739) | ✅ | ✅ | ❌ (silently dropped) |
 | 서브룸 생성 | ✅ | ✅ | ❌ |
 | `add_participant` | admin/owner only | ❌ | ❌ |
 | invite 발급/revoke | admin/owner only | ❌ | ❌ |

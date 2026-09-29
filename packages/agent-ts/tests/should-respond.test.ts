@@ -114,14 +114,43 @@ describe("shouldRespond — parity with Python test_should_respond.py", () => {
     expect(shouldRespond(msg, ctx)).toBe(true);
   });
 
-  it("human message without mention still responds (default)", () => {
+  it("human message without mention does not respond (#739)", () => {
     const ctx = makeCtx();
     const msg = makeMsg({
       participant_id: "human-pid",
       content: "안녕하세요",
       metadata: {},
     });
+    expect(shouldRespond(msg, ctx)).toBe(false);
+  });
+
+  it("server-expanded sole_agent mention responds (#739)", () => {
+    const ctx = makeCtx({ myParticipantIds: new Set(["solo-pid"]) });
+    const msg = makeMsg({
+      participant_id: "human-pid",
+      content: "안녕",
+      metadata: { mentions: [{ type: "user", id: "solo-pid", via: "sole_agent" }] },
+    });
     expect(shouldRespond(msg, ctx)).toBe(true);
+  });
+
+  it("@everyone expansion wakes a thread reply only with the literal (#739)", () => {
+    const ctx = makeCtx({ myParticipantIds: new Set(["a-pid"]) });
+    const mentions = [{ type: "user", id: "a-pid", via: "everyone" }];
+    const withLiteral = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      content: "@everyone 의견?",
+      metadata: { mentions },
+    });
+    expect(shouldRespond(withLiteral, ctx)).toBe(true);
+    const forged = makeMsg({
+      participant_id: "human-pid",
+      root_message_id: "root-1",
+      content: "mail a@everyone.com",
+      metadata: { mentions },
+    });
+    expect(shouldRespond(forged, ctx)).toBe(false);
   });
 
   it("unmentioned thread reply never triggers room-wide scheduling", () => {
@@ -206,14 +235,16 @@ describe("shouldRespond — parity with Python test_should_respond.py", () => {
     expect(shouldRespond(msg, ctx)).toBe(true);
   });
 
-  it("room-only mention does not suppress response", () => {
+  it("room-only mention addresses no agent (#739)", () => {
+    // Without ``room_query`` metadata a bare room mention calls no one
+    // here, so it follows the unaddressed-human rule.
     const ctx = makeCtx();
     const msg = makeMsg({
       participant_id: "human-pid",
       content: "<#room:xyz> 의견 좀",
       metadata: { mentions: [{ type: "room", id: "xyz" }] },
     });
-    expect(shouldRespond(msg, ctx)).toBe(true);
+    expect(shouldRespond(msg, ctx)).toBe(false);
   });
 
   it("agent message without mention skips", () => {
@@ -287,14 +318,14 @@ describe("shouldRespond — parity with Python test_should_respond.py", () => {
     expect(shouldRespond(msg, ctx)).toBe(false);
   });
 
-  it("no metadata at all — human → respond", () => {
+  it("no metadata at all — human → no response (#739)", () => {
     const ctx = makeCtx();
     const msg = makeMsg({
       participant_id: "human",
       content: "hello",
       metadata: null,
     });
-    expect(shouldRespond(msg, ctx)).toBe(true);
+    expect(shouldRespond(msg, ctx)).toBe(false);
   });
 
   it("room_query metadata (legacy, no rep id) responds", () => {

@@ -4,7 +4,8 @@ import { useLocale } from '@/i18n/LocaleProvider'
 export interface MentionOption {
   id: string
   display: string
-  kind: 'user' | 'agent' | 'room' | 'file'
+  // #739 — ``everyone`` is the room-wide ``@everyone`` call.
+  kind: 'user' | 'agent' | 'room' | 'file' | 'everyone'
   // Issue #271 — short self-introduction shown as a secondary line
   // in the autocomplete so a user picking among multiple agents can
   // tell *what* each one does. Optional; absent for rooms, users,
@@ -59,6 +60,8 @@ export default function MentionPopover({
             <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-[10px]">
               {option.kind === 'room'
                 ? '#'
+                : option.kind === 'everyone'
+                  ? '@'
                 : option.kind === 'file'
                   ? '$'
                   : option.kind === 'agent'

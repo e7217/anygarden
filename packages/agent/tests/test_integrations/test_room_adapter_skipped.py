@@ -103,7 +103,9 @@ async def test_declined_message_without_a_turn_sends_nothing(wired) -> None:
 @pytest.mark.asyncio
 async def test_respond_does_not_report_skipped(wired) -> None:
     client, _ = wired
-    await client.handler(_msg("각자 무엇을 할 수 있나", **_TURN))
+    await client.handler(_msg(f"<@user:{MY_PID}> 무엇을 할 수 있나", mentions=[
+        {"type": "user", "id": MY_PID},
+    ], **_TURN))
 
     _FakeSupervisor.dispatch.assert_awaited_once()
     client.sendLifecycle.assert_not_awaited()

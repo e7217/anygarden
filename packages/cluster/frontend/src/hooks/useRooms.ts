@@ -51,6 +51,9 @@ export interface Room {
   // system_prompt) not to write to its long-term memory file in
   // this room. Trust-model signal, not a hard FS guard.
   ephemeral?: boolean;
+  // #159 — ``mentioned_only`` (default), ``round_robin`` or
+  // ``orchestrator``. #739 uses it to show the mention hint.
+  speaker_strategy?: string;
   // Caller-specific sidebar update state (#385). True means this
   // user has not marked the room read at the latest message seq.
   has_updates?: boolean;
