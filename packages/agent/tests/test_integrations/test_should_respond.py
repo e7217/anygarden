@@ -146,12 +146,85 @@ class TestShouldRespond:
                "metadata": {"_nonce": "x"}}
         assert should_respond(msg, client) is True
 
-    def test_human_message_without_mention_responds(self):
-        """No addressable mentions from the server + human sender —
-        keep the 1:1 / broadcast-to-room default behaviour."""
+    def test_human_message_without_mention_is_ingest_only(self):
+        """#739 — no addressable mention + human sender → the agent keeps
+        the message as context but does not reply. The server expands
+        ``@everyone`` and one-agent rooms into explicit mentions, so an
+        unmentioned message here really is addressed to nobody."""
         client = _make_client()
         msg = {"participant_id": "human-pid", "content": "안녕하세요", "metadata": {}}
-        assert should_respond(msg, client) is True
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+        assert should_respond(msg, client) is False
+
+    def test_human_message_without_mention_skips_when_context_opted_out(self):
+        client = _make_client(context_window_opt_out=True)
+        msg = {"participant_id": "human-pid", "content": "안녕하세요", "metadata": {}}
+        assert decide_policy(msg, client) is MessagePolicy.SKIP
+
+    def test_sole_agent_expansion_responds(self):
+        """#739 — the server calls the only agent of a 1:1 room with a
+        ``via: sole_agent`` user mention that is not in the content."""
+        client = _make_client(my_pids={"solo-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "안녕",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "solo-pid", "via": "sole_agent"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_everyone_expansion_responds(self):
+        client = _make_client(my_pids={"a-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "content": "@everyone 소개",
+            "metadata": {
+                "mentions": [
+                    {"type": "user", "id": "a-pid", "via": "everyone"},
+                    {"type": "user", "id": "b-pid", "via": "everyone"},
+                ],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_everyone_expansion_wakes_thread_reply(self):
+        """Thread replies only wake on mentions reflected in the content;
+        an ``@everyone`` entry is reflected by the literal ``@everyone``."""
+        client = _make_client(my_pids={"a-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "root_message_id": "root-1",
+            "content": "@everyone 의견?",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "a-pid", "via": "everyone"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+
+    def test_forged_everyone_entry_without_literal_does_not_wake_thread(self):
+        client = _make_client(my_pids={"a-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "root_message_id": "root-1",
+            "content": "그냥 답글",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "a-pid", "via": "everyone"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
+
+    def test_everyone_literal_must_be_a_whole_word_in_thread(self):
+        client = _make_client(my_pids={"a-pid"})
+        msg = {
+            "participant_id": "human-pid",
+            "root_message_id": "root-1",
+            "content": "mail a@everyone.com",
+            "metadata": {
+                "mentions": [{"type": "user", "id": "a-pid", "via": "everyone"}],
+            },
+        }
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_human_message_addressed_to_other_agent_skips(self):
         """Regression guard for the multi-agent fan-out bug: if the
@@ -185,14 +258,15 @@ class TestShouldRespond:
     def test_room_only_mention_does_not_suppress(self):
         """``<#room:xyz>`` alone is a cross-room routing hint, not a
         user-addressed mention. It must not force this agent to skip
-        — otherwise every ``#room`` query would silence the room."""
+        (rule 5) — the message is still absorbed as context like any
+        other unaddressed human message (#739)."""
         client = _make_client()
         msg = {
             "participant_id": "human-pid",
             "content": "<#room:xyz> 의견 좀",
             "metadata": {"mentions": [{"type": "room", "id": "xyz"}]},
         }
-        assert should_respond(msg, client) is True
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_agent_message_not_mentioned_skip(self):
         client = _make_client()
@@ -271,10 +345,10 @@ class TestShouldRespond:
         assert should_respond(msg, client) is False
 
     def test_no_metadata(self):
-        """Human message with no metadata at all."""
+        """Human message with no metadata at all → context only (#739)."""
         client = _make_client()
         msg = {"participant_id": "human", "content": "hello"}
-        assert should_respond(msg, client) is True
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_room_query_metadata_responds(self):
         """Legacy room_query metadata (no representative_agent_id) triggers
@@ -590,10 +664,10 @@ class TestCycleDetectionInDecidePolicy:
         }
         # 'ok' from another agent without mention → rule 7 SKIP normally
         # but not because of the cycle guard. Verify by using a human
-        # sender (no nonce) so rule 6 would otherwise RESPOND.
+        # sender (no nonce): the cycle guard would SKIP, rule 6 ingests.
         msg_human = dict(msg)
         msg_human["metadata"] = {}  # no nonce → sender_is_agent=False
-        assert decide_policy(msg_human, client) is MessagePolicy.RESPOND
+        assert decide_policy(msg_human, client) is MessagePolicy.INGEST_ONLY
 
     def test_no_room_id_disables_cycle_rule(self):
         """Legacy tests don't put room_id on msg — cycle rule is inert."""
@@ -874,8 +948,9 @@ class TestOrchestratorStrategy:
     def test_orchestrator_unset_falls_back_to_mentioned_only(self):
         """Strategy is 'orchestrator' but ``orchestrator_agent_id`` is
         unset (admin flipped the knob but never picked an agent).
-        Graceful fallback: unaddressed human still wakes every agent,
-        so the room stays usable even when misconfigured."""
+        Graceful fallback to ``mentioned_only`` semantics: the dispatcher
+        tail does not SKIP, so an unaddressed human message is absorbed
+        as context (#739) and mentions keep working."""
         client = _make_client(
             my_pids={"my-pid-123"},
             agent_id="agent-alpha",
@@ -888,7 +963,7 @@ class TestOrchestratorStrategy:
             "content": "hello",
             "metadata": {},
         }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_direct_mention_still_wins(self):
         """Direct mention is evaluated BEFORE the strategy dispatcher,
@@ -1154,15 +1229,14 @@ class TestWakeTriggerStampD1:
 
     def test_unstamped_frame_takes_legacy_chain(self):
         # Unaddressed root message without a stamp on a mentioned_only
-        # room: human sender → RESPOND via legacy rule 6 — identical to
-        # the pre-D-1 judgment (condition ④).
+        # room: human sender → INGEST_ONLY via rule 6 (#739).
         client = _make_client()
         msg = {
             "participant_id": "other-pid",
             "content": "plain legacy message",
             "metadata": {},
         }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
+        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
     def test_ingest_only_beats_message_stamp(self):
         # The server never stamps ingest_only frames; if a stamp and the

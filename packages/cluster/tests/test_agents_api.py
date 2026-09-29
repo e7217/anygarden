@@ -986,6 +986,33 @@ class TestAgentManifestAPI:
         assert data["agents_md"] == "# v2"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("name", ["everyone", "Everyone", " EVERYONE "])
+    async def test_reserved_name_everyone_rejected(self, agents_env, name) -> None:
+        """#739 — ``@everyone`` calls every agent, so it cannot be a name."""
+        client = agents_env["client"]
+        headers = {"Authorization": f"Bearer {agents_env['token']}"}
+
+        resp = await client.post(
+            "/api/v1/agents", json={"engine": "echo", "name": name}, headers=headers
+        )
+        assert resp.status_code == 422
+
+        resp = await client.post(
+            "/api/v1/agents", json={"engine": "echo", "name": "ok-name"}, headers=headers
+        )
+        agent_id = resp.json()["id"]
+        resp = await client.put(
+            f"/api/v1/agents/{agent_id}", json={"name": name}, headers=headers
+        )
+        assert resp.status_code == 422
+
+        resp = await client.post(
+            "/api/v1/agents", json={"engine": "echo", "name": "everyone-bot"},
+            headers=headers,
+        )
+        assert resp.status_code in (200, 201)
+
+    @pytest.mark.asyncio
     async def test_update_agent_clears_agents_md_with_explicit_flag(
         self, agents_env
     ) -> None:

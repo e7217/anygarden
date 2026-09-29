@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -104,20 +104,30 @@ class GuestRoomAggregateLimiter:
 _ID_MENTION_PATTERN = re.compile(r"<@user:([^>]+)>|<#room:([^>]+)>")
 # Legacy @Name mentions (backward compat)
 _LEGACY_MENTION_PATTERN = re.compile(r"(?<!\w)@([\w-]+)")
+# ``@everyone`` (#739) — lowercase only, and bounded the same way as a
+# legacy name so ``@everyone123``, ``@everyone-bot`` and
+# ``a@everyone.com`` are not calls to the whole room.
+EVERYONE_KEYWORD = "everyone"
+_EVERYONE_PATTERN = re.compile(r"(?<!\w)@everyone(?![\w-])")
 
 
 def parse_mentions(content: str) -> list[dict[str, str]]:
     """Extract mentions from a message.
 
-    Supports two formats:
+    Supports three formats:
     - ID-based: ``<@user:abc123>`` → ``{"type": "user", "id": "abc123"}``
     - ID-based: ``<#room:xyz789>`` → ``{"type": "room", "id": "xyz789"}``
     - Legacy:   ``@Name``          → ``{"type": "legacy", "name": "Name"}``
+    - Room-wide: ``@everyone``     → ``{"type": "everyone"}`` (#739). It is
+      recognised even next to ID tokens, reported once, and never as a
+      legacy name. :func:`expand_room_mentions` turns it into user mentions.
 
     >>> parse_mentions("<@user:abc> and <#room:xyz>")
     [{'type': 'user', 'id': 'abc'}, {'type': 'room', 'id': 'xyz'}]
     >>> parse_mentions("Hey @Alice")
     [{'type': 'legacy', 'name': 'Alice'}]
+    >>> parse_mentions("@everyone standup")
+    [{'type': 'everyone'}]
     """
     mentions: list[dict[str, str]] = []
     for m in _ID_MENTION_PATTERN.finditer(content):
@@ -125,11 +135,86 @@ def parse_mentions(content: str) -> list[dict[str, str]]:
             mentions.append({"type": "user", "id": m.group(1)})
         elif m.group(2):
             mentions.append({"type": "room", "id": m.group(2)})
+    has_id_mentions = bool(mentions)
+    if _EVERYONE_PATTERN.search(content):
+        mentions.append({"type": "everyone"})
     # Only fall back to legacy parsing when no ID-based mentions found
-    if not mentions:
+    if not has_id_mentions:
         for m in _LEGACY_MENTION_PATTERN.finditer(content):
+            if m.group(1) == EVERYONE_KEYWORD:
+                continue
             mentions.append({"type": "legacy", "name": m.group(1)})
     return mentions
+
+
+def expand_room_mentions(
+    mentions: list[dict[str, Any]],
+    *,
+    agent_pids: Sequence[str],
+    sender_pid: str | None,
+    sender_is_human: bool,
+    is_thread_reply: bool,
+    speaker_strategy: str,
+) -> list[dict[str, Any]]:
+    """Rewrite room-level calls into ordinary user mentions (#739).
+
+    The server is the single place that decides who a message calls, so
+    agent ``decide_policy`` (rules 3/5), turn creation, the #719 woken set
+    and the peer safety net all keep reading plain ``user`` mentions.
+    Added entries carry ``via`` so they can be told apart from mentions
+    typed in the content.
+
+    1. ``{"type": "everyone"}`` is replaced by every agent participant
+       except the sender (``via: "everyone"``), skipping pids that are
+       already mentioned. Applies in every speaker strategy and in threads.
+    2. Otherwise, a human root message in a ``mentioned_only`` room with
+       no ``user``/``legacy`` mention, in a room with exactly one agent,
+       calls that agent (``via: "sole_agent"``) — a 1:1 room needs no
+       mention.
+    3. Anything else is returned unchanged.
+
+    Pure: callers look up ``agent_pids`` (agent participant ids of the
+    room). The input list is never mutated.
+    """
+    has_everyone = any(m.get("type") == "everyone" for m in mentions)
+    if has_everyone:
+        result = [m for m in mentions if m.get("type") != "everyone"]
+        seen = {
+            str(m.get("id")) for m in result if m.get("type") == "user"
+        }
+        for pid in agent_pids:
+            if pid == sender_pid or pid in seen:
+                continue
+            seen.add(pid)
+            result.append({"type": "user", "id": pid, "via": "everyone"})
+        return result
+
+    if (
+        sender_is_human
+        and not is_thread_reply
+        and speaker_strategy == "mentioned_only"
+        and len(agent_pids) == 1
+        and not any(m.get("type") in ("user", "legacy") for m in mentions)
+    ):
+        return [
+            *mentions,
+            {"type": "user", "id": agent_pids[0], "via": "sole_agent"},
+        ]
+    return list(mentions)
+
+
+def names_agent_in_content(agent_name: str | None, content: str) -> bool:
+    """True when *content* addresses the agent by ``@name`` (#739).
+
+    Mirrors the agent-side fallback in ``decide_policy``: legacy ``@Name``
+    mentions and names the legacy pattern cannot capture (e.g. names with
+    spaces) wake the agent. ``(?![\\w:])`` keeps an agent named ``user``
+    from matching ``<@user:ID>`` tokens. Case-insensitive, like the agent.
+    """
+    if not agent_name:
+        return False
+    pattern = rf"@{re.escape(agent_name)}(?![\w:])"
+    return re.search(pattern, content, re.IGNORECASE) is not None
 
 
 # ── Peer-mention safety net (#279) ───────────────────────────────────

@@ -292,6 +292,52 @@ class TestGuestWSSendFrame:
                     for m in mentions
                 )
 
+    def test_guest_cannot_use_everyone(self, guest_env) -> None:
+        """#739 — ``@everyone`` is not on the guest mention allowlist, so a
+        guest cannot fan out to every agent in a multi-agent room."""
+        app = guest_env["app"]
+        room_id = guest_env["room"].id
+
+        async def add_second_agent() -> None:
+            async with guest_env["session_factory"]() as db:
+                agent = Agent(name="Second", engine="anthropic", actual_state="running")
+                db.add(agent)
+                await db.flush()
+                db.add(Participant(room_id=room_id, agent_id=agent.id, role="member"))
+                await db.commit()
+
+        import anyio
+
+        anyio.run(add_second_agent)
+
+        with TestClient(app) as client, client.websocket_connect(
+            f"/ws/rooms/{room_id}",
+            subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
+        ) as ws:
+            ws.receive_text()  # welcome
+            ws.send_text(json.dumps({"type": "send", "content": "@everyone hi"}))
+            out = json.loads(ws.receive_text())
+            assert out["type"] == "message"
+            assert "mentions" not in (out.get("metadata") or {})
+
+    def test_guest_in_one_agent_room_calls_that_agent(self, guest_env) -> None:
+        """#739 — a one-agent room needs no mention, for guests too."""
+        app = guest_env["app"]
+        room_id = guest_env["room"].id
+        agent_pid = guest_env["agent_part"].id
+
+        with TestClient(app) as client, client.websocket_connect(
+            f"/ws/rooms/{room_id}",
+            subprotocols=["anygarden.v1", f"bearer.{guest_env['guest_jwt']}"],
+        ) as ws:
+            ws.receive_text()  # welcome
+            ws.send_text(json.dumps({"type": "send", "content": "hello"}))
+            out = json.loads(ws.receive_text())
+            assert out["type"] == "message"
+            assert out["metadata"]["mentions"] == [
+                {"type": "user", "id": agent_pid, "via": "sole_agent"}
+            ]
+
     def test_guest_cooldown_stricter(self, guest_env) -> None:
         """Burst past the guest bucket (capacity=3) trips the
         cooldown error — and does so *before* a registered-user
