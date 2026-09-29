@@ -238,6 +238,34 @@ class TestWSEndpoint:
                 assert data["seq"] == 1
 
     @pytest.mark.asyncio
+    async def test_ws_unexpected_error_closes_socket(self, ws_env) -> None:
+        """#726 — an unexpected error in the frame loop must close the
+        socket (1011) instead of returning silently. Returning without a
+        close frame leaves a TestClient ``receive_text()`` waiting forever,
+        which is how intermittent DB errors turned into 6h CI hangs."""
+        from starlette.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("simulated handler failure")
+
+        with TestClient(app) as client:
+            app.state.typing_tracker.set_typing = _boom
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as ws:
+                assert json.loads(ws.receive_text())["type"] == "welcome"
+                ws.send_text(json.dumps({"type": "typing", "is_typing": True}))
+                with pytest.raises(WebSocketDisconnect) as closed:
+                    ws.receive_text()
+                assert closed.value.code == 1011
+
+    @pytest.mark.asyncio
     async def test_ws_send_and_receive_message(self, ws_env) -> None:
         from starlette.testclient import TestClient
 

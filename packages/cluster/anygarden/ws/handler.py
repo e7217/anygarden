@@ -2520,6 +2520,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         logger.info("ws.disconnected", room_id=room_id, participant_id=participant.id)
     except Exception as exc:
         logger.error("ws.error", room_id=room_id, error=str(exc))
+        # #726 — tell the peer the session ended. Returning without a
+        # close frame leaves the client (and TestClient's receive) waiting
+        # on a socket nobody serves anymore.
+        try:
+            await websocket.close(code=1011, reason="internal error")
+        except Exception:  # noqa: BLE001 — socket may already be gone
+            pass
     finally:
         await manager.unsubscribe(participant.id, websocket=websocket)
         if guest_gauge_incremented:
