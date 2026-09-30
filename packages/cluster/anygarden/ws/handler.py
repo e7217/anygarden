@@ -62,6 +62,7 @@ from anygarden.orchestration.rules import (
     names_agent_in_content,
     parse_mentions,
     strip_peer_mentions_from_content,
+    undelivered_peer_calls,
 )
 from anygarden.ws.protocol import (
     ErrorOut,
@@ -1558,6 +1559,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             m for m in peer_mentions if m not in redundant
                         ]
                         metadata["peer_redundant"] = True
+                        # #743 — the sentence stays; the UI marks the call
+                        # as not delivered instead.
+                        metadata.setdefault("peer_call_undelivered", []).extend(
+                            undelivered_peer_calls(redundant, "already_answering")
+                        )
                         logger.warning(
                             "ws.peer_mention_redundant",
                             room_id=room_id,
@@ -1596,6 +1602,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 else used
                             )
                             metadata["peer_blocked"] = True
+                            metadata.setdefault(
+                                "peer_call_undelivered", []
+                            ).extend(
+                                undelivered_peer_calls(
+                                    peer_mentions, "limit_reached"
+                                )
+                            )
                             logger.warning(
                                 "ws.peer_mention_blocked",
                                 room_id=room_id,

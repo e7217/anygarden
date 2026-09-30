@@ -218,6 +218,10 @@ export const chatEn = {
   'chat.goalAgentRequired': 'Select an agent.',
   'chat.saving': 'Saving…',
   'chat.addResponsibility': 'Add responsibility',
+  'chat.undeliveredCallAlreadyAnswering': 'Call not delivered · {{names}} (already answering)',
+  'chat.undeliveredCallLimitReached': 'Call not delivered · {{names}} (call limit reached)',
+  'chat.undeliveredCallTitle': 'The server did not send this call. The sentence is kept as the agent wrote it.',
+  'chat.unknownParticipant': 'Unknown participant',
 } as const
 
 export const chatKo: Record<keyof typeof chatEn, string> = {
@@ -440,4 +444,8 @@ export const chatKo: Record<keyof typeof chatEn, string> = {
   'chat.goalAgentRequired': '에이전트를 선택해 주세요.',
   'chat.saving': '저장 중…',
   'chat.addResponsibility': '책임 추가',
+  'chat.undeliveredCallAlreadyAnswering': '호출 전달 안 됨 · {{names}} (이미 답하는 중)',
+  'chat.undeliveredCallLimitReached': '호출 전달 안 됨 · {{names}} (호출 한도 초과)',
+  'chat.undeliveredCallTitle': '서버가 이 호출을 보내지 않았습니다. 문장은 에이전트가 쓴 그대로 둡니다.',
+  'chat.unknownParticipant': '알 수 없는 참가자',
 }

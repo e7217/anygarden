@@ -1,5 +1,5 @@
 import { useState, useCallback, memo, useMemo } from 'react'
-import { Bookmark, BookmarkCheck, CornerDownRight, Paperclip } from 'lucide-react'
+import { BellOff, Bookmark, BookmarkCheck, CornerDownRight, Paperclip } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
@@ -25,6 +25,7 @@ import {
   extractSharedFileReferencesFromMetadata,
 } from '@/lib/fileReferences'
 import type { RoomSharedFile } from '@/lib/roomFiles'
+import { extractUndeliveredCalls } from '@/lib/undeliveredCalls'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -74,6 +75,42 @@ function MessageReferences({
   )
 }
 
+// #743 — peer calls the server did not deliver. The sentence that made
+// the call stays in the bubble; this chip says who was not called.
+function UndeliveredCalls({
+  metadata,
+  resolveUser,
+}: {
+  metadata?: Record<string, unknown>
+  resolveUser: (id: string) => string | undefined
+}) {
+  const { t } = useLocale()
+  const groups = extractUndeliveredCalls(metadata)
+  if (groups.length === 0) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {groups.map(g => {
+        const names = g.participantIds
+          .map(id => resolveUser(id) ?? t('chat.unknownParticipant'))
+          .join(', ')
+        const label = g.reason === 'already_answering'
+          ? t('chat.undeliveredCallAlreadyAnswering', { names })
+          : t('chat.undeliveredCallLimitReached', { names })
+        return (
+          <span
+            key={g.reason}
+            data-testid="undelivered-call"
+            title={t('chat.undeliveredCallTitle')}
+            className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-2 py-0.5 text-xs text-[var(--color-foreground-muted)]"
+          >
+            <BellOff className="h-3 w-3 shrink-0 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
+            <span className="min-w-0 break-words">{label}</span>
+          </span>
+        )
+      })}
+    </div>
+  )
+}
 
 export default memo(function MessageBubble({
   message,
@@ -437,6 +474,7 @@ export default memo(function MessageBubble({
           fileReferenceCandidates={fileReferenceCandidates}
         />
         <MessageReferences metadata={message.metadata} />
+        <UndeliveredCalls metadata={message.metadata} resolveUser={resolveUser} />
       </div>
       <div className="mt-1 pl-1 flex items-center gap-2">
         {pendingBadge}

@@ -116,6 +116,69 @@ def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
     return "<referenced-files>\n" + "\n".join(lines) + "\n</referenced-files>"
 
 
+def compose_concurrent_call_hint(
+    metadata: dict[str, Any] | None,
+    *,
+    my_pids: set[str],
+    roster: dict[str, Any] | None,
+) -> str:
+    """Tell an agent that the message woke other agents too (#743).
+
+    ``@everyone`` (or a human mentioning several agents) wakes every
+    target at once, so each answers without seeing the others' replies.
+    Left unsaid, a model with a coordinator-like role introduces itself
+    and then asks peers who already answered to do the same. Returns
+    ``""`` unless this agent and at least one other agent are called.
+
+    An entry counts as an agent when the roster says so or when the
+    server added it for ``@everyone`` (it only expands to agents).
+    """
+    if not metadata:
+        return ""
+    mentions = metadata.get("mentions")
+    if not isinstance(mentions, list):
+        return ""
+
+    called: list[str] = []
+    for m in mentions:
+        if not isinstance(m, dict) or m.get("type") != "user":
+            continue
+        pid = m.get("id")
+        if not isinstance(pid, str) or not pid or pid in called:
+            continue
+        brief = roster.get(pid) if roster else None
+        is_agent = (
+            isinstance(brief, dict) and brief.get("kind") == "agent"
+        ) or m.get("via") == "everyone"
+        if is_agent:
+            called.append(pid)
+
+    if len(called) < 2 or not any(pid in my_pids for pid in called):
+        return ""
+
+    names: list[str] = []
+    for pid in called:
+        if pid in my_pids:
+            continue
+        brief = roster.get(pid) if roster else None
+        name = brief.get("display_name") if isinstance(brief, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            names = []
+            break
+        names.append(_xml_escape_text(_clean_reference_field(name)))
+
+    who = f": you, {', '.join(names)}" if names else ""
+    return (
+        "<concurrent-call>\n"
+        f"This message called {len(called)} agents at once{who}.\n"
+        "Each of them is answering it separately right now, and you will "
+        "not see their replies before you finish.\n"
+        "Answer for yourself only. Do not ask the others to answer or "
+        "hand the turn to them.\n"
+        "</concurrent-call>"
+    )
+
+
 class MessagePolicy(Enum):
     """Decision for how an incoming message should be handled.
 
@@ -234,6 +297,17 @@ class EngineAdapter(ABC):
         referenced_files = compose_referenced_files_hint(metadata)
         if referenced_files:
             parts.append(referenced_files)
+
+        # #743 — a message that woke several agents at once.
+        client = getattr(self, "_client", None)
+        if client is not None:
+            concurrent_call = compose_concurrent_call_hint(
+                metadata,
+                my_pids=set(getattr(client, "_my_participant_ids", ()) or ()),
+                roster=self._room_roster(room_id),
+            )
+            if concurrent_call:
+                parts.append(concurrent_call)
 
         # #538 — label the addressed message with its sender so the
         # engine never mistakes a peer/human turn for its own voice.

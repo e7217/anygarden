@@ -577,3 +577,34 @@ describe('MessageBubble — handoff_to trailer stripping', () => {
     expect(screen.queryByText(/handoff_to:/)).toBeNull()
   })
 })
+
+describe('MessageBubble — undelivered peer calls (#743)', () => {
+  it('names the peers a call did not reach, grouped by reason', () => {
+    const msg = baseMsg({
+      content: '저는 Rep입니다.  두 분도 소개해 주세요.',
+      metadata: {
+        peer_call_undelivered: [
+          { participant_id: 'agent-1', reason: 'already_answering' },
+          { participant_id: 'agent-gone', reason: 'limit_reached' },
+        ],
+      },
+    })
+    render(
+      <MessageBubble message={msg} participants={participants} isMine={false} />,
+    )
+
+    const chips = screen.getAllByTestId('undelivered-call')
+    expect(chips).toHaveLength(2)
+    expect(chips[0]).toHaveTextContent('Call not delivered · Helper (already answering)')
+    expect(chips[1]).toHaveTextContent('Call not delivered · Unknown participant (call limit reached)')
+    // The agent's own sentence is kept as written.
+    expect(screen.getByText(/두 분도 소개해 주세요/)).toBeInTheDocument()
+  })
+
+  it('renders nothing extra without the field', () => {
+    render(
+      <MessageBubble message={baseMsg()} participants={participants} isMine={false} />,
+    )
+    expect(screen.queryByTestId('undelivered-call')).toBeNull()
+  })
+})

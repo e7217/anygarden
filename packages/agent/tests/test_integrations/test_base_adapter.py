@@ -26,6 +26,7 @@ from anygarden_agent.coordination.pending_context import append_context_line
 from anygarden_agent.integrations.base import (
     EngineAdapter,
     ShaTrackedInjector,
+    compose_concurrent_call_hint,
     compose_referenced_files_hint,
     compose_session_context_suffix,
 )
@@ -242,6 +243,149 @@ class TestComposeReferencedFilesHint:
             "- spec.md: memory/shared/spec.md\n"
             "</referenced-files>"
         )
+
+
+_ROSTER = {
+    "me": {"id": "me", "display_name": "PM", "kind": "agent"},
+    "a1": {"id": "a1", "display_name": "local-agent", "kind": "agent"},
+    "a2": {"id": "a2", "display_name": "agent01", "kind": "agent"},
+    "h1": {"id": "h1", "display_name": "admin", "kind": "user"},
+}
+
+
+def _everyone(*pids: str) -> list[dict[str, Any]]:
+    return [{"type": "user", "id": pid, "via": "everyone"} for pid in pids]
+
+
+class TestComposeConcurrentCallHint:
+    """#743 — an agent woken together with other agents answers without
+    seeing their replies, so the turn input says so."""
+
+    def test_everyone_names_the_other_agents(self) -> None:
+        out = compose_concurrent_call_hint(
+            {"mentions": _everyone("me", "a1", "a2")},
+            my_pids={"me"},
+            roster=_ROSTER,
+        )
+
+        assert out == (
+            "<concurrent-call>\n"
+            "This message called 3 agents at once: you, local-agent, agent01.\n"
+            "Each of them is answering it separately right now, and you will "
+            "not see their replies before you finish.\n"
+            "Answer for yourself only. Do not ask the others to answer or "
+            "hand the turn to them.\n"
+            "</concurrent-call>"
+        )
+
+    def test_explicit_mentions_of_two_agents_count(self) -> None:
+        out = compose_concurrent_call_hint(
+            {"mentions": [{"type": "user", "id": "me"}, {"type": "user", "id": "a2"}]},
+            my_pids={"me"},
+            roster=_ROSTER,
+        )
+
+        assert "called 2 agents at once: you, agent01." in out
+
+    def test_human_mentions_are_not_counted(self) -> None:
+        out = compose_concurrent_call_hint(
+            {"mentions": [{"type": "user", "id": "me"}, {"type": "user", "id": "h1"}]},
+            my_pids={"me"},
+            roster=_ROSTER,
+        )
+
+        assert out == ""
+
+    def test_single_call_is_empty(self) -> None:
+        assert compose_concurrent_call_hint(
+            {"mentions": [{"type": "user", "id": "me", "via": "sole_agent"}]},
+            my_pids={"me"},
+            roster=_ROSTER,
+        ) == ""
+
+    def test_empty_when_not_called(self) -> None:
+        assert compose_concurrent_call_hint(
+            {"mentions": _everyone("a1", "a2")},
+            my_pids={"me"},
+            roster=_ROSTER,
+        ) == ""
+
+    def test_unknown_names_fall_back_to_the_count(self) -> None:
+        out = compose_concurrent_call_hint(
+            {"mentions": _everyone("me", "x1", "x2")},
+            my_pids={"me"},
+            roster=None,
+        )
+
+        assert "This message called 3 agents at once.\n" in out
+
+    def test_duplicate_entries_are_counted_once(self) -> None:
+        out = compose_concurrent_call_hint(
+            {"mentions": [*_everyone("me", "a1"), {"type": "user", "id": "a1"}]},
+            my_pids={"me"},
+            roster=_ROSTER,
+        )
+
+        assert "called 2 agents at once: you, local-agent." in out
+
+    def test_malformed_metadata_is_empty(self) -> None:
+        assert compose_concurrent_call_hint(None, my_pids={"me"}, roster=_ROSTER) == ""
+        assert compose_concurrent_call_hint({}, my_pids={"me"}, roster=_ROSTER) == ""
+        assert compose_concurrent_call_hint(
+            {"mentions": "x"}, my_pids={"me"}, roster=_ROSTER
+        ) == ""
+        assert compose_concurrent_call_hint(
+            {"mentions": ["x", {"type": "user"}]}, my_pids={"me"}, roster=_ROSTER
+        ) == ""
+
+
+class TestAssembleUserContentConcurrentCall:
+    def _adapter(self) -> _BareAdapter:
+        adapter = _BareAdapter()
+        client = MagicMock()
+        client._my_participant_ids = {"me"}
+        client._participants_by_room = {"r1": _ROSTER}
+        adapter._client = client
+        return adapter
+
+    def test_hint_sits_between_references_and_the_message(self) -> None:
+        out = self._adapter().assemble_user_content(
+            "r1",
+            "@everyone introduce yourselves",
+            {
+                "mentions": _everyone("me", "a1", "a2"),
+                "references": [
+                    {
+                        "type": "shared_file",
+                        "name": "spec.md",
+                        "storage_name": "spec.md",
+                    }
+                ],
+            },
+            sender_participant_id="h1",
+        )
+
+        assert out.index("</referenced-files>") < out.index("<concurrent-call>")
+        assert out.endswith(
+            "</concurrent-call>\n\nadmin(user): @everyone introduce yourselves"
+        )
+
+    def test_no_hint_keeps_output_unchanged(self) -> None:
+        out = self._adapter().assemble_user_content(
+            "r1",
+            "hello",
+            {"mentions": [{"type": "user", "id": "me"}]},
+            sender_participant_id="h1",
+        )
+
+        assert out == "admin(user): hello"
+
+    def test_adapter_without_client_skips_the_hint(self) -> None:
+        out = _BareAdapter().assemble_user_content(
+            "r1", "hello", {"mentions": _everyone("me", "a1")}
+        )
+
+        assert out == "hello"
 
 
 def _stub_client(
