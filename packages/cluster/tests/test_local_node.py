@@ -28,8 +28,8 @@ from anygarden.node.ownership import (
 )
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
-from anygarden_machine.detector import DetectionResult, EngineInfo
-from anygarden_machine.spawner import RunningAgent, SpawnResult
+from anygarden.machine.detector import DetectionResult, EngineInfo
+from anygarden.machine.spawner import RunningAgent, SpawnResult
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +42,7 @@ def offline(monkeypatch):
         monkeypatch.setenv("ANYGARDEN_" + key, "0")
     monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
     monkeypatch.setattr(
-        "anygarden_machine.daemon.detect_engines",
+        "anygarden.machine.daemon.detect_engines",
         AsyncMock(
             return_value=DetectionResult(
                 engines=[EngineInfo(engine="echo", version="test", path="fake")]
@@ -244,7 +244,7 @@ async def test_local_delivery_uses_real_lifecycle_fences_without_daemon_socket(
     monkeypatch.setattr(spawner, "spawn", fake_spawn)
     monkeypatch.setattr(spawner, "kill", fake_kill)
     monkeypatch.setattr(
-        "anygarden_machine.daemon.connect",
+        "anygarden.machine.daemon.connect",
         lambda *a, **kw: pytest.fail("daemon network connect"),
     )
     async with factory() as db:
@@ -336,8 +336,8 @@ async def test_cleanup_failure_keeps_recovery_required(tmp_path, monkeypatch):
 async def test_shutdown_waits_for_inflight_spawn_and_kills_its_process(
     tmp_path, monkeypatch
 ):
-    from anygarden_machine.daemon import MachineDaemon
-    from anygarden_machine.proc_kill import subprocess_group_kwargs
+    from anygarden.machine.daemon import MachineDaemon
+    from anygarden.machine.proc_kill import subprocess_group_kwargs
 
     daemon = MachineDaemon(
         "http://localhost:8000",
@@ -639,7 +639,7 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
     import os
     from uuid import uuid4
 
-    from anygarden_machine.spawner import SpawnManifest
+    from anygarden.machine.spawner import SpawnManifest
 
     for key in (
         "ANYGARDEN_JWT_SECRET",

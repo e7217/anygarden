@@ -14,7 +14,7 @@ from anygarden_agent import secrets
 from anygarden_agent.cli import agent_main
 from anygarden_agent.runtime.execution.contracts import Invocation, SessionScope
 from anygarden_agent.runtime.execution.endpoint import CHILD_KEY, CONFIG_KEY, INPUT_KEY
-from anygarden_machine.daemon import MachineDaemon
+from anygarden.machine.daemon import MachineDaemon
 from .test_engine_endpoints import endpoint_env, config
 from .test_agents_api import agents_env
 
@@ -66,12 +66,12 @@ async def test_db_to_invocation_preserves_explicit_selection(
     process.stdin.wait_closed = AsyncMock()
     with (
         patch(
-            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
+            "anygarden.machine.spawner.asyncio.create_subprocess_exec",
             new_callable=AsyncMock,
             return_value=process,
         ) as create,
         patch(
-            "anygarden_machine.spawner.shutil.which",
+            "anygarden.machine.spawner.shutil.which",
             return_value="/bin/anygarden-agent",
         ),
     ):

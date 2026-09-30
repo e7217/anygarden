@@ -166,6 +166,6 @@ it('uses the actual integrated node data directory in local consent commands', a
   mocks.attachments = [{ ...attachment, room_approved_by_user_id: 'owner', global_approved_by_user_id: 'admin' }]
   show()
   await screen.findByLabelText('Local consent proof')
-  expect(screen.getByText(/anygarden-machine workspace --node-data-dir/)).toHaveTextContent("--node-data-dir '/srv/custom node' consent")
+  expect(screen.getByText(/anygarden machine workspace --node-data-dir/)).toHaveTextContent("--node-data-dir '/srv/custom node' consent")
   expect(screen.queryByText(/--node-data-dir ~\/\.anygarden/)).not.toBeInTheDocument()
 })

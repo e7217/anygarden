@@ -105,7 +105,7 @@ Run the agent tests using the matching workspace packages (not older installed
 editable copies):
 
 ```sh
-PYTHONPATH=packages/agent:packages/cluster:packages/machine \
+PYTHONPATH=packages/agent:packages/cluster \
   python -m pytest -q packages/agent/tests -p no:libtmux
 ```
 

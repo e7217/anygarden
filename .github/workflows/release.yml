@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - 'anygarden-v*'
-      - 'anygarden-machine-v*'
       - 'anygarden-agent-v*'
 
 permissions:
@@ -88,7 +87,8 @@ jobs:
         id: parse
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Format: anygarden-v<ver>, anygarden-machine-v<ver>, anygarden-agent-v<ver>
+          # Format: anygarden-v<ver>, anygarden-agent-v<ver>. #754 — the machine
+          # daemon ships inside anygarden; anygarden-machine is no longer released.
           DIST_NAME="${TAG%-v*}"
           VERSION="${TAG##*-v}"
           # PyPI distribution name → packages/<dir> mapping. The cluster
@@ -96,7 +96,6 @@ jobs:
           # packages/cluster/ so the source layout stays stable.
           case "${DIST_NAME}" in
             anygarden)         PKG="cluster" ;;
-            anygarden-machine) PKG="machine" ;;
             anygarden-agent)   PKG="agent" ;;
             *)
               echo "::error::Unknown tag prefix: ${DIST_NAME}"
@@ -126,7 +125,7 @@ jobs:
       # #398 — the cluster (`anygarden`) wheel serves the SPA from
       # ``anygarden/static/``, which is a git-ignored vite build artifact.
       # It must be built BEFORE ``uv build`` so hatchling's ``artifacts``
-      # rule can pull it into the sdist/wheel. machine/agent releases
+      # rule can pull it into the sdist/wheel. agent releases
       # don't ship a frontend, so this step is cluster-only.
       - name: Setup Node
         if: steps.parse.outputs.dist_name == 'anygarden'
@@ -174,8 +173,8 @@ jobs:
           VERSION="${{ steps.parse.outputs.version }}"
           PREV_TAG="${{ steps.prev.outputs.tag }}"
           # uv normalizes hyphens to underscores in wheel/sdist
-          # filenames (PEP 491/625), so anygarden-machine ships as
-          # anygarden_machine-<ver>-*.whl. Translate the distribution
+          # filenames (PEP 491/625), so anygarden-agent ships as
+          # anygarden_agent-<ver>-*.whl. Translate the distribution
           # name to the filename form before globbing.
           FILE_PREFIX="${DIST_NAME//-/_}"
           ARGS=(

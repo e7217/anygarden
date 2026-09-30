@@ -14,7 +14,7 @@ from sqlalchemy import select
 from anygarden.db.models import Machine, User
 from anygarden.node.ownership import NodeOwnershipError
 from anygarden.ws.machine_handler import handle_machine_frame
-from anygarden_machine.daemon import MachineDaemon
+from anygarden.machine.daemon import MachineDaemon
 
 log = structlog.get_logger(__name__)
 

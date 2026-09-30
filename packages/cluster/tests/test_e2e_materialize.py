@@ -41,7 +41,7 @@ from anygarden.db.models import (
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 
-from anygarden_machine.spawner import SpawnManifest, Spawner
+from anygarden.machine.spawner import SpawnManifest, Spawner
 
 
 class FakeWS:

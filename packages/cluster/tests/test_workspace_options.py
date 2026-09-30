@@ -19,6 +19,9 @@ from anygarden.db.models import (
     User,
     WorkspaceAttachment,
 )
+from anygarden.machine.daemon import MachineDaemon
+from anygarden.machine.protocol.frames import SystemInfo
+from anygarden.machine.workspace_signing import WorkspaceReceiptSigner
 from anygarden.node.execution import LocalDaemon
 from anygarden.workspaces.router import (
     AttachmentCreate,
@@ -26,9 +29,6 @@ from anygarden.workspaces.router import (
     create_attachment,
     workspace_options,
 )
-from anygarden_machine.daemon import MachineDaemon
-from anygarden_machine.protocol.frames import SystemInfo
-from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
 from fastapi import HTTPException
 from sqlalchemy import select
 
@@ -45,11 +45,11 @@ def identity(user):
 async def env(tmp_path, monkeypatch):
     # Execute the actual shipped register method; do not fake its advertised support.
     monkeypatch.setattr(
-        "anygarden_machine.daemon.detect_engines",
+        "anygarden.machine.daemon.detect_engines",
         AsyncMock(return_value=SimpleNamespace(engines=[])),
     )
     monkeypatch.setattr(
-        "anygarden_machine.daemon.collect_system_info",
+        "anygarden.machine.daemon.collect_system_info",
         lambda: SystemInfo(hostname="test", cpu_cores=1, memory_gb=1),
     )
     signer = WorkspaceReceiptSigner(tmp_path / "receipt.key")

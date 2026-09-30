@@ -21,8 +21,8 @@ describe('machine connection guide', () => {
     const command = writeText.mock.calls[0][0] as string
     expect(command).toContain('--server \'https://garden.example.com\'')
     expect(command).toContain('--machine-id \'machine-123\'')
-    expect(command).toContain('anygarden-machine connect')
-    expect(command).toContain('&&\nanygarden-machine run')
+    expect(command).toContain('anygarden machine connect')
+    expect(command).toContain('&&\nanygarden machine run')
     expect(command).not.toContain('secret-machine-token')
     expect(screen.getByText(/settings and token privately on that computer/)).toBeInTheDocument()
     expect(screen.getByText('Restart and automatic startup')).toBeInTheDocument()

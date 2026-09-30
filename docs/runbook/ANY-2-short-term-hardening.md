@@ -73,7 +73,7 @@
 ```bash
 pytest packages/cluster/tests/test_lifecycle.py -q
 pytest packages/cluster/tests/test_migrations.py -q
-pytest packages/machine/tests/test_manifest_store.py packages/machine/tests/test_daemon.py packages/machine/tests/test_protocol_frames.py -q
+pytest packages/cluster/tests/machine/test_manifest_store.py packages/cluster/tests/machine/test_daemon.py packages/cluster/tests/machine/test_protocol_frames.py -q
 npm -w anygarden-frontend test -- --run src/lib/admin-agent-warning.test.ts
 npm -w anygarden-frontend run build
 ```

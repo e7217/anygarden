@@ -10,12 +10,12 @@ from types import SimpleNamespace
 import pytest
 from anygarden.auth.machine_token import generate_machine_token, hash_machine_token
 from anygarden.db.models import Agent, Machine, MachineToken
+from anygarden.machine.daemon import MachineDaemon
+from anygarden.machine.managed_workspace import CAPABILITY, EDIT_CAPABILITY, supported
 from anygarden.node.execution import LocalExecutionBackend
 from anygarden.scheduler.machine_bus import MachineBus, MachineRequestError
 from anygarden.ws.machine_handler import ws_machine
 from anygarden_agent.runtime.workspace_receipt import report_workspace
-from anygarden_machine.daemon import MachineDaemon
-from anygarden_machine.managed_workspace import CAPABILITY, EDIT_CAPABILITY, supported
 from fastapi import WebSocketDisconnect
 
 from .test_agents_api import agents_env as _agents_env

@@ -6,7 +6,7 @@ on-disk 세션 스토어가 살아남았더라도 fresh 대화로 시작한다.
 
 이 매핑을 **에이전트 cwd 아래 파일**에 저장한다. 머신 materializer는
 "agent-created output directly under the agent root"를 prune하지 않고 보존하므로
-(``anygarden_machine.spawner`` 참조), 이 파일은 respawn을 넘어 살아남는다.
+(``anygarden.machine.spawner`` 참조), 이 파일은 respawn을 넘어 살아남는다.
 respawn된 어댑터는 이를 읽어 핸들을 복원하고 cold 대신 ``resume`` 할 수 있다.
 
 Best-effort: 손상/부재 파일은 빈 매핑으로 degrade하고, 사라진 세션에 대한

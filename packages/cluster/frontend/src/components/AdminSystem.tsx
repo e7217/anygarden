@@ -78,9 +78,7 @@ function PackageRow({ update }: { update: PackageUpdate }) {
         <div className="mt-3 rounded-[var(--radius-sm)] bg-[var(--color-surface-alt)] p-2">
           <p className="text-xs text-[var(--color-foreground-muted)]">{t('admin.system.updateCommand')}</p>
           <code className="mt-0.5 block font-mono text-xs text-[var(--color-foreground)]">
-            {pkg === 'anygarden-machine'
-              ? `pip install -U ${pkg} && systemctl --user restart anygarden-machine`
-              : `pip install -U ${pkg}`}
+            {`pip install -U ${pkg}`}
           </code>
         </div>
       )}

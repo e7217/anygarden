@@ -21,9 +21,9 @@ usage API and preserved data; the embedded model gateway is removed.
 
 | | Version | Needed for |
 |---|---|---|
-| Python | 3.12+ | the workspace and CI; `anygarden` and `anygarden-machine` alone also run on 3.11 |
+| Python | 3.12+ | the workspace and CI; `anygarden` alone also runs on 3.11 |
 | [uv](https://docs.astral.sh/uv/) | any current release | installing and running the Python packages |
-| Node.js | 20+ | building the web UI, and the TypeScript agent runtime |
+| Node.js | 20+ | building the web UI |
 
 Node.js is not needed to *run* the server from PyPI — those packages ship a
 prebuilt web UI. It is needed from a checkout, and wherever the npm-distributed
@@ -102,12 +102,11 @@ checkout, run the integrated node instead. See
 
 ## Packages
 
-Anygarden is a `uv` workspace of three packages:
+Anygarden is a `uv` workspace of two packages:
 
 | Package | Path | What it is |
 |---|---|---|
-| `anygarden` | [`packages/cluster/`](packages/cluster) | server, REST/WebSocket API and web UI |
-| `anygarden-machine` | [`packages/machine/`](packages/machine) | per-host daemon that spawns and supervises agents |
+| `anygarden` | [`packages/cluster/`](packages/cluster) | server, REST/WebSocket API, web UI, and the per-host machine daemon (`anygarden.machine`, installed with `anygarden[machine]`) |
 | `anygarden-agent` | [`packages/agent/`](packages/agent) | Python agent runtime and engine adapters |
 
 ## Docs

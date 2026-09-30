@@ -52,7 +52,7 @@ anygarden machine --help
 
 ### anygarden machine / agent / client
 
-`anygarden machine` 서브커맨드는 뒤따르는 `anygarden-machine` CLI 명령/인수(예: `run`, `run --config PATH`)를 그대로 전달합니다. 별도의 `--` 구분자는 필요하지 않습니다.
+`anygarden machine` 서브커맨드는 뒤따르는 머신 데몬 CLI(`anygarden.machine.cli`) 명령/인수(예: `run`, `run --config PATH`)를 그대로 전달합니다. 별도의 `--` 구분자는 필요하지 않습니다.
 
 - `anygarden agent`는 `anygarden-agent` CLI의 `--engine`, `--name`, `--server`, `--room`, `--token`을 그대로 사용합니다.
 - `anygarden client`는 `anygarden-client` CLI의 `--server`, `--user`, `--room`, `--token`을 그대로 사용합니다.
@@ -63,7 +63,7 @@ anygarden server init   # ~/.anygarden/ 생성 및 config 생성
 anygarden server
 
 # 머신 데몬
-anygarden machine run   # anygarden-machine CLI의 run 명령 실행
+anygarden machine run   # 머신 데몬 CLI의 run 명령 실행 (anygarden[machine] 필요)
 
 # 에이전트/클라이언트
 anygarden agent --engine codex-cli --name PM \

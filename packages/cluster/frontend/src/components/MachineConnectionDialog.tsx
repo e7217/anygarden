@@ -23,9 +23,9 @@ function shellQuote(value: string): string {
 
 export function machineRunCommand(server: URL, machineId: string, needsToken: boolean): string {
   const options = `--server ${shellQuote(server.toString().replace(/\/$/, ''))} \\\n  --machine-id ${shellQuote(machineId)}`
-  if (!needsToken) return `anygarden-machine run ${options}`
+  if (!needsToken) return `anygarden machine run ${options}`
   // connect prompts privately and saves the existing identity, without registering a duplicate.
-  return `anygarden-machine connect ${options} &&\nanygarden-machine run`
+  return `anygarden machine connect ${options} &&\nanygarden machine run`
 }
 
 interface Props {
@@ -86,7 +86,7 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
           <section className="space-y-2">
             <h3 className="font-semibold">{t('admin.machines.installStep')}</h3>
             <p className="text-[var(--color-foreground-muted)]">{t('admin.machines.installHint')}</p>
-            {commandBlock('python3 -m venv ~/.anygarden/machine-venv\nsource ~/.anygarden/machine-venv/bin/activate\npython -m pip install --upgrade anygarden-machine', `${t('admin.machines.installCommand')} (Bash)`)}
+            {commandBlock('python3 -m venv ~/.anygarden/machine-venv\nsource ~/.anygarden/machine-venv/bin/activate\npython -m pip install --upgrade "anygarden[machine]"', `${t('admin.machines.installCommand')} (Bash)`)}
           </section>
           <section className="space-y-3">
             <h3 className="font-semibold">{t('admin.machines.runStep')}</h3>
@@ -122,9 +122,9 @@ export default function MachineConnectionDialog({ open, onOpenChange, machine, t
             <details className="space-y-2 text-xs text-[var(--color-foreground-muted)]">
               <summary className="cursor-pointer py-2 font-medium">{t('admin.machines.restartLater')}</summary>
               <p>{t('admin.machines.restartHint')}</p>
-              {commandBlock('source ~/.anygarden/machine-venv/bin/activate\nanygarden-machine run', t('admin.machines.restartCommand'))}
+              {commandBlock('source ~/.anygarden/machine-venv/bin/activate\nanygarden machine run', t('admin.machines.restartCommand'))}
               <p>{t('admin.machines.serviceHint')}</p>
-              {commandBlock('anygarden-machine install-systemd-unit\nsystemctl --user daemon-reload\nsystemctl --user enable --now anygarden-machine', t('admin.machines.serviceCommand'))}
+              {commandBlock('anygarden machine install-systemd-unit\nsystemctl --user daemon-reload\nsystemctl --user enable --now anygarden-machine', t('admin.machines.serviceCommand'))}
             </details>
           </section>
           <section className="space-y-2">

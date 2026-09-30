@@ -54,7 +54,7 @@ def _install_fake_module(monkeypatch, name: str, **attrs) -> dict:
 
 
 def test_machine_delegates_to_machine_cli(runner, monkeypatch) -> None:
-    calls = _install_fake_module(monkeypatch, "anygarden_machine.cli", main="machine")
+    calls = _install_fake_module(monkeypatch, "anygarden.machine.cli", main="machine")
     result = runner.invoke(cli.dispatch, ["machine", "run", "--server", "ws://x"])
     assert result.exit_code == 0
     assert "machine" in calls
@@ -85,8 +85,8 @@ def test_client_delegates_to_client_cli(runner, monkeypatch) -> None:
 
 def test_machine_missing_extra_hint(runner, monkeypatch) -> None:
     # Force the lazy import to fail as if anygarden[machine] were not installed.
-    monkeypatch.setitem(sys.modules, "anygarden_machine.cli", None)
-    monkeypatch.setitem(sys.modules, "anygarden_machine", None)
+    monkeypatch.setitem(sys.modules, "anygarden.machine.cli", None)
+    monkeypatch.setitem(sys.modules, "anygarden.machine", None)
     result = runner.invoke(cli.dispatch, ["machine", "run"])
     assert result.exit_code != 0
     assert 'pip install "anygarden[machine]"' in result.output

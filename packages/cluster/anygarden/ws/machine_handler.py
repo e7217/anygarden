@@ -134,8 +134,9 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
     frame_type = data.get("type")
 
     if frame_type == "managed_workspace_result":
-        from anygarden_machine.protocol.frames import ManagedWorkspaceResultFrame
         from pydantic import ValidationError
+
+        from anygarden.machine.protocol.frames import ManagedWorkspaceResultFrame
 
         try:
             result = ManagedWorkspaceResultFrame.model_validate(data)
