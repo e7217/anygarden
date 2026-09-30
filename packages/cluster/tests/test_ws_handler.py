@@ -31,6 +31,27 @@ from anygarden.ws.protocol import (
 # ── Fixtures ──────────────────────────────────────────────────────────
 
 
+@pytest.fixture()
+def config(config: AnygardenSettings, tmp_path) -> AnygardenSettings:
+    """Use a file-backed SQLite DB instead of ``sqlite+aiosqlite://`` (#726).
+
+    The in-memory engine keeps one shared connection (``StaticPool``).
+    When a WS handler task is cancelled mid-query (e.g. the TestClient
+    socket closes), SQLAlchemy invalidates that connection and the pool
+    opens a new one, which for ``:memory:`` is a new, empty DB. The rest
+    of the test then fails with ``no such table``, a FOREIGN KEY error or
+    ``no active connection``. With a file, a new connection sees the same
+    data.
+    """
+    return config.model_copy(update={"db_url": _file_db_url(tmp_path)})
+
+
+def _file_db_url(tmp_path) -> str:
+    import uuid
+
+    return f"sqlite+aiosqlite:///{tmp_path / f'ws-{uuid.uuid4().hex}.db'}"
+
+
 @pytest_asyncio.fixture()
 async def ws_env(config: AnygardenSettings):
     """Set up a full app with a seeded user, room, and participant.
@@ -1879,11 +1900,11 @@ class TestActivityLogRequestIdCorrelation:
 
 class TestAgentCausalLink:
     @pytest_asyncio.fixture()
-    async def make_room(self, config: AnygardenSettings):
+    async def make_room(self, config: AnygardenSettings, tmp_path):
         """Factory: build an app + room with N agents under a strategy.
 
-        Returns handles per test; each call gets its own in-memory DB
-        (config.db_url is ``sqlite+aiosqlite://``). Agents are added in
+        Returns handles per test; each call gets its own file-backed DB
+        under ``tmp_path`` (#726). Agents are added in
         ``agent_names`` order, which is the round-robin rotation order
         (joined_at, id), so the caller controls who index 0 / 1 are.
         """
@@ -1893,7 +1914,8 @@ class TestAgentCausalLink:
         engines = []
 
         async def _make(*, strategy: str, agent_names: list[str]):
-            engine = build_engine(config.db_url)
+            # One file per call so each room gets its own DB (#726).
+            engine = build_engine(_file_db_url(tmp_path))
             sf = build_session_factory(engine)
             engines.append(engine)
             async with engine.begin() as conn:
