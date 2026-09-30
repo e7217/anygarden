@@ -1549,12 +1549,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # Explicit delegations have their own target/role admission
                 # below. The heuristic chatter budget must not strip their
                 # required mention or discard concurrent directed requests.
-                # #737 — agent thread replies skip the net, but an ``ask_peer``
-                # call is posted as a thread reply and must still respect
-                # the redundant-wake check and the depth/budget cap.
+                # #763 — agent thread replies go through the net too. Since
+                # #737 peer conversations live in threads, so skipping it
+                # there bypassed the redundant-wake check and the depth/budget
+                # cap. The thread wake path reads the ``mentions`` this block
+                # rewrites, so a stripped mention wakes nobody.
                 if (
-                    (not is_thread_reply or is_tool_peer_ask)
-                    and is_agent_for_peer
+                    is_agent_for_peer
                     and not is_delegation_result
                     and "delegation_target_participant_id" not in metadata
                     and mentions
