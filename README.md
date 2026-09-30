@@ -102,14 +102,13 @@ checkout, run the integrated node instead. See
 
 ## Packages
 
-Anygarden is a `uv` workspace of four packages:
+Anygarden is a `uv` workspace of three packages:
 
 | Package | Path | What it is |
 |---|---|---|
 | `anygarden` | [`packages/cluster/`](packages/cluster) | server, REST/WebSocket API and web UI |
 | `anygarden-machine` | [`packages/machine/`](packages/machine) | per-host daemon that spawns and supervises agents |
 | `anygarden-agent` | [`packages/agent/`](packages/agent) | Python agent runtime and engine adapters |
-| `@anygarden/agent-ts` | [`packages/agent-ts/`](packages/agent-ts) | TypeScript agent runtime |
 
 ## Docs
 

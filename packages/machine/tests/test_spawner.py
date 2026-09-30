@@ -716,44 +716,6 @@ class TestSpawn:
 
 
 
-    async def test_spawn_python_runtime_still_default(
-        self, spawner: Spawner, spawn_msg: SpawnManifest
-    ) -> None:
-        """Issue #73 regression guard — a manifest with ``runtime``
-        unset (or explicitly ``"python"``) must still pick the Python
-        binary. No TS binary lookup happens on the default path."""
-        captured_cmd: list[str] = []
-        which_calls: list[str] = []
-
-        async def capture_exec(*args, **kwargs):
-            captured_cmd.extend(args)
-            proc = MagicMock()
-            proc.pid = 74
-            proc.wait = AsyncMock(return_value=0)
-            proc.stderr = None
-            proc.stdin = AsyncMock()
-            return proc
-
-        def fake_which(name: str):
-            which_calls.append(name)
-            if name == "anygarden-agent":
-                return "/usr/local/bin/anygarden-agent"
-            return None
-
-        # Leave ``spawn_msg.runtime`` at its default.
-        assert spawn_msg.runtime == "python"
-
-        with patch(
-            "anygarden_machine.spawner.asyncio.create_subprocess_exec",
-            side_effect=capture_exec,
-        ), patch("anygarden_machine.spawner.shutil.which", side_effect=fake_which):
-            result = await spawner.spawn(spawn_msg)
-
-        assert result.success is True
-        assert captured_cmd[0] == "/usr/local/bin/anygarden-agent"
-        # The Python path must not probe for the TS binary.
-        assert "anygarden-agent-ts" not in which_calls
-
     async def test_spawn_profile_chmod(self, spawner: Spawner, spawn_msg: SpawnManifest) -> None:
         """Profile temp file should be created with chmod 600."""
         chmod_calls = []
@@ -1358,18 +1320,16 @@ async def test_invalid_pi_provider_refused_before_subprocess(spawner,provider):
     assert not result.success and 'provider' in result.error
     create.assert_not_awaited()
 
-@pytest.mark.parametrize('engine_name,runtime', [
-    ('claude-code', 'python'), ('gemini-cli', 'python'), ('openhands', 'python'),
-    ('claude_code', 'typescript'), ('gemini_cli', 'typescript'),
-    ('codex-cli', 'typescript'), ('pi-cli', 'typescript'),
+@pytest.mark.parametrize('engine_name', [
+    'claude-code', 'gemini-cli', 'openhands', 'claude_code', 'gemini_cli',
 ])
-async def test_unsupported_engine_rejected_before_files_or_processes(spawner, spawn_msg, engine_name, runtime):
+async def test_unsupported_engine_rejected_before_files_or_processes(spawner, spawn_msg, engine_name):
     from dataclasses import replace
-    msg = replace(spawn_msg, engine=engine_name, runtime=runtime, provider='local')
+    msg = replace(spawn_msg, engine=engine_name, provider='local')
     with patch('anygarden_machine.spawner.asyncio.create_subprocess_exec', new_callable=AsyncMock) as spawn:
         result = await spawner.spawn(msg)
         assert not result.success
-        assert 'removed' in result.error or 'Python' in result.error or 'python' in result.error
+        assert 'removed' in result.error
         spawn.assert_not_called()
     assert not (spawner._agent_dirs_root / msg.agent_id).exists()
 

@@ -38,7 +38,6 @@ INVALID_PROVIDER = "invalid_provider"
 INVALID_ENDPOINT = "invalid_endpoint"
 INVALID_PI_AUTH = "invalid_pi_auth"
 ENGINE_REMOVED = "engine_removed"
-INVALID_RUNTIME = "invalid_runtime"
 
 UNAVAILABLE_CODES: frozenset[str] = frozenset(
     {
@@ -51,7 +50,6 @@ UNAVAILABLE_CODES: frozenset[str] = frozenset(
         INVALID_ENDPOINT,
         INVALID_PI_AUTH,
         ENGINE_REMOVED,
-        INVALID_RUNTIME,
     }
 )
 
@@ -77,8 +75,6 @@ def render_unavailable_message(
         raise ValueError(f"unknown audience: {audience!r}")
     d: Mapping[str, object] = detail or {}
 
-    if code == INVALID_RUNTIME:
-        return "Codex/Pi 실행은 Python 런타임을 사용합니다. 관리자에게 런타임 설정 변경을 요청하세요. 기존 설정과 이력은 보존됩니다."
     if code == ENGINE_REMOVED:
         return "이 엔진은 지원이 종료되었습니다. Codex 또는 Pi 에이전트를 새로 만들고 필요한 설정을 옮겨 주세요. 기존 설정과 이력은 보존됩니다."
 

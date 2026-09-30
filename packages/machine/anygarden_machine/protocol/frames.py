@@ -75,12 +75,6 @@ class SyncDesiredStateFrame(BaseModel):
     # Each entry: {"name": "...", "description": "..." or null}
     sub_rooms: list[dict[str, str | None]] = Field(default_factory=list)
 
-    # Issue #73 — which runtime hosts this agent on the machine.
-    # ``"python"`` spawns anygarden-agent; ``"typescript"`` spawns
-    # anygarden-agent-ts. Defaults to ``"python"`` so pre-#73 servers
-    # stay compatible without re-emitting the field.
-    runtime: str = "python"
-
     # Issue #277 — bearer token for the anygarden self-MCP entry the
     # cluster baked into ``files`` (``.codex/config.toml`` references
     # this via ``bearer_token_env_var``). Machine spawner exposes the

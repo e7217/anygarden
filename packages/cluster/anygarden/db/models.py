@@ -410,15 +410,6 @@ class Agent(Base):
     )
     max_restarts: Mapped[int] = mapped_column(Integer, default=3)
     restart_window_seconds: Mapped[int] = mapped_column(Integer, default=300)
-    # Issue #73 — which runtime (machine-side process) hosts this
-    # agent. ``"python"`` spawns ``anygarden-agent``; ``"typescript"``
-    # spawns ``anygarden-agent-ts``. Defaults to ``"python"`` so rows
-    # created before the schema migration continue to use the Python
-    # runtime. ``server_default`` is the load-bearing piece — without
-    # it the SQLite batch migration refuses to add a NOT NULL column.
-    runtime: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="python", server_default="python"
-    )
     # Issue #101 — admin-customizable avatar. ``avatar_kind`` picks the
     # renderer branch (``'emoji'``, ``'lucide'``, or NULL for the default
     # seed-driven initial); ``avatar_value`` carries the payload (the
