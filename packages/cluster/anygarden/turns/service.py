@@ -53,10 +53,13 @@ TerminalTurnState = Literal["completed", "cancelled", "failed"]
 async def _on_turn_terminal(db: AsyncSession, turn: AgentTurn) -> None:
     """#762 — extension point fired once per terminal turn transition.
 
-    Intentionally a no-op for now; the async peer fan-in hooks in here. It
-    runs inside the caller's transaction after the terminal fields are set,
-    so it may only do DB work (no commits, no broadcasts).
+    Settles the async peer fan-in (a peer's answer, or the caller's turn
+    closing). It runs inside the caller's transaction after the terminal
+    fields are set, so it may only do DB work (no commits, no broadcasts).
     """
+    from anygarden.orchestration.peer_fanin import on_turn_terminal
+
+    await on_turn_terminal(db, turn)
 
 
 async def mark_turn_terminal(
@@ -765,6 +768,44 @@ async def finish_completion(
             changed_count=0,
             details={"attempt": attempt.attempt_number},
         )
+
+
+async def finish_deferred(
+    db: AsyncSession,
+    *,
+    turn: AgentTurn,
+    attempt: AgentTurnAttempt,
+) -> None:
+    """Close a turn whose reply was kept as an ``ask_peer`` draft (#762).
+
+    The turn completed but posted nothing; the caller is woken again by the
+    peer fan-in, so no failure notice and no redispatch apply.
+    """
+    now = _now()
+    turn.updated_at = now
+    await mark_turn_terminal(
+        db,
+        turn,
+        state="completed",
+        reason="awaiting_peers",
+        at=now,
+        attempt=attempt,
+        attempt_outcome="ok",
+    )
+    db.add(
+        ActivityLog(
+            agent_id=turn.agent_id,
+            event_type="response_deferred",
+            request_id=turn.request_id,
+            room_id=turn.room_id,
+            details={
+                "room_id": turn.room_id,
+                "attempt": attempt.attempt_number,
+                "generation": attempt.generation,
+                "reason": "awaiting_peers",
+            },
+        )
+    )
 
 
 async def record_lifecycle(

@@ -877,12 +877,6 @@ async def _startup_server(app: FastAPI) -> None:
         from anygarden.orchestration.rules import PeerHandoffBudget
 
         app.state.peer_handoff_budget = PeerHandoffBudget()
-    # Issue #737 — peer asks scheduled by the ``ask_peer`` MCP tool,
-    # posted by the WS handler after the caller's final reply.
-    if not getattr(app.state, "pending_peer_asks", None):
-        from anygarden.orchestration.peer_ask import PendingPeerAsks
-
-        app.state.pending_peer_asks = PendingPeerAsks()
 
     # v2: No stale agent reset. Machines reconnect and report actual state.
     # Server reconciles via sync_batch on reconnect.
@@ -1296,6 +1290,7 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
 
     from anygarden.db.models import Agent, AgentTurn
     from anygarden.observability.metrics import durable_turns_by_state
+    from anygarden.orchestration.peer_fanin import dispatch_peer_ask_groups
     from anygarden.turns.service import (
         cancel_invalid_turns,
         deliver_pending_outbox,
@@ -1322,6 +1317,8 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             if manager is not None:
                 await deliver_pending_outbox(factory, manager)
             recovered = await recover_stalled_turns(factory, manager)
+            # #762 — wake ask_peer callers whose peers have all answered.
+            await dispatch_peer_ask_groups(factory, manager)
             async with factory() as db:
                 pending_agents = set(
                     (

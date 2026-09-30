@@ -63,7 +63,7 @@ export default function GuestRoomPage() {
     }
   }, [errorStatus, navigate])
 
-  const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(
+  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping } = useWebSocket(
     scope,
   )
 
@@ -192,6 +192,7 @@ export default function GuestRoomPage() {
           myParticipantId={myParticipantId}
           typingUsers={typingUsers}
           typingStages={typingStages}
+              typingProgress={typingProgress}
         />
         <MessageInput
           onSend={send}

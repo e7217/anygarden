@@ -79,7 +79,7 @@ function LocalChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, typingStages, send, sendTyping } = useWebSocket(selectedRoom)
+  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping } = useWebSocket(selectedRoom)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // Thread grouping is derived once here so the timeline and the side
@@ -603,6 +603,7 @@ function LocalChatPage() {
               myParticipantId={myParticipantId}
               typingUsers={typingUsers}
               typingStages={typingStages}
+              typingProgress={typingProgress}
               threadIndex={threadIndex}
               activeThreadRootId={threadRootId}
               // Re-clicking the open thread's trigger is a close like any
@@ -639,6 +640,7 @@ function LocalChatPage() {
             <TypingIndicator
               typingUsers={typingUsers}
               typingStages={typingStages}
+              typingProgress={typingProgress}
               participants={participants}
               myParticipantId={myParticipantId}
             />

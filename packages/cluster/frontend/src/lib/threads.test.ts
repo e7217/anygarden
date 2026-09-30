@@ -177,3 +177,18 @@ describe('canHostThread', () => {
     expect(canHostThread(index, 'unknown')).toBe(true)
   })
 })
+
+describe('indexThreads hidden system messages (#762)', () => {
+  it('does not count an ask_peer result message as a reply', () => {
+    const root = msg({ id: 'root', seq: 1 })
+    const answer = reply('root', { id: 'a', seq: 2 })
+    const wake = reply('root', {
+      id: 'wake', seq: 3, participant_id: null,
+      metadata: { system_origin: 'peer_ask_results' },
+    })
+    const index = indexThreads([root, answer, wake])
+
+    expect(replyCount(index, 'root')).toBe(1)
+    expect(index.repliesByRoot.get('root')?.map(m => m.id)).toEqual(['a'])
+  })
+})

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections import deque
 from typing import Any
 from urllib.parse import parse_qs
 from uuid import UUID, uuid4
@@ -960,13 +959,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # lifespan can leave this None and the safety net falls back to
     # depth-only enforcement.
     peer_handoff_budget = getattr(app.state, "peer_handoff_budget", None)
-    # Issue #737 — asks scheduled by the ``ask_peer`` MCP tool. After the
-    # caller's final reply is stored they are fed back into this loop as
-    # thread-reply sends (``injected_sends``) so they take the normal
-    # agent-send path. Each carries the hop of the reply that scheduled
-    # it (#756), since the injected send has no turn proof of its own.
-    pending_peer_asks = getattr(app.state, "pending_peer_asks", None)
-    injected_sends: deque[tuple[str, int]] = deque()
 
     # -- Authentication via Sec-WebSocket-Protocol --
     raw_protocols = websocket.headers.get("sec-websocket-protocol", "")
@@ -1275,14 +1267,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
         # -- Main receive loop --
         while True:
-            # #737 — a send injected for an ``ask_peer`` call is handled
-            # before the next frame from the socket.
-            is_tool_peer_ask = bool(injected_sends)
-            injected_hop: int | None = None
-            if is_tool_peer_ask:
-                raw, injected_hop = injected_sends.popleft()
-            else:
-                raw = await websocket.receive_text()
+            raw = await websocket.receive_text()
             # #425 — reset per-frame log context and re-bind the room as
             # the durable correlation key for every log this frame emits.
             # request_id (per agent) is additionally bound in the
@@ -1629,20 +1614,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             for m in peer_mentions
                             if m.get("type") == "user"
                         }
-                        hop = (
-                            injected_hop
-                            if injected_hop is not None
-                            else await _peer_caller_hop(
-                                session_factory,
-                                peer_handoff_budget,
-                                room_id=room_id,
-                                participant_id=participant.id,
-                                request_id=(
-                                    metadata.get("request_id")
-                                    if isinstance(metadata.get("request_id"), str)
-                                    else None
-                                ),
-                            )
+                        hop = await _peer_caller_hop(
+                            session_factory,
+                            peer_handoff_budget,
+                            room_id=room_id,
+                            participant_id=participant.id,
+                            request_id=(
+                                metadata.get("request_id")
+                                if isinstance(metadata.get("request_id"), str)
+                                else None
+                            ),
                         )
                         too_deep = hop > MAX_PEER_DEPTH
                         ok = too_deep or peer_handoff_budget.consume(
@@ -1701,9 +1682,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # peer-mention budget so the first agent in the new
                     # turn starts with a clean slate.
                     peer_handoff_budget.reset(room_id)
-                    # #737 — asks scheduled in the previous turn are stale.
-                    if pending_peer_asks is not None:
-                        pending_peer_asks.clear_room(room_id)
 
                 # Room mention → representative agent routing.
                 # Guests can't reach this block — their mentions had
@@ -1904,6 +1882,34 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         if completion_decision.outcome in {"idempotent", "stale"}:
                             await db.commit()
                             continue
+                        # #762 — a turn that asked peers does not post its
+                        # reply: it becomes the fan-in draft and the turn
+                        # closes. The caller is woken with the peers'
+                        # answers and writes the final answer then.
+                        # A delegation result still goes to its delegator.
+                        if (
+                            completion_decision.outcome == "accept"
+                            and completion_decision.turn is not None
+                            and completion_decision.attempt is not None
+                            and not is_delegation_result
+                        ):
+                            from anygarden.orchestration.peer_fanin import (
+                                absorb_caller_reply,
+                            )
+                            from anygarden.turns.service import finish_deferred
+
+                            if await absorb_caller_reply(
+                                db,
+                                request_id=completion_decision.turn.request_id,
+                                content=frame_in.content,
+                            ):
+                                await finish_deferred(
+                                    db,
+                                    turn=completion_decision.turn,
+                                    attempt=completion_decision.attempt,
+                                )
+                                await db.commit()
+                                continue
                         # Consume proof above, but never expose it as another
                         # participant's invocation through broadcast/history.
                         # The echoed request ID remains correlation metadata
@@ -2475,39 +2481,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             manager,
                             participant_ids=connected_targets,
                         )
-
-                # #737 — post the caller's scheduled ``ask_peer`` questions
-                # as thread replies under this reply. Injected sends carry
-                # no turn proof, so ``begin_completion`` treats them as
-                # legacy agent sends and the usual thread-mention path
-                # creates the peer's turn.
-                if (
-                    identity is not None
-                    and identity.kind == "agent"
-                    and pending_peer_asks is not None
-                    and not is_tool_peer_ask
-                    and not is_delegation_result
-                    and frame_in.content.strip()
-                ):
-                    thread_root = msg.root_message_id or msg.id
-                    asks = pending_peer_asks.take(
-                        identity.id, room_id, request_id=reply_request_id
-                    )
-                    if asks:
-                        ask_hop = await _peer_caller_hop(
-                            session_factory,
-                            peer_handoff_budget,
-                            room_id=room_id,
-                            participant_id=participant.id,
-                            request_id=reply_request_id,
-                        )
-                    for ask in asks:
-                        injected_sends.append((json.dumps({
-                            "type": "send",
-                            "content": f"<@user:{ask.target_pid}> {ask.question}",
-                            "thread_root_id": thread_root,
-                            "metadata": {"peer_ask": {"via": "tool"}},
-                        }), ask_hop))
 
                 # Send system message if representative agent is offline
                 if metadata.get("_rep_offline"):

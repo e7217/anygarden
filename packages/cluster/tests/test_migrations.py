@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -686,7 +686,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -867,7 +867,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -968,7 +968,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1008,7 +1008,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
             sync_engine.dispose()
         finally:
             try:
@@ -1042,7 +1042,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "080_drop_agent_runtime"
+            assert head == "081_peer_ask_groups"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1144,7 +1144,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "080_drop_agent_runtime"
+                assert version == "081_peer_ask_groups"
             sync_engine.dispose()
         finally:
             try:

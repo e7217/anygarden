@@ -206,14 +206,17 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "ask_peer",
         "description": (
-            "Ask another agent in this room to answer a question. Use this "
-            "instead of writing a routing token in your reply. The question "
-            "is posted as a thread reply under your final reply once you "
-            "send it, and the peer answers there. Call once per peer. If "
-            "the result says 'rejected', the peer will not be called: read "
-            "the returned recent messages, answer from them, and do not "
-            "repeat the request in your reply. Only agents can be asked; "
-            "address people by name in your reply."
+            "Ask other agents in this room to answer questions. Use this "
+            "instead of writing a routing token in your reply. Put every peer "
+            "you need in one call. The questions are posted at once in a "
+            "thread under the message you are answering and the peers start "
+            "working. Your reply for this turn is then kept as a draft, not "
+            "posted: note what you already found yourself and end your turn. "
+            "When all peers have finished you are woken with their answers "
+            "and write the final answer once. A peer that is answering "
+            "something in this room right now is rejected; one that already "
+            "finished can be asked again. Only agents can be asked; address "
+            "people by name in your reply."
         ),
         "inputSchema": {
             "type": "object",
@@ -222,18 +225,34 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "The current room ID from your roster.",
                 },
-                "participant_id": {
-                    "type": "string",
-                    "description": "The peer agent's id from your roster.",
-                },
-                "question": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 2000,
-                    "description": "What you want the peer to answer.",
+                "asks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "description": "One entry per peer.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "participant_id": {
+                                "type": "string",
+                                "description": "The peer agent's id from your roster.",
+                            },
+                            "question": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                                "description": (
+                                    "What you want this peer to answer. Include "
+                                    "the context it needs; it does not see your "
+                                    "conversation."
+                                ),
+                            },
+                        },
+                        "required": ["participant_id", "question"],
+                    },
                 },
             },
-            "required": ["room_id", "participant_id", "question"],
+            "required": ["room_id", "asks"],
         },
     },
     {
@@ -1193,88 +1212,193 @@ async def ask_peer(
     agent_id: str,
     arguments: dict[str, Any],
     budget: Any,
-    pending: Any,
-) -> dict[str, Any]:
-    """Check and schedule a structured peer ask (#737).
+) -> tuple[dict[str, Any], list[Any]]:
+    """Ask peers now and collect their answers asynchronously (#762).
 
-    A rejection is a normal result (``isError`` false) the model should
-    act on in the same turn; only bad arguments are tool errors.
+    Accepted questions are posted in the caller's thread at once and each
+    peer's turn is started; the caller's reply for this turn is kept as a
+    draft, and the caller is woken with every answer once all peers finish
+    (:mod:`anygarden.orchestration.peer_fanin`). A peer that was itself
+    called by a question (hop 2) cannot ask on: its request is handed back
+    to the caller with its answer.
+
+    Returns the tool result and the posted questions; the caller of this
+    function commits, then broadcasts them. A rejection is a normal result
+    (``isError`` false) the model should act on in the same turn; only bad
+    arguments are tool errors.
     """
     from anygarden.orchestration.peer_ask import (
+        MAX_ASKS_PER_CALL,
         MAX_QUESTION_CHARS,
-        PeerAsk,
+        REASON_LIMIT_REACHED,
         check_peer_ask,
+        resolve_caller,
+        since_turn_start,
     )
+    from anygarden.orchestration.peer_fanin import (
+        open_or_join_group,
+        post_question,
+        record_forwarded_request,
+    )
+    from anygarden.orchestration.rules import MAX_PEER_DEPTH
 
     room_id = arguments.get("room_id")
-    target_pid = arguments.get("participant_id")
-    question = arguments.get("question")
     if not isinstance(room_id, str) or not room_id:
-        return _error_result("room_id is required")
-    if not isinstance(target_pid, str) or not target_pid:
-        return _error_result("participant_id is required")
-    if not isinstance(question, str) or not question.strip():
-        return _error_result("question is required")
-    question = question.strip()
-    if len(question) > MAX_QUESTION_CHARS:
+        return _error_result("room_id is required"), []
+    raw_asks = arguments.get("asks")
+    if raw_asks is None and "participant_id" in arguments:
+        raw_asks = [{
+            "participant_id": arguments.get("participant_id"),
+            "question": arguments.get("question"),
+        }]
+    if not isinstance(raw_asks, list) or not raw_asks:
+        return _error_result("asks is required"), []
+    if len(raw_asks) > MAX_ASKS_PER_CALL:
+        return _error_result(f"at most {MAX_ASKS_PER_CALL} asks per call"), []
+    asks: list[tuple[str, str]] = []
+    for item in raw_asks:
+        pid = item.get("participant_id") if isinstance(item, dict) else None
+        question = item.get("question") if isinstance(item, dict) else None
+        if not isinstance(pid, str) or not pid:
+            return _error_result("each ask needs a participant_id"), []
+        if not isinstance(question, str) or not question.strip():
+            return _error_result("each ask needs a question"), []
+        question = question.strip()
+        if len(question) > MAX_QUESTION_CHARS:
+            return _error_result(
+                f"question is longer than {MAX_QUESTION_CHARS} characters"
+            ), []
+        # A repeated target keeps its last question.
+        asks = [a for a in asks if a[0] != pid] + [(pid, question)]
+
+    caller = await resolve_caller(db, agent_id=agent_id, room_id=room_id)
+    if caller is None:
+        return _error_result("You are not a participant of this room."), []
+    if caller.turn is None:
         return _error_result(
-            f"question is longer than {MAX_QUESTION_CHARS} characters"
-        )
+            "ask_peer can only be used while you are answering a message."
+        ), []
 
-    decision = await check_peer_ask(
-        db,
-        budget=budget,
-        pending=pending,
-        agent_id=agent_id,
-        room_id=room_id,
-        target_pid=target_pid,
-    )
-    if decision.status == "invalid":
-        return _error_result(decision.detail or "invalid peer")
-
-    target = {"participant_id": target_pid, "name": decision.target_name}
-    if decision.status == "rejected":
-        if decision.reason == "already_answering":
-            why = (
-                f"{decision.target_name or 'This peer'} was called by the "
-                "same message as you and is answering it now."
+    # Hop 2: this turn was started by a peer's question. Hand the request
+    # back to that caller instead of calling on (#762).
+    if caller.hop > MAX_PEER_DEPTH:
+        forwarded = [
+            (pid, q)
+            for pid, q in asks
+            if await record_forwarded_request(
+                db, request_id=caller.turn.request_id, participant_id=pid, question=q
             )
+        ]
+        if forwarded:
+            names = ", ".join(caller.names.get(pid, pid) for pid, _ in forwarded)
+            return _ok_result(
+                "Not sent: you were asked by another agent, so you cannot ask "
+                f"peers yourself. Your request to {names} goes back to the agent "
+                "that asked you, together with your answer; it decides whether "
+                "to ask. Answer the question you were asked with what you have.",
+                {
+                    "status": "forwarded",
+                    "targets": [
+                        {"participant_id": pid, "name": caller.names.get(pid)}
+                        for pid, _ in forwarded
+                    ],
+                },
+            ), []
+        recent = await since_turn_start(db, caller)
+        return _rejected_result(
+            [
+                {
+                    "participant_id": pid,
+                    "name": caller.names.get(pid),
+                    "status": "rejected",
+                    "reason": REASON_LIMIT_REACHED,
+                }
+                for pid, _ in asks
+            ],
+            recent,
+        ), []
+
+    results: list[dict[str, Any]] = []
+    accepted: list[tuple[Any, str]] = []
+    for pid, question in asks:
+        decision = await check_peer_ask(db, caller=caller, target_pid=pid)
+        entry: dict[str, Any] = {
+            "participant_id": pid,
+            "name": decision.target_name,
+            "status": decision.status,
+        }
+        if decision.status == "invalid":
+            entry["detail"] = decision.detail
+        elif decision.status == "rejected":
+            entry["reason"] = decision.reason
+        elif budget is not None and not budget.consume(room_id, 1):
+            entry["status"] = "rejected"
+            entry["reason"] = REASON_LIMIT_REACHED
         else:
-            why = "The peer-call limit for this user turn is reached."
-        recent = "\n".join(
-            f"- #{m['seq']} {m['speaker']}: {m['content']}"
-            for m in decision.since_turn_start
-        )
-        text = (
-            f"Rejected: {why} The peer will not be called. Do not ask for "
-            "this in your reply; use the messages below if they answer it."
-            + (f"\nMessages posted since your turn started:\n{recent}" if recent else "")
-        )
-        return _ok_result(
-            text,
-            {
-                "status": "rejected",
-                "reason": decision.reason,
-                "targets": [target],
-                "since_turn_start": decision.since_turn_start,
-            },
-        )
+            accepted.append((decision.target, question))
+        results.append(entry)
 
-    if pending is not None:
-        pending.schedule(
-            agent_id,
-            room_id,
-            PeerAsk(
-                target_pid=target_pid,
-                question=question,
-                request_id=decision.request_id,
-                created_at=pending.now(),
-            ),
+    if len(asks) == 1 and results[0]["status"] == "invalid":
+        return _error_result(results[0]["detail"] or "invalid peer"), []
+
+    posted = []
+    if accepted:
+        group = await open_or_join_group(
+            db, caller_turn=caller.turn, caller_participant_id=caller.participant.id
         )
-    return _ok_result(
-        f"Scheduled: {decision.target_name or target_pid} will be asked in a "
-        "thread under your final reply. Do not repeat the question in your "
-        "reply.",
-        {"status": "scheduled", "targets": [target]},
+        for target, question in accepted:
+            posted.append(await post_question(db, group=group, target=target, question=question))
+        if budget is not None:
+            budget.mark_peer_called(room_id, [t.id for t, _ in accepted])
+
+    if not accepted:
+        return _rejected_result(results, await since_turn_start(db, caller)), []
+
+    sent = ", ".join(
+        caller.names.get(t.id, t.id) for t, _ in accepted
     )
+    text = (
+        f"Sent to {sent}. Each answers in a thread under the message you are "
+        "answering. Your reply for this turn will NOT be posted: write down "
+        "only what you have already found yourself (it is kept as your draft), "
+        "then end your turn. When every peer has finished you will be woken "
+        "with their answers and your draft, and you write the final answer then."
+    )
+    not_sent = [r for r in results if r["status"] != "accepted"]
+    if not_sent:
+        text += "\nNot sent: " + "; ".join(
+            f"{r.get('name') or r['participant_id']} ({r.get('reason') or r.get('detail')})"
+            for r in not_sent
+        )
+    return _ok_result(text, {"status": "sent", "targets": results}), posted
 
+
+def _rejected_result(
+    results: list[dict[str, Any]], recent_messages: list[dict[str, Any]]
+) -> dict[str, Any]:
+    whys = []
+    for r in results:
+        name = r.get("name") or r["participant_id"]
+        if r.get("reason") == "already_answering":
+            whys.append(f"{name} is answering a message in this room right now.")
+        elif r.get("reason") == "limit_reached":
+            whys.append(f"{name}: the peer-call limit for this user turn is reached.")
+        else:
+            whys.append(f"{name}: {r.get('detail') or 'invalid'}")
+    recent = "\n".join(
+        f"- #{m['seq']} {m['speaker']}: {m['content']}" for m in recent_messages
+    )
+    text = (
+        "Rejected: " + " ".join(whys) + " No peer will be called. Do not ask "
+        "for this in your reply; answer yourself, using the messages below if "
+        "they help."
+        + (f"\nMessages posted since your turn started:\n{recent}" if recent else "")
+    )
+    return _ok_result(
+        text,
+        {
+            "status": "rejected",
+            "targets": results,
+            "since_turn_start": recent_messages,
+        },
+    )

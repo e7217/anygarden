@@ -215,3 +215,41 @@ describe('useWebSocket typing stages', () => {
     expect(typingState()).toEqual({ users: [], stages: {} })
   })
 })
+
+function ProgressHarness() {
+  const { typingStages, typingProgress } = useWebSocket('room-1')
+  return <div data-testid="progress">{JSON.stringify({ stages: typingStages, progress: typingProgress })}</div>
+}
+
+function receiveFrame(socket: FakeWebSocket, frame: Record<string, unknown>) {
+  act(() => socket.onmessage?.({ data: JSON.stringify(frame) } as MessageEvent))
+}
+
+describe('useWebSocket peer-wait progress (#762)', () => {
+  it('keeps waiting_peers counts until the stage changes, stops or expires', () => {
+    render(<ProgressHarness />)
+    const state = () => JSON.parse(screen.getByTestId('progress').textContent || '{}')
+    receiveFrame(sockets[0], {
+      type: 'typing', participant_id: 'pm', is_typing: true, stage: 'waiting_peers',
+      waiting_done: 0, waiting_total: 2, waiting_names: ['a', 'b'],
+    })
+    expect(state()).toEqual({ stages: { pm: 'waiting_peers' }, progress: { pm: { done: 0, total: 2 } } })
+
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'pm', is_typing: true, stage: 'writing' })
+    expect(state()).toEqual({ stages: { pm: 'writing' }, progress: {} })
+
+    receiveFrame(sockets[0], {
+      type: 'typing', participant_id: 'pm', is_typing: true, stage: 'waiting_peers',
+      waiting_done: 1, waiting_total: 2,
+    })
+    receiveFrame(sockets[0], { type: 'typing', participant_id: 'pm', is_typing: false })
+    expect(state()).toEqual({ stages: {}, progress: {} })
+
+    receiveFrame(sockets[0], {
+      type: 'typing', participant_id: 'pm', is_typing: true, stage: 'waiting_peers',
+      waiting_done: 1, waiting_total: 2,
+    })
+    act(() => vi.advanceTimersByTime(5000))
+    expect(state()).toEqual({ stages: {}, progress: {} })
+  })
+})

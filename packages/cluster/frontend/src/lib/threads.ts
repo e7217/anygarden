@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@/hooks/useWebSocket'
+import { isHiddenSystemMessage } from '@/lib/systemMessages'
 
 export interface ThreadIndex {
   /** Top-level messages, in stream order. */
@@ -49,6 +50,9 @@ export function indexThreads(messages: ChatMessage[]): ThreadIndex {
       if (rootId) orphanIds.add(msg.id)
       continue
     }
+    // Hidden plumbing (e.g. an ask_peer result message, #762) neither
+    // renders nor counts as a reply.
+    if (isHiddenSystemMessage(msg)) continue
     const bucket = repliesByRoot.get(rootId)
     if (bucket) bucket.push(msg)
     else repliesByRoot.set(rootId, [msg])

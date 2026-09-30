@@ -34,4 +34,17 @@ describe('TypingIndicator', () => {
       participants={participants} myParticipantId={null} />)
     expect(screen.getByText('Codex · 응답 작성 중…, Pi · 응답 준비 중…')).toBeTruthy()
   })
+
+  it('shows how many peers an ask_peer caller is still waiting on', () => {
+    renderInLocale('ko', <TypingIndicator typingUsers={new Set(['agent'])}
+      typingStages={{ agent: 'waiting_peers' }} typingProgress={{ agent: { done: 1, total: 2 } }}
+      participants={participants} myParticipantId={null} />)
+    expect(screen.getByText('Codex · 동료 답 기다리는 중 (1/2)…')).toBeTruthy()
+  })
+
+  it('shows the waiting stage without counts when the server sent none', () => {
+    renderInLocale('en', <TypingIndicator typingUsers={new Set(['agent'])}
+      typingStages={{ agent: 'waiting_peers' }} participants={participants} myParticipantId={null} />)
+    expect(screen.getByText('Codex · waiting for peers…')).toBeTruthy()
+  })
 })
