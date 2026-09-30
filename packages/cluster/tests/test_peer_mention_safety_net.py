@@ -171,6 +171,10 @@ class TestPeerMentionStamping:
                 # response) but the peer-mention token is gone.
                 assert f"<@user:{peer_pid}>" not in second["content"]
                 assert "2차 질문" in second["content"]
+                # #743 — the UI shows which call was not delivered.
+                assert meta.get("peer_call_undelivered") == [
+                    {"participant_id": peer_pid, "reason": "limit_reached"}
+                ]
 
     @pytest.mark.asyncio
     async def test_user_send_resets_peer_budget(self, ws_env) -> None:
@@ -325,6 +329,10 @@ class TestRedundantPeerWake:
         assert f"<@user:{peer_pid}>" not in msg["content"]
         assert "소개해 주세요" in msg["content"]
         assert meta.get("peer_redundant") is True
+        # #743 — the call stays in the text and is marked undelivered.
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": peer_pid, "reason": "already_answering"}
+        ]
         assert "mentions" not in meta
         assert meta.get("kind") is None
         budget = app.state.peer_handoff_budget
@@ -347,6 +355,7 @@ class TestRedundantPeerWake:
         assert meta.get("peer_depth") == 1
         assert meta.get("kind") == "peer_query"
         assert meta.get("peer_redundant") is None
+        assert "peer_call_undelivered" not in meta
 
     @pytest.mark.asyncio
     async def test_non_mentioned_only_room_does_not_mark_woken(self, ws_env) -> None:
@@ -390,6 +399,76 @@ class TestRedundantPeerWake:
         assert app.state.peer_handoff_budget.woken(room.id) == frozenset()
 
 
+class TestUndeliveredPeerCall:
+    """#743 — invalid peer calls keep their sentence and are listed in
+    ``peer_call_undelivered`` so the UI can say they were not delivered."""
+
+    @pytest.mark.asyncio
+    async def test_redundant_and_blocked_targets_share_one_list(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        async with sf() as db:
+            third = Agent(name="third", engine="codex", actual_state="running")
+            db.add(third)
+            await db.flush()
+            third_part = Participant(room_id=room.id, agent_id=third.id, role="member")
+            db.add(third_part)
+            await db.commit()
+            third_pid = third_part.id
+
+        with TestClient(app) as client:
+            # The human wakes sender and peer; third stays asleep.
+            _user_send(
+                client, room.id, ws_env["token"],
+                f"<@user:{sender_pid}> <@user:{peer_pid}> 각자 답해 줘",
+            )
+            first = _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{third_pid}> 첫 질문", "첫 질문",
+            )
+            assert first["metadata"].get("peer_depth") == 1
+            # peer is already answering; third would exceed the depth cap.
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token,
+                f"<@user:{peer_pid}> <@user:{third_pid}> 두 분 의견도 주세요", "의견도 주세요",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert "두 분 의견도 주세요" in msg["content"]
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": peer_pid, "reason": "already_answering"},
+            {"participant_id": third_pid, "reason": "limit_reached"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_message_left_blank_by_stripping_is_still_delivered(
+        self, ws_env
+    ) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "@everyone 각자 소개해 주세요")
+            with client.websocket_connect(
+                f"/ws/rooms/{room.id}",
+                subprotocols=["anygarden.v1", f"bearer.{sender_token}"],
+            ) as agent_ws:
+                agent_ws.receive_text()  # welcome
+                agent_ws.send_text(json.dumps({
+                    "type": "send", "content": f"<@user:{peer_pid}>",
+                }))
+                for _ in range(10):
+                    frame = json.loads(agent_ws.receive_text())
+                    if frame.get("type") == "message":
+                        break
+                else:  # pragma: no cover
+                    pytest.fail("agent send was never echoed back")
+
+        assert frame["content"].strip() == ""
+        assert (frame.get("metadata") or {}).get("peer_call_undelivered") == [
+            {"participant_id": peer_pid, "reason": "already_answering"}
+        ]
+
+
 class TestAgentEveryone:
     """#739 — an agent's ``@everyone`` expands into peer mentions and is
     therefore held to the same depth/budget as any other peer ask."""
@@ -430,3 +509,6 @@ class TestAgentEveryone:
         meta = msg.get("metadata") or {}
         assert meta.get("peer_blocked") is True
         assert "mentions" not in meta
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": _peer_pid, "reason": "limit_reached"}
+        ]

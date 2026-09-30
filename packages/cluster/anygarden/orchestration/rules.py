@@ -321,6 +321,25 @@ def strip_peer_mentions_from_content(
     return _PEER_MENTION_TOKEN.sub(_drop, content)
 
 
+def undelivered_peer_calls(
+    mentions: Iterable[dict[str, Any]],
+    reason: str,
+) -> list[dict[str, str]]:
+    """Describe peer calls the server refused to deliver (#743).
+
+    Stored under ``metadata.peer_call_undelivered`` next to the
+    ``peer_redundant`` / ``peer_blocked`` flags. The message text keeps
+    the sentence that made the call, so the UI uses these entries to say
+    who was not called and why (``already_answering`` or
+    ``limit_reached``). Only ``user`` mentions carry a participant id.
+    """
+    return [
+        {"participant_id": str(m["id"]), "reason": reason}
+        for m in mentions
+        if m.get("type") == "user" and m.get("id")
+    ]
+
+
 class PeerHandoffBudget:
     """Per-room counter that resets on every human/guest message.
 
