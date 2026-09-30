@@ -56,8 +56,10 @@ jobs:
 
       - name: Test cluster
         working-directory: packages/cluster
-        # ~2,000 tests; one worker per runner core (#753).
-        run: uv run pytest -x -n auto
+        # ~2,000 tests; one worker per logical CPU (#753). ``-n auto``
+        # counts physical cores when psutil is installed, which gives
+        # only 2 workers on the 4-vCPU runner.
+        run: uv run pytest -x -n logical
 
   test-windows:
     name: Test (Windows native)
