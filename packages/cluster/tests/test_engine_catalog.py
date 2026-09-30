@@ -47,6 +47,7 @@ class TestCatalog:
         assert get_engine_entry("nonexistent") is None
 
     def test_is_valid_model(self) -> None:
+        assert is_valid_model("codex-cli", "gpt-6.1-sol") is True
         assert is_valid_model("codex-cli", "gpt-6-sol") is True
         assert is_valid_model("codex-cli", "nonexistent") is False
         assert is_valid_model("unknown-engine", "gpt-6-sol") is False
@@ -71,17 +72,30 @@ class TestCatalog:
 
     def test_is_valid_reasoning_effort_model_level(self) -> None:
         """Per-model reasoning_levels narrow the engine-level list."""
-        # gpt-5.5 stops at xhigh; GPT-5.6 tiers add ``max``.
+        # gpt-5.5 stops at xhigh; GPT-5.6 tiers add ``max``, sol/terra ``ultra``.
         assert is_valid_reasoning_effort("codex-cli", "xhigh", model="gpt-5.5") is True
         assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-5.5") is False
         assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-5.6-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-5.6-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-5.6-terra") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-5.6-luna") is False
         # #692 — GPT-6 astra/sol add ``ultra``; luna stops at ``max``.
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-astra") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-sol") is True
+        assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6.1-sol") is True
         assert is_valid_reasoning_effort("codex-cli", "ultra", model="gpt-6-luna") is False
         assert is_valid_reasoning_effort("codex-cli", "max", model="gpt-6-luna") is True
-        # The backend rejects ``minimal`` for every GPT-6 model.
-        for model in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna"):
+        # The backend rejects ``minimal`` for every catalog model.
+        for model in (
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+        ):
             assert (
                 is_valid_reasoning_effort("codex-cli", "minimal", model=model)
                 is False
@@ -191,9 +205,14 @@ class TestEngineModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["engine"] == "codex-cli"
-        assert data["default_model"] == "gpt-6-sol"
+        assert data["default_model"] == "gpt-6.1-sol"
         model_ids = [m["id"] for m in data["models"]]
-        assert model_ids[:3] == ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]
+        assert model_ids[:4] == [
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+        ]
         assert "gpt-5.6-sol" in model_ids
         assert "gpt-5.6-terra" in model_ids
         assert "gpt-5.6-luna" in model_ids
@@ -249,6 +268,8 @@ class TestEngineModelsEndpoint:
         assert "max" not in by_id["gpt-5.5"]
         assert "max" in by_id["gpt-5.6-sol"]
         assert "ultra" in by_id["gpt-6-sol"]
+        assert "ultra" in by_id["gpt-6.1-sol"]
+        assert "minimal" not in by_id["gpt-6.1-sol"]
         assert "ultra" not in by_id["gpt-6-luna"]
         assert "minimal" not in by_id["gpt-6-sol"]
         assert "ultra" in data["reasoning_levels"]

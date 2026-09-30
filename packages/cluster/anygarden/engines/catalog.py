@@ -15,7 +15,7 @@ class EngineModel:
     """A single model offered by an engine."""
 
     id: str
-    """Identifier passed to the adapter (e.g. ``"gpt-6-sol"``)."""
+    """Identifier passed to the adapter (e.g. ``"gpt-6.1-sol"``)."""
 
     label: str
     """Human-friendly display name."""
@@ -100,6 +100,17 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # the same cost/quality reason terra was the GPT-5.6 default. Operators
     # can pick astra per agent when a task needs the frontier model.
     #
+    # GPT-6.1 sol (2026-09-30) is codex's "latest workhorse" and demotes
+    # gpt-6-sol to "previous generation"; it has the same reasoning levels.
+    # Live-verified (low and ultra) against codex 0.159.0 on 2026-09-30 and
+    # made the default. gpt-6-sol stays for agents already pinned to it.
+    #
+    # The same 2026-09-30 check realigned the older models with codex's own
+    # lists: the backend now rejects ``minimal`` for every model (gpt-5.5
+    # answers "Supported values are: none, low, medium, high, xhigh"), and
+    # gpt-5.6 sol/terra gained ``ultra``. The engine-level list keeps
+    # ``minimal`` for custom models served through a provider gateway.
+    #
     # #692 removed gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.3-codex-spark
     # and gpt-5.2: the backend now answers them with "not supported when
     # using Codex with a ChatGPT account". GPT-5.6 and 5.5 still work
@@ -107,8 +118,13 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
     # already pinned to them.
     "codex-cli": EngineCatalogEntry(
         engine="codex-cli",
-        default_model="gpt-6-sol",
+        default_model="gpt-6.1-sol",
         models=(
+            EngineModel(
+                id="gpt-6.1-sol",
+                label="GPT-6.1 Sol",
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
+            ),
             EngineModel(
                 id="gpt-6-astra",
                 label="GPT-6 Astra",
@@ -127,22 +143,22 @@ ENGINE_CATALOG: dict[str, EngineCatalogEntry] = {
             EngineModel(
                 id="gpt-5.6-sol",
                 label="GPT-5.6 Sol",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
             ),
             EngineModel(
                 id="gpt-5.6-terra",
                 label="GPT-5.6 Terra",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+                reasoning_levels=("low", "medium", "high", "xhigh", "max", "ultra"),
             ),
             EngineModel(
                 id="gpt-5.6-luna",
                 label="GPT-5.6 Luna",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh", "max"),
+                reasoning_levels=("low", "medium", "high", "xhigh", "max"),
             ),
             EngineModel(
                 id="gpt-5.5",
                 label="GPT-5.5",
-                reasoning_levels=("minimal", "low", "medium", "high", "xhigh"),
+                reasoning_levels=("low", "medium", "high", "xhigh"),
             ),
         ),
         reasoning_levels=(
