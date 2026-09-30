@@ -18,7 +18,7 @@ After #750 removed the fsync cost of file-backed test DBs, the Linux CI `Test cl
 ## Action
 
 - `packages/cluster/pyproject.toml`: added `pytest-xdist>=3.5` to the `dev` extra; `uv.lock` updated (pytest-xdist 3.8.0, execnet 2.1.2).
-- `.github/workflows/ci.yml`: the `Test cluster` step now runs `uv run pytest -x -n auto`.
+- `.github/workflows/ci.yml`: the `Test cluster` step now runs `uv run pytest -x -n logical`. The first push used `-n auto`, but on CI that started only 2 workers: with psutil installed, `auto` counts physical cores, and the 4-vCPU runner reports 2. Follow-up commit `fa7ada0` switched to `logical`.
 - `CONTRIBUTING.md`: under "Checks before you push", documented `cd packages/cluster && uv run pytest -n auto`.
 
 ## Decisions
@@ -29,10 +29,10 @@ After #750 removed the fsync cost of file-backed test DBs, the Linux CI `Test cl
   - Split machine/agent/cluster into separate CI jobs — smaller gain (machine and agent take ~40 s together); can still be done later.
 - Tests already use their own DB and `tmp_path`, so workers do not share state. Local runs: `-n 4` passed 6/6 times (~1m50s each); `-n auto` (8 workers) failed 2 of 4 runs with one failure each, always in `test_ws_handler.py::TestAgentCausalLink`.
 - Those failures are #726, not new ones: the same tests also fail sequentially, and CI's #726 failures are in the same class. The in-memory test engine uses `StaticPool`; when its single connection is closed mid-test (e.g. a cancelled WS handler task), the pool opens a new, empty in-memory DB, which shows up as `no such table`, FK failures or `no active connection`. Higher CPU load makes that timing more likely.
-- Assumption: CI runners keep ~4 cores, so `-n auto` means 4 workers there. On a bigger runner, #726 may show up more often until it is fixed.
+- Assumption: CI runners keep 4 vCPUs, so `-n logical` means 4 workers there. On a bigger runner, #726 may show up more often until it is fixed.
 
 ## Result
 
 - Local cluster suite: 6m21s sequential → ~1m50s with `-n 4`, 2034 passed.
-- The CI effect will be measured on the PR.
+- CI `Test cluster` step: ~634 s → 373 s with `-n auto` (2 workers). The `-n logical` run is measured on the PR.
 - #726 is still open; its root cause and the proposed fix (file-backed DB for the WS fixtures) are recorded on the issue.
