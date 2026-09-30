@@ -569,6 +569,29 @@ def _is_ambient_candidate(
     return True
 
 
+async def _peer_caller_hop(
+    session_factory: Any,
+    budget: Any,
+    *,
+    room_id: str,
+    participant_id: str,
+    request_id: str | None,
+) -> int:
+    """Hop at which *participant_id* calls peers from its current turn (#756).
+
+    The turn the reply echoes is authoritative. A reply without a turn
+    proof (proactive or legacy sends) still counts as hop 2 when a peer
+    call already woke the sender in this user turn.
+    """
+    from anygarden.orchestration.peer_ask import sender_hop
+
+    async with session_factory() as db:
+        hop = await sender_hop(db, request_id=request_id, participant_id=participant_id)
+    if budget is not None and participant_id in budget.peer_called(room_id):
+        hop = max(hop, 2)
+    return hop
+
+
 async def _directed_delegation_target(
     db: AsyncSession,
     *,
@@ -940,9 +963,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # Issue #737 — asks scheduled by the ``ask_peer`` MCP tool. After the
     # caller's final reply is stored they are fed back into this loop as
     # thread-reply sends (``injected_sends``) so they take the normal
-    # agent-send path.
+    # agent-send path. Each carries the hop of the reply that scheduled
+    # it (#756), since the injected send has no turn proof of its own.
     pending_peer_asks = getattr(app.state, "pending_peer_asks", None)
-    injected_sends: deque[str] = deque()
+    injected_sends: deque[tuple[str, int]] = deque()
 
     # -- Authentication via Sec-WebSocket-Protocol --
     raw_protocols = websocket.headers.get("sec-websocket-protocol", "")
@@ -1254,11 +1278,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             # #737 — a send injected for an ``ask_peer`` call is handled
             # before the next frame from the socket.
             is_tool_peer_ask = bool(injected_sends)
-            raw = (
-                injected_sends.popleft()
-                if is_tool_peer_ask
-                else await websocket.receive_text()
-            )
+            injected_hop: int | None = None
+            if is_tool_peer_ask:
+                raw, injected_hop = injected_sends.popleft()
+            else:
+                raw = await websocket.receive_text()
             # #425 — reset per-frame log context and re-bind the room as
             # the durable correlation key for every log this frame emits.
             # request_id (per agent) is additionally bound in the
@@ -1500,14 +1524,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 #   peer-mention events allowed in the room across
                 #   the whole turn, regardless of layer.
                 #
-                # Both express depth as ``budget.consume()``-derived
-                # used count: 1st peer-ask of the turn yields used=1,
-                # which is layer 1. Triggering both caps simultaneously
-                # is the same write so we keep one budget object.
+                # #756 — the layer is the sender's hop (what started its
+                # turn), not how many calls the user turn already made, so
+                # asking several peers at once stays layer 1. Each called
+                # peer takes one slot of the total, whether it was named
+                # in the body or asked through ``ask_peer``.
                 #
                 # Human/guest sends open a fresh turn → budget reset
                 # below. Agent sends with peer mentions trigger the
-                # consume-and-check. Pre-spawn-of-budget tests skip the
+                # hop check and consume. Pre-spawn-of-budget tests skip the
                 # safety net entirely so legacy fixtures don't break.
                 is_agent_for_peer = (
                     identity is not None and identity.kind == "agent"
@@ -1562,8 +1587,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # #719 — the user turn already woke these peers; they
                     # are answering the same question, so re-waking them
                     # only makes them answer twice. Drop the mention
-                    # without spending the handoff budget.
-                    already_woken = peer_handoff_budget.woken(room_id)
+                    # without spending the handoff budget. #756 — the same
+                    # holds for peers an earlier call in this turn woke.
+                    already_woken = peer_handoff_budget.woken(
+                        room_id
+                    ) | peer_handoff_budget.peer_called(room_id)
                     redundant = [
                         m for m in peer_mentions if str(m.get("id")) in already_woken
                     ]
@@ -1595,20 +1623,33 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             ),
                         )
                     if peer_mentions:
-                        ok = peer_handoff_budget.consume(room_id)
-                        used = (
-                            MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN
-                            - peer_handoff_budget.remaining(room_id)
+                        called_pids = {
+                            str(m["id"])
+                            for m in peer_mentions
+                            if m.get("type") == "user"
+                        }
+                        hop = (
+                            injected_hop
+                            if injected_hop is not None
+                            else await _peer_caller_hop(
+                                session_factory,
+                                peer_handoff_budget,
+                                room_id=room_id,
+                                participant_id=participant.id,
+                                request_id=(
+                                    metadata.get("request_id")
+                                    if isinstance(metadata.get("request_id"), str)
+                                    else None
+                                ),
+                            )
                         )
-                        block = (not ok) or (used > MAX_PEER_DEPTH)
-                        if block:
-                            peer_pids = {
-                                str(m["id"])
-                                for m in peer_mentions
-                                if m.get("type") == "user"
-                            }
+                        too_deep = hop > MAX_PEER_DEPTH
+                        ok = too_deep or peer_handoff_budget.consume(
+                            room_id, max(1, len(called_pids))
+                        )
+                        if too_deep or not ok:
                             frame_in.content = strip_peer_mentions_from_content(
-                                frame_in.content, peer_pids=peer_pids
+                                frame_in.content, peer_pids=called_pids
                             )
                             mentions = [m for m in mentions if m not in peer_mentions]
                             if mentions:
@@ -1619,9 +1660,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             # can tell the blocked event apart from a
                             # successful pass-through.
                             metadata["peer_depth"] = (
-                                MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN + 1
-                                if not ok
-                                else used
+                                hop
+                                if too_deep
+                                else MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN + 1
                             )
                             metadata["peer_blocked"] = True
                             metadata.setdefault(
@@ -1635,20 +1676,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 "ws.peer_mention_blocked",
                                 room_id=room_id,
                                 sender_agent_id=sender_agent_id,
-                                used=used,
+                                hop=hop,
                                 budget_ok=ok,
+                                remaining=peer_handoff_budget.remaining(room_id),
                             )
                         else:
-                            metadata["peer_depth"] = used
-                            # First peer-ask in the turn → ``peer_query``;
-                            # everything after → ``peer_response`` (the
-                            # initiating agent reading a reply that itself
-                            # carried mentions, which is the depth-2
-                            # territory we strip; in practice this branch
-                            # only fires when ``MAX_PEER_DEPTH`` is bumped
-                            # above 1 by an admin override).
+                            peer_handoff_budget.mark_peer_called(room_id, called_pids)
+                            metadata["peer_depth"] = hop
+                            # A hop-1 call → ``peer_query``; anything deeper
+                            # → ``peer_response`` (in practice only when
+                            # ``MAX_PEER_DEPTH`` is bumped above 1 by an
+                            # admin override).
                             metadata["kind"] = (
-                                "peer_query" if used == 1 else "peer_response"
+                                "peer_query" if hop == 1 else "peer_response"
                             )
                 elif (
                     not is_thread_reply
@@ -2449,15 +2489,24 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     and frame_in.content.strip()
                 ):
                     thread_root = msg.root_message_id or msg.id
-                    for ask in pending_peer_asks.take(
+                    asks = pending_peer_asks.take(
                         identity.id, room_id, request_id=reply_request_id
-                    ):
-                        injected_sends.append(json.dumps({
+                    )
+                    if asks:
+                        ask_hop = await _peer_caller_hop(
+                            session_factory,
+                            peer_handoff_budget,
+                            room_id=room_id,
+                            participant_id=participant.id,
+                            request_id=reply_request_id,
+                        )
+                    for ask in asks:
+                        injected_sends.append((json.dumps({
                             "type": "send",
                             "content": f"<@user:{ask.target_pid}> {ask.question}",
                             "thread_root_id": thread_root,
                             "metadata": {"peer_ask": {"via": "tool"}},
-                        }))
+                        }), ask_hop))
 
                 # Send system message if representative agent is offline
                 if metadata.get("_rep_offline"):

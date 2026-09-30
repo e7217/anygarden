@@ -219,19 +219,23 @@ def names_agent_in_content(agent_name: str | None, content: str) -> bool:
 
 # ── Peer-mention safety net (#279) ───────────────────────────────────
 
-# How deep the agent-to-agent mention chain may go inside a single
+# How deep the agent-to-agent call chain may go inside a single
 # user turn before the server starts stripping peer mentions. ``1``
-# means: agent A asks agent B (depth 0 → outbound depth 1); B's
-# reply targeting A is depth-2 territory and gets its mentions
-# stripped. Tuned for 2026-04 telemetry: most "useful" peer asks
-# converge in one hop; depth ≥ 2 is overwhelmingly a runaway loop
-# (agents re-asking each other on synthesis prompts).
+# means: agent A asks agent B (a call from a turn a person started is
+# hop 1); a call from B's turn, which A's call started, is hop 2 and
+# gets its mentions stripped. Tuned for 2026-04 telemetry: most
+# "useful" peer asks converge in one hop; depth ≥ 2 is overwhelmingly
+# a runaway loop (agents re-asking each other on synthesis prompts).
+# The hop comes from the sender's turn, not from how many calls the
+# user turn already made: asking several peers at once is still one
+# hop (#756).
 MAX_PEER_DEPTH: int = 1
 
-# How many peer mentions may be broadcast within one ``user_turn``
-# (a turn boundary opens whenever a human/guest sends a message).
-# Hit-rate caps catastrophic fan-outs that depth alone misses
-# (e.g. depth-1 agent peer-asking eight teammates simultaneously).
+# How many peers may be called within one ``user_turn`` (a turn
+# boundary opens whenever a human/guest sends a message). Each called
+# peer takes one slot, whether the call is a mention in the body or an
+# ``ask_peer`` tool call. Caps catastrophic fan-outs that depth alone
+# misses (e.g. a hop-1 agent asking eight teammates simultaneously).
 MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN: int = 8
 
 
@@ -357,19 +361,22 @@ class PeerHandoffBudget:
     ±1 slop, which is the same slop already accepted upstream.
 
     It also remembers which agent participants the current user turn
-    already woke (#719). Those agents are answering the same question,
-    so a peer mention aimed at them would only make them answer twice.
+    already woke (#719) and which peers it already called (#756). Those
+    agents are answering, so another call aimed at them would only make
+    them answer twice.
     """
 
     def __init__(self, capacity: int = MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN) -> None:
         self._capacity = capacity
         self._remaining: dict[str, int] = {}
         self._woken: dict[str, frozenset[str]] = {}
+        self._peer_called: dict[str, frozenset[str]] = {}
 
     def reset(self, room_id: str) -> None:
         """Restore the room's quota and forget the previous turn's wakes."""
         self._remaining[room_id] = self._capacity
         self._woken.pop(room_id, None)
+        self._peer_called.pop(room_id, None)
 
     def mark_woken(self, room_id: str, participant_ids: Iterable[str]) -> None:
         """Record the agent participants the current user turn woke."""
@@ -378,6 +385,14 @@ class PeerHandoffBudget:
     def woken(self, room_id: str) -> frozenset[str]:
         """Agent participants already woken in the room's current user turn."""
         return self._woken.get(room_id, frozenset())
+
+    def mark_peer_called(self, room_id: str, participant_ids: Iterable[str]) -> None:
+        """Add peers a delivered call woke in the current user turn."""
+        self._peer_called[room_id] = self.peer_called(room_id) | frozenset(participant_ids)
+
+    def peer_called(self, room_id: str) -> frozenset[str]:
+        """Peers already called in the room's current user turn."""
+        return self._peer_called.get(room_id, frozenset())
 
     def consume(self, room_id: str, count: int = 1) -> bool:
         """Try to consume *count* slots. Returns True if allowed."""
@@ -391,14 +406,14 @@ class PeerHandoffBudget:
         """Read-only peek used by tests and observability."""
         return self._remaining.get(room_id, self._capacity)
 
-    def would_block(self, room_id: str) -> bool:
-        """Whether the next peer handoff would be blocked, without spending it.
+    def would_block(self, room_id: str, *, hop: int = 1, reserved: int = 0) -> bool:
+        """Whether one more peer call would be blocked, without spending it.
 
-        Mirrors the WS safety net: a handoff is blocked when no slot is
-        left or when it would exceed ``MAX_PEER_DEPTH`` (#737).
+        Mirrors the WS safety net: a call is blocked when the caller's
+        turn is deeper than ``MAX_PEER_DEPTH`` or no slot is left once
+        the *reserved* (scheduled, not yet posted) calls take theirs.
         """
-        remaining = self.remaining(room_id)
-        return remaining < 1 or (self._capacity - remaining + 1) > MAX_PEER_DEPTH
+        return hop > MAX_PEER_DEPTH or self.remaining(room_id) < reserved + 1
 
 
 # ── Typing State ─────────────────────────────────────────────────────

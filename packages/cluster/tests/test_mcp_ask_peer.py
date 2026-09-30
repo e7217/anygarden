@@ -21,7 +21,7 @@ from anygarden.db.models import (
     Participant,
 )
 from tests.test_peer_mention_safety_net import _seed_sender_and_peer as _seed_pair
-from tests.test_peer_mention_safety_net import _user_send
+from tests.test_peer_mention_safety_net import _add_token, _user_send
 
 
 async def _seed_sender_and_peer(sf, room) -> tuple[str, str, str]:
@@ -180,9 +180,11 @@ class TestAskPeerTool:
         assert "only calls agents" in result["content"][0]["text"]
 
     @pytest.mark.asyncio
-    async def test_thread_ask_still_obeys_the_depth_cap(self, ws_env) -> None:
-        """A scheduled ask that loses its slot before posting is marked
-        undelivered instead of waking the peer (safety net in threads)."""
+    async def test_ask_to_a_peer_the_reply_already_called_is_not_delivered_twice(
+        self, ws_env
+    ) -> None:
+        """A scheduled ask whose target the reply itself already called is
+        marked undelivered instead of waking the peer a second time."""
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
 
@@ -191,8 +193,6 @@ class TestAskPeerTool:
             assert _ask_peer(client, sender_token, room.id, peer_pid, "확인 부탁")[
                 "structuredContent"
             ]["status"] == "scheduled"
-            # The reply itself calls the peer with a token, spending the one
-            # peer slot of this user turn before the thread ask is posted.
             proof = await _turn_proof(sf, sender_pid)
             _reply, ask = _agent_reply(
                 client, room.id, sender_token, f"<@user:{peer_pid}> 먼저 이것부터", proof,
@@ -200,10 +200,93 @@ class TestAskPeerTool:
             )
 
         meta = ask.get("metadata") or {}
-        assert meta.get("peer_blocked") is True
+        assert meta.get("peer_redundant") is True
         assert meta.get("peer_call_undelivered") == [
-            {"participant_id": peer_pid, "reason": "limit_reached"}
+            {"participant_id": peer_pid, "reason": "already_answering"}
         ]
+
+    @pytest.mark.asyncio
+    async def test_two_asks_in_one_turn_are_both_delivered(self, ws_env) -> None:
+        """#756 — asking two peers from one turn is one hop, not two."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        other_pid = await _add_running_agent(sf, room, "agent01")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 다들 뭐 할 수 있어?")
+            for target in (other_pid, peer_pid):
+                assert _ask_peer(client, sender_token, room.id, target, "무엇을 할 수 있나요?")[
+                    "structuredContent"
+                ]["status"] == "scheduled"
+            proof = await _turn_proof(sf, sender_pid)
+            _reply, *asks = _agent_reply(
+                client, room.id, sender_token, "두 분께 물어봤습니다.", proof,
+                expect_messages=3,
+            )
+
+        for ask in asks:
+            meta = ask.get("metadata") or {}
+            assert "peer_blocked" not in meta, meta
+            assert "peer_call_undelivered" not in meta, meta
+            assert meta.get("peer_depth") == 1
+        async with sf() as db:
+            woken = set(
+                (
+                    await db.scalars(
+                        select(AgentTurn.target_participant_id).where(
+                            AgentTurn.target_participant_id.in_([peer_pid, other_pid])
+                        )
+                    )
+                ).all()
+            )
+        assert woken == {peer_pid, other_pid}
+
+    @pytest.mark.asyncio
+    async def test_ask_beyond_the_budget_is_rejected_by_the_tool(self, ws_env) -> None:
+        """#756 — the tool's ``scheduled`` holds at send time; the ask that
+        does not fit is rejected while the caller can still fix its reply."""
+        from anygarden.orchestration.rules import PeerHandoffBudget
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        other_pid = await _add_running_agent(sf, room, "agent01")
+        app.state.peer_handoff_budget = PeerHandoffBudget(capacity=1)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 다들 뭐 할 수 있어?")
+            first = _ask_peer(client, sender_token, room.id, other_pid, "q1")
+            second = _ask_peer(client, sender_token, room.id, peer_pid, "q2")
+            assert first["structuredContent"]["status"] == "scheduled"
+            assert second["structuredContent"] == {
+                **second["structuredContent"], "status": "rejected", "reason": "limit_reached",
+            }
+            proof = await _turn_proof(sf, sender_pid)
+            _reply, ask = _agent_reply(
+                client, room.id, sender_token, "agent01에게 물어봤습니다.", proof,
+                expect_messages=2,
+            )
+
+        assert ask["content"].startswith(f"<@user:{other_pid}>")
+        assert "peer_blocked" not in (ask.get("metadata") or {})
+
+    @pytest.mark.asyncio
+    async def test_peer_woken_by_an_ask_cannot_ask_on(self, ws_env) -> None:
+        """A call from a turn another peer's call started is hop 2."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        other_pid = await _add_running_agent(sf, room, "agent01")
+        peer_token = await _add_token(sf, peer_pid)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 도와줘")
+            _ask_peer(client, sender_token, room.id, peer_pid, "확인 부탁")
+            proof = await _turn_proof(sf, sender_pid)
+            _agent_reply(client, room.id, sender_token, "물어봤습니다.", proof, expect_messages=2)
+
+            result = _ask_peer(client, peer_token, room.id, other_pid, "너도 봐 줘")
+
+        assert result["structuredContent"]["status"] == "rejected"
+        assert result["structuredContent"]["reason"] == "limit_reached"
 
     @pytest.mark.asyncio
     async def test_new_human_message_drops_scheduled_asks(self, ws_env) -> None:
@@ -226,3 +309,16 @@ class TestAskPeerTool:
 async def _agent_id(sf, participant_id: str) -> str:
     async with sf() as db:
         return (await db.get(Participant, participant_id)).agent_id
+
+
+async def _add_running_agent(sf, room, name: str) -> str:
+    async with sf() as db:
+        agent = Agent(
+            name=name, engine="codex", actual_state="running", desired_state="running",
+        )
+        db.add(agent)
+        await db.flush()
+        part = Participant(room_id=room.id, agent_id=agent.id, role="member")
+        db.add(part)
+        await db.commit()
+        return part.id
