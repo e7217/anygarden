@@ -877,6 +877,12 @@ async def _startup_server(app: FastAPI) -> None:
         from anygarden.orchestration.rules import PeerHandoffBudget
 
         app.state.peer_handoff_budget = PeerHandoffBudget()
+    # Issue #737 — peer asks scheduled by the ``ask_peer`` MCP tool,
+    # posted by the WS handler after the caller's final reply.
+    if not getattr(app.state, "pending_peer_asks", None):
+        from anygarden.orchestration.peer_ask import PendingPeerAsks
+
+        app.state.pending_peer_asks = PendingPeerAsks()
 
     # v2: No stale agent reset. Machines reconnect and report actual state.
     # Server reconciles via sync_batch on reconnect.

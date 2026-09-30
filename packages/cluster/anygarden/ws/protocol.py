@@ -310,9 +310,9 @@ class WelcomeOut(BaseModel):
     orchestrator_agent_id: Optional[str] = None
     next_speaker_participant_id: Optional[str] = None
     # Issue #221 — room participants roster, stamped at welcome time.
-    # Orchestrator agents inject this list into their LLM system
-    # prompt so the model can call ``handoff_to`` with a valid
-    # ``participant_id`` (UUID) instead of guessing a display name.
+    # Agents render this list into their LLM prompt so the model can
+    # pass a valid ``participant_id`` (UUID) to the ``ask_peer`` tool
+    # (#737) instead of guessing a display name.
     # Defaults to an empty list so pre-#221 clients see no change in
     # semantics when the server is rolled forward first.
     participants: list[ParticipantBrief] = []

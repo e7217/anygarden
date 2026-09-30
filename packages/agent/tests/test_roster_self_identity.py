@@ -123,3 +123,28 @@ class TestSelfMentionDoesNotLoop:
             },
         )
         assert calls == []
+
+
+class TestPeerCallGuidance:
+    """#737 — peers are called through the ``ask_peer`` tool; a routing
+    token is only the fallback when the tool is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_roster_points_to_ask_peer_with_token_fallback(self) -> None:
+        client = await _client_in("room-a", "p-self", [ADMIN, SELF, PEER])
+        suffix = client.compose_roster_suffix("room-a")
+
+        assert "call the ask_peer tool" in suffix
+        assert "do not also write the request in your reply" in suffix
+        assert "rejected" in suffix
+        assert "ask_peer only calls agents" in suffix
+        assert "Only if the ask_peer tool is unavailable" in suffix
+        assert "routing token in the final reply" in suffix
+        # Rules kept from #283/#288.
+        assert "Refer to peers by display name in prose" in suffix
+        assert "Don't peer-ask for trivial greetings" in suffix
+
+    @pytest.mark.asyncio
+    async def test_alone_in_room_has_no_ask_peer_guidance(self) -> None:
+        client = await _client_in("room-a", "p-self", [SELF])
+        assert "ask_peer" not in client.compose_roster_suffix("room-a")

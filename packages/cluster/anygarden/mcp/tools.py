@@ -204,6 +204,39 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "ask_peer",
+        "description": (
+            "Ask another agent in this room to answer a question. Use this "
+            "instead of writing a routing token in your reply. The question "
+            "is posted as a thread reply under your final reply once you "
+            "send it, and the peer answers there. Call once per peer. If "
+            "the result says 'rejected', the peer will not be called: read "
+            "the returned recent messages, answer from them, and do not "
+            "repeat the request in your reply. Only agents can be asked; "
+            "address people by name in your reply."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "room_id": {
+                    "type": "string",
+                    "description": "The current room ID from your roster.",
+                },
+                "participant_id": {
+                    "type": "string",
+                    "description": "The peer agent's id from your roster.",
+                },
+                "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "What you want the peer to answer.",
+                },
+            },
+            "required": ["room_id", "participant_id", "question"],
+        },
+    },
+    {
         "name": "add_task_blocker",
         "description": (
             "Record that one of your tasks is blocked by another task — "
@@ -1152,3 +1185,95 @@ async def resolve_task_blockers(
             woken,
         )
     return woken
+
+
+async def ask_peer(
+    db: AsyncSession,
+    *,
+    agent_id: str,
+    arguments: dict[str, Any],
+    budget: Any,
+    pending: Any,
+) -> dict[str, Any]:
+    """Check and schedule a structured peer ask (#737).
+
+    A rejection is a normal result (``isError`` false) the model should
+    act on in the same turn; only bad arguments are tool errors.
+    """
+    from anygarden.orchestration.peer_ask import (
+        MAX_QUESTION_CHARS,
+        PeerAsk,
+        check_peer_ask,
+    )
+
+    room_id = arguments.get("room_id")
+    target_pid = arguments.get("participant_id")
+    question = arguments.get("question")
+    if not isinstance(room_id, str) or not room_id:
+        return _error_result("room_id is required")
+    if not isinstance(target_pid, str) or not target_pid:
+        return _error_result("participant_id is required")
+    if not isinstance(question, str) or not question.strip():
+        return _error_result("question is required")
+    question = question.strip()
+    if len(question) > MAX_QUESTION_CHARS:
+        return _error_result(
+            f"question is longer than {MAX_QUESTION_CHARS} characters"
+        )
+
+    decision = await check_peer_ask(
+        db,
+        budget=budget,
+        agent_id=agent_id,
+        room_id=room_id,
+        target_pid=target_pid,
+    )
+    if decision.status == "invalid":
+        return _error_result(decision.detail or "invalid peer")
+
+    target = {"participant_id": target_pid, "name": decision.target_name}
+    if decision.status == "rejected":
+        if decision.reason == "already_answering":
+            why = (
+                f"{decision.target_name or 'This peer'} was called by the "
+                "same message as you and is answering it now."
+            )
+        else:
+            why = "The peer-call limit for this user turn is reached."
+        recent = "\n".join(
+            f"- #{m['seq']} {m['speaker']}: {m['content']}"
+            for m in decision.since_turn_start
+        )
+        text = (
+            f"Rejected: {why} The peer will not be called. Do not ask for "
+            "this in your reply; use the messages below if they answer it."
+            + (f"\nMessages posted since your turn started:\n{recent}" if recent else "")
+        )
+        return _ok_result(
+            text,
+            {
+                "status": "rejected",
+                "reason": decision.reason,
+                "targets": [target],
+                "since_turn_start": decision.since_turn_start,
+            },
+        )
+
+    if pending is not None:
+        pending.schedule(
+            agent_id,
+            room_id,
+            PeerAsk(
+                target_pid=target_pid,
+                question=question,
+                request_id=decision.request_id,
+                created_at=pending.now(),
+            ),
+        )
+    return _ok_result(
+        f"Scheduled: {decision.target_name or target_pid} will be asked in a "
+        "thread under your final reply. Do not repeat the question in your "
+        "reply.",
+        {"status": "scheduled", "targets": [target]},
+    )
+

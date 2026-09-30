@@ -22,6 +22,7 @@ from anygarden.mcp.auth import resolve_agent_id
 from anygarden.mcp.tools import (
     TOOL_SCHEMAS,
     add_task_blocker,
+    ask_peer,
     call_tool,
     claim_task,
     clear_task_blocker,
@@ -359,6 +360,20 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                 )
                 if not tool_result.get("isError"):
                     await db.commit()
+            return _jsonrpc_ok(req_id, tool_result)
+
+        # ``ask_peer`` (#737) only reads the DB and schedules the ask in
+        # memory; the WS handler posts it after the caller's final reply.
+        if name == "ask_peer":
+            session_factory = request.app.state.session_factory
+            async with session_factory() as db:
+                tool_result = await ask_peer(
+                    db,
+                    agent_id=agent_id,
+                    arguments=arguments,
+                    budget=getattr(request.app.state, "peer_handoff_budget", None),
+                    pending=getattr(request.app.state, "pending_peer_asks", None),
+                )
             return _jsonrpc_ok(req_id, tool_result)
 
         service = _service(request)

@@ -184,7 +184,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # quartet. #270 added ``create_task``. #459 (Wave 2c) added
     # ``add_task_blocker`` / ``clear_task_blocker``. Per-tool tests live
     # in test_mark_task_status.py, test_create_task_tool.py, and
-    # test_task_blockers.py.
+    # test_task_blockers.py. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
     assert names == {
         "create_skill",
         "update_skill",
@@ -195,6 +195,7 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "create_task",
         "add_task_blocker",
         "clear_task_blocker",
+        "ask_peer",
     }
 
 

@@ -142,7 +142,7 @@ class RoomOut(BaseModel):
     # #159 Phase A — room-scoped speaker strategy. ``mentioned_only``
     # (default) is the pre-#159 behaviour; ``round_robin`` rotates
     # across agents; ``orchestrator`` delegates next-speaker choice to
-    # ``orchestrator_agent_id`` via the ``handoff_to`` tool call. The
+    # ``orchestrator_agent_id`` via ``[HANDOFF]`` messages. The
     # orchestrator pointer is a separate column from
     # ``representative_agent_id`` so cross-room and in-room roles stay
     # legible (decisions §3.2 A).

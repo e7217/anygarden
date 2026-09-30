@@ -391,6 +391,15 @@ class PeerHandoffBudget:
         """Read-only peek used by tests and observability."""
         return self._remaining.get(room_id, self._capacity)
 
+    def would_block(self, room_id: str) -> bool:
+        """Whether the next peer handoff would be blocked, without spending it.
+
+        Mirrors the WS safety net: a handoff is blocked when no slot is
+        left or when it would exceed ``MAX_PEER_DEPTH`` (#737).
+        """
+        remaining = self.remaining(room_id)
+        return remaining < 1 or (self._capacity - remaining + 1) > MAX_PEER_DEPTH
+
 
 # ── Typing State ─────────────────────────────────────────────────────
 
