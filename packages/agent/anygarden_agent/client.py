@@ -661,22 +661,30 @@ class ChatClient:
             "or describes peers.\n"
             + "\n".join(lines)
         )
-        # #283 / #288 / #737: the paragraphs below carry the peer-call
-        # rules — call through the ``ask_peer`` tool (#737) so the call is
-        # recorded and a rejection comes back within the turn, a routing
-        # token only as the fallback, display names in prose, and the
-        # don't-peer-ask-over-trivia brake. Roster tests pin the phrases.
+        # #283 / #288 / #737 / #762: the paragraphs below carry the
+        # peer-call rules — call through the ``ask_peer`` tool so the call
+        # is recorded and a rejection comes back within the turn; the turn
+        # that asks ends with a draft and is woken with the answers, so the
+        # caller writes one final answer (#762 replaced the #283 "don't
+        # synthesize" rule, whose premise — peer replies in the main channel
+        # — ended with #737's threads). A routing token only as the
+        # fallback, display names in prose, and the don't-peer-ask-over-
+        # trivia brake. Roster tests pin the phrases.
         suffix += (
-            "\n\nWhen you need another agent to actively answer, call the "
-            "ask_peer tool with this room ID, that agent's id from the list "
-            "above, and your question. The server posts the question in a "
-            "thread under your final reply and wakes that agent, so do not "
-            "also write the request in your reply. If ask_peer says the call "
-            "was rejected, that agent will not be called: use the messages it "
-            "returns and answer yourself. ask_peer only calls agents (kind: "
-            "agent); address people by name. The peer's reply reaches the "
-            "user directly — you only need to synthesize if the user "
-            "explicitly asks (e.g. \"정리해줘\") or peer answers conflict.\n\n"
+            "\n\nWhen you need other agents to actively answer, call the "
+            "ask_peer tool once with this room ID and one entry per agent "
+            "(its id from the list above and a self-contained question). "
+            "The server posts the questions in a thread at once and the "
+            "agents start working, so do not also write the requests in "
+            "your reply. Your reply for that turn is not posted: write only "
+            "what you already found yourself; it is kept as your draft. When "
+            "every agent has finished you are woken with their answers and "
+            "your draft — then write the final answer once, combining them, "
+            "and say which agent failed or timed out and why. Do not ask for "
+            "what you already know. If ask_peer says a call was rejected, "
+            "that agent will not be called: use the messages it returns and "
+            "answer yourself. ask_peer only calls agents (kind: agent); "
+            "address people by name.\n\n"
             "Only if the ask_peer tool is unavailable, put an intentional "
             "routing token in the final reply by substituting the agent's id "
             "into <@user:PARTICIPANT_ID>; intermediate commentary is not sent "

@@ -1,10 +1,11 @@
 import type { Participant } from '@/pages/ChatPage'
-import type { AgentStage } from '@/lib/typingStage'
+import { stageLabel, type AgentStage, type PeerProgress } from '@/lib/typingStage'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 interface TypingIndicatorProps {
   typingUsers: Set<string>
   typingStages?: Record<string, AgentStage>
+  typingProgress?: Record<string, PeerProgress>
   participants: Record<string, Participant>
   myParticipantId: string | null
 }
@@ -12,6 +13,7 @@ interface TypingIndicatorProps {
 export default function TypingIndicator({
   typingUsers,
   typingStages = {},
+  typingProgress = {},
   participants,
   myParticipantId,
 }: TypingIndicatorProps) {
@@ -31,9 +33,7 @@ export default function TypingIndicator({
       return others.map((pid, index) => {
         const stage = typingStages[pid]
         if (!stage) return t('chat.isTyping', { name: names[index] })
-        const stageKey = stage === 'preparing' ? 'chat.stagePreparing'
-          : stage === 'using_tool' ? 'chat.stageUsingTool' : 'chat.stageWriting'
-        return `${names[index]} · ${t(stageKey)}`
+        return `${names[index]} · ${stageLabel(t, stage, typingProgress[pid])}`
       }).join(', ')
     }
     if (names.length === 1) return t('chat.isTyping', { name: names[0] })

@@ -362,18 +362,35 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                     await db.commit()
             return _jsonrpc_ok(req_id, tool_result)
 
-        # ``ask_peer`` (#737) only reads the DB and schedules the ask in
-        # memory; the WS handler posts it after the caller's final reply.
+        # ``ask_peer`` (#762) posts the accepted questions and starts the
+        # peers' turns in one transaction, then broadcasts the questions.
+        # The peers themselves get their turn through the durable outbox,
+        # so their copy of the live frame is withheld (as for task
+        # assignments) to avoid a second, untracked wake.
         if name == "ask_peer":
+            from anygarden.messages.serialization import message_to_frame
+
             session_factory = request.app.state.session_factory
             async with session_factory() as db:
-                tool_result = await ask_peer(
+                tool_result, posted = await ask_peer(
                     db,
                     agent_id=agent_id,
                     arguments=arguments,
                     budget=getattr(request.app.state, "peer_handoff_budget", None),
-                    pending=getattr(request.app.state, "pending_peer_asks", None),
                 )
+                if not tool_result.get("isError"):
+                    await db.commit()
+            manager = getattr(request.app.state, "connection_manager", None)
+            if manager is not None:
+                for q in posted:
+                    frame = message_to_frame(q.message)
+                    durable = q.turn.state == "pending"
+                    await manager.broadcast_tailored(
+                        q.message.room_id,
+                        lambda pid, _f=frame, _t=q.target.target_participant_id, _d=durable: (
+                            None if _d and pid == _t else _f
+                        ),
+                    )
             return _jsonrpc_ok(req_id, tool_result)
 
         service = _service(request)

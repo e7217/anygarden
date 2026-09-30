@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { clearAuthSession, getAuthToken } from '@/lib/authStorage';
-import { isAgentStage, type AgentStage } from '@/lib/typingStage';
+import { isAgentStage, peerProgressFrom, type AgentStage, type PeerProgress } from '@/lib/typingStage';
 
 export interface ChatMessage {
   type: string; id: string; room_id: string;
@@ -18,6 +18,8 @@ export function useWebSocket(roomId: string | null) {
   const [connected, setConnected] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [typingStages, setTypingStages] = useState<Record<string, AgentStage>>({});
+  // #762 — peers answered / asked, for a ``waiting_peers`` stage.
+  const [typingProgress, setTypingProgress] = useState<Record<string, PeerProgress>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const seqRef = useRef(0);
   const reconnectRef = useRef(1);
@@ -36,6 +38,7 @@ export function useWebSocket(roomId: string | null) {
     typingTimers.current = {};
     setTypingUsers(new Set());
     setTypingStages({});
+    setTypingProgress({});
   }, []);
 
   const connect = useCallback(() => {
@@ -176,6 +179,18 @@ export function useWebSocket(roomId: string | null) {
         );
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
+        const forget = () => {
+          setTypingUsers(prev => {
+            const next = new Set(prev); next.delete(pid); return next;
+          });
+          setTypingStages(prev => {
+            const next = { ...prev }; delete next[pid]; return next;
+          });
+          setTypingProgress(prev => {
+            if (!(pid in prev)) return prev;
+            const next = { ...prev }; delete next[pid]; return next;
+          });
+        };
         if (data.is_typing) {
           setTypingUsers(prev => new Set(prev).add(pid));
           setTypingStages(prev => {
@@ -184,15 +199,18 @@ export function useWebSocket(roomId: string | null) {
             else delete next[pid];
             return next;
           });
+          const progress = data.stage === 'waiting_peers' ? peerProgressFrom(data) : null;
+          setTypingProgress(prev => {
+            if (!progress && !(pid in prev)) return prev;
+            const next = { ...prev };
+            if (progress) next[pid] = progress;
+            else delete next[pid];
+            return next;
+          });
           // Reset the expire timer — don't stack multiple timeouts
           if (typingTimers.current[pid]) clearTimeout(typingTimers.current[pid]);
           typingTimers.current[pid] = setTimeout(() => {
-            setTypingUsers(prev => {
-              const next = new Set(prev); next.delete(pid); return next;
-            });
-            setTypingStages(prev => {
-              const next = { ...prev }; delete next[pid]; return next;
-            });
+            forget();
             delete typingTimers.current[pid];
           }, 5000);
         } else {
@@ -200,12 +218,7 @@ export function useWebSocket(roomId: string | null) {
             clearTimeout(typingTimers.current[pid]);
             delete typingTimers.current[pid];
           }
-          setTypingUsers(prev => {
-            const next = new Set(prev); next.delete(pid); return next;
-          });
-          setTypingStages(prev => {
-            const next = { ...prev }; delete next[pid]; return next;
-          });
+          forget();
         }
       }
     };
@@ -297,5 +310,5 @@ export function useWebSocket(roomId: string | null) {
     }).catch(() => {});
   }, [roomId]);
 
-  return { messages, connected, typingUsers, typingStages, send, sendTyping };
+  return { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping };
 }

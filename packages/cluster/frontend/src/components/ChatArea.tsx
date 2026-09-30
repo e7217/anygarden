@@ -16,7 +16,8 @@ import { parseServerDate } from '@/lib/datetime'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import ThreadReplyAffordance from '@/components/ThreadReplyAffordance'
 import { canHostThread, type ThreadIndex } from '@/lib/threads'
-import type { AgentStage } from '@/lib/typingStage'
+import { stageLabel, type AgentStage, type PeerProgress } from '@/lib/typingStage'
+import { isHiddenSystemMessage } from '@/lib/systemMessages'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ChatAreaProps {
@@ -25,6 +26,7 @@ interface ChatAreaProps {
   myParticipantId: string | null
   typingUsers?: Set<string>
   typingStages?: Record<string, AgentStage>
+  typingProgress?: Record<string, PeerProgress>
   /** Grouped view of ``messages`` — replies are rendered in the
    *  thread panel, not inline in this timeline. Computed once by
    *  ``ChatPage`` so the panel and the timeline agree.
@@ -51,6 +53,7 @@ export default function ChatArea({
   myParticipantId,
   typingUsers,
   typingStages = {},
+  typingProgress = {},
   threadIndex,
   activeThreadRootId,
   onOpenThread,
@@ -268,9 +271,7 @@ export default function ChatArea({
       const name = participants[pid]?.display_name ?? pid.slice(0, 8)
       const stage = typingStages[pid]
       if (!stage) return name
-      const stageKey = stage === 'preparing' ? 'chat.stagePreparing'
-        : stage === 'using_tool' ? 'chat.stageUsingTool' : 'chat.stageWriting'
-      return `${name} · ${t(stageKey)}`
+      return `${name} · ${stageLabel(t, stage, typingProgress[pid])}`
     })
 
   useEffect(() => {
@@ -307,19 +308,10 @@ export default function ChatArea({
             // border. Returning null here (not just an empty bubble)
             // keeps the gap from spacing-y vestigial.
             if (hiddenMessageIds.has(msg.id)) return null
-            // #313 — auto-route protocol echoes (request/response
-            // synthetic messages) are internal plumbing, not chat
-            // content. The cluster persists them so the audit
-            // trail is complete; we just hide them from the
-            // user-facing thread.
-            const sysOrigin = (msg.metadata as Record<string, unknown> | undefined)
-              ?.system_origin
-            if (
-              sysOrigin === 'auto_route_request' ||
-              sysOrigin === 'auto_route_response'
-            ) {
-              return null
-            }
+            // #313 / #762 — auto-route echoes and ask_peer result messages
+            // are internal plumbing, not chat content. The cluster persists
+            // them so the audit trail is complete; we just hide them.
+            if (isHiddenSystemMessage(msg)) return null
             return (
               <div key={msg.seq || i} data-message-id={msg.id} className="group/message relative">
                 <MessageBubble

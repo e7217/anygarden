@@ -1956,6 +1956,95 @@ class AgentTurnOutbox(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
+class PeerAskGroup(Base):
+    """The peer questions one caller turn sent through ``ask_peer`` (#762).
+
+    The caller's turn ends without posting (its reply is kept as
+    ``caller_draft``); once every target turn and the caller turn are
+    terminal, or ``deadline_at`` passes, the turn-recovery worker posts a
+    hidden result message and starts a new caller turn from it.
+    """
+
+    __tablename__ = "peer_ask_groups"
+    __table_args__ = (
+        UniqueConstraint("caller_request_id", name="uq_peer_ask_groups_caller_request"),
+        Index("ix_peer_ask_groups_state_deadline", "state", "deadline_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    caller_participant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("participants.id", ondelete="CASCADE"), nullable=False
+    )
+    caller_agent_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    trigger_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # Where the caller's turn ran: the wake message goes here so the caller
+    # resumes the same engine session and answers in the same place.
+    scope_thread_root_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # collecting | ready | waking (claimed by a worker) | woken | abandoned
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="collecting", server_default="collecting"
+    )
+    caller_closed_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    caller_draft: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    deadline_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    wake_request_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    woken_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class PeerAskTarget(Base):
+    """One peer question inside a :class:`PeerAskGroup` (#762)."""
+
+    __tablename__ = "peer_ask_targets"
+    __table_args__ = (
+        UniqueConstraint("request_id", name="uq_peer_ask_targets_request"),
+        Index("ix_peer_ask_targets_group", "group_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    group_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("peer_ask_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    target_participant_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("participants.id", ondelete="CASCADE"), nullable=False
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # The peer's turn; its terminal transition settles this row.
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    # pending | completed | failed | cancelled | timeout (terminal: all but pending)
+    state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    reason: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None)
+    reply_message_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    # ``ask_peer`` calls the peer made at hop 2, handed back to the caller:
+    # ``[{"participant_id", "question"}]``.
+    forwarded_requests: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        UtcDateTime, nullable=True, default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class Goal(Base):
     """A repeating responsibility owned by an agent (#302).
 

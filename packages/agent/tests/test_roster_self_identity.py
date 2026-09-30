@@ -135,8 +135,16 @@ class TestPeerCallGuidance:
         suffix = client.compose_roster_suffix("room-a")
 
         assert "call the ask_peer tool" in suffix
-        assert "do not also write the request in your reply" in suffix
+        assert "do not also write the requests in your reply" in suffix
         assert "rejected" in suffix
+        # #762 — the asking turn ends with a draft and is woken with the
+        # answers; the caller writes one final answer. The #283 "only
+        # synthesize if asked" rule is gone.
+        assert "kept as your draft" in suffix
+        assert "write the final answer once" in suffix
+        assert "failed or timed out" in suffix
+        assert "synthesize if" not in suffix
+        assert "정리해줘" not in suffix
         assert "ask_peer only calls agents" in suffix
         assert "Only if the ask_peer tool is unavailable" in suffix
         assert "routing token in the final reply" in suffix

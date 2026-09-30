@@ -1,4 +1,4 @@
-"""Unit tests for the ``ask_peer`` scheduling and checks (#737)."""
+"""Unit tests for the ``ask_peer`` checks (#737, #762)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pytest
 from anygarden.db.models import (
     Agent,
     AgentTurn,
+    AgentTurnAttempt,
     Message,
     Participant,
     Project,
@@ -14,78 +15,13 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.orchestration.peer_ask import (
-    PeerAsk,
-    PendingPeerAsks,
     check_peer_ask,
+    resolve_caller,
     sender_hop,
+    since_turn_start,
     turn_hop,
 )
 from anygarden.orchestration.rules import PeerHandoffBudget
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self.t = 1000.0
-
-    def __call__(self) -> float:
-        return self.t
-
-
-def _ask(target: str, request_id: str | None = "r1", at: float = 1000.0) -> PeerAsk:
-    return PeerAsk(target_pid=target, question=f"q-{target}", request_id=request_id, created_at=at)
-
-
-class TestPendingPeerAsks:
-    def test_take_returns_asks_bound_to_the_reply_turn(self) -> None:
-        store = PendingPeerAsks(clock=_Clock())
-        store.schedule("a", "room", _ask("b", "r1"))
-        store.schedule("a", "room", _ask("c", "r2"))
-
-        assert [x.target_pid for x in store.take("a", "room", request_id="r1")] == ["b"]
-        assert [x.target_pid for x in store.pending("a", "room")] == ["c"]
-
-    def test_unbound_ask_rides_any_reply(self) -> None:
-        store = PendingPeerAsks(clock=_Clock())
-        store.schedule("a", "room", _ask("b", None))
-
-        assert [x.target_pid for x in store.take("a", "room", request_id=None)] == ["b"]
-        assert store.pending("a", "room") == []
-
-    def test_newer_ask_to_same_target_replaces_older(self) -> None:
-        store = PendingPeerAsks(clock=_Clock())
-        store.schedule("a", "room", _ask("b"))
-        store.schedule("a", "room", PeerAsk("b", "newer", "r1", 1000.0))
-
-        taken = store.take("a", "room", request_id="r1")
-        assert [(x.target_pid, x.question) for x in taken] == [("b", "newer")]
-
-    def test_expired_asks_are_dropped(self) -> None:
-        clock = _Clock()
-        store = PendingPeerAsks(ttl_seconds=60, clock=clock)
-        store.schedule("a", "room", _ask("b"))
-        clock.t += 61
-
-        assert store.take("a", "room", request_id="r1") == []
-
-    def test_clear_room_only_touches_that_room(self) -> None:
-        store = PendingPeerAsks(clock=_Clock())
-        store.schedule("a", "room", _ask("b"))
-        store.schedule("a", "other", _ask("c"))
-
-        assert [x.target_pid for x in store.clear_room("room")] == ["b"]
-        assert [x.target_pid for x in store.pending("a", "other")] == ["c"]
-
-
-class TestPendingInRoom:
-    def test_counts_every_callers_asks_in_the_room(self) -> None:
-        store = PendingPeerAsks(clock=_Clock())
-        store.schedule("a", "room", _ask("b"))
-        store.schedule("c", "room", _ask("d"))
-        store.schedule("a", "other", _ask("e"))
-
-        assert sorted((agent, x.target_pid) for agent, x in store.pending_in_room("room")) == [
-            ("a", "b"), ("c", "d"),
-        ]
 
 
 class TestWouldBlock:
@@ -222,117 +158,86 @@ class TestTurnHop:
 
 class TestCheckPeerAsk:
     @pytest.mark.asyncio
-    async def test_schedulable_peer_is_bound_to_the_open_turn(self, db) -> None:
+    async def test_idle_peer_is_accepted_and_the_caller_is_bound_to_its_turn(self, db) -> None:
         ids = await _seed(db)
-        decision = await check_peer_ask(
-            db, budget=PeerHandoffBudget(), agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        assert decision.status == "scheduled"
-        assert decision.request_id == "turn-1"
+        decision = await check_peer_ask(db, caller=caller, target_pid=ids["peer_p"])
+
+        assert caller.turn.request_id == "turn-1"
+        assert caller.hop == 1
+        assert decision.status == "accepted"
         assert decision.target_name == "local-agent"
-        assert decision.since_turn_start == []
 
     @pytest.mark.asyncio
-    async def test_already_woken_peer_is_rejected_with_recent_messages(self, db) -> None:
+    async def test_peer_with_an_open_turn_is_already_answering(self, db) -> None:
+        """#762 — "already answering" is an open turn in the room, not a
+        memory of who was called this user turn."""
         ids = await _seed(db)
-        budget = PeerHandoffBudget()
-        budget.mark_woken(ids["room"], [ids["caller_p"], ids["peer_p"]])
+        db.add(AgentTurn(
+            request_id="peer-turn", room_id=ids["room"], target_participant_id=ids["peer_p"],
+            idempotency_key="k-peer", state="pending",
+        ))
+        await db.commit()
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        decision = await check_peer_ask(
-            db, budget=budget, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
+        decision = await check_peer_ask(db, caller=caller, target_pid=ids["peer_p"])
 
         assert decision.status == "rejected"
         assert decision.reason == "already_answering"
         # Root-level messages after the trigger only; the thread reply is not
         # part of the caller's conversation.
-        assert decision.since_turn_start == [
+        assert await since_turn_start(db, caller) == [
             {"seq": 2, "speaker": "local-agent", "content": "local-agent 소개"}
         ]
 
     @pytest.mark.asyncio
-    async def test_exhausted_budget_is_rejected(self, db) -> None:
+    async def test_peer_that_already_finished_can_be_asked_again(self, db) -> None:
         ids = await _seed(db)
-        budget = PeerHandoffBudget(capacity=1)
-        budget.consume(ids["room"])
-
-        decision = await check_peer_ask(
-            db, budget=budget, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
-
-        assert decision.status == "rejected"
-        assert decision.reason == "limit_reached"
-
-    @pytest.mark.asyncio
-    async def test_two_targets_in_one_turn_are_both_scheduled(self, db) -> None:
-        """#756 — asking several peers at once is one hop, not two."""
-        ids = await _seed(db)
-        other = await _add_agent(db, ids["room"], "agent01")
-        budget, pending = PeerHandoffBudget(), PendingPeerAsks(clock=_Clock())
-
-        for target in (ids["peer_p"], other):
-            decision = await check_peer_ask(
-                db, budget=budget, pending=pending, agent_id=ids["caller"],
-                room_id=ids["room"], target_pid=target,
-            )
-            assert decision.status == "scheduled"
-            pending.schedule(ids["caller"], ids["room"], _ask(target, "turn-1"))
-
-    @pytest.mark.asyncio
-    async def test_scheduled_asks_count_against_the_budget(self, db) -> None:
-        """#756 — an ask the tool calls scheduled must still fit at send time."""
-        ids = await _seed(db)
-        other = await _add_agent(db, ids["room"], "agent01")
-        budget, pending = PeerHandoffBudget(capacity=1), PendingPeerAsks(clock=_Clock())
-        pending.schedule(ids["caller"], ids["room"], _ask(other, "turn-1"))
-
-        decision = await check_peer_ask(
-            db, budget=budget, pending=pending, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
-        assert decision.status == "rejected"
-        assert decision.reason == "limit_reached"
-
-        # Re-asking a target already scheduled replaces that ask, so it
-        # does not need a second slot.
-        decision = await check_peer_ask(
-            db, budget=budget, pending=pending, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=other,
-        )
-        assert decision.status == "scheduled"
-
-    @pytest.mark.asyncio
-    async def test_peer_already_called_this_turn_is_already_answering(self, db) -> None:
-        ids = await _seed(db)
+        db.add(AgentTurn(
+            request_id="peer-turn", room_id=ids["room"], target_participant_id=ids["peer_p"],
+            idempotency_key="k-peer", state="completed",
+        ))
+        await db.commit()
         budget = PeerHandoffBudget()
         budget.mark_peer_called(ids["room"], [ids["peer_p"]])
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        decision = await check_peer_ask(
-            db, budget=budget, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
+        decision = await check_peer_ask(db, caller=caller, target_pid=ids["peer_p"])
 
-        assert decision.status == "rejected"
-        assert decision.reason == "already_answering"
+        assert decision.status == "accepted"
 
     @pytest.mark.asyncio
-    async def test_turn_started_by_a_peer_call_is_depth_blocked(self, db) -> None:
+    async def test_turn_started_by_a_peer_call_is_hop_two(self, db) -> None:
         ids = await _seed(db)
-        other = await _add_agent(db, ids["room"], "agent01")
         await _retrigger(db, ids, author_pid=ids["peer_p"],
                          metadata={"mentions": [{"type": "user", "id": ids["caller_p"]}]})
 
-        decision = await check_peer_ask(
-            db, budget=PeerHandoffBudget(), agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=other,
-        )
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        assert decision.status == "rejected"
-        assert decision.reason == "limit_reached"
+        assert caller.hop == 2
+
+    @pytest.mark.asyncio
+    async def test_running_turn_is_preferred_over_a_newer_queued_one(self, db) -> None:
+        """The MCP call carries no turn id; the executing turn wins."""
+        ids = await _seed(db)
+        db.add(AgentTurnAttempt(
+            turn_id="turn-1", agent_id=ids["caller"], attempt_number=1,
+            generation=0, lease_token="lease-1", state="started",
+        ))
+        db.add(AgentTurn(
+            request_id="turn-2", room_id=ids["room"], target_participant_id=ids["caller_p"],
+            agent_id=ids["caller"], idempotency_key="k2", state="pending",
+        ))
+        db.add(AgentTurnAttempt(
+            turn_id="turn-2", agent_id=ids["caller"], attempt_number=1,
+            generation=0, lease_token="lease-2", state="pending",
+        ))
+        await db.commit()
+
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
+
+        assert caller.turn.request_id == "turn-1"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("which,needle", [
@@ -342,39 +247,28 @@ class TestCheckPeerAsk:
     ])
     async def test_invalid_targets(self, db, which: str, needle: str) -> None:
         ids = await _seed(db)
-        target = ids.get(which, "no-such-participant")
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
         decision = await check_peer_ask(
-            db, budget=PeerHandoffBudget(), agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=target,
+            db, caller=caller, target_pid=ids.get(which, "no-such-participant")
         )
 
         assert decision.status == "invalid"
         assert needle in (decision.detail or "")
 
     @pytest.mark.asyncio
-    async def test_caller_outside_the_room_is_invalid(self, db) -> None:
+    async def test_caller_outside_the_room_is_none(self, db) -> None:
         ids = await _seed(db)
-        decision = await check_peer_ask(
-            db, budget=None, agent_id="stranger",
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
-        assert decision.status == "invalid"
+        assert await resolve_caller(db, agent_id="stranger", room_id=ids["room"]) is None
 
     @pytest.mark.asyncio
-    async def test_no_open_turn_means_unbound_and_no_history(self, db) -> None:
+    async def test_no_open_turn_means_no_turn_and_no_history(self, db) -> None:
         ids = await _seed(db)
         turn = await db.get(AgentTurn, "turn-1")
         turn.state = "completed"
         await db.commit()
-        budget = PeerHandoffBudget()
-        budget.mark_woken(ids["room"], [ids["peer_p"]])
 
-        decision = await check_peer_ask(
-            db, budget=budget, agent_id=ids["caller"],
-            room_id=ids["room"], target_pid=ids["peer_p"],
-        )
+        caller = await resolve_caller(db, agent_id=ids["caller"], room_id=ids["room"])
 
-        assert decision.status == "rejected"
-        assert decision.request_id is None
-        assert decision.since_turn_start == []
+        assert caller.turn is None
+        assert await since_turn_start(db, caller) == []

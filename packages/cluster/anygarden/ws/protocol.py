@@ -233,7 +233,14 @@ class TypingOut(BaseModel):
     room_id: str
     participant_id: str
     is_typing: bool
-    stage: Optional[Literal["preparing", "using_tool", "writing"]] = None
+    stage: Optional[
+        Literal["preparing", "using_tool", "writing", "waiting_peers"]
+    ] = None
+    # #762 — ``waiting_peers`` only: the server keeps an ``ask_peer``
+    # caller's indicator alive while its peers answer.
+    waiting_done: Optional[int] = None
+    waiting_total: Optional[int] = None
+    waiting_names: Optional[list[str]] = None
 
 
 class PresenceUpdateOut(BaseModel):
