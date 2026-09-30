@@ -246,7 +246,7 @@ export default function AgentSettingsDialog({
               </span>
             ) : null}
           </DialogTitle>
-          <DialogDescription className="text-left text-xs leading-relaxed">
+          <DialogDescription className="text-left leading-relaxed">
             {t('agentSetup.saveHint')}
           </DialogDescription>
         </DialogHeader>

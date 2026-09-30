@@ -53,7 +53,7 @@ type CatalogState =
   | { kind: 'unavailable' }
 
 const DEPRECATED_BADGE_CSS =
-  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[10px] text-[var(--color-warning)]'
+  'border-[color:color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] text-[var(--color-warning)]'
 
 // The `Agent.avatar_kind` column is typed as a loose `string` (it's
 // open-ended at the DB layer), but EntityAvatar only understands

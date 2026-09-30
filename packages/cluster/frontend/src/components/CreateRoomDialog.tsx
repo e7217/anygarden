@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
@@ -50,16 +51,15 @@ export default function CreateRoomDialog({ projects, onCreateRoom }: CreateRoomD
           {projects.length > 1 && (
             <div className="space-y-2">
               <Label htmlFor="project-select">{t('rooms.project')}</Label>
-              <select
+              <Select
                 id="project-select"
                 value={projectId}
                 onChange={e => setProjectId(e.target.value)}
-                className="flex h-9 w-full rounded-[var(--radius-xs)] border border-[var(--color-border-strong)] bg-[var(--color-background)] px-3 py-1 text-sm text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
               >
                 {projects.map(p => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
           <div className="space-y-2">

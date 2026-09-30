@@ -117,7 +117,7 @@ export default function RoomActivityDialog({
               />
               {parentLabel && (
                 <span
-                  className="text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
+                  className="text-badge font-normal text-[var(--color-foreground-subtle)] shrink-0"
                   title={t('rooms.triggeredBy', { agent: parent?.agentId ?? t('rooms.agent'), request: turn.parentRequestId ?? '' })}
                   data-testid="room-activity-parent"
                 >
@@ -125,7 +125,7 @@ export default function RoomActivityDialog({
                 </span>
               )}
               <span
-                className="font-mono text-[10px] text-[var(--color-foreground-subtle)] shrink-0"
+                className="font-mono text-badge font-normal text-[var(--color-foreground-subtle)] shrink-0"
                 title={turn.agentId ?? undefined}
               >
                 {turn.agentId ? turn.agentId.slice(0, 6) : t('rooms.agent')}
@@ -146,7 +146,7 @@ export default function RoomActivityDialog({
               </span>
               {turn.error && (
                 <span
-                  className="ml-auto truncate text-[10px] text-[var(--color-destructive,#d74c4c)]"
+                  className="ml-auto truncate text-badge font-normal text-[var(--color-destructive,#d74c4c)]"
                   title={turn.error}
                 >
                   {turn.error}

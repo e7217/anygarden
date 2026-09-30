@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Search, X } from 'lucide-react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { DialogOverlay, DialogPortal, DialogTitle } from '@/components/ui/dialog'
 import { apiFetch } from '@/lib/api'
 import { formatMessageTimestamp } from '@/lib/datetime'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -51,28 +53,27 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
     if (!open) { setQuery(''); setResults([]) }
   }, [open])
 
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center px-3 pt-[15vh]" onClick={onClose}>
-      <div className="fixed inset-0 bg-black/20" />
-      <div
-        className="relative w-full max-w-lg rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-3">
-          <Search className="h-4 w-4 text-[var(--color-foreground-subtle)]" />
+    <DialogPrimitive.Root open={open} onOpenChange={next => { if (!next) onClose() }}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-[15vh] z-50 w-[calc(100%-1.5rem)] max-w-lg -translate-x-1/2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep focus:outline-none"
+        >
+        <DialogTitle className="sr-only">{t('chat.searchMessages')}</DialogTitle>
+        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-4 py-3 transition-colors has-[input:focus-visible]:border-[var(--color-brand-focus)]">
+          <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
           <input
-            autoFocus
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder={t('chat.searchPlaceholder')}
             aria-label={t('chat.searchMessages')}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-foreground-subtle)]"
+            className="min-w-0 flex-1 bg-transparent px-2 py-1 text-base placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none! md:text-sm"
           />
-          <button onClick={onClose} aria-label={t('chat.closeSearch')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-hover)]">
-            <X className="h-4 w-4" />
-          </button>
+          <DialogPrimitive.Close aria-label={t('chat.closeSearch')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-hover)]">
+            <X aria-hidden="true" className="h-4 w-4" />
+          </DialogPrimitive.Close>
         </div>
         <div className="max-h-80 overflow-y-auto">
           {loading && (
@@ -94,7 +95,7 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
                 className="text-sm line-clamp-2"
                 dangerouslySetInnerHTML={{ __html: r.snippet }}
               />
-              <div className="text-[11px] text-[var(--color-foreground-subtle)] mt-0.5">
+              <div className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-0.5">
                 {/* #514 — share the chat bubble's #93-safe formatter: today
                     shows the time, older results are prefixed with the date. */}
                 {formatMessageTimestamp(r.created_at, new Date(), locale)}
@@ -102,7 +103,8 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
             </button>
           ))}
         </div>
-      </div>
-    </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </DialogPrimitive.Root>
   )
 }

@@ -338,6 +338,12 @@ code, pre, kbd, samp {
   font-weight: 600;
 }
 
+@utility text-body {
+  font-size: 1rem;             /* 16px — regular body text */
+  line-height: 1.5;
+  font-weight: 400;
+}
+
 @utility text-caption {
   font-size: 0.875rem;         /* 14px — secondary labels, captions */
   line-height: 1.43;
@@ -560,5 +566,54 @@ code, pre, kbd, samp {
   .handoff-card--pending::before {
     animation: none;
     background-position: 50% 0;
+  }
+}
+
+/* ==========================================================================
+   Motion — dialog enter + reduced-motion fallback
+   Only opacity/transform animate. Reduced motion keeps every state change
+   (dialogs still fade in, spinners still turn) but drops travel and loops.
+   ========================================================================== */
+
+@keyframes dialog-fade-in {
+  from { opacity: 0; }
+}
+
+@keyframes dialog-enter {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+.dialog-overlay[data-state="open"] {
+  animation: dialog-fade-in 150ms ease-out;
+}
+
+.dialog-content[data-state="open"] {
+  animation: dialog-enter 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  /* Elements that opted into a transition keep a brief cross-fade so
+     hover/selection still reads, but slides and resizes land at once. */
+  [class*="transition"] {
+    transition-duration: 100ms;
+  }
+
+  .dialog-content[data-state="open"] {
+    animation: dialog-fade-in 100ms ease-out;
+  }
+
+  /* A spinner is a busy signal, not decoration: slow it rather than
+     freeze it. Looping decorative effects stop. */
+  .animate-spin {
+    animation-duration: 1.5s;
+  }
+
+  .animate-pulse,
+  .animate-ping {
+    animation: none;
   }
 }

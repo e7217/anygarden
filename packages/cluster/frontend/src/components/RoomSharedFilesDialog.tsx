@@ -105,7 +105,7 @@ export default function RoomSharedFilesDialog({
                   <p className="truncate text-sm text-[var(--color-foreground)]" title={f.filename}>
                     {f.filename}
                   </p>
-                  <p className="text-[11px] text-[var(--color-foreground-subtle)]">
+                  <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">
                     {formatBytes(f.size_bytes)} · {f.mime}
                   </p>
                 </div>

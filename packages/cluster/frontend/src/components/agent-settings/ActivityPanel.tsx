@@ -305,7 +305,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
       <div className="max-h-[60vh] overflow-y-auto space-y-3">
       {turns.length > 0 && (
         <section className="space-y-1.5">
-          <h4 className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
+          <h4 className="text-badge font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
             {t('admin.activity.turns')}
           </h4>
           <ul className="space-y-1">
@@ -351,7 +351,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                     </span>
                     {turn.triggerMessageId && (
                       <span
-                        className="ml-auto truncate text-[10px] text-[var(--color-foreground-subtle)] font-mono"
+                        className="ml-auto truncate text-badge font-normal text-[var(--color-foreground-subtle)] font-mono"
                         title={t('admin.activity.triggeredBy', { id: turn.triggerMessageId })}
                       >
                         #{turn.triggerMessageId.slice(0, 6)}
@@ -361,7 +361,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                   {isOpen && (
                     <ol className="border-t border-[var(--color-border)] px-6 py-1.5 space-y-0.5">
                       {turn.roomId && (
-                        <li className="text-[10px] text-[var(--color-foreground-subtle)] font-mono">
+                        <li className="text-badge font-normal text-[var(--color-foreground-subtle)] font-mono">
                           {t('admin.activity.room', { id: turn.roomId })}
                         </li>
                       )}
@@ -370,7 +370,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                         return (
                           <li
                             key={evt.id}
-                            className="flex items-center gap-2 text-[11px]"
+                            className="flex items-center gap-2 text-badge font-normal"
                           >
                             <span className="font-mono text-[var(--color-foreground)]">
                               {evt.event_type}
@@ -387,7 +387,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
                         )
                       })}
                       {turn.error && (
-                        <li className="text-[11px] text-[var(--color-destructive,#d74c4c)]">
+                        <li className="text-badge font-normal text-[var(--color-destructive,#d74c4c)]">
                           {t('admin.activity.error', { message: localizeError(turn.error) })}
                         </li>
                       )}
@@ -402,7 +402,7 @@ export default function ActivityPanel({ agentId, active = true, focusRequestId =
 
       {system.length > 0 && (
         <section className="space-y-1">
-          <h4 className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
+          <h4 className="text-badge font-medium uppercase tracking-wide text-[var(--color-foreground-muted)]">
             {t('admin.activity.systemEvents')}
           </h4>
           <ul className="space-y-1">

@@ -92,7 +92,7 @@ export default function RecentTurnSummary({ agentId, active, onShowTurn }: Props
             <span className="font-medium text-[var(--color-destructive)]">{t(CATEGORY_LABEL[category])}</span>
             {' — '}
             {t(reasonKey(category, code))}
-            {code && <code className="ml-1 font-mono text-[11px] text-[var(--color-foreground-subtle)]">{code}</code>}
+            {code && <code className="ml-1 font-mono text-badge font-normal text-[var(--color-foreground-subtle)]">{code}</code>}
           </p>
         )}
         {status === 'failed' && turn && onShowTurn && (

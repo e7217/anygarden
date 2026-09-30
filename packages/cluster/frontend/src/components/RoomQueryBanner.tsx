@@ -87,7 +87,7 @@ interface QueryChipProps {
 function QueryChip({ query, onDismiss, onScrollTo }: QueryChipProps) {
   const { t } = useLocale()
   const base =
-    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)]'
+    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow-whisper'
 
   if (query.status === 'pending') {
     // Pending chip: no interaction — the user is waiting for the

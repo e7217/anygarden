@@ -495,7 +495,7 @@ export default function MessageInput({
                 <button
                   type="button"
                   onClick={() => removeAttachment(a.id)}
-                  className="flex h-8 w-8 items-center justify-center text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
+                  className="flex size-[var(--control-icon-size)] items-center justify-center text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground)]"
                   aria-label={t('chat.removeAttachment', { name: a.filename })}
                   title={t('chat.remove')}
                 >
@@ -535,7 +535,7 @@ export default function MessageInput({
                 aria-label={t('chat.addMenu')}
                 aria-haspopup="menu"
                 aria-expanded={addMenuOpen}
-                className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex size-[var(--control-icon-size)] items-center justify-center rounded-full text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Plus className="h-[18px] w-[18px]" />
               </button>
@@ -543,7 +543,7 @@ export default function MessageInput({
                 <div
                   role="menu"
                   aria-label={t('chat.addMenu')}
-                  className="absolute bottom-full left-0 z-50 mb-2 w-44 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] py-1 shadow-lg"
+                  className="absolute bottom-full left-0 z-50 mb-2 w-44 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] py-1 shadow-deep"
                 >
                   <button
                     type="button"
@@ -573,8 +573,9 @@ export default function MessageInput({
                 ? t('chat.connecting')
                 : placeholder ?? t('chat.messagePlaceholder')
             }
+            aria-label={placeholder ?? t('chat.messageInputLabel')}
             rows={1}
-            className="min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-[var(--control-icon-size)] flex-1 resize-none bg-transparent px-2 py-[calc((var(--control-icon-size)-1.5rem)/2)] text-base leading-6 md:text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <button
             type="button"
@@ -584,7 +585,7 @@ export default function MessageInput({
             }
             title={t('chat.sendMessage')}
             aria-label={t('chat.sendMessage')}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[var(--color-on-brand)] transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-hover)] disabled:text-[var(--color-foreground-subtle)]"
+            className="flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[var(--color-on-brand)] transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-hover)] disabled:text-[var(--color-foreground-subtle)]"
           >
             <ArrowUp className="h-4 w-4" />
           </button>

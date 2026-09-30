@@ -109,7 +109,7 @@ export default memo(function HandoffMessageCard({
           {targetName}
         </span>
         {state === 'timeout' && (
-          <span className="ml-1 text-[11px] text-[var(--color-foreground-subtle)]">
+          <span className="ml-1 text-badge font-normal text-[var(--color-foreground-subtle)]">
             · {t('chat.handoffNoResponse')}
           </span>
         )}
@@ -122,7 +122,7 @@ export default memo(function HandoffMessageCard({
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
             aria-controls="handoff-instruction-panel"
-            className="mt-1 inline-flex min-h-11 items-center gap-1 rounded-sm px-1 text-[11px] text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand-focus)]"
+            className="mt-1 inline-flex min-h-11 items-center gap-1 rounded-sm px-1 text-badge font-normal text-[var(--color-foreground-subtle)] hover:text-[var(--color-foreground-muted)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-brand-focus)]"
           >
             {expanded ? (
               <ChevronDown className="h-3 w-3" aria-hidden="true" />

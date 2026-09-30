@@ -84,7 +84,7 @@ export default function ThreadPanel({
         type="button"
         aria-label={t('chat.closeThread')}
         data-testid="thread-panel-backdrop"
-        className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] lg:hidden"
+        className="fixed inset-0 z-30 bg-[var(--color-overlay)] backdrop-blur-[1px] lg:hidden"
         onClick={onClose}
       />
 
@@ -111,7 +111,7 @@ export default function ThreadPanel({
         <div data-testid="thread-panel-header" className="flex h-12 lg:h-[var(--room-header-h,3.5rem)] shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-brand-tint-bg)] px-3">
           <div className="flex min-w-0 items-center gap-2">
             <MessagesSquare className="h-4 w-4 shrink-0 text-[var(--color-brand-tint-text)]" />
-            <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
+            <h2 className="text-badge font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
               {t('chat.thread')}
             </h2>
             <span className="text-badge text-[var(--color-brand-tint-text)] opacity-80">

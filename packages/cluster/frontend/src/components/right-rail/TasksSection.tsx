@@ -358,7 +358,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{error.match(/HTTP (\d+)/) ? t('tasks.requestFailed', { status: error.match(/HTTP (\d+)/)?.[1] ?? '' }) : error}</p>}
         {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && tasks.length === 0 && (
-          <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
+          <div className="px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
             {t('tasks.empty')}
           </div>
         )}

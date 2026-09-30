@@ -33,7 +33,7 @@ function AgentNodeInner({ data, selected }: NodeProps) {
 
   const tint = ENGINE_TINT[engine.toLowerCase()] ?? ENGINE_TINT.default
   const ring = agentStateColor(state)
-  const borderWidth = selected || state === 'running' ? 2 : 1
+  const emphasized = selected || state === 'running'
   const isRunning = state === 'running'
   const isTrusted = permissionLevel === 'trusted'
 
@@ -44,7 +44,11 @@ function AgentNodeInner({ data, selected }: NodeProps) {
       className={className}
       style={{
         background: tint,
-        border: `${borderWidth}px solid ${ring}`,
+        border: `1px solid ${ring}`,
+        // Second ring pixel drawn inside the border so emphasis never
+        // changes the box and only colour transitions.
+        outline: `1px solid ${emphasized ? ring : 'transparent'}`,
+        outlineOffset: -2,
         boxShadow: SHADOW_SOFT,
         color: TEXT_PRIMARY,
       }}

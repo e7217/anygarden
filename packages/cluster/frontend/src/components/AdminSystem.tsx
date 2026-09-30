@@ -84,7 +84,7 @@ function PackageRow({ update }: { update: PackageUpdate }) {
       )}
 
       {checked_at && (
-        <p className="mt-2 text-[11px] text-[var(--color-foreground-subtle)]">
+        <p className="mt-2 text-badge font-normal text-[var(--color-foreground-subtle)]">
           {t('admin.system.lastChecked', { date: formatDate(parseServerDate(checked_at), { dateStyle: 'medium', timeStyle: 'short' }) })}
         </p>
       )}
@@ -104,27 +104,27 @@ function StatusBadge({
   const { t } = useLocale()
   if (error) {
     return (
-      <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-foreground-muted)]">
+      <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
         {t('admin.system.checkFailed')}
       </span>
     )
   }
   if (!checked) {
     return (
-      <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-foreground-muted)]">
+      <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
         {t('admin.system.notChecked')}
       </span>
     )
   }
   if (available) {
     return (
-      <span className="shrink-0 rounded-full bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-text)]">
+      <span className="shrink-0 rounded-full bg-[color:color-mix(in_srgb,var(--color-brand)_15%,transparent)] px-2 py-0.5 text-badge font-semibold text-[var(--color-brand-text)]">
         {t('admin.system.updateAvailable')}
       </span>
     )
   }
   return (
-    <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-foreground-muted)]">
+    <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
       {t('admin.system.upToDate')}
     </span>
   )

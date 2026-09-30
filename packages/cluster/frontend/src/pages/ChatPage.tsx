@@ -458,7 +458,7 @@ function LocalChatPage() {
       />
       <SidebarExpandButton />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col">
         {selectedRoom && currentRoom ? (
           <>
             <div ref={setRoomHeaderEl} className="relative">
@@ -719,7 +719,7 @@ function LocalChatPage() {
               >
                 <Menu className="h-5 w-5" />
               </Button>
-              <span className="text-[15px] font-bold tracking-tight">Anygarden</span>
+              <span className="text-body font-bold tracking-tight">Anygarden</span>
             </div>
             <div className="flex flex-1 flex-col items-center justify-center bg-[var(--color-surface-alt)] px-6 text-center">
               <div className="flex w-full max-w-sm flex-col items-center">
@@ -755,7 +755,7 @@ function LocalChatPage() {
             </div>
           </>
         )}
-      </div>
+      </main>
 
       {/* #302 — right context rail. Rendered as a sibling to the main
           flex column so it can either push (desktop, expanded) or

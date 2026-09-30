@@ -5,11 +5,14 @@ import { RoomsProvider } from '@/hooks/useRooms'
 import { SidebarLayoutProvider } from '@/hooks/useSidebarLayout'
 import { RightSidebarLayoutProvider } from '@/hooks/useRightSidebarLayout'
 import LoginPage from '@/pages/LoginPage'
-import ChatPage from '@/pages/ChatPage'
-import GuestInvitePage from '@/pages/GuestInvitePage'
-import GuestRoomPage from '@/pages/GuestRoomPage'
-import FederationPreviewPage from '@/pages/FederationPreviewPage'
 import { useLocale } from '@/i18n/LocaleProvider'
+
+// Chat and guest shells pull in react-markdown, remark-gfm, anser and
+// @dnd-kit; keeping them out of the entry chunk lets /login paint first.
+const ChatPage = lazy(() => import('@/pages/ChatPage'))
+const GuestInvitePage = lazy(() => import('@/pages/GuestInvitePage'))
+const GuestRoomPage = lazy(() => import('@/pages/GuestRoomPage'))
+const FederationPreviewPage = lazy(() => import('@/pages/FederationPreviewPage'))
 
 // Topology view is code-split. Pulls in @xyflow/react + dagre
 // (~110KB gzip combined) only when the route is actually visited.
@@ -30,7 +33,7 @@ const AdminFederationPage = lazy(() => import('@/pages/AdminFederationPage'))
 /** Full-viewport placeholder, matching the route-level loading states. */
 function RouteFallback({ label }: { label: string }) {
   return (
-    <div className="flex items-center justify-center h-screen text-[var(--color-foreground-muted)]">
+    <div className="flex items-center justify-center h-dvh text-[var(--color-foreground-muted)]">
       {label}
     </div>
   )
@@ -39,15 +42,15 @@ function RouteFallback({ label }: { label: string }) {
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   const { t } = useLocale()
-  if (loading) return <div className="flex items-center justify-center h-screen">{t('common.loading')}</div>
+  if (loading) return <div className="flex items-center justify-center h-dvh">{t('common.loading')}</div>
   if (!user) return <Navigate to="/login" />
-  return <>{children}</>
+  return <Suspense fallback={<RouteFallback label={t('common.loading')} />}>{children}</Suspense>
 }
 
 function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   const { t } = useLocale()
-  if (loading) return <div className="flex items-center justify-center h-screen">{t('common.loading')}</div>
+  if (loading) return <div className="flex items-center justify-center h-dvh">{t('common.loading')}</div>
   if (!user) return <Navigate to="/login" />
   if (!user.is_admin) return <Navigate to="/" />
   // Boundary lives after the auth gates so a non-admin is redirected
@@ -63,7 +66,10 @@ export default function App() {
     return (
       <BrowserRouter>
         <Routes>
-          <Route path="/__preview/federation" element={<FederationPreviewPage />} />
+          <Route
+            path="/__preview/federation"
+            element={<Suspense fallback={<RouteFallback label={t('common.loading')} />}><FederationPreviewPage /></Suspense>}
+          />
         </Routes>
       </BrowserRouter>
     )
@@ -94,8 +100,8 @@ export default function App() {
             {/* Guest entry + single-room shell. Intentionally NOT
                 wrapped in ProtectedRoute — the guest flow has its own
                 JWT lifecycle and must not redirect through /login. */}
-            <Route path="/invite/:token" element={<GuestInvitePage />} />
-            <Route path="/g/:roomId" element={<GuestRoomPage />} />
+            <Route path="/invite/:token" element={<Suspense fallback={<RouteFallback label={t('common.loading')} />}><GuestInvitePage /></Suspense>} />
+            <Route path="/g/:roomId" element={<Suspense fallback={<RouteFallback label={t('common.loading')} />}><GuestRoomPage /></Suspense>} />
             <Route path="/" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/rooms/:roomId" element={<ProtectedRoute><ChatPage /></ProtectedRoute>} />
             <Route path="/admin/agents" element={<Navigate to="/admin/machines" replace />} />

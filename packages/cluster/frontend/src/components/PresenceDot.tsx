@@ -98,7 +98,7 @@ export default function PresenceDot({
         background: bg,
         // Whisper border (DESIGN.md §4) so the offline dot still
         // reads against a white participant row.
-        boxShadow: '0 0 0 1px rgba(0,0,0,0.04)',
+        boxShadow: '0 0 0 1px color-mix(in srgb, var(--color-foreground) 5%, transparent)',
         flexShrink: 0,
       }}
     />

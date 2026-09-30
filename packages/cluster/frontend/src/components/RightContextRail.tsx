@@ -67,7 +67,7 @@ export default function RightContextRail({
           aria-label={t('chat.closeContext')}
           data-drawer-overlay="room-context-rail"
           tabIndex={-1}
-          className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] lg:hidden"
+          className="fixed inset-0 z-30 bg-[var(--color-overlay)] backdrop-blur-[1px] lg:hidden"
           onClick={onClose}
         />
       )}
@@ -90,10 +90,12 @@ export default function RightContextRail({
         // w-96 (384px) only at xl+. #760 — desktop width is now the
         // user's, shared with ThreadPanel through ``--right-rail-w``
         // and capped at 40vw so a width saved on a wide screen cannot
-        // crush the chat column on a narrow one.
+        // crush the chat column on a narrow one. Only transform and
+        // shadow animate; the width snaps so the chat column reflows once
+        // rather than on every frame.
         className={`
           fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-72 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
-          transform transition-all duration-200 ease-out data-[resizing]:transition-none
+          transform transition-[transform,box-shadow] duration-200 ease-out data-[resizing]:transition-none
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
             ? 'lg:translate-x-full lg:w-0 lg:overflow-hidden lg:border-l-0'

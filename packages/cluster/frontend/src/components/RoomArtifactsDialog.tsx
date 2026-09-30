@@ -78,6 +78,8 @@ function ArtifactImagePreview({
     <img
       src={src}
       alt={alt}
+      loading="lazy"
+      decoding="async"
       className="h-32 w-full rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] object-contain"
     />
   )
@@ -195,7 +197,7 @@ export default function RoomArtifactsDialog({
                     >
                       {item.filename}
                     </p>
-                    <p className="text-[11px] text-[var(--color-foreground-subtle)]">
+                    <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">
                       {formatBytes(item.size_bytes)} · {item.mime}
                     </p>
                   </div>

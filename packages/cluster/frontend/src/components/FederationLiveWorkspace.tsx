@@ -518,7 +518,7 @@ function InviteComposer({ federation }: { federation: Federation }) {
         </div>
         <Field label={t('federation.intendedCertificate')}>
           <textarea
-            className="min-h-20 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-xs text-[var(--color-foreground)]"
+            className="min-h-20 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
             value={form.certificatePem}
             onChange={(e) => setForm({ ...form, certificatePem: e.target.value })}
             placeholder="-----BEGIN CERTIFICATE-----"
@@ -579,7 +579,7 @@ function InviteAcceptor({ federation }: { federation: Federation }) {
       <CardContent className="space-y-3">
         <Field label={t('federation.bundleJson')}>
           <textarea
-            className="min-h-24 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-xs text-[var(--color-foreground)]"
+            className="min-h-24 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface-elevated)] p-2 font-mono text-sm text-[var(--color-foreground)]"
             value={form.bundleJson}
             onChange={(e) => setForm({ ...form, bundleJson: e.target.value })}
             placeholder='{"protocol_version":1,"invite_id":…}'

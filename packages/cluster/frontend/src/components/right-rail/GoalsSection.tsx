@@ -143,7 +143,7 @@ export default function GoalsSection({
         {error && <p className="px-3 py-2 text-xs text-[var(--color-danger)]" role="alert">{t('goals.loadFailed')} {error}</p>}
         {loading && <p className="px-3 py-2 text-xs text-[var(--color-foreground-muted)]">{t('common.loading')}</p>}
         {!loading && !error && goals.length === 0 && !showForm && (
-          <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
+          <div className="px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
             {t('goals.empty')}
           </div>
         )}
@@ -156,6 +156,7 @@ export default function GoalsSection({
             <span
               className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
               title={statusLabel(g.status)}
+              aria-hidden="true"
             />
             <div className="min-w-0 flex-1">
               <p

@@ -194,7 +194,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               <select
                 value={task.assignee_participant_id ?? ''}
                 onChange={e => reassign(task, e.target.value)}
-                className="min-h-11 min-w-0 max-w-[8rem] truncate border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none focus:ring-0 md:min-h-6"
+                className="min-h-11 min-w-0 max-w-[8rem] truncate rounded-[var(--radius-sm)] border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:min-h-6"
                 aria-label={t('chat.reassign')}
               >
                 <option value="">— {t('chat.unassigned')} —</option>
@@ -250,12 +250,13 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
             onChange={e => setNewTitle(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && createTask()}
             placeholder={t('chat.addTask')}
-            className="min-h-11 min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-foreground-subtle)]"
+            aria-label={t('chat.addTask')}
+            className="min-h-11 min-w-[8rem] flex-1 rounded-[var(--radius-sm)] bg-transparent px-2 text-sm placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
           />
           <select
             value={newAssignee}
             onChange={e => setNewAssignee(e.target.value)}
-            className="min-h-11 max-w-[8rem] truncate border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] outline-none focus:ring-0 md:min-h-6"
+            className="min-h-11 max-w-[8rem] truncate rounded-[var(--radius-sm)] border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:min-h-6"
             aria-label={t('chat.pickAssignee')}
           >
             <option value="">— {t('chat.assignee')} —</option>

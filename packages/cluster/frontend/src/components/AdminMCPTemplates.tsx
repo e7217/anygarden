@@ -226,7 +226,7 @@ export default function AdminMCPTemplates() {
                       {template.display_name}
                     </h3>
                     <Badge variant="outline">
-                      <code className="text-[11px]">{template.name}</code>
+                      <code className="text-badge font-normal">{template.name}</code>
                     </Badge>
                     {template.source === 'builtin' && (
                       <Badge variant="outline" className="text-[var(--color-foreground-muted)]">
@@ -241,14 +241,14 @@ export default function AdminMCPTemplates() {
                   )}
                   <div className="mt-2 flex flex-wrap items-center gap-1">
                     {template.supported_engines.map(engine => (
-                      <Badge key={engine} variant="outline" className="text-[10px]">
+                      <Badge key={engine} variant="outline">
                         {engine}
                       </Badge>
                     ))}
                     {template.required_env_vars.length > 0 && (
                       <Badge
                         variant="outline"
-                        className="text-[10px] text-[var(--color-foreground-muted)]"
+                        className="text-badge font-normal text-[var(--color-foreground-muted)]"
                         title={template.required_env_vars.join('\n')}
                       >
                         {t('admin.mcp.envCount', { count: template.required_env_vars.length })}
@@ -449,7 +449,7 @@ function AttachDialog({ template, agents, instancesByAgent, onClose }: AttachDia
                         onClick={() => setShowValues(v => ({ ...v, [varName]: !visible }))}
                         aria-label={visible ? t('admin.mcp.hideVariable', { name: varName }) : t('admin.mcp.showVariable', { name: varName })}
                         aria-pressed={visible}
-                        className="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-[var(--color-foreground-subtle)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:text-[var(--color-foreground)]"
+                        className="absolute right-0 top-0 flex h-full w-9 items-center justify-center text-[var(--color-foreground-subtle)] transition-colors hover:text-[var(--color-foreground)] focus-visible:outline-none focus-visible:text-[var(--color-foreground)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand-focus)] rounded-r-[var(--radius-sm)]"
                       >
                         {visible
                           ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" />
@@ -790,7 +790,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 <Label htmlFor="mcp-slug">
                   {t('admin.mcp.slug')}
                   {isCreate && !slugTouched && (
-                    <span className="ml-1 text-[10px] font-normal text-[var(--color-foreground-subtle)]">
+                    <span className="ml-1 text-badge font-normal text-[var(--color-foreground-subtle)]">
                       {t('admin.mcp.auto')}
                     </span>
                   )}
@@ -830,14 +830,15 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 />
               </div>
               <div>
-                <Label>{t('admin.mcp.args')}</Label>
-                <div className="space-y-1.5 pt-1">
+                <Label id="mcp-args-label">{t('admin.mcp.args')}</Label>
+                <div role="group" aria-labelledby="mcp-args-label" className="space-y-1.5 pt-1">
                   {form.args.map((arg, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <Input
                         value={arg}
                         onChange={e => updateArg(i, e.target.value)}
                         placeholder={i === 0 ? '-y' : '@modelcontextprotocol/server-*'}
+                        aria-label={t('admin.mcp.argLabel', { count: i + 1 })}
                         className="flex-1"
                       />
                       <Button
@@ -856,17 +857,18 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                 </div>
               </div>
               <div>
-                <Label>{t('admin.mcp.envVariables')}</Label>
-                <div className="space-y-1.5 pt-1">
+                <Label id="mcp-env-label">{t('admin.mcp.envVariables')}</Label>
+                <div role="group" aria-labelledby="mcp-env-label" className="space-y-1.5 pt-1">
                   {form.envRows.map((row, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <Input
                         value={row.key}
                         onChange={e => updateEnv(i, { key: e.target.value })}
                         placeholder="GITHUB_TOKEN"
-                        className="flex-1 font-mono text-xs"
+                        aria-label={t('admin.mcp.envKeyLabel', { count: i + 1 })}
+                        className="flex-1 font-mono text-sm"
                       />
-                      <label className="flex shrink-0 items-center gap-1 text-xs text-[var(--color-foreground-muted)]">
+                      <label className="flex shrink-0 items-center gap-1 text-caption font-normal text-[var(--color-foreground-muted)]">
                         <input
                           type="checkbox"
                           checked={row.secret}
@@ -879,6 +881,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                           value={row.value}
                           onChange={e => updateEnv(i, { value: e.target.value })}
                           placeholder={t('admin.mcp.valuePlaceholder')}
+                          aria-label={t('admin.mcp.envValueLabel', { count: i + 1 })}
                           className="flex-1 text-xs"
                         />
                       )}
@@ -908,7 +911,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                     </span>
                   ) : (
                     placeholders.map(p => (
-                      <Badge key={p} variant="outline" className="font-mono text-[10px]">
+                      <Badge key={p} variant="outline" className="font-mono">
                         {p}
                       </Badge>
                     ))
@@ -977,7 +980,7 @@ function CustomEditorDialog({ template, onClose, onSaved }: CustomEditorProps) {
                   id="mcp-config-adv"
                   value={advanced.configText}
                   onChange={e => setAdvanced(prev => ({ ...prev, configText: e.target.value }))}
-                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2 font-mono text-xs"
+                  className="w-full min-h-[200px] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2 font-mono text-sm"
                 />
               </div>
             </>

@@ -411,7 +411,7 @@ export default function Sidebar({
           aria-label={t('chat.closeSidebar')}
           data-drawer-overlay="workspace-sidebar"
           tabIndex={-1}
-          className="fixed inset-0 z-30 bg-black/25 backdrop-blur-[1px] md:hidden"
+          className="fixed inset-0 z-30 bg-[var(--color-overlay)] backdrop-blur-[1px] md:hidden"
           onClick={onClose}
         />
       )}
@@ -560,7 +560,7 @@ export default function Sidebar({
 
                   <button
                     onClick={() => openNewRoomDialog(project.id)}
-                    className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-[14px] font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
+                    className="flex min-h-[var(--control-sm-height)] w-full items-center rounded-[var(--radius-sm)] px-2 text-caption font-medium text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] transition-colors"
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
                     <span>{t('chat.newRoom')}</span>
@@ -610,7 +610,7 @@ export default function Sidebar({
                         key={dm.id}
                         onClick={() => go(`/rooms/${dm.id}`)}
                         data-testid={`sidebar-dm-${dm.id}`}
-                        className={`flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-[14px] font-medium transition-colors ${
+                        className={`flex min-h-[var(--control-sm-height)] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-caption font-medium transition-colors ${
                           selectedRoom === dm.id
                             ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
                             : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
@@ -650,6 +650,7 @@ export default function Sidebar({
             <div className="space-y-4 py-2">
               <Input
                 placeholder={t('chat.projectName')}
+                aria-label={t('chat.projectName')}
                 value={newProjectName}
                 onChange={e => setNewProjectName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
@@ -706,6 +707,7 @@ export default function Sidebar({
             )}
             <Input
               placeholder={t('chat.roomName')}
+              aria-label={t('chat.roomName')}
               value={newRoomName}
               onChange={e => setNewRoomName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleCreateRoom()}
@@ -846,7 +848,7 @@ function RoomTreeNodeView({
         <button
           onClick={() => onGo(`/rooms/${node.room.id}`)}
           style={{ paddingLeft: `${indentPx + 8}px` }}
-          className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center pr-2 text-[14px] font-medium transition-colors ${
+          className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center pr-2 text-caption font-medium transition-colors ${
             isSelected
               ? 'text-[var(--color-foreground)]'
               : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1170,7 +1172,7 @@ function AgentDMListAdmin({
                     ? `sidebar-dm-${soloDM.id}`
                     : `sidebar-agent-${agent.id}`
                 }
-                className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-[14px] font-medium transition-colors ${
+                className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-caption font-medium transition-colors ${
                   soloIsSelected
                     ? 'text-[var(--color-foreground)]'
                     : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'
@@ -1211,7 +1213,7 @@ function AgentDMListAdmin({
                   // is never lost, only toggled with the user's intent.
                   <span className="ml-auto flex shrink-0 items-center gap-1.5 group-hover:hidden">
                     {agentHasUpdates && <UpdateDot />}
-                    <span className="rounded-full bg-black/5 px-1.5 text-[11px] text-[var(--color-foreground-muted)]">
+                    <span className="rounded-full bg-[var(--color-surface-hover)] px-1.5 text-badge text-[var(--color-foreground-muted)]">
                       {agentDms.length}
                     </span>
                   </span>
@@ -1274,7 +1276,7 @@ function AgentDMListAdmin({
                         <span className="min-w-0 truncate">{label}</span>
                         {dm.ephemeral && (
                           <span
-                            className="shrink-0 rounded-full bg-black/5 px-1.5 text-[10px] text-[var(--color-foreground-muted)]"
+                            className="shrink-0 rounded-full border border-[var(--color-border-strong)] px-1.5 text-badge text-[var(--color-foreground-muted)]"
                             title={t('chat.temporarySession')}
                           >
                             {t('chat.temporaryShort')}
@@ -1303,7 +1305,7 @@ function AgentDMListAdmin({
             key={dm.id}
             onClick={() => onGo(`/rooms/${dm.id}`)}
             data-testid={`sidebar-dm-${dm.id}`}
-            className={`flex min-h-[var(--control-sm-height)] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[14px] font-medium transition-colors ${
+            className={`flex min-h-[var(--control-sm-height)] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-caption font-medium transition-colors ${
               isSel
                 ? 'bg-[var(--color-surface)] shadow-whisper text-[var(--color-foreground)]'
                 : 'text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
@@ -1433,7 +1435,7 @@ function PinnedRoomItem({
       </button>
       <button
         onClick={() => onGo(`/rooms/${room.id}`)}
-        className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center py-1 pr-2 text-[14px] font-medium transition-colors ${
+        className={`flex min-h-[var(--control-sm-height)] min-w-0 flex-1 items-center py-1 pr-2 text-caption font-medium transition-colors ${
           isSelected
             ? 'text-[var(--color-foreground)]'
             : 'text-[var(--color-foreground-muted)] group-hover:text-[var(--color-foreground)]'

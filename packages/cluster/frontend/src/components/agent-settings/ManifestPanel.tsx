@@ -310,17 +310,21 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
     return (
       <div
         key={f.path}
-        className={`group flex items-center justify-between pr-3 py-1.5 text-sm cursor-pointer transition-colors ${
+        className={`group flex items-center justify-between pr-3 text-sm transition-colors ${
           isSelected
             ? 'bg-[var(--color-brand-tint-bg)] text-[var(--color-brand-tint-text)]'
             : 'hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)]'
         }`}
-        style={indentStyle}
-        onClick={() => onSelect(f.path)}
-        data-testid={`agent-edit-file-${f.path}`}
-        data-virtual={f.virtual ? 'true' : undefined}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand-focus)]"
+          style={indentStyle}
+          onClick={() => onSelect(f.path)}
+          aria-current={isSelected ? 'true' : undefined}
+          data-testid={`agent-edit-file-${f.path}`}
+          data-virtual={f.virtual ? 'true' : undefined}
+        >
           {f.virtual ? (
             <FileText
               className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]"
@@ -331,7 +335,7 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
             {node.name}
             {f.dirty ? <span className="ml-1 opacity-70">•</span> : null}
           </span>
-        </span>
+        </button>
         {showTrash ? (
           <button
             type="button"
@@ -339,10 +343,11 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
               e.stopPropagation()
               onRemove(f.path)
             }}
-            className="opacity-0 group-hover:opacity-100 transition-opacity"
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity"
             title={t('admin.manifest.removeFile', { path: f.path })}
+            aria-label={t('admin.manifest.removeFile', { path: f.path })}
           >
-            <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" />
+            <Trash2 className="h-3.5 w-3.5 text-[var(--color-warning)]" aria-hidden="true" />
           </button>
         ) : null}
       </div>
@@ -356,13 +361,15 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
   const fileCount = countFilesRec(node)
   return (
     <div key={node.path}>
-      <div
-        className="group flex items-center justify-between pr-3 py-1 text-sm cursor-pointer hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)] transition-colors"
-        style={indentStyle}
-        onClick={() => onToggle(node.path)}
-        data-testid={`agent-edit-dir-${node.path}`}
-      >
-        <span className="flex min-w-0 items-center gap-1">
+      <div className="group flex items-center justify-between pr-3 text-sm hover:bg-[var(--color-surface-alt)] text-[var(--color-foreground)] transition-colors">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-brand-focus)]"
+          style={indentStyle}
+          onClick={() => onToggle(node.path)}
+          aria-expanded={isOpen}
+          data-testid={`agent-edit-dir-${node.path}`}
+        >
           {isOpen ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-muted)]" aria-hidden="true" />
           ) : (
@@ -371,10 +378,10 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
           <span className={`truncate text-xs ${depth === 0 ? 'uppercase tracking-wider text-[var(--color-foreground-muted)]' : 'font-mono text-[var(--color-foreground)]'}`}>
             {label}
           </span>
-          <span className="text-[10px] text-[var(--color-foreground-subtle)]">
+          <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
             ({fileCount})
           </span>
-        </span>
+        </button>
         {isSkill ? (
           <button
             type="button"
@@ -382,11 +389,12 @@ function renderTreeNode(args: RenderTreeNodeArgs): ReactNode {
               e.stopPropagation()
               onAddInSkill(node.name)
             }}
-            className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 hover:bg-[var(--color-surface-hover)]"
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity rounded p-0.5 hover:bg-[var(--color-surface-hover)]"
             title={t('admin.manifest.addFileIn', { path: node.path })}
+            aria-label={t('admin.manifest.addFileIn', { path: node.path })}
             data-testid={`agent-edit-add-in-skill-${node.name}`}
           >
-            <Plus className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" />
+            <Plus className="h-3.5 w-3.5 text-[var(--color-foreground-muted)]" aria-hidden="true" />
           </button>
         ) : null}
       </div>
@@ -1193,6 +1201,7 @@ export default function ManifestPanel({
                     value={newFilePath}
                     onChange={e => setNewFilePath(e.target.value)}
                     placeholder="skills/greeting/SKILL.md"
+                    aria-label={t('admin.manifest.newFilePath')}
                     className="min-w-0 flex-1 basis-full sm:basis-auto"
                     onKeyDown={e => {
                       if (e.key === 'Enter') {
@@ -1218,6 +1227,7 @@ export default function ManifestPanel({
                     value={newSkillName}
                     onChange={e => setNewSkillName(e.target.value)}
                     placeholder="greeting"
+                    aria-label={t('admin.manifest.newSkillName')}
                     onKeyDown={e => {
                       if (e.key === 'Enter') {
                         e.preventDefault()
@@ -1271,7 +1281,7 @@ export default function ManifestPanel({
                           <button
                             type="button"
                             onClick={() => setAttachedSkillSection(v => !v)}
-                            className="w-full flex items-center gap-1.5 pr-3 py-1 text-[10px] uppercase tracking-wider text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)]"
+                            className="w-full flex items-center gap-1.5 pr-3 py-1 text-badge font-normal uppercase tracking-wider text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)]"
                             style={{ paddingLeft: 12 }}
                             data-testid="agent-edit-attached-skills-toggle"
                           >
@@ -1282,7 +1292,7 @@ export default function ManifestPanel({
                             )}
                             <BookOpen className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span>{t('admin.manifest.attachedSkills')}</span>
-                            <span className="text-[10px] text-[var(--color-foreground-subtle)] normal-case tracking-normal">
+                            <span className="text-badge font-normal text-[var(--color-foreground-subtle)] normal-case tracking-normal">
                               ({attachedSkills.length})
                             </span>
                             <Lock className="ml-auto h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />
@@ -1341,6 +1351,7 @@ export default function ManifestPanel({
                         value={selectedFile.content}
                         onChange={e => handleFileContentChange(e.target.value)}
                         spellCheck={false}
+                        aria-label={t('admin.manifest.fileContent', { path: selectedFile.path })}
                         placeholder={
                           selectedFile.virtual
                             ? t('admin.manifest.agentsMdPlaceholder')
@@ -1371,21 +1382,22 @@ export default function ManifestPanel({
                           {t('admin.manifest.viewInSkills')}
                         </button>
                       </div>
-                      <div className="mb-2 text-[11px] text-[var(--color-foreground-muted)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] rounded-[var(--radius-xs)] px-2 py-1">
+                      <div className="mb-2 text-badge font-normal text-[var(--color-foreground-muted)] bg-[var(--color-surface-alt)] border border-[var(--color-border)] rounded-[var(--radius-xs)] px-2 py-1">
                         {t('admin.manifest.libraryManaged')}
                       </div>
                       {selectedAttachedPreview ? (
                         <>
                           <textarea
-                            className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none"
+                            className="font-mono text-sm flex-1 w-full rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] px-3 py-2 text-[var(--color-foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]"
                             value={selectedAttachedPreview.skill_md}
                             readOnly
+                            aria-label={t('admin.manifest.fileContent', { path: `skills/${selectedAttachedSkill.name}/SKILL.md` })}
                             spellCheck={false}
                             data-testid="agent-edit-attached-skill-content"
                           />
                           {selectedAttachedPreview.extra_files.length > 0 ? (
                             <div className="mt-2">
-                              <div className="text-[10px] uppercase tracking-wider text-[var(--color-foreground-muted)] mb-1">
+                              <div className="text-badge font-normal uppercase tracking-wider text-[var(--color-foreground-muted)] mb-1">
                                 {t('admin.manifest.extraFiles', { count: selectedAttachedPreview.extra_files.length })}
                               </div>
                               <ul className="rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs max-h-28 max-w-full overflow-auto">
