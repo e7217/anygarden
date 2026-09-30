@@ -5,6 +5,12 @@
 
 ### Changed
 
+- The codex-cli model catalog offers `gpt-6.1-sol`, which codex now lists as
+  its latest workhorse model, and it replaces `gpt-6-sol` as the default.
+  Agents pinned to `gpt-6-sol` keep it; it stays in the catalog.
+- Reasoning levels for the older codex-cli models now match what codex lists:
+  `minimal` is no longer offered for `gpt-5.6-*` or `gpt-5.5`, because the
+  backend rejects it, and `gpt-5.6-sol` and `gpt-5.6-terra` gain `ultra`.
 - The codex-cli model catalog offers the GPT-6 family (`gpt-6-astra`,
   `gpt-6-sol`, `gpt-6-luna`) and the `ultra` reasoning level (astra and sol).
   The default model is now `gpt-6-sol` (#692).

@@ -3,6 +3,11 @@
 
 ## Unreleased
 
+### Changed
+
+- `CodexCliAdapter` falls back to `gpt-6.1-sol` instead of `gpt-6-sol` when no
+  model is given, matching the cluster catalog default.
+
 ## v0.13.0 (2026-09-23)
 
 First release since v0.12.0 (2026-07-17). Eleven changes had accumulated
