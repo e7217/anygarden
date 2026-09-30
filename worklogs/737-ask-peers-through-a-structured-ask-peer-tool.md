@@ -40,5 +40,5 @@ Agents could call another agent only by writing a `<@user:PARTICIPANT_ID>` routi
 
 - Agents can call a peer with `ask_peer`; the question appears as a thread reply under the caller's final reply and the peer's turn is triggered by that thread message.
 - A call to a peer already answering, or over the limit, is rejected inside the caller's turn with the recent messages, so no dangling request is posted.
-- Tests: agent suite 678 passed; cluster related subset 578 passed; new tests 20 passed. Full cluster run pending at commit time.
+- Tests: agent suite 678 passed; cluster related subset 578 passed; new tests 20 passed; full cluster suite 2054 passed.
 - Pending: live check with a codex agent (`permission_level=trusted`) to confirm models use the tool.
