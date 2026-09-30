@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from typing import Any
 from urllib.parse import parse_qs
 from uuid import UUID, uuid4
@@ -936,6 +937,12 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # lifespan can leave this None and the safety net falls back to
     # depth-only enforcement.
     peer_handoff_budget = getattr(app.state, "peer_handoff_budget", None)
+    # Issue #737 — asks scheduled by the ``ask_peer`` MCP tool. After the
+    # caller's final reply is stored they are fed back into this loop as
+    # thread-reply sends (``injected_sends``) so they take the normal
+    # agent-send path.
+    pending_peer_asks = getattr(app.state, "pending_peer_asks", None)
+    injected_sends: deque[str] = deque()
 
     # -- Authentication via Sec-WebSocket-Protocol --
     raw_protocols = websocket.headers.get("sec-websocket-protocol", "")
@@ -1244,7 +1251,14 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
         # -- Main receive loop --
         while True:
-            raw = await websocket.receive_text()
+            # #737 — a send injected for an ``ask_peer`` call is handled
+            # before the next frame from the socket.
+            is_tool_peer_ask = bool(injected_sends)
+            raw = (
+                injected_sends.popleft()
+                if is_tool_peer_ask
+                else await websocket.receive_text()
+            )
             # #425 — reset per-frame log context and re-bind the room as
             # the durable correlation key for every log this frame emits.
             # request_id (per agent) is additionally bound in the
@@ -1510,8 +1524,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # Explicit delegations have their own target/role admission
                 # below. The heuristic chatter budget must not strip their
                 # required mention or discard concurrent directed requests.
+                # #737 — agent thread replies skip the net, but an ``ask_peer``
+                # call is posted as a thread reply and must still respect
+                # the redundant-wake check and the depth/budget cap.
                 if (
-                    not is_thread_reply
+                    (not is_thread_reply or is_tool_peer_ask)
                     and is_agent_for_peer
                     and not is_delegation_result
                     and "delegation_target_participant_id" not in metadata
@@ -1643,6 +1660,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # peer-mention budget so the first agent in the new
                     # turn starts with a clean slate.
                     peer_handoff_budget.reset(room_id)
+                    # #737 — asks scheduled in the previous turn are stale.
+                    if pending_peer_asks is not None:
+                        pending_peer_asks.clear_room(room_id)
 
                 # Room mention → representative agent routing.
                 # Guests can't reach this block — their mentions had
@@ -1812,10 +1832,13 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         continue
                     completion_decision = None
+                    reply_request_id: str | None = None
                     if identity is not None and identity.kind == "agent":
                         from anygarden.turns.service import begin_completion
 
                         raw_rid = metadata.get("request_id")
+                        if isinstance(raw_rid, str):
+                            reply_request_id = raw_rid
                         raw_attempt = metadata.get("turn_attempt")
                         raw_generation = metadata.get("turn_generation")
                         raw_lease = metadata.get("turn_lease")
@@ -2411,6 +2434,30 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             manager,
                             participant_ids=connected_targets,
                         )
+
+                # #737 — post the caller's scheduled ``ask_peer`` questions
+                # as thread replies under this reply. Injected sends carry
+                # no turn proof, so ``begin_completion`` treats them as
+                # legacy agent sends and the usual thread-mention path
+                # creates the peer's turn.
+                if (
+                    identity is not None
+                    and identity.kind == "agent"
+                    and pending_peer_asks is not None
+                    and not is_tool_peer_ask
+                    and not is_delegation_result
+                    and frame_in.content.strip()
+                ):
+                    thread_root = msg.root_message_id or msg.id
+                    for ask in pending_peer_asks.take(
+                        identity.id, room_id, request_id=reply_request_id
+                    ):
+                        injected_sends.append(json.dumps({
+                            "type": "send",
+                            "content": f"<@user:{ask.target_pid}> {ask.question}",
+                            "thread_root_id": thread_root,
+                            "metadata": {"peer_ask": {"via": "tool"}},
+                        }))
 
                 # Send system message if representative agent is offline
                 if metadata.get("_rep_offline"):

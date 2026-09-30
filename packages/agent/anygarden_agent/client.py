@@ -59,7 +59,7 @@ def _is_task_init_content(content: str) -> bool:
     - ``[DELEGATED]``  — a user/agent delegates a subtask to another
       agent. Each delegation is an independent task.
     - ``[HANDOFF]`` (#159 Phase C) — the orchestrator passes turn
-      control to another participant via the ``handoff_to`` tool.
+      control to another participant with a ``[HANDOFF]`` message.
       The receiving agent treats this as a fresh task so the
       per-room agent-turn counter doesn't age out mid-collaboration.
     """
@@ -256,10 +256,9 @@ class ChatClient:
         # server on every welcome. ``room_id -> {participant_id: brief}``
         # where ``brief`` mirrors ``ParticipantBrief`` on the wire
         # (keys: ``id``, ``display_name``, ``kind``, ``agent_id``).
-        # The orchestrator Claude Code adapter reads this to inject a
-        # UUID-annotated roster into its LLM system prompt so the
-        # model can call ``handoff_to`` with a valid participant UUID
-        # instead of guessing a display name. Pre-#221 servers omit
+        # ``compose_roster_suffix`` renders it into the LLM prompt so the
+        # model can pass a valid participant id to the ``ask_peer`` tool
+        # (#737) instead of guessing a display name. Pre-#221 servers omit
         # ``participants`` entirely — those rooms cache an empty dict
         # so the adapter's iteration stays safe.
         self._participants_by_room: dict[str, dict[str, dict[str, Any]]] = {}
@@ -591,9 +590,9 @@ class ChatClient:
         ``parse_mentions`` treats every such token as an actionable
         mention. Splitting *display name* from the *id-as-data* lets
         the model address peers by name in prose and only assemble a
-        routing token when intentionally calling one (handoff_to MCP
-        tool, or the explicit ``<@user:PARTICIPANT_ID>`` placeholder
-        pattern in the usage paragraph below).
+        routing token when intentionally calling one (the ``ask_peer`` MCP
+        tool (#737), or the explicit ``<@user:PARTICIPANT_ID>`` fallback
+        in the usage paragraph below).
 
         Self is excluded — an orchestrator handing off to itself would
         be a no-op cycle. Returns an empty string when the roster
@@ -657,33 +656,34 @@ class ChatClient:
             header
             + "\n\n"
             "Room participants (peers, excluding you). Refer to peers by "
-            "display name in prose. "
-            "Construct a routing token <@user:PARTICIPANT_ID> ONLY when "
-            "intentionally calling a specific peer for a reply — never "
-            "when merely listing, recommending, or describing peers.\n"
+            "display name in prose. Never put a routing token "
+            "<@user:PARTICIPANT_ID> in prose that merely lists, recommends, "
+            "or describes peers.\n"
             + "\n".join(lines)
         )
-        # #283 / #288: synthesis is opt-in, and the
-        # routing-token-vs-display-name split is spelled out so the
-        # model doesn't copy live tokens out of the roster header into
-        # prose. The two paragraphs below carry both rules plus the
-        # don't-peer-ask-over-trivia brake; any future copy edit that
-        # drops one is caught by the regression assertions in
-        # ``test_claude_code.py``.
+        # #283 / #288 / #737: the paragraphs below carry the peer-call
+        # rules — call through the ``ask_peer`` tool (#737) so the call is
+        # recorded and a rejection comes back within the turn, a routing
+        # token only as the fallback, display names in prose, and the
+        # don't-peer-ask-over-trivia brake. Roster tests pin the phrases.
         suffix += (
-            "\n\nWhen you need a peer to actively answer, build the "
-            "routing token by substituting that peer's id from the "
-            "list above into <@user:PARTICIPANT_ID>. The peer's "
-            "reply reaches the user directly — you only need to "
-            "synthesize if the user explicitly asks (e.g. "
-            "\"정리해줘\") or peer answers conflict.\n\n"
-            "Put an intentional routing token in the final reply; "
-            "intermediate commentary is not sent to the room.\n\n"
+            "\n\nWhen you need another agent to actively answer, call the "
+            "ask_peer tool with this room ID, that agent's id from the list "
+            "above, and your question. The server posts the question in a "
+            "thread under your final reply and wakes that agent, so do not "
+            "also write the request in your reply. If ask_peer says the call "
+            "was rejected, that agent will not be called: use the messages it "
+            "returns and answer yourself. ask_peer only calls agents (kind: "
+            "agent); address people by name. The peer's reply reaches the "
+            "user directly — you only need to synthesize if the user "
+            "explicitly asks (e.g. \"정리해줘\") or peer answers conflict.\n\n"
+            "Only if the ask_peer tool is unavailable, put an intentional "
+            "routing token in the final reply by substituting the agent's id "
+            "into <@user:PARTICIPANT_ID>; intermediate commentary is not sent "
+            "to the room.\n\n"
             "For recommendations, comparisons, status reports, or "
             "any descriptive reference to a peer, use only the "
-            "display name. Never put a routing token in prose that "
-            "merely mentions or lists peers — that token wakes the "
-            "peer for an unwanted reply. Don't peer-ask for trivial "
+            "display name. Don't peer-ask for trivial "
             "greetings or meta questions — answer those yourself."
         )
         return suffix
