@@ -7,11 +7,14 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import {
+  RIGHT_RAIL_WIDTH,
   RightSidebarLayoutProvider,
+  clampRailWidth,
   useRightSidebarLayout,
 } from './useRightSidebarLayout'
 
 const STORAGE_KEY = 'anygarden_right_sidebar_collapsed'
+const WIDTH_KEY = 'anygarden_right_sidebar_width'
 
 function wrap({ children }: { children: ReactNode }) {
   return createElement(RightSidebarLayoutProvider, null, children)
@@ -121,5 +124,68 @@ describe('useRightSidebarLayout', () => {
     act(() => { result.current.setCollapsed(true) })
     expect(result.current.collapsed).toBe(true)
     expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+  })
+})
+
+// #760 — user-adjustable rail width, shared with the thread panel.
+describe('useRightSidebarLayout width', () => {
+  it('defaults to 320px when nothing is stored', () => {
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.default)
+    expect(RIGHT_RAIL_WIDTH.default).toBe(320)
+  })
+
+  it('hydrates a stored width', () => {
+    localStorage.setItem(WIDTH_KEY, '400')
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    expect(result.current.width).toBe(400)
+  })
+
+  it('clamps an out-of-range stored width', () => {
+    localStorage.setItem(WIDTH_KEY, '9999')
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.max)
+  })
+
+  it('ignores a malformed stored width', () => {
+    localStorage.setItem(WIDTH_KEY, 'abc')
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.default)
+  })
+
+  it('setWidth clamps, rounds and persists', () => {
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    act(() => { result.current.setWidth(401.6) })
+    expect(result.current.width).toBe(402)
+    expect(localStorage.getItem(WIDTH_KEY)).toBe('402')
+
+    act(() => { result.current.setWidth(10) })
+    expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.min)
+  })
+
+  it('resetWidth returns to the default', () => {
+    localStorage.setItem(WIDTH_KEY, '480')
+    const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+    act(() => { result.current.resetWidth() })
+    expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.default)
+    expect(localStorage.getItem(WIDTH_KEY)).toBe(String(RIGHT_RAIL_WIDTH.default))
+  })
+
+  it('survives a throwing localStorage', () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied')
+    })
+    try {
+      const { result } = renderHook(() => useRightSidebarLayout(), { wrapper: wrap })
+      expect(result.current.width).toBe(RIGHT_RAIL_WIDTH.default)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('clampRailWidth bounds and rounds', () => {
+    expect(clampRailWidth(0)).toBe(RIGHT_RAIL_WIDTH.min)
+    expect(clampRailWidth(10_000)).toBe(RIGHT_RAIL_WIDTH.max)
+    expect(clampRailWidth(333.4)).toBe(333)
   })
 })

@@ -21,6 +21,7 @@ import ThreadInline from '@/components/ThreadInline'
 import { indexThreads, canHostThread } from '@/lib/threads'
 import { clearDraft, threadDraftKey } from '@/lib/composerDrafts'
 import { useThreadDisplayMode } from '@/hooks/useThreadDisplayMode'
+import { useElementHeightVar } from '@/hooks/useElementHeightVar'
 import WorkspaceAttachmentBanner from '@/components/WorkspaceAttachmentBanner'
 import RightRailToggle from '@/components/right-rail/RightRailToggle'
 import { Button } from '@/components/ui/button'
@@ -148,6 +149,11 @@ function LocalChatPage() {
   // overlay (<md viewport) is local to ChatPage because only the chat
   // route hosts the rail right now.
   const [rightRailOpen, setRightRailOpen] = useState(false)
+  // #760 — the right slot's header matches the room header's measured
+  // height, which grows when a narrow chat column wraps it to two rows.
+  const [pageEl, setPageEl] = useState<HTMLDivElement | null>(null)
+  const [roomHeaderEl, setRoomHeaderEl] = useState<HTMLDivElement | null>(null)
+  useElementHeightVar(roomHeaderEl, pageEl, '--room-header-h')
 
   const currentRoom = useMemo<Room | null>(() => {
     if (!selectedRoom) return null
@@ -438,7 +444,7 @@ function LocalChatPage() {
   )
 
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div ref={setPageEl} className="flex h-dvh overflow-hidden">
       <SearchDialog
         open={searchOpen}
         onClose={() => setSearchOpen(false)}
@@ -456,7 +462,7 @@ function LocalChatPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedRoom && currentRoom ? (
           <>
-            <div className="relative">
+            <div ref={setRoomHeaderEl} className="relative">
               <RoomHeader
                 roomName={currentRoom.name}
                 connected={connected}

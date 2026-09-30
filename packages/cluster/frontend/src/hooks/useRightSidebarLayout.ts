@@ -16,7 +16,17 @@ import {
 // rail) and collapses by default below 1024px (where the conversation
 // otherwise gets squeezed). Persisted user choice always wins.
 const STORAGE_KEY = 'anygarden_right_sidebar_collapsed'
+const WIDTH_STORAGE_KEY = 'anygarden_right_sidebar_width'
 const LG_BREAKPOINT_QUERY = '(min-width: 1024px)'
+
+// Desktop width of the right-hand slot (#760), shared by the context
+// rail and the thread panel so swapping one for the other never moves
+// the chat column. The default matches the pre-#760 ``lg:w-80``.
+export const RIGHT_RAIL_WIDTH = { default: 320, min: 280, max: 560, step: 16 } as const
+
+export function clampRailWidth(px: number): number {
+  return Math.round(Math.min(RIGHT_RAIL_WIDTH.max, Math.max(RIGHT_RAIL_WIDTH.min, px)))
+}
 
 export interface RightSidebarLayoutValue {
   /** Desktop-only collapsed flag. Mobile (< md) handles overlay drawer
@@ -28,6 +38,11 @@ export interface RightSidebarLayoutValue {
    *  task in AgentSettingsDialog auto-opens the rail in the destination
    *  room) and by tests. */
   setCollapsed: (next: boolean) => void
+  /** Desktop width in px, clamped to ``RIGHT_RAIL_WIDTH``. */
+  width: number
+  /** Clamp + persist. Callers commit once per gesture, not per frame. */
+  setWidth: (px: number) => void
+  resetWidth: () => void
 }
 
 const RightSidebarLayoutContext =
@@ -49,8 +64,19 @@ function readInitial(): boolean {
   }
 }
 
+function readInitialWidth(): number {
+  try {
+    const raw = localStorage.getItem(WIDTH_STORAGE_KEY)
+    const parsed = raw === null ? NaN : Number(raw)
+    return Number.isFinite(parsed) ? clampRailWidth(parsed) : RIGHT_RAIL_WIDTH.default
+  } catch {
+    return RIGHT_RAIL_WIDTH.default
+  }
+}
+
 export function RightSidebarLayoutProvider({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsedState] = useState<boolean>(() => readInitial())
+  const [width, setWidthState] = useState<number>(() => readInitialWidth())
 
   useEffect(() => {
     try {
@@ -59,6 +85,22 @@ export function RightSidebarLayoutProvider({ children }: { children: ReactNode }
       /* ignore */
     }
   }, [collapsed])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(WIDTH_STORAGE_KEY, String(width))
+    } catch {
+      /* ignore */
+    }
+  }, [width])
+
+  const setWidth = useCallback((px: number) => {
+    setWidthState(clampRailWidth(px))
+  }, [])
+
+  const resetWidth = useCallback(() => {
+    setWidthState(RIGHT_RAIL_WIDTH.default)
+  }, [])
 
   const setCollapsed = useCallback((next: boolean) => {
     setCollapsedState(next)
@@ -69,8 +111,8 @@ export function RightSidebarLayoutProvider({ children }: { children: ReactNode }
   }, [])
 
   const value = useMemo<RightSidebarLayoutValue>(
-    () => ({ collapsed, toggleCollapsed, setCollapsed }),
-    [collapsed, toggleCollapsed, setCollapsed],
+    () => ({ collapsed, toggleCollapsed, setCollapsed, width, setWidth, resetWidth }),
+    [collapsed, toggleCollapsed, setCollapsed, width, setWidth, resetWidth],
   )
 
   return createElement(RightSidebarLayoutContext.Provider, { value }, children)
