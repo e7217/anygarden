@@ -8,6 +8,8 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.app import create_app
@@ -15,6 +17,22 @@ from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.fts import create_message_fts
 from anygarden.db.models import Base
+
+
+@event.listens_for(Engine, "connect")
+def _skip_sqlite_fsync(dbapi_connection, _connection_record) -> None:
+    """Don't wait for the disk on test SQLite DBs (#749).
+
+    File-backed test DBs (``tmp_path / "x.db"``) otherwise sync after
+    every DDL statement, so one ``create_all`` takes ~1.5 s instead of
+    ~0.05 s. Test DBs are thrown away, so durability does not matter.
+    Covers aiosqlite and pysqlite engines, including alembic's.
+    """
+    if "sqlite" not in type(dbapi_connection).__module__:
+        return
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA synchronous=OFF")
+    cursor.close()
 
 
 @pytest.fixture()
