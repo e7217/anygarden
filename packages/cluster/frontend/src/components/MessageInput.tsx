@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Button } from '@/components/ui/button'
-import { Paperclip, Send, X } from 'lucide-react'
+import { ArrowUp, Paperclip, Plus, X } from 'lucide-react'
 import MentionPopover, { type MentionOption } from '@/components/MentionPopover'
 import { insertMentionToken, extractMentionsMetadata, resolveRoomMentionsInText } from '@/lib/mentions'
 import { readDraft, writeDraft, clearDraft } from '@/lib/composerDrafts'
@@ -109,6 +108,27 @@ export default function MessageInput({
     textareaRef.current?.focus()
   }, [autoFocus])
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The ``+`` button opens a small drop-up of composer actions; file
+  // attachment is its only entry today.
+  const [addMenuOpen, setAddMenuOpen] = useState(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!addMenuOpen) return
+    const onOutside = (event: PointerEvent) => {
+      if (!addMenuRef.current?.contains(event.target as Node)) setAddMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setAddMenuOpen(false)
+      addMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    }
+    document.addEventListener('pointerdown', onOutside)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onOutside)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [addMenuOpen])
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [mention, setMention] = useState<MentionState | null>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -488,7 +508,7 @@ export default function MessageInput({
             )}
           </div>
         )}
-        <div className="relative flex w-full items-end gap-2">
+        <div className="relative flex w-full items-end gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1.5 transition-colors focus-within:border-[var(--color-brand-focus)] focus-within:ring-2 focus-within:ring-[var(--color-brand-focus)]/35">
           {mention && filtered.length > 0 && (
             <MentionPopover
               options={filtered}
@@ -499,7 +519,7 @@ export default function MessageInput({
             />
           )}
           {roomId && (
-            <>
+            <div ref={addMenuRef} className="relative shrink-0">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -507,18 +527,40 @@ export default function MessageInput({
                 onChange={handleFileSelected}
                 accept=".txt,.md,.markdown,.json,.yaml,.yml,.csv,.py,.html,.xml,text/*,application/json,application/yaml,application/xml"
               />
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => fileInputRef.current?.click()}
+              <button
+                type="button"
+                onClick={() => setAddMenuOpen(open => !open)}
                 disabled={disabled || uploading}
-                title={t('chat.attachFile')}
-                aria-label={t('chat.attachFile')}
-                className="min-h-11 min-w-11"
+                title={t('chat.addMenu')}
+                aria-label={t('chat.addMenu')}
+                aria-haspopup="menu"
+                aria-expanded={addMenuOpen}
+                className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--color-foreground-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Paperclip className="h-4 w-4" />
-              </Button>
-            </>
+                <Plus className="h-[18px] w-[18px]" />
+              </button>
+              {addMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label={t('chat.addMenu')}
+                  className="absolute bottom-full left-0 z-50 mb-2 w-44 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] py-1 shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    autoFocus
+                    onClick={() => {
+                      setAddMenuOpen(false)
+                      fileInputRef.current?.click()
+                    }}
+                    className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 text-left text-sm text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]"
+                  >
+                    <Paperclip className="h-4 w-4 text-[var(--color-foreground-muted)]" />
+                    {t('chat.attachFile')}
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           <textarea
             ref={textareaRef}
@@ -532,20 +574,20 @@ export default function MessageInput({
                 : placeholder ?? t('chat.messagePlaceholder')
             }
             rows={1}
-            className="flex-1 resize-none rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)]/35 focus-visible:border-[var(--color-brand-focus)] disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+            className="min-h-8 flex-1 resize-none bg-transparent px-2 py-1 text-sm leading-6 text-[var(--color-foreground)] placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
-          <Button
-            size="icon"
+          <button
+            type="button"
             onClick={handleSend}
             disabled={
               disabled || uploading || (!value.trim() && attachments.length === 0)
             }
             title={t('chat.sendMessage')}
             aria-label={t('chat.sendMessage')}
-            className="min-h-11 min-w-11"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] text-[var(--color-on-brand)] transition-colors hover:bg-[var(--color-brand-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-hover)] disabled:text-[var(--color-foreground-subtle)]"
           >
-            <Send className="h-4 w-4" />
-          </Button>
+            <ArrowUp className="h-4 w-4" />
+          </button>
         </div>
         {draftCallsNoOne && (
           <p
