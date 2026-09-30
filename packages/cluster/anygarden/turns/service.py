@@ -46,6 +46,63 @@ def _lease_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+TERMINAL_TURN_STATES = frozenset({"completed", "cancelled", "failed"})
+TerminalTurnState = Literal["completed", "cancelled", "failed"]
+
+
+async def _on_turn_terminal(db: AsyncSession, turn: AgentTurn) -> None:
+    """#762 — extension point fired once per terminal turn transition.
+
+    Intentionally a no-op for now; the async peer fan-in hooks in here. It
+    runs inside the caller's transaction after the terminal fields are set,
+    so it may only do DB work (no commits, no broadcasts).
+    """
+
+
+async def mark_turn_terminal(
+    db: AsyncSession,
+    turn: AgentTurn,
+    *,
+    state: TerminalTurnState,
+    reason: str | None,
+    at: datetime | None = None,
+    attempt: AgentTurnAttempt | None = None,
+    attempt_state: TerminalTurnState | None = None,
+    attempt_outcome: str | None = None,
+    attempt_reason: str | None = None,
+) -> None:
+    """Move ``turn`` to a terminal state — the single gate for doing so.
+
+    #762 — every path that closes a turn goes through here so
+    ``_on_turn_terminal`` fires exactly once per transition. The helper only
+    writes what each call site wrote before:
+
+    * ``at`` stamps ``turn.completed_at`` (and ``attempt.ended_at``); it is
+      left unset by the delivery-time cancels, which never stamped them.
+    * ``attempt`` is updated only when given: its state defaults to
+      ``state``; ``attempt_outcome`` / ``attempt_reason`` are written only
+      when not ``None``.
+
+    Runs in the caller's session/transaction and never commits.
+    """
+
+    if state not in TERMINAL_TURN_STATES:
+        raise ValueError(f"not a terminal turn state: {state!r}")
+    turn.state = state
+    turn.terminal_reason = reason
+    if at is not None:
+        turn.completed_at = at
+    if attempt is not None:
+        attempt.state = attempt_state or state
+        if at is not None:
+            attempt.ended_at = at
+        if attempt_outcome is not None:
+            attempt.outcome = attempt_outcome
+        if attempt_reason is not None:
+            attempt.reason = attempt_reason
+    await _on_turn_terminal(db, turn)
+
+
 async def create_turn(
     db: AsyncSession,
     *,
@@ -80,6 +137,8 @@ async def create_turn(
         state = "cancelled"
         reason = "agent_not_running"
 
+    # #762 — the row is always built open; a turn born terminal is closed
+    # through ``mark_turn_terminal`` right after it is added (below).
     turn = AgentTurn(
         request_id=rid,
         room_id=room_id,
@@ -89,11 +148,10 @@ async def create_turn(
         thread_root_id=thread_root_id,
         task_id=task_id,
         idempotency_key=key,
-        state=state,
+        state="pending",
         active_attempt=1,
         retry_count=retry_count,
         max_retries=max_retries,
-        terminal_reason=reason,
     )
     # Phase 5 — an active external-workspace lease turns every invocation
     # into an epoch-bound intent. Cross-room turns and write turns without a
@@ -107,9 +165,9 @@ async def create_turn(
     if state == "pending" and not workspace_allowed:
         state = "cancelled"
         reason = workspace_reason or "workspace_authorization_revoked"
-        turn.state = state
-        turn.terminal_reason = reason
     db.add(turn)
+    if state == "cancelled":
+        await mark_turn_terminal(db, turn, state="cancelled", reason=reason)
     attempt = AgentTurnAttempt(
         id=str(uuid4()),
         turn_id=rid,
@@ -238,10 +296,14 @@ async def deliver_pending_outbox(
             ) = await _workspace_gate(db, turn)
             if not workspace_ok:
                 reason = workspace_reason or "workspace_authorization_revoked"
-                turn.state = "cancelled"
-                turn.terminal_reason = reason
-                attempt.state = "cancelled"
-                attempt.reason = reason
+                await mark_turn_terminal(
+                    db,
+                    turn,
+                    state="cancelled",
+                    reason=reason,
+                    attempt=attempt,
+                    attempt_reason=reason,
+                )
                 row.state = "cancelled"
                 row.last_error = reason
                 if workspace_attachment is not None:
@@ -275,10 +337,14 @@ async def deliver_pending_outbox(
                 )
             ).first()
             if joined is None or joined[2].desired_state != "running":
-                turn.state = "cancelled"
-                turn.terminal_reason = "authorization_revoked"
-                attempt.state = "cancelled"
-                attempt.reason = "authorization_revoked"
+                await mark_turn_terminal(
+                    db,
+                    turn,
+                    state="cancelled",
+                    reason="authorization_revoked",
+                    attempt=attempt,
+                    attempt_reason="authorization_revoked",
+                )
                 row.state = "cancelled"
                 row.last_error = "authorization_revoked"
                 db.add(
@@ -303,10 +369,14 @@ async def deliver_pending_outbox(
             msg = await db.get(Message, turn.trigger_message_id)
             if msg is None:
                 row.state = "cancelled"
-                turn.state = "cancelled"
-                turn.terminal_reason = "trigger_message_deleted"
-                attempt.state = "cancelled"
-                attempt.reason = "trigger_message_deleted"
+                await mark_turn_terminal(
+                    db,
+                    turn,
+                    state="cancelled",
+                    reason="trigger_message_deleted",
+                    attempt=attempt,
+                    attempt_reason="trigger_message_deleted",
+                )
                 await db.commit()
                 continue
 
@@ -652,13 +722,19 @@ async def finish_completion(
     message_id: str,
 ) -> None:
     now = _now()
-    turn.state = "completed"
     turn.accepted_message_id = message_id
-    turn.completed_at = now
     turn.updated_at = now
-    attempt.state = "completed"
-    attempt.ended_at = now
-    attempt.outcome = "ok"
+    # A visible reply never set a terminal reason; keep the (always ``None``
+    # after the completion CAS) value exactly as it is.
+    await mark_turn_terminal(
+        db,
+        turn,
+        state="completed",
+        reason=turn.terminal_reason,
+        at=now,
+        attempt=attempt,
+        attempt_outcome="ok",
+    )
     db.add(
         ActivityLog(
             agent_id=turn.agent_id,
@@ -820,12 +896,15 @@ async def record_lifecycle(
             attempt.ended_at = now
             attempt.outcome = frame.outcome
         elif frame.outcome == "cancelled":
-            attempt.state = "cancelled"
-            attempt.ended_at = now
-            attempt.outcome = "cancelled"
-            turn.state = "cancelled"
-            turn.terminal_reason = "agent_cancelled"
-            turn.completed_at = now
+            await mark_turn_terminal(
+                db,
+                turn,
+                state="cancelled",
+                reason="agent_cancelled",
+                at=now,
+                attempt=attempt,
+                attempt_outcome="cancelled",
+            )
         elif frame.outcome == "skipped":
             # #720 — the agent's policy declined this delivery (SKIP /
             # INGEST_ONLY). That is a deliberate, complete answer: close the
@@ -835,12 +914,15 @@ async def record_lifecycle(
             if attempt.state in ACTIVE_ATTEMPT_STATES and turn.state in {
                 "pending", "leased", "retrying",
             }:
-                attempt.state = "completed"
-                attempt.ended_at = now
-                attempt.outcome = "skipped"
-                turn.state = "completed"
-                turn.terminal_reason = "agent_skipped"
-                turn.completed_at = now
+                await mark_turn_terminal(
+                    db,
+                    turn,
+                    state="completed",
+                    reason="agent_skipped",
+                    at=now,
+                    attempt=attempt,
+                    attempt_outcome="skipped",
+                )
         elif attempt.state in ACTIVE_ATTEMPT_STATES:
             # A terminal lifecycle frame normally follows the agent's visible
             # reply, whose completion CAS has already closed the Turn. If that
@@ -957,22 +1039,28 @@ async def recover_stalled_turns(
                 workspace_attachment,
             ) = await _workspace_gate(db, turn)
             gate_ok = gate_ok and workspace_ok
+            # The attempt was already fenced to "interrupted" above, so only
+            # the turn itself transitions here.
             if not gate_ok:
-                turn.state = "cancelled"
-                turn.terminal_reason = workspace_reason or "authorization_revoked"
-                turn.completed_at = current
+                await mark_turn_terminal(
+                    db,
+                    turn,
+                    state="cancelled",
+                    reason=workspace_reason or "authorization_revoked",
+                    at=current,
+                )
                 result.cancelled += 1
                 event = "turn_cancelled"
             elif turn.protocol_version == 0:
-                turn.state = "failed"
-                turn.terminal_reason = "legacy_interrupted"
-                turn.completed_at = current
+                await mark_turn_terminal(
+                    db, turn, state="failed", reason="legacy_interrupted", at=current
+                )
                 result.failed += 1
                 event = "turn_retry_exhausted"
             elif turn.retry_count >= turn.max_retries:
-                turn.state = "failed"
-                turn.terminal_reason = "retry_exhausted"
-                turn.completed_at = current
+                await mark_turn_terminal(
+                    db, turn, state="failed", reason="retry_exhausted", at=current
+                )
                 result.failed += 1
                 event = "turn_retry_exhausted"
             else:
@@ -1113,9 +1201,7 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
             if gate is not None and workspace_ok:
                 continue
             now = _now()
-            turn.state = "cancelled"
-            turn.terminal_reason = workspace_reason or "authorization_revoked"
-            turn.completed_at = now
+            reason = workspace_reason or "authorization_revoked"
             attempt = (
                 await db.execute(
                     select(AgentTurnAttempt).where(
@@ -1124,10 +1210,18 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                     )
                 )
             ).scalar_one_or_none()
-            if attempt is not None and attempt.state not in {"completed", "cancelled"}:
-                attempt.state = "cancelled"
-                attempt.ended_at = now
-                attempt.reason = turn.terminal_reason
+            # An attempt that already closed keeps its own terminal fields.
+            if attempt is not None and attempt.state in {"completed", "cancelled"}:
+                attempt = None
+            await mark_turn_terminal(
+                db,
+                turn,
+                state="cancelled",
+                reason=reason,
+                at=now,
+                attempt=attempt,
+                attempt_reason=reason,
+            )
             await db.execute(
                 update(AgentTurnOutbox)
                 .where(

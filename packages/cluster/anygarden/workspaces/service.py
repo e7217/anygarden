@@ -458,11 +458,11 @@ async def cancel_attachment_turns(
             )
         ).all()
     )
+    # #762 — lazy: turns.service imports this module lazily too.
+    from anygarden.turns.service import mark_turn_terminal
+
     now = _now()
     for turn in turns:
-        turn.state = "cancelled"
-        turn.terminal_reason = reason
-        turn.completed_at = now
         attempt = (
             await db.execute(
                 select(AgentTurnAttempt).where(
@@ -471,10 +471,18 @@ async def cancel_attachment_turns(
                 )
             )
         ).scalar_one_or_none()
-        if attempt is not None and attempt.state not in {"completed", "cancelled"}:
-            attempt.state = "cancelled"
-            attempt.ended_at = now
-            attempt.reason = reason
+        # An attempt that already closed keeps its own terminal fields.
+        if attempt is not None and attempt.state in {"completed", "cancelled"}:
+            attempt = None
+        await mark_turn_terminal(
+            db,
+            turn,
+            state="cancelled",
+            reason=reason,
+            at=now,
+            attempt=attempt,
+            attempt_reason=reason,
+        )
         await db.execute(
             update(AgentTurnOutbox)
             .where(
