@@ -1,4 +1,4 @@
-.PHONY: install setup test lint clean dev release-agent release-machine release-cluster
+.PHONY: install setup test lint clean dev release-agent release-cluster
 
 install:                ## Install all packages (workspace)
 	uv sync --all-packages --all-extras
@@ -19,9 +19,6 @@ dev:                    ## Run cluster dev server + frontend
 
 release-agent:          ## Build and publish anygarden-agent to PyPI
 	rm -rf dist/ && uv build --package anygarden-agent && twine upload dist/anygarden_agent-*
-
-release-machine:        ## Build and publish anygarden-machine to PyPI
-	rm -rf dist/ && uv build --package anygarden-machine && twine upload dist/anygarden_machine-*
 
 release-cluster:        ## Build and publish anygarden to PyPI (source dir kept as packages/cluster/)
 	rm -rf dist/ && uv build --package anygarden && twine upload dist/anygarden-*

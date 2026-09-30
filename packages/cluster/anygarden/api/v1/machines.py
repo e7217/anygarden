@@ -371,7 +371,7 @@ async def update_machine_daemon(
     # Owner (or admin) only — machines are a registered-user concern, and
     # updating your own machine is not a privilege escalation (the owner
     # already controls it). The daemon only ever reinstalls the fixed
-    # anygarden-machine distribution from PyPI (#550).
+    # anygarden distribution from PyPI (#550).
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):

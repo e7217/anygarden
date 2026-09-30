@@ -32,6 +32,6 @@ export function workspaceCliPrefix(kind: 'integrated' | 'remote' | null, nodeDat
     ? `'${nodeDataDir.replace(/'/g, `'"'"'`)}'`
     : '"${ANYGARDEN_NODE_DATA_DIR:?Set ANYGARDEN_NODE_DATA_DIR to the running node data directory}"'
   return kind === 'integrated'
-    ? `anygarden-machine workspace --node-data-dir ${directory}`
-    : 'anygarden-machine workspace'
+    ? `anygarden machine workspace --node-data-dir ${directory}`
+    : 'anygarden machine workspace'
 }

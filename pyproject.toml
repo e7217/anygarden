@@ -13,4 +13,3 @@ members = ["packages/*"]
 [tool.uv.sources]
 anygarden = { workspace = true }
 anygarden-agent = { workspace = true }
-anygarden-machine = { workspace = true }

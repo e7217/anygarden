@@ -127,7 +127,7 @@ class ConnectionManager:
         and what agent connections use), every active subscription of
         *participant_id* is evicted and closed with code 4040
         ("superseded"). Without this guard two
-        clients sharing an agent token (e.g. ``anygarden-machine`` reconcile
+        clients sharing an agent token (e.g. the machine daemon's reconcile
         racing a manual launch) would both stay in ``_rooms[room_id]``
         and every broadcast would fan out to both — doubling LLM calls,
         ``[ROOM_QUERY]`` forwards, and direct replies.

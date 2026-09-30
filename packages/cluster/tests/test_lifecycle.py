@@ -33,7 +33,7 @@ from anygarden.scheduler.lifecycle import (
     sweep_stale_agents,
 )
 from anygarden.scheduler.machine_bus import MachineBus
-from anygarden_machine.daemon import MachineDaemon
+from anygarden.machine.daemon import MachineDaemon
 
 
 class FakeWS:

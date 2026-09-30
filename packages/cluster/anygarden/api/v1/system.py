@@ -23,9 +23,9 @@ from anygarden.system import version_service, version_store
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
-# Packages the update check tracks. ``anygarden`` is the server itself;
-# ``anygarden-machine`` lets the admin see the recommended machine version.
-_CHECK_PACKAGES = ["anygarden", "anygarden-machine"]
+# Packages the update check tracks. #754 — the machine daemon ships inside
+# ``anygarden``, so one package covers both the server and the daemons.
+_CHECK_PACKAGES = ["anygarden"]
 
 
 class ServerVersion(BaseModel):

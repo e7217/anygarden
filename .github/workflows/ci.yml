@@ -50,10 +50,6 @@ jobs:
       - name: Sync workspace
         run: uv sync --frozen --all-packages --all-extras
 
-      - name: Test machine
-        working-directory: packages/machine
-        run: uv run pytest -x
-
       - name: Test agent
         working-directory: packages/agent
         run: uv run pytest -x
@@ -100,8 +96,8 @@ jobs:
       # to a platform-aware helper is a separate cleanup; until then
       # the broad suite stays on Linux.
       - name: Test safefs Windows backend
-        working-directory: packages/machine
-        run: uv run pytest tests/test_safefs_win.py tests/test_proc_kill.py -v
+        working-directory: packages/cluster
+        run: uv run pytest tests/machine/test_safefs_win.py tests/machine/test_proc_kill.py -v
 
   build-frontend:
     name: Build frontend

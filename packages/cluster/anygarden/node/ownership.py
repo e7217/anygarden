@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from anygarden_machine.safefs import safe_write_text, secure_chmod
+from anygarden.machine.safefs import safe_write_text, secure_chmod
 
 
 class NodeOwnershipError(RuntimeError):

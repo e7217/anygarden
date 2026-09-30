@@ -1,6 +1,6 @@
 """Per-agent file manifest path validation (server-side).
 
-This module mirrors :mod:`anygarden_machine.agent_dir` so the server can
+This module mirrors :mod:`anygarden.machine.agent_dir` so the server can
 reject invalid paths at the REST API boundary, before they ever reach
 the database or a ``spawn_agent`` frame. The two copies MUST stay in
 sync — see ``docs/plans/2026-04-11-per-agent-directory-skills.md`` and
@@ -58,7 +58,7 @@ def validate_agent_file_path(path: str) -> None:
     """Raise :class:`AgentFilePathError` if *path* is not allowed.
 
     Keep this in sync with
-    ``anygarden_machine.agent_dir.validate_agent_file_path``.
+    ``anygarden.machine.agent_dir.validate_agent_file_path``.
     """
     if not path:
         raise AgentFilePathError("path is empty")

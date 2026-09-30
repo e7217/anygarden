@@ -41,7 +41,7 @@ from anygarden.workspaces.service import (
     machine_can_activate,
     policy_hash,
 )
-from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
+from anygarden.machine.workspace_signing import WorkspaceReceiptSigner
 
 
 class FakeManager:

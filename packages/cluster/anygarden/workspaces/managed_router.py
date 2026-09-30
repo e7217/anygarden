@@ -4,14 +4,6 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from anygarden_machine.managed_workspace import (
-    CAPABILITY,
-    EDIT_CAPABILITY,
-    MAX_UPLOAD_ENCODED,
-    PREVIEW_BYTES,
-    WorkspaceSnapshot,
-    path_parts,
-)
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -20,6 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Agent, Machine
 from anygarden.dependencies import get_admin_identity, get_db
+from anygarden.machine.managed_workspace import (
+    CAPABILITY,
+    EDIT_CAPABILITY,
+    MAX_UPLOAD_ENCODED,
+    PREVIEW_BYTES,
+    WorkspaceSnapshot,
+    path_parts,
+)
 from anygarden.scheduler.machine_bus import MachineRequestError
 
 router = APIRouter()

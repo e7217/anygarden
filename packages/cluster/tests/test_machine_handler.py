@@ -35,7 +35,7 @@ from anygarden.ws.machine_handler import (
     _handle_register,
     _handle_self_update_result,
 )
-from anygarden_machine.workspace_signing import WorkspaceReceiptSigner
+from anygarden.machine.workspace_signing import WorkspaceReceiptSigner
 
 
 @pytest_asyncio.fixture()

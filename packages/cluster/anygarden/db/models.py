@@ -2295,7 +2295,7 @@ class TokenBudgetIncident(Base):
 class VersionCheck(Base):
     """Cached result of the last PyPI update check per package (#546).
 
-    One row per package (``anygarden``, ``anygarden-machine``). The admin
+    One row per package (``anygarden``; ``anygarden-machine`` rows predate #754). The admin
     ``check-updates`` endpoint upserts here; the ``updates`` endpoint and
     the UI badge read from it without any outbound call. Persisting to the
     DB (rather than in-memory) keeps the last-known state across restarts

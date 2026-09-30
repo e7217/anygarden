@@ -44,7 +44,6 @@ claim a new deployment verification on separate physical hosts.
    ```sh
    # on the operator host
    uv build --package anygarden
-   uv build --package anygarden-machine
    uv build --package anygarden-agent
    # Include the matching dependency wheels in dist/ before an offline install.
    scp dist/*.whl node:/tmp/wheels/

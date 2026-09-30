@@ -283,7 +283,7 @@ def _machine(ctx: click.Context) -> None:
     """Run the machine daemon (requires ``anygarden[machine]``)."""
     machine_main = _load_or_hint(
         "machine",
-        lambda: __import__("anygarden_machine.cli", fromlist=["main"]).main,
+        lambda: __import__("anygarden.machine.cli", fromlist=["main"]).main,
     )
     machine_main(args=ctx.args, prog_name="anygarden machine", standalone_mode=True)
 

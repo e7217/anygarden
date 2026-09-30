@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
-from anygarden_machine.safefs import secure_chmod
+from anygarden.machine.safefs import secure_chmod
 from fastapi import FastAPI
 from sqlalchemy import select, text
 

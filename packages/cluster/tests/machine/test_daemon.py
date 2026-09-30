@@ -1,0 +1,1970 @@
+"""Tests for the declarative WebSocket daemon."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from anygarden.machine.daemon import MachineDaemon, _base_url_from_machine_url
+from anygarden.machine.protocol.frames import (
+    RegisterFrame,
+    ReportActualStateFrame,
+    SelfUpdateFrame,
+    SyncDesiredStateFrame,
+    SystemInfo,
+)
+from anygarden.machine.updater import UpdateResult
+
+
+class TestBaseUrlFromMachineUrl:
+    """The daemon derives the agent dial-back URL by trimming the
+    ``/ws/machines/<id>`` endpoint suffix off its own connection URL.
+    Anything else in the path is operator intent (reverse-proxy
+    prefix, API version segment, ...) and must be preserved — otherwise
+    agents can't reach the server through the same proxy the daemon
+    uses.
+    """
+
+    def test_bare_host_port(self) -> None:
+        assert (
+            _base_url_from_machine_url("ws://localhost:8001/ws/machines/abc")
+            == "ws://localhost:8001"
+        )
+
+    def test_preserves_reverse_proxy_prefix(self) -> None:
+        assert (
+            _base_url_from_machine_url(
+                "wss://proxy.example.com/anygarden/ws/machines/abc-123"
+            )
+            == "wss://proxy.example.com/anygarden"
+        )
+
+    def test_preserves_multi_segment_prefix(self) -> None:
+        assert (
+            _base_url_from_machine_url(
+                "wss://edge.example.com/api/v1/ws/machines/xyz"
+            )
+            == "wss://edge.example.com/api/v1"
+        )
+
+    def test_passes_through_url_without_machine_suffix(self) -> None:
+        # Older/custom daemons may register with a bare origin; leave it alone.
+        assert (
+            _base_url_from_machine_url("ws://localhost:8001")
+            == "ws://localhost:8001"
+        )
+
+    def test_empty_input_stays_empty(self) -> None:
+        assert _base_url_from_machine_url("") == ""
+
+    def test_non_url_input_stays_empty(self) -> None:
+        assert _base_url_from_machine_url("not a url") == ""
+
+
+@pytest.fixture
+def daemon(tmp_path: Path) -> MachineDaemon:
+    """Create a MachineDaemon with test configuration."""
+    return MachineDaemon(
+        server_url="wss://localhost:8000/ws/machines/machine-test-001",
+        machine_id="machine-test-001",
+        machine_token="test-machine-token",
+        labels={"region": "local"},
+        agent_dirs_root=tmp_path / "agents",
+        workspace_registry_path=tmp_path / "workspaces.json",
+        workspace_signing_key_path=tmp_path / "workspace-signing.key",
+    )
+
+
+def _capture_ws(daemon: MachineDaemon) -> list[dict]:
+    """Wire up a mock WS that captures sent frames."""
+    sent_frames: list[dict] = []
+    mock_ws = AsyncMock()
+    mock_ws.send = AsyncMock(
+        side_effect=lambda data: sent_frames.append(json.loads(data))
+    )
+    daemon._ws = mock_ws
+    return sent_frames
+
+
+# ── Registration ──────────────────────────────────────────────────────
+
+
+class TestRegisterFrame:
+    """Tests for machine registration."""
+
+    async def test_register_sends_frame(self, daemon: MachineDaemon) -> None:
+        """_register should send a RegisterFrame with capabilities."""
+        sent_frames = _capture_ws(daemon)
+
+        mock_detection = MagicMock()
+        mock_detection.engines = [
+            MagicMock(engine="claude-code", version="1.0.0", path="/usr/bin/claude-code"),
+        ]
+
+        with patch("anygarden.machine.daemon.detect_engines", return_value=mock_detection):
+            await daemon._register()
+
+        assert len(sent_frames) == 1
+        frame = sent_frames[0]
+        assert frame["type"] == "register"
+        assert frame["machine_id"] == "machine-test-001"
+        assert len(frame["capabilities"]) == 1
+        assert frame["capabilities"][0]["engine"] == "claude-code"
+        assert frame["workspace_signing_public_key"].startswith("ed25519pk_")
+        assert "agent_generation_reports_v1" in frame["control_capabilities"]
+        assert "workspace_receipt_signing_v1" in frame["control_capabilities"]
+
+    async def test_register_reports_engine_login_status(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#715 — only engines that report a login status carry ``auth``."""
+        from anygarden.machine.detector import DetectionResult, EngineInfo
+
+        sent_frames = _capture_ws(daemon)
+        detection = DetectionResult(
+            engines=[
+                EngineInfo("codex-cli", "codex-cli 0.157.1", "/usr/bin/codex", "chatgpt"),
+                EngineInfo("pi-cli", "0.85.1", "/opt/pi"),
+            ]
+        )
+        with patch("anygarden.machine.daemon.detect_engines", return_value=detection):
+            await daemon._register()
+
+        capabilities = {c["engine"]: c for c in sent_frames[0]["capabilities"]}
+        assert capabilities["codex-cli"]["auth"] == "chatgpt"
+        assert "auth" not in capabilities["pi-cli"]
+
+    async def test_register_includes_system_info(self, daemon: MachineDaemon) -> None:
+        """_register embeds collected static SystemInfo in the frame (#523)."""
+        sent_frames = _capture_ws(daemon)
+
+        mock_detection = MagicMock()
+        mock_detection.engines = []
+        fake_info = SystemInfo(
+            hostname="worker01",
+            lan_ip="192.168.1.42",
+            os_platform="Linux-test-x86_64",
+            cpu_cores=8,
+            memory_gb=64.0,
+        )
+
+        with patch(
+            "anygarden.machine.daemon.detect_engines", return_value=mock_detection
+        ), patch(
+            "anygarden.machine.daemon.collect_system_info", return_value=fake_info
+        ):
+            await daemon._register()
+
+        assert len(sent_frames) == 1
+        si = sent_frames[0]["system_info"]
+        assert si["hostname"] == "worker01"
+        assert si["lan_ip"] == "192.168.1.42"
+        assert si["os_platform"] == "Linux-test-x86_64"
+        assert si["cpu_cores"] == 8
+        assert si["memory_gb"] == 64.0
+
+    async def test_register_includes_daemon_version(self, daemon: MachineDaemon) -> None:
+        """_register reports the daemon's own package version (#546).
+
+        The server persists this as ``machine.daemon_version`` for the
+        admin UI; before #546 the frame carried no version at all so the
+        column stayed NULL.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        mock_detection = MagicMock()
+        mock_detection.engines = []
+
+        with patch(
+            "anygarden.machine.daemon.detect_engines", return_value=mock_detection
+        ):
+            await daemon._register()
+
+        from anygarden.machine import __version__
+
+        assert sent_frames[0]["daemon_version"] == __version__
+
+
+# ── Report actual state ──────────────────────────────────────────────
+
+
+class TestReportActualState:
+    """Tests for report_actual_state mechanism."""
+
+    async def test_report_includes_running_agents(self, daemon: MachineDaemon) -> None:
+        """Report should include the list of running agents."""
+        sent_frames = _capture_ws(daemon)
+
+        # Mock spawner to return some agents
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+        ])
+        daemon._running_generations["a1"] = 3
+
+        await daemon._report_actual_state()
+
+        assert len(sent_frames) == 1
+        report = sent_frames[0]
+        assert report["type"] == "report_actual_state"
+        assert len(report["agents"]) == 1
+        assert report["agents"][0]["agent_id"] == "a1"
+        assert report["agents"][0]["actual_state"] == "running"
+        assert report["agents"][0]["generation"] == 3
+
+    async def test_report_empty_when_no_agents(self, daemon: MachineDaemon) -> None:
+        """Report should send empty agents list when nothing is running."""
+        sent_frames = _capture_ws(daemon)
+
+        await daemon._report_actual_state()
+
+        assert len(sent_frames) == 1
+        report = sent_frames[0]
+        assert report["type"] == "report_actual_state"
+        assert report["agents"] == []
+
+
+# ── Transitional states (#219) ───────────────────────────────────────
+#
+# `_transitional_states` holds the short-lived ``starting`` / ``stopping``
+# annotations for agents whose spawn or kill is in flight. Without it
+# admins only see ``running`` → (30s gap) → ``stopped`` because the
+# daemon's periodic report runs on a 30s cadence and never emits the
+# in-flight states.
+
+
+class TestTransitionalStatesReport:
+    """Transitional states feed into ``_report_actual_state`` output."""
+
+    async def test_starting_emitted_when_spawn_in_flight(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Agent with an in-flight spawn (not yet running) reports as starting."""
+        sent_frames = _capture_ws(daemon)
+
+        # Process hasn't come up yet, but a spawn is dispatched.
+        daemon._spawner.list_running = MagicMock(return_value=[])
+        daemon._transitional_states["a-new"] = "starting"
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        assert len(report["agents"]) == 1
+        assert report["agents"][0]["agent_id"] == "a-new"
+        assert report["agents"][0]["actual_state"] == "starting"
+
+    async def test_stopping_emitted_while_process_still_alive(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Kill is dispatched but the process hasn't exited — report stopping."""
+        sent_frames = _capture_ws(daemon)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-dying", "pid": 42, "engine": "claude-code", "uptime_seconds": 5},
+        ])
+        daemon._transitional_states["a-dying"] = "stopping"
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        states = {a["agent_id"]: a["actual_state"] for a in report["agents"]}
+        assert states == {"a-dying": "stopping"}
+
+    async def test_running_wins_when_no_transitional_entry(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Regression guard: normal running agents still reported as running."""
+        sent_frames = _capture_ws(daemon)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-ok", "pid": 1, "engine": "x", "uptime_seconds": 1},
+        ])
+        # No transitional entry.
+
+        await daemon._report_actual_state()
+
+        report = sent_frames[0]
+        assert report["agents"][0]["actual_state"] == "running"
+
+
+class TestTransitionalStatesLifecycle:
+    """Transitional state is set on dispatch and cleared on callback."""
+
+    async def test_stop_reconcile_emits_stopping_before_kill(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """When desired=stopped and the agent is running, the daemon must
+        emit a ``stopping`` report BEFORE ``spawner.kill`` returns — so
+        admins see the transition in under 2s instead of waiting for the
+        next periodic report (30s)."""
+        sent_frames = _capture_ws(daemon)
+
+        # Pretend agent is running.
+        mock_running = MagicMock()
+        mock_running.agent_id = "a-bye"
+        daemon._spawner.get_running = MagicMock(return_value=mock_running)
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a-bye", "pid": 99, "engine": "x", "uptime_seconds": 5},
+        ])
+
+        # Capture report frames seen at the moment kill() is invoked.
+        reports_at_kill: list[dict] = []
+
+        async def record_then_succeed(agent_id: str) -> dict:
+            reports_at_kill.extend(
+                f for f in sent_frames if f["type"] == "report_actual_state"
+            )
+            return {"success": True}
+
+        daemon._spawner.kill = AsyncMock(side_effect=record_then_succeed)
+
+        # Save a stopped manifest and run reconcile.
+        manifest = SyncDesiredStateFrame(
+            agent_id="a-bye",
+            desired_state="stopped",
+            generation=2,
+            engine="x",
+        )
+        daemon._manifest_store.save(manifest)
+        daemon._running_generations["a-bye"] = 1
+
+        await daemon._reconcile_agent("a-bye")
+
+        # By the time kill ran there was already a stopping report.
+        assert reports_at_kill, "no report sent before kill dispatched"
+        latest = reports_at_kill[-1]
+        states = {a["agent_id"]: a["actual_state"] for a in latest["agents"]}
+        assert states.get("a-bye") == "stopping"
+
+    async def test_on_agent_stopped_clears_transitional(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """After the normal-exit callback, the transitional map must drop
+        the entry so the next report correctly treats the agent as absent
+        (→ server converges to ``stopped`` via the absent-from-report
+        branch)."""
+        _capture_ws(daemon)
+        daemon._transitional_states["a-done"] = "stopping"
+        daemon._running_generations["a-done"] = 1
+
+        await daemon._on_agent_stopped("a-done", 0)
+
+        assert "a-done" not in daemon._transitional_states
+
+    async def test_on_agent_crashed_clears_transitional(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Crash path must also release the transitional map entry so a
+        leaked ``starting`` doesn't linger across the crash-restart."""
+        _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="a-boom",
+            desired_state="running",
+            generation=1,
+            engine="x",
+            restart_policy="stop",
+        )
+        daemon._manifest_store.save(manifest)
+        daemon._transitional_states["a-boom"] = "starting"
+
+        await daemon._on_agent_crashed("a-boom", 1, "segfault")
+
+        assert "a-boom" not in daemon._transitional_states
+
+
+# ── Sync desired state ───────────────────────────────────────────────
+
+
+class TestSyncDesiredState:
+    """Tests for handling sync_desired_state frames."""
+
+    async def test_sync_running_requests_token_and_spawns(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """sync_desired_state with desired=running should request token,
+        then spawn the agent when token_grant arrives."""
+        sent_frames = _capture_ws(daemon)
+
+        # Mock the spawner.spawn to succeed
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-001"
+        mock_result.pid = 42
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "running",
+            "generation": 1,
+            "engine": "claude-code",
+            "name": "test-agent",
+            "profile_yaml": "name: x",
+            "rooms": ["room-1"],
+        }
+
+        # Handle the sync in a task so we can inject the token grant
+        async def handle_and_grant():
+            # Small delay so handle starts waiting for the token
+            await asyncio.sleep(0.01)
+            # Now simulate the server sending a token_grant
+            grant_data = {
+                "type": "token_grant",
+                "agent_id": "agent-001",
+                "agent_token": "tok-abc",
+            }
+            await daemon._handle(grant_data)
+
+        handle_task = asyncio.create_task(daemon._handle(sync_data))
+        grant_task = asyncio.create_task(handle_and_grant())
+
+        await asyncio.gather(handle_task, grant_task)
+
+        # Should have sent token_request + report_actual_state
+        token_requests = [f for f in sent_frames if f["type"] == "token_request"]
+        assert len(token_requests) == 1
+        assert "agent-001" in token_requests[0]["agent_ids"]
+
+        # Spawner should have been called with the right parameters
+        daemon._spawner.spawn.assert_called_once()
+        spawn_arg = daemon._spawner.spawn.call_args[0][0]
+        assert spawn_arg.agent_id == "agent-001"
+        assert spawn_arg.agent_token == "tok-abc"
+        assert spawn_arg.engine == "claude-code"
+
+        # Generation should be tracked
+        assert daemon._running_generations.get("agent-001") == 1
+
+    async def test_sync_stopped_kills_running_agent(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """sync_desired_state with desired=stopped should kill the running agent."""
+        sent_frames = _capture_ws(daemon)
+
+        # Pretend agent is running
+        mock_running = MagicMock()
+        mock_running.agent_id = "agent-001"
+        daemon._spawner.get_running = MagicMock(return_value=mock_running)
+        daemon._spawner.kill = AsyncMock(return_value={"success": True})
+        daemon._running_generations["agent-001"] = 1
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "stopped",
+            "generation": 2,
+        }
+        await daemon._handle(sync_data)
+
+        daemon._spawner.kill.assert_called_once_with("agent-001")
+        assert "agent-001" not in daemon._running_generations
+
+    async def test_sync_same_generation_is_noop(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If agent is already running at the desired generation, do nothing."""
+        sent_frames = _capture_ws(daemon)
+
+        mock_running = MagicMock()
+        mock_running.agent_id = "agent-001"
+        daemon._spawner.get_running = MagicMock(return_value=mock_running)
+        daemon._spawner.spawn = AsyncMock()
+        daemon._running_generations["agent-001"] = 3
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "running",
+            "generation": 3,
+            "engine": "claude-code",
+        }
+        await daemon._handle(sync_data)
+
+        # Spawn should NOT have been called
+        daemon._spawner.spawn.assert_not_called()
+
+    async def test_sync_forwards_engine_secrets_to_spawn(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Frame-delivered engine_secrets must reach SpawnManifest.
+
+        ManifestStore.save strips engine_secrets from disk, and the
+        reconcile loop spawns from a disk-loaded manifest. Without the
+        in-memory secrets cache, any engine that ships keys via
+        engine_secrets would receive ``{}`` after the save/load hop.
+        """
+        _capture_ws(daemon)
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-001"
+        mock_result.pid = 42
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "running",
+            "generation": 1,
+            "engine": "claude-code",
+            "name": "secret-agent",
+            "profile_yaml": "",
+            "rooms": ["room-1"],
+            "engine_secrets": {
+                "ANTHROPIC_API_KEY": "sk-test-secret",
+            },
+        }
+
+        async def handle_and_grant():
+            await asyncio.sleep(0.01)
+            await daemon._handle({
+                "type": "token_grant",
+                "agent_id": "agent-001",
+                "agent_token": "tok-xyz",
+            })
+
+        await asyncio.gather(
+            asyncio.create_task(daemon._handle(sync_data)),
+            asyncio.create_task(handle_and_grant()),
+        )
+
+        daemon._spawner.spawn.assert_called_once()
+        spawn_arg = daemon._spawner.spawn.call_args[0][0]
+        assert spawn_arg.engine_secrets == {
+            "ANTHROPIC_API_KEY": "sk-test-secret",
+        }
+
+    async def test_sync_newer_generation_restarts(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If a newer generation arrives, kill the old and respawn."""
+        sent_frames = _capture_ws(daemon)
+
+        mock_running = MagicMock()
+        mock_running.agent_id = "agent-001"
+        daemon._spawner.get_running = MagicMock(return_value=mock_running)
+        daemon._spawner.kill = AsyncMock(return_value={"success": True})
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-001"
+        mock_result.pid = 99
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        daemon._running_generations["agent-001"] = 1
+
+        sync_data = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-001",
+            "desired_state": "running",
+            "generation": 2,
+            "engine": "claude-code",
+        }
+
+        async def handle_and_grant():
+            await asyncio.sleep(0.01)
+            grant_data = {
+                "type": "token_grant",
+                "agent_id": "agent-001",
+                "agent_token": "tok-new",
+            }
+            await daemon._handle(grant_data)
+
+        handle_task = asyncio.create_task(daemon._handle(sync_data))
+        grant_task = asyncio.create_task(handle_and_grant())
+
+        await asyncio.gather(handle_task, grant_task)
+
+        daemon._spawner.kill.assert_called_once_with("agent-001")
+        daemon._spawner.spawn.assert_called_once()
+        assert daemon._running_generations.get("agent-001") == 2
+
+    async def test_stop_tombstone_rejects_delayed_running_across_restart(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """Wire order start N → stop N+1 → delayed start N cannot reanimate.
+
+        The first start remains in its token round-trip when stop arrives.
+        Stop cancels that spawn, and the persisted tombstone rejects the late
+        frame both in this daemon and in a fresh daemon using the same disk.
+        """
+        _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        running_n = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-fenced",
+            "desired_state": "running",
+            "generation": 1,
+            "engine": "claude-code",
+        }
+        stopped_n_plus_one = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-fenced",
+            "desired_state": "stopped",
+            "generation": 2,
+        }
+
+        await daemon._handle(running_n)
+        await asyncio.sleep(0)
+        assert "agent-fenced" in daemon._token_futures
+
+        await daemon._handle(stopped_n_plus_one)
+        await asyncio.sleep(0)
+        await daemon._handle(running_n)
+        await asyncio.sleep(0)
+
+        daemon._spawner.spawn.assert_not_awaited()
+        manifest = daemon._manifest_store.load("agent-fenced")
+        assert manifest is not None
+        assert manifest.desired_state == "stopped"
+        assert manifest.generation == 2
+
+        restarted = MachineDaemon(
+            server_url=daemon.server_url,
+            machine_id=daemon.machine_id,
+            machine_token=daemon.machine_token,
+            agent_dirs_root=tmp_path / "agents",
+            workspace_registry_path=tmp_path / "restart-workspaces.json",
+            workspace_signing_key_path=tmp_path / "restart-signing.key",
+        )
+        _capture_ws(restarted)
+        restarted._spawner.spawn = AsyncMock()
+
+        await restarted._handle(running_n)
+        await asyncio.sleep(0)
+
+        restarted._spawner.spawn.assert_not_awaited()
+        persisted = restarted._manifest_store.load("agent-fenced")
+        assert persisted is not None
+        assert persisted.desired_state == "stopped"
+        assert persisted.generation == 2
+
+
+# ── Per-agent reconcile serialization (#183) ─────────────────────────
+
+
+class TestReconcileSerialization:
+    """#183 — generation pre-reservation and per-agent lock close the
+    race window where two ``sync_desired_state`` frames arriving back
+    to back dispatched two concurrent spawn tasks for the same agent.
+    """
+
+    async def test_duplicate_same_generation_spawns_once(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Two ``sync_desired_state`` frames for the same agent at the
+        same generation that arrive while the first spawn is still
+        awaiting its token_grant must NOT dispatch a second spawn. The
+        generation reservation happens synchronously inside the lock
+        before ``create_task`` is called.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-race"
+        mock_result.pid = 42
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        base = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-race",
+            "desired_state": "running",
+            "engine": "claude-code",
+            "name": "a",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+
+        async def grant_after_delay():
+            # Wait long enough for BOTH sync frames to have been handled
+            # before we resolve the single token grant.
+            await asyncio.sleep(0.05)
+            grant = {
+                "type": "token_grant",
+                "agent_id": "agent-race",
+                "agent_token": "tok-once",
+            }
+            await daemon._handle(grant)
+
+        t_first = asyncio.create_task(
+            daemon._handle({**base, "generation": 1})
+        )
+        t_second = asyncio.create_task(
+            daemon._handle({**base, "generation": 1})
+        )
+        t_grant = asyncio.create_task(grant_after_delay())
+        await asyncio.gather(t_first, t_second, t_grant)
+
+        # Only one spawn dispatched despite two reconcile requests.
+        assert daemon._spawner.spawn.call_count == 1
+        # Only one token request sent.
+        token_reqs = [f for f in sent_frames if f["type"] == "token_request"]
+        assert len(token_reqs) == 1
+
+    async def test_stale_generation_ignored_when_reservation_higher(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """A reconcile at generation N when generation N+k is already
+        reserved (spawn in flight OR completed) must short-circuit: no
+        kill, no spawn, no token request.
+        """
+        sent_frames = _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        daemon._spawner.kill = AsyncMock()
+
+        # Pre-reserve gen 5 as if a spawn is already in flight / done.
+        daemon._running_generations["agent-stale"] = 5
+
+        sync_stale = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-stale",
+            "desired_state": "running",
+            "generation": 3,  # older
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+        # Save the manifest (what _handle does) — but since the test
+        # mutates state directly, use save directly too.
+        from anygarden.machine.protocol.frames import SyncDesiredStateFrame
+
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-stale",
+                desired_state="running",
+                generation=3,
+                engine="claude-code",
+            )
+        )
+
+        await daemon._reconcile_agent("agent-stale")
+
+        daemon._spawner.spawn.assert_not_called()
+        daemon._spawner.kill.assert_not_called()
+        # Reservation untouched.
+        assert daemon._running_generations["agent-stale"] == 5
+
+    async def test_spawn_failure_rolls_back_reservation(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If ``Spawner.spawn`` fails, the pre-reservation in
+        ``_running_generations`` must be rolled back so a subsequent
+        reconcile can retry rather than seeing a phantom running agent.
+        """
+        sent_frames = _capture_ws(daemon)
+
+        fail = MagicMock()
+        fail.success = False
+        fail.agent_id = "agent-broken"
+        fail.error = "spawn refused"
+        daemon._spawner.spawn = AsyncMock(return_value=fail)
+
+        sync = {
+            "type": "sync_desired_state",
+            "agent_id": "agent-broken",
+            "desired_state": "running",
+            "generation": 7,
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+        }
+
+        async def grant():
+            await asyncio.sleep(0.01)
+            await daemon._handle(
+                {
+                    "type": "token_grant",
+                    "agent_id": "agent-broken",
+                    "agent_token": "tok-bad",
+                }
+            )
+
+        await asyncio.gather(
+            daemon._handle(sync),
+            grant(),
+        )
+
+        # Spawn was attempted
+        daemon._spawner.spawn.assert_called_once()
+        # And the reservation was cleaned up on failure — a retry
+        # (re-send of the same frame) must be able to try again.
+        assert "agent-broken" not in daemon._running_generations
+
+    async def test_parallel_reconcile_different_agents(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Different agents must NOT block each other — each lock is
+        per-agent so the daemon can reconcile agents in parallel. We
+        verify by arranging the grant arrival order to match the
+        expected progression and confirming both spawns happen.
+        """
+        daemon._spawner.spawn = AsyncMock(
+            side_effect=lambda m: MagicMock(
+                success=True, agent_id=m.agent_id, pid=100, error=""
+            )
+        )
+
+        base = {
+            "type": "sync_desired_state",
+            "desired_state": "running",
+            "engine": "claude-code",
+            "profile_yaml": "",
+            "rooms": [],
+            "generation": 1,
+        }
+
+        async def grant_both():
+            await asyncio.sleep(0.02)
+            for aid, tok in (("agent-a", "tok-a"), ("agent-b", "tok-b")):
+                await daemon._handle(
+                    {
+                        "type": "token_grant",
+                        "agent_id": aid,
+                        "agent_token": tok,
+                    }
+                )
+
+        await asyncio.gather(
+            daemon._handle({**base, "agent_id": "agent-a"}),
+            daemon._handle({**base, "agent_id": "agent-b"}),
+            grant_both(),
+        )
+
+        assert daemon._spawner.spawn.call_count == 2
+        assert daemon._running_generations["agent-a"] == 1
+        assert daemon._running_generations["agent-b"] == 1
+
+
+# ── Sync batch ───────────────────────────────────────────────────────
+
+
+class TestSyncBatch:
+    """Tests for handling sync_batch frames."""
+
+    async def test_batch_kills_orphans(self, daemon: MachineDaemon) -> None:
+        """Agents running locally but not in the batch should be killed."""
+        sent_frames = _capture_ws(daemon)
+
+        # Pretend two agents are running locally
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-keep", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+            {"agent_id": "agent-orphan", "pid": 200, "engine": "codex", "uptime_seconds": 30},
+        ])
+        daemon._spawner.kill = AsyncMock(return_value={"success": True})
+        daemon._spawner.get_running = MagicMock(return_value=None)
+        daemon._running_generations["agent-keep"] = 1
+        daemon._running_generations["agent-orphan"] = 1
+
+        # Mock spawner.spawn (won't be called since agents are not running after kill)
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-keep"
+        mock_result.pid = 100
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        batch_data = {
+            "type": "sync_batch",
+            "agents": [
+                {
+                    "type": "sync_desired_state",
+                    "agent_id": "agent-keep",
+                    "desired_state": "running",
+                    "generation": 1,
+                    "engine": "claude-code",
+                },
+            ],
+        }
+
+        async def feed_token():
+            await asyncio.sleep(0.01)
+            grant_data = {
+                "type": "token_grant",
+                "agent_id": "agent-keep",
+                "agent_token": "tok-keep",
+            }
+            await daemon._handle(grant_data)
+
+        handle_task = asyncio.create_task(daemon._handle(batch_data))
+        token_task = asyncio.create_task(feed_token())
+
+        await asyncio.gather(handle_task, token_task)
+
+        # agent-orphan should have been killed
+        kill_calls = [
+            call.args[0] for call in daemon._spawner.kill.call_args_list
+        ]
+        assert "agent-orphan" in kill_calls
+        assert "agent-orphan" not in daemon._running_generations
+
+    async def test_partial_batch_does_not_kill_orphans(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#185: A ``sync_batch`` with ``is_full_snapshot=False`` must
+        NOT kill agents missing from the batch. The server only listed
+        the agents it's updating — everything else should keep running.
+        A server bug that sent a bogus partial batch (e.g. a failed
+        query) previously caused mass kill of all local agents.
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-keep", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+            {"agent_id": "agent-untouched", "pid": 200, "engine": "codex", "uptime_seconds": 30},
+        ])
+        daemon._spawner.kill = AsyncMock()
+        daemon._spawner.get_running = MagicMock(return_value=None)
+        daemon._running_generations["agent-keep"] = 1
+        daemon._running_generations["agent-untouched"] = 1
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.pid = 100
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": False,
+            "agents": [
+                {
+                    "type": "sync_desired_state",
+                    "agent_id": "agent-keep",
+                    "desired_state": "running",
+                    "generation": 2,
+                    "engine": "claude-code",
+                },
+            ],
+        }
+
+        async def feed_token():
+            await asyncio.sleep(0.01)
+            await daemon._handle(
+                {
+                    "type": "token_grant",
+                    "agent_id": "agent-keep",
+                    "agent_token": "tok-keep",
+                }
+            )
+
+        await asyncio.gather(
+            daemon._handle(batch_data),
+            feed_token(),
+        )
+
+        # Untouched agent must NOT be killed — it's outside the partial
+        # batch's scope, not an orphan.
+        daemon._spawner.kill.assert_not_called()
+        assert daemon._running_generations["agent-untouched"] == 1
+
+    async def test_empty_partial_batch_kills_nothing(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """#185: The core regression guard — an empty
+        ``is_full_snapshot=False`` batch from a server-side bug (empty
+        result set, failed filter, etc.) used to mass-kill every agent
+        on the machine. With the flag, it's now a no-op.
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-a", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+            {"agent_id": "agent-b", "pid": 200, "engine": "codex", "uptime_seconds": 30},
+        ])
+        daemon._spawner.kill = AsyncMock()
+        daemon._running_generations["agent-a"] = 1
+        daemon._running_generations["agent-b"] = 1
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": False,
+            "agents": [],
+        }
+        await daemon._handle(batch_data)
+
+        daemon._spawner.kill.assert_not_called()
+        assert daemon._running_generations == {"agent-a": 1, "agent-b": 1}
+
+    async def test_empty_full_snapshot_kills_all(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Sanity: the original behaviour must remain for
+        ``is_full_snapshot=True`` empty batches — used when the server
+        drops a machine's entire agent set (depopulation, reassignment).
+        """
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "agent-a", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
+        ])
+        daemon._spawner.kill = AsyncMock(return_value={"success": True})
+        daemon._running_generations["agent-a"] = 1
+
+        batch_data = {
+            "type": "sync_batch",
+            "is_full_snapshot": True,
+            "agents": [],
+        }
+        await daemon._handle(batch_data)
+
+        daemon._spawner.kill.assert_called_once_with("agent-a")
+        assert "agent-a" not in daemon._running_generations
+
+
+# ── Token grant ──────────────────────────────────────────────────────
+
+
+class TestTokenGrant:
+    """Tests for token_grant handling."""
+
+    async def test_token_grant_resolves_future(self, daemon: MachineDaemon) -> None:
+        """token_grant should resolve the pending future for that agent."""
+        _capture_ws(daemon)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[str] = loop.create_future()
+        daemon._token_futures["agent-001"] = future
+
+        grant_data = {
+            "type": "token_grant",
+            "agent_id": "agent-001",
+            "agent_token": "tok-123",
+        }
+        await daemon._handle(grant_data)
+
+        assert future.done()
+        assert future.result() == "tok-123"
+
+    async def test_unexpected_token_grant_is_ignored(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """token_grant for an agent we didn't request should be harmless."""
+        _capture_ws(daemon)
+
+        grant_data = {
+            "type": "token_grant",
+            "agent_id": "unknown-agent",
+            "agent_token": "tok-xyz",
+        }
+        # Should not raise
+        await daemon._handle(grant_data)
+
+
+# ── Crash handling ───────────────────────────────────────────────────
+
+
+class TestCrashHandling:
+    """Tests for crash restart logic."""
+
+    async def test_crash_restart_within_budget(self, daemon: MachineDaemon) -> None:
+        """Agent crash with budget remaining should trigger restart."""
+        sent_frames = _capture_ws(daemon)
+
+        # Save a manifest that wants the agent running
+        manifest = SyncDesiredStateFrame(
+            agent_id="agent-crash",
+            desired_state="running",
+            generation=1,
+            engine="claude-code",
+            restart_policy="restart_on_same_machine",
+            max_restarts=3,
+            restart_window_seconds=300,
+        )
+        daemon._manifest_store.save(manifest)
+
+        # Mock spawner for the restart
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-crash"
+        mock_result.pid = 99
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        # Trigger crash callback
+        async def crash_and_grant():
+            task = asyncio.create_task(
+                daemon._on_agent_crashed("agent-crash", 1, "segfault")
+            )
+            await asyncio.sleep(0.01)
+            # Feed the token for the restart
+            grant_data = {
+                "type": "token_grant",
+                "agent_id": "agent-crash",
+                "agent_token": "tok-restart",
+            }
+            await daemon._handle(grant_data)
+            await task
+
+        await crash_and_grant()
+
+        # Should have spawned a restart
+        daemon._spawner.spawn.assert_called_once()
+        spawn_arg = daemon._spawner.spawn.call_args[0][0]
+        assert spawn_arg.agent_token == "tok-restart"
+
+    async def test_crash_budget_exhausted_restart_anywhere(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """When crash budget is exhausted and policy is restart_anywhere,
+        should send RequestReplacementFrame."""
+        sent_frames = _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="agent-crash",
+            desired_state="running",
+            generation=1,
+            engine="claude-code",
+            restart_policy="restart_anywhere",
+            max_restarts=1,
+            restart_window_seconds=300,
+        )
+        daemon._manifest_store.save(manifest)
+
+        # First crash — allowed
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.agent_id = "agent-crash"
+        mock_result.pid = 100
+        daemon._spawner.spawn = AsyncMock(return_value=mock_result)
+
+        async def crash_and_grant():
+            task = asyncio.create_task(
+                daemon._on_agent_crashed("agent-crash", 1, "error1")
+            )
+            await asyncio.sleep(0.01)
+            grant = {
+                "type": "token_grant",
+                "agent_id": "agent-crash",
+                "agent_token": "tok-1",
+            }
+            await daemon._handle(grant)
+            await task
+
+        await crash_and_grant()
+        assert daemon._spawner.spawn.call_count == 1
+
+        # Second crash — budget exhausted
+        daemon._spawner.spawn.reset_mock()
+        await daemon._on_agent_crashed("agent-crash", 1, "error2")
+
+        # Should NOT have spawned again
+        daemon._spawner.spawn.assert_not_called()
+
+        # Should have sent a request_replacement frame
+        replacement_frames = [
+            f for f in sent_frames if f["type"] == "request_replacement"
+        ]
+        assert len(replacement_frames) == 1
+        assert replacement_frames[0]["agent_id"] == "agent-crash"
+        assert replacement_frames[0]["generation"] == 1
+
+        # Manifest should be marked stopped so daemon restart does not
+        # re-spawn this agent behind the server's back (#182).
+        reloaded = daemon._manifest_store.load("agent-crash")
+        assert reloaded is not None
+        assert reloaded.desired_state == "stopped"
+
+    async def test_request_replacement_survives_missing_manifest(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """If the manifest was already deleted when replacement fires,
+        the daemon must not crash on the FileNotFoundError path (#182).
+        """
+        sent_frames = _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="agent-ghost",
+            desired_state="running",
+            generation=1,
+            engine="claude-code",
+            restart_policy="restart_anywhere",
+            max_restarts=0,  # budget exhausted on first crash
+            restart_window_seconds=300,
+        )
+        daemon._manifest_store.save(manifest)
+        # Simulate the manifest being removed between save and crash —
+        # e.g. operator clean-up or a prior stop_agent flow.
+        daemon._manifest_store.delete("agent-ghost")
+
+        # Re-inject an in-memory manifest so the crash path can still load
+        # its restart_policy. We bypass the file and re-save then delete
+        # the desired_state field mid-flight by patching load() to return
+        # the known manifest once, then the real (absent) file afterwards.
+        real_load = daemon._manifest_store.load
+        calls = {"n": 0}
+
+        def _patched_load(agent_id: str):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return manifest
+            return real_load(agent_id)
+
+        daemon._manifest_store.load = _patched_load  # type: ignore[assignment]
+
+        await daemon._on_agent_crashed("agent-ghost", 1, "boom")
+
+        # request_replacement still fires even though update_desired_state
+        # raises FileNotFoundError internally (caught by the fix).
+        replacement_frames = [
+            f for f in sent_frames if f["type"] == "request_replacement"
+        ]
+        assert len(replacement_frames) == 1
+
+    async def test_crash_with_stop_policy_does_not_restart(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """When restart_policy is stop, crashes should just report state."""
+        sent_frames = _capture_ws(daemon)
+
+        manifest = SyncDesiredStateFrame(
+            agent_id="agent-stop",
+            desired_state="running",
+            generation=1,
+            engine="claude-code",
+            restart_policy="stop",
+        )
+        daemon._manifest_store.save(manifest)
+
+        daemon._spawner.spawn = AsyncMock()
+        await daemon._on_agent_crashed("agent-stop", 1, "error")
+
+        daemon._spawner.spawn.assert_not_called()
+
+        # Should still have reported state
+        report_frames = [
+            f for f in sent_frames if f["type"] == "report_actual_state"
+        ]
+        assert len(report_frames) >= 1
+
+    async def test_normal_stop_reports_state(self, daemon: MachineDaemon) -> None:
+        """Normal agent stop should report state."""
+        sent_frames = _capture_ws(daemon)
+
+        daemon._running_generations["agent-done"] = 1
+        await daemon._on_agent_stopped("agent-done", 0)
+
+        assert "agent-done" not in daemon._running_generations
+
+        report_frames = [
+            f for f in sent_frames if f["type"] == "report_actual_state"
+        ]
+        assert len(report_frames) >= 1
+
+
+# ── Ping ─────────────────────────────────────────────────────────────
+
+
+class TestPing:
+    """Tests for ping handling."""
+
+    async def test_ping_triggers_report(self, daemon: MachineDaemon) -> None:
+        """Ping should respond with report_actual_state."""
+        sent_frames = _capture_ws(daemon)
+
+        ping_data = {"type": "ping"}
+        await daemon._handle(ping_data)
+
+        assert len(sent_frames) == 1
+        assert sent_frames[0]["type"] == "report_actual_state"
+
+
+# ── Rotate token ─────────────────────────────────────────────────────
+
+
+class TestRotateToken:
+    """Tests for rotate_token frame handling."""
+
+    async def test_handle_rotate_token_persists_and_updates(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """rotate_token should write the new token to disk and update memory."""
+        token_file = tmp_path / "machine.token"
+        daemon._token_path = token_file
+
+        rotate_data = {
+            "type": "rotate_token",
+            "new_token": "mch_new_token_xyz",
+        }
+        await daemon._handle(rotate_data)
+
+        assert daemon.machine_token == "mch_new_token_xyz"
+        assert token_file.exists()
+        assert token_file.read_text().strip() == "mch_new_token_xyz"
+        # On POSIX, secure_chmod pins the mode bits. On Windows the
+        # equivalent DACL doesn't surface through ``st_mode`` — that
+        # path is covered by the dedicated DACL tests in
+        # ``test_safefs_win.py``; here we only verify the rotate flow
+        # called the secure helper.
+        import sys
+        if sys.platform != "win32":
+            mode = token_file.stat().st_mode & 0o777
+            assert mode == 0o600
+
+    async def test_handle_rotate_token_save_failure_keeps_old_token(
+        self, daemon: MachineDaemon, monkeypatch
+    ) -> None:
+        """If save_token fails, the in-memory token must NOT be updated."""
+        def fail_save(*args, **kwargs):
+            raise PermissionError("test token storage is read-only")
+        monkeypatch.setattr("anygarden.machine.daemon.save_token", fail_save)
+        daemon.machine_token = "original_token"
+
+        rotate_data = {
+            "type": "rotate_token",
+            "new_token": "mch_new_token_xyz",
+        }
+        await daemon._handle(rotate_data)
+
+        # In-memory token should still be the original
+        assert daemon.machine_token == "original_token"
+
+
+# ── Reconnection ─────────────────────────────────────────────────────
+
+
+class TestReconnection:
+    """Tests for WebSocket reconnection behavior."""
+
+    async def test_reconnect_on_disconnect(self, daemon: MachineDaemon) -> None:
+        """Daemon should attempt reconnection after disconnect."""
+        connect_count = 0
+
+        async def mock_connect_and_serve():
+            nonlocal connect_count
+            connect_count += 1
+            if connect_count < 3:
+                raise OSError("Connection refused")
+            # On 3rd attempt, cancel to stop the loop
+            raise asyncio.CancelledError()
+
+        daemon._connect_and_serve = mock_connect_and_serve
+
+        with patch("anygarden.machine.daemon.asyncio.sleep", new_callable=AsyncMock):
+            # CancelledError is caught inside run() which drains and returns cleanly
+            await daemon.run()
+
+        # Should have attempted to connect 3 times (2 OSError + 1 CancelledError)
+        assert connect_count == 3
+
+
+class TestMemorySyncBack237:
+    """Issue #237 — daemon emits ``agent_memory_update`` frames when
+    ``memory/notes.md`` changes for any running agent.
+    """
+
+    async def test_emits_memory_update_on_first_observation(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """First time we see a non-empty memory file we ship it."""
+        sent = _capture_ws(daemon)
+
+        # Lay down a file as if the spawner had materialized it.
+        agent_root = tmp_path / "a1"
+        (agent_root / "memory").mkdir(parents=True)
+        (agent_root / "memory" / "notes.md").write_text("remember this")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "agent_memory_update" in types
+        memory_frame = next(f for f in sent if f["type"] == "agent_memory_update")
+        assert memory_frame["agent_id"] == "a1"
+        assert memory_frame["memory_md"] == "remember this"
+
+    async def test_skips_unchanged_memory_on_next_tick(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """The hash cache suppresses repeat frames when the file body
+        is identical to the last observation."""
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "a1"
+        (agent_root / "memory").mkdir(parents=True)
+        (agent_root / "memory" / "notes.md").write_text("same")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+        first = sum(1 for f in sent if f.get("type") == "agent_memory_update")
+        await daemon._report_actual_state()
+        second = sum(1 for f in sent if f.get("type") == "agent_memory_update")
+        assert first == 1
+        assert second == 1  # no new frame
+
+    async def test_emits_new_frame_when_body_changes(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "a1"
+        notes = agent_root / "memory" / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text("v1")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+        notes.write_text("v2 with more content")
+        await daemon._report_actual_state()
+
+        memory_frames = [f for f in sent if f.get("type") == "agent_memory_update"]
+        assert len(memory_frames) == 2
+        assert memory_frames[0]["memory_md"] == "v1"
+        assert memory_frames[1]["memory_md"] == "v2 with more content"
+
+    async def test_missing_file_is_silent(
+        self, daemon: MachineDaemon, tmp_path
+    ) -> None:
+        """Agents spawned pre-#237 (no memory directory yet) don't
+        emit spurious frames — the guard skips when the file is absent."""
+        sent = _capture_ws(daemon)
+
+        agent_root = tmp_path / "empty"
+        agent_root.mkdir()
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._report_actual_state()
+
+        memory_frames = [f for f in sent if f.get("type") == "agent_memory_update"]
+        assert memory_frames == []
+
+
+# ── Room shared file handlers (#246) ──────────────────────────────────
+
+
+class TestSharedFileHandlers:
+    """Server→machine shared file frames materialize files under
+    ``<agent_root>/memory/shared/``. The handlers are idempotent — the
+    server retransmits during reconnect/backfill and must not clobber
+    identical payloads — and they never touch ``notes.md``.
+    """
+
+    async def test_write_creates_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        frame = AgentMemorySharedFileWriteFrame(
+            agent_id="a1",
+            storage_name="spec.md",
+            content="hello\n",
+            content_sha256="irrelevant-tests-compute-their-own",
+        )
+        await daemon._handle_agent_memory_shared_file_write(frame)
+
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        assert shared_file.read_text() == "hello\n"
+
+    async def test_write_skips_when_hash_matches(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """A second write with the same sha256 must not rewrite the
+        file. Observed via mtime: a rewrite would bump it."""
+        import hashlib
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        content = "hello\n"
+        sha = hashlib.sha256(content.encode()).hexdigest()
+        frame = AgentMemorySharedFileWriteFrame(
+            agent_id="a1",
+            storage_name="spec.md",
+            content=content,
+            content_sha256=sha,
+        )
+
+        await daemon._handle_agent_memory_shared_file_write(frame)
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        first_mtime = shared_file.stat().st_mtime_ns
+
+        # Force a detectable mtime bump if a rewrite actually happens.
+        # ``os.utime`` rewinds the clock so any real write would move
+        # it forward past the set value.
+        import os
+
+        os.utime(shared_file, ns=(0, 0))
+        rewound_mtime = shared_file.stat().st_mtime_ns
+
+        await daemon._handle_agent_memory_shared_file_write(frame)
+        after_mtime = shared_file.stat().st_mtime_ns
+
+        # Didn't rewrite → mtime stays at the rewound value.
+        assert after_mtime == rewound_mtime
+        assert first_mtime != rewound_mtime  # sanity check for rewind
+
+    async def test_write_overwrites_when_hash_changes(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        import hashlib
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        first = "hello\n"
+        second = "goodbye\n"
+        for content in (first, second):
+            sha = hashlib.sha256(content.encode()).hexdigest()
+            await daemon._handle_agent_memory_shared_file_write(
+                AgentMemorySharedFileWriteFrame(
+                    agent_id="a1",
+                    storage_name="spec.md",
+                    content=content,
+                    content_sha256=sha,
+                )
+            )
+
+        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        assert shared_file.read_text() == second
+
+    async def test_delete_removes_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        shared_dir = agent_root / "memory" / "shared"
+        shared_dir.mkdir(parents=True)
+        (shared_dir / "spec.md").write_text("x")
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle_agent_memory_shared_file_delete(
+            AgentMemorySharedFileDeleteFrame(
+                agent_id="a1", storage_name="spec.md"
+            )
+        )
+        assert not (shared_dir / "spec.md").exists()
+
+    async def test_delete_missing_is_noop(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        # Must not raise.
+        await daemon._handle_agent_memory_shared_file_delete(
+            AgentMemorySharedFileDeleteFrame(
+                agent_id="a1", storage_name="nope.md"
+            )
+        )
+
+    async def test_handle_dispatches_shared_write(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        """``_handle`` must route the new frame types through to their
+        handlers — otherwise the daemon silently drops them."""
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle(
+            {
+                "type": "agent_memory_shared_file_write",
+                "agent_id": "a1",
+                "storage_name": "spec.md",
+                "content": "x",
+                "content_sha256": "h",
+            }
+        )
+        assert (agent_root / "memory" / "shared" / "spec.md").read_text() == "x"
+
+    async def test_handle_dispatches_shared_delete(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "agent-a"
+        shared_dir = agent_root / "memory" / "shared"
+        shared_dir.mkdir(parents=True)
+        (shared_dir / "spec.md").write_text("x")
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle(
+            {
+                "type": "agent_memory_shared_file_delete",
+                "agent_id": "a1",
+                "storage_name": "spec.md",
+            }
+        )
+        assert not (shared_dir / "spec.md").exists()
+
+
+class TestOutboxArtifactSyncBack290:
+    """Issue #290 — daemon polls each running agent's
+    ``memory/outbox/`` and emits ``room_artifact_produced`` frames for
+    new / changed files.
+    """
+
+    async def test_emits_artifact_for_new_outbox_file(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        import base64
+        import hashlib
+
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        # Fake PNG (real-image-like prefix isn't required — mimetypes
+        # uses the extension and the daemon doesn't introspect content).
+        body = b"\x89PNG\r\n\x1a\n" + b"placeholder-bytes"
+        (outbox / "screenshot.png").write_bytes(body)
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        artifact_frames = [
+            f for f in sent if f.get("type") == "room_artifact_produced"
+        ]
+        assert len(artifact_frames) == 1
+        f = artifact_frames[0]
+        assert f["agent_id"] == "a1"
+        assert f["filename"] == "screenshot.png"
+        assert f["mime"] == "image/png"
+        assert f["size_bytes"] == len(body)
+        assert f["sha256"] == hashlib.sha256(body).hexdigest()
+        assert base64.b64decode(f["content_b64"]) == body
+
+    async def test_skips_unchanged_artifact_on_next_tick(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "snap.png").write_bytes(b"same")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+        first = sum(1 for f in sent if f.get("type") == "room_artifact_produced")
+        await daemon._report_actual_state()
+        second = sum(1 for f in sent if f.get("type") == "room_artifact_produced")
+        assert first == 1
+        assert second == 1  # cache hit, no re-emit
+
+    async def test_emits_new_frame_when_artifact_body_changes(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        target = outbox / "snap.png"
+        target.write_bytes(b"v1")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+        target.write_bytes(b"v2-different-bytes")
+        await daemon._report_actual_state()
+
+        artifact_frames = [
+            f for f in sent if f.get("type") == "room_artifact_produced"
+        ]
+        assert len(artifact_frames) == 2
+        assert artifact_frames[0]["sha256"] != artifact_frames[1]["sha256"]
+
+    async def test_skips_oversize_files(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from anygarden.machine.daemon import ARTIFACT_MAX_BYTES
+
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        # One byte over the limit triggers the skip-with-log branch.
+        (outbox / "huge.png").write_bytes(b"\x00" * (ARTIFACT_MAX_BYTES + 1))
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_skips_disallowed_mime(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "binary.exe").write_bytes(b"MZ\x90\x00")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_skips_subdirs_inside_outbox(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        nested = outbox / "subdir"
+        nested.mkdir(parents=True)
+        (nested / "trapped.png").write_bytes(b"hidden")
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+    async def test_handles_missing_outbox_silently(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        agent_root = tmp_path / "a1"
+        agent_root.mkdir()  # no memory/outbox/ subtree at all
+
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 1, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        sent = _capture_ws(daemon)
+        await daemon._report_actual_state()
+
+        types = [f.get("type") for f in sent]
+        assert "room_artifact_produced" not in types
+
+
+# ── #451 re-adopt on restart ──────────────────────────────────────────
+
+
+class TestReadoptRunningAgents:
+    """#451 — on (re)connect the daemon re-adopts agent processes that
+    outlived a daemon restart, restoring ``_running_generations`` BEFORE
+    the first reconcile so the generation gate suppresses duplicate
+    spawns and ``kill`` can reach the existing process group.
+    """
+
+    def _runtime(self, generation: int = 4, started_at: float = 222.0) -> dict:
+        return {
+            "pid": 555,
+            "pgid": 555,
+            "started_at": started_at,
+            "engine": "claude-code",
+            "generation": generation,
+        }
+
+    async def test_readopt_restores_generation_and_registers(
+        self, daemon: MachineDaemon
+    ) -> None:
+        daemon._manifest_store.record_runtime("agent-live", self._runtime())
+
+        with patch(
+            "anygarden.machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden.machine.spawner.psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        # Generation restored from runtime.json.
+        assert daemon._running_generations["agent-live"] == 4
+        # Agent registered with the spawner (proc=None adoption).
+        agent = daemon._spawner.get_running("agent-live")
+        assert agent is not None
+        assert agent.proc is None
+        if agent.watch_task is not None:
+            agent.watch_task.cancel()
+
+    async def test_readopt_then_same_generation_reconcile_does_not_spawn(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """The core invariant: after re-adopt, a reconcile at the SAME
+        generation must be a no-op (no duplicate spawn)."""
+        _capture_ws(daemon)
+        daemon._spawner.spawn = AsyncMock()
+        daemon._spawner.kill = AsyncMock()
+
+        daemon._manifest_store.record_runtime(
+            "agent-live", self._runtime(generation=4)
+        )
+
+        with patch(
+            "anygarden.machine.spawner.is_group_alive", return_value=True
+        ), patch("anygarden.machine.spawner.psutil.Process") as mock_proc_cls:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        # Desired state arrives at the SAME generation the adopted process
+        # is already at (what the server believes after the daemon bounced).
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-live",
+                desired_state="running",
+                generation=4,
+                engine="claude-code",
+            )
+        )
+
+        await daemon._reconcile_agent("agent-live")
+
+        # Generation gate short-circuits → NO duplicate spawn, NO kill.
+        daemon._spawner.spawn.assert_not_called()
+        daemon._spawner.kill.assert_not_called()
+
+        agent = daemon._spawner.get_running("agent-live")
+        if agent is not None and agent.watch_task is not None:
+            agent.watch_task.cancel()
+
+    async def test_readopt_dead_group_clears_runtime_and_skips(
+        self, daemon: MachineDaemon
+    ) -> None:
+        daemon._manifest_store.record_runtime("agent-dead", self._runtime())
+
+        with patch(
+            "anygarden.machine.spawner.is_group_alive", return_value=False
+        ):
+            await daemon._readopt_running_agents()
+
+        # Not adopted, generation not restored, stale runtime cleared.
+        assert "agent-dead" not in daemon._running_generations
+        assert daemon._spawner.get_running("agent-dead") is None
+        assert daemon._manifest_store.load_runtime("agent-dead") is None
+
+    async def test_readopt_kills_runtime_fenced_by_persisted_tombstone(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """A cold restart enforces its tombstone before the first report."""
+        daemon._manifest_store.save(
+            SyncDesiredStateFrame(
+                agent_id="agent-fenced",
+                desired_state="stopped",
+                generation=5,
+            )
+        )
+        daemon._manifest_store.record_runtime(
+            "agent-fenced", self._runtime(generation=4)
+        )
+
+        with patch(
+            "anygarden.machine.spawner.is_group_alive", return_value=True
+        ), patch(
+            "anygarden.machine.spawner.psutil.Process"
+        ) as mock_proc_cls, patch(
+            "anygarden.machine.spawner.terminate_tree"
+        ) as terminate_tree:
+            mock_proc_cls.return_value.create_time.return_value = 222.0
+            await daemon._readopt_running_agents()
+
+        terminate_tree.assert_called_once_with(555, timeout=10)
+        assert daemon._spawner.get_running("agent-fenced") is None
+        assert "agent-fenced" not in daemon._running_generations
+        assert daemon._manifest_store.load_runtime("agent-fenced") is None
+
+    async def test_readopt_skips_already_tracked_agent(
+        self, daemon: MachineDaemon
+    ) -> None:
+        """Idempotent across WS reconnects: an agent already tracked in
+        memory must not be re-adopted again."""
+        daemon._manifest_store.record_runtime("agent-x", self._runtime())
+        # Simulate it already being tracked (e.g. spawned this lifetime).
+        daemon._spawner.get_running = MagicMock(return_value=MagicMock())
+        adopt_spy = MagicMock(return_value=True)
+        daemon._spawner.adopt = adopt_spy
+
+        await daemon._readopt_running_agents()
+
+        adopt_spy.assert_not_called()
+
+
+class TestSelfUpdate:
+    """Server-driven self-update handler (#550)."""
+
+    async def test_success_reports_updating_and_requests_exit(
+        self, daemon: MachineDaemon
+    ) -> None:
+        sent = _capture_ws(daemon)
+        ok = UpdateResult(ok=True, from_version="0.12.0", to_version=None, error=None)
+
+        with patch("anygarden.machine.daemon.run_update", return_value=ok):
+            await daemon._handle_self_update(SelfUpdateFrame())
+
+        # First frame is the "updating" progress report.
+        assert sent[0]["type"] == "self_update_result"
+        assert sent[0]["status"] == "updating"
+        # Success ⇒ request process exit so systemd restarts on the new version,
+        # and close the socket to break the serve loop. No "failed" is sent.
+        assert daemon._exit_requested is True
+        daemon._ws.close.assert_awaited()
+        assert not any(f.get("status") == "failed" for f in sent)
+
+    async def test_failure_reports_failed_and_keeps_running(
+        self, daemon: MachineDaemon
+    ) -> None:
+        sent = _capture_ws(daemon)
+        fail = UpdateResult(
+            ok=False, from_version="0.12.0", to_version=None, error="pip exited 1"
+        )
+
+        with patch("anygarden.machine.daemon.run_update", return_value=fail):
+            await daemon._handle_self_update(SelfUpdateFrame())
+
+        statuses = [f["status"] for f in sent if f["type"] == "self_update_result"]
+        assert statuses == ["updating", "failed"]
+        assert sent[-1]["error"] == "pip exited 1"
+        # Failure ⇒ daemon stays up.
+        assert daemon._exit_requested is False
+
+    async def test_dispatch_routes_self_update(self, daemon: MachineDaemon) -> None:
+        _capture_ws(daemon)
+        ok = UpdateResult(ok=True, from_version="0.12.0", to_version=None, error=None)
+        with patch("anygarden.machine.daemon.run_update", return_value=ok):
+            await daemon._handle({"type": "self_update"})
+        assert daemon._exit_requested is True

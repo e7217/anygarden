@@ -5,7 +5,7 @@ $ErrorActionPreference = "Stop"
 
 Push-Location $PSScriptRoot/..
 try {
-    foreach ($pkg in @("packages/machine", "packages/agent", "packages/cluster")) {
+    foreach ($pkg in @("packages/agent", "packages/cluster")) {
         Write-Host "[anygarden] pytest $pkg" -ForegroundColor Cyan
         Push-Location $pkg
         try {

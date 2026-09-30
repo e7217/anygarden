@@ -1,7 +1,7 @@
 """Server-side parity of the agent-manifest path validation.
 
 This test file intentionally duplicates the cases in
-``anygarden-machine/tests/test_agent_dir.py``. The two copies must stay
+``tests/machine/test_agent_dir.py``. The two copies must stay
 equivalent — if one diverges, the other is wrong.
 """
 
