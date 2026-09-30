@@ -49,9 +49,9 @@ stopping and restarting the node — `anygarden stop` takes the same `--data-dir
 
 ## Project layout
 
-Anygarden is a `uv` workspace of four packages — `cluster` (server + web UI),
-`machine` (per-host daemon), `agent` (Python runtime), and `agent-ts` (TypeScript
-runtime). See [Packages](README.md#packages) for paths and distribution names.
+Anygarden is a `uv` workspace of three packages — `cluster` (server + web UI),
+`machine` (per-host daemon), and `agent` (Python runtime). See
+[Packages](README.md#packages) for paths and distribution names.
 
 ## Workflow
 

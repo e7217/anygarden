@@ -23,12 +23,3 @@ ENGINE_REMOVED_MESSAGE = "This engine has been removed. Create a codex-cli or pi
 
 def removed_engine_error(engine: str) -> str | None:
     return ENGINE_REMOVED_MESSAGE if engine in REMOVED_ENGINES else None
-
-
-PYTHON_RUNTIME_REQUIRED = "Codex and Pi require the Python agent runtime; set runtime=python in agent settings. Existing configuration and history are preserved."
-
-
-def engine_runtime_error(engine: str, runtime: str | None) -> str | None:
-    if engine in {"codex-cli", "pi-cli"} and runtime not in {None, "python"}:
-        return PYTHON_RUNTIME_REQUIRED
-    return None

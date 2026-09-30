@@ -24,7 +24,6 @@ async def test_retired_configuration_preserved_and_execution_blocked(
             engine=engine_name,
             model="old-model",
             provider="old-provider",
-            runtime="typescript",
             agents_md="keep role",
             generation=19,
             desired_state="running",
@@ -37,7 +36,6 @@ async def test_retired_configuration_preserved_and_execution_blocked(
             agent.engine,
             agent.model,
             agent.provider,
-            agent.runtime,
             agent.agents_md,
             agent.generation,
             agent.desired_state,
@@ -72,7 +70,6 @@ async def test_retired_configuration_preserved_and_execution_blocked(
             agent.engine,
             agent.model,
             agent.provider,
-            agent.runtime,
             agent.agents_md,
             agent.generation,
             agent.desired_state,
@@ -94,48 +91,3 @@ async def test_retired_configuration_preserved_and_execution_blocked(
         "/api/v1/agents", headers=headers, json=dict(name="new", engine=engine_name)
     )
     assert created.status_code == 422
-
-
-@pytest.mark.parametrize("engine_name", ["codex-cli", "pi-cli"])
-async def test_python_runtime_required_without_automatic_conversion(
-    agents_env, engine_name
-):
-    env = agents_env
-    headers = {"Authorization": f"Bearer {env['token']}"}
-    payload = dict(
-        name="new", engine=engine_name, provider="local", runtime="typescript"
-    )
-    assert (
-        await env["client"].post("/api/v1/agents", headers=headers, json=payload)
-    ).status_code == 422
-    async with env["factory"]() as db:
-        agent = Agent(
-            **payload, desired_state="running", actual_state="stopped", generation=4
-        )
-        db.add(agent)
-        await db.commit()
-        agent_id = agent.id
-    response = await env["client"].post(
-        f"/api/v1/agents/{agent_id}/start", headers=headers
-    )
-    assert response.status_code == 422 and "runtime=python" in response.json()["detail"]
-    await env["lifecycle"].request_start(agent_id)
-    async with env["factory"]() as db:
-        agent = await db.get(Agent, agent_id)
-        assert agent.runtime == "typescript" and agent.generation == 4
-        assert (await env["lifecycle"]._build_sync_frame(db, agent, []))[
-            "desired_state"
-        ] == "stopped"
-    # An explicit runtime edit repairs the configuration; no implicit conversion.
-    response = await env["client"].put(
-        f"/api/v1/agents/{agent_id}",
-        headers=headers,
-        json=dict(runtime_set=True, runtime="python"),
-    )
-    assert response.status_code == 200 and response.json()["runtime"] == "python"
-    response = await env["client"].put(
-        f"/api/v1/agents/{agent_id}",
-        headers=headers,
-        json=dict(runtime_set=True, runtime="typescript"),
-    )
-    assert response.status_code == 422

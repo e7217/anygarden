@@ -16,7 +16,6 @@ from anygarden.agent_availability import (
     INVALID_ENDPOINT,
     INVALID_PI_AUTH,
     INVALID_PROVIDER,
-    INVALID_RUNTIME,
     NO_MACHINE_FOR_ENGINE,
     NO_ROOM,
     QUOTA_EXHAUSTED,
@@ -39,7 +38,6 @@ def test_all_codes_are_registered() -> None:
         INVALID_PI_AUTH,
         QUOTA_EXHAUSTED,
         ENGINE_REMOVED,
-        INVALID_RUNTIME,
     }
 
 

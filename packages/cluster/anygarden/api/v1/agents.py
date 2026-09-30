@@ -35,7 +35,6 @@ from anygarden.engines import get_engine_entry
 from anygarden.engines.endpoints import EndpointConfiguration
 from anygarden.engines.validation import (
     PROVIDER_PATTERN,
-    engine_runtime_error,
     pi_provider_error,
     removed_engine_error,
 )
@@ -137,11 +136,6 @@ class AgentCreate(BaseModel):
     # Issue #493 — per-agent turn timeout (seconds). None = global default.
     turn_timeout_sec: TurnTimeoutSec = None
     restart_policy: str = "restart_anywhere"
-    # Issue #73 — runtime selector (``python`` default, ``typescript``
-    # for the new anygarden-agent-ts path). Accepting it here lets admins
-    # pin a specific runtime when they know the engine has a TS-native
-    # SDK they want to exercise (e.g. Claude Code v2).
-    runtime: str = "python"
     # Issue #271 — short public-facing introduction visible to other
     # participants (LLM roster + mention popover + participant list).
     # Capped at 200 chars to keep the per-turn token cost predictable
@@ -162,10 +156,6 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode="after")
     def require_pi_provider(self) -> AgentCreate:
-        if self.engine in {"codex-cli", "pi-cli"} and self.runtime != "python":
-            raise ValueError(
-                "Codex and Pi require the Python agent runtime; choose runtime=python"
-            )
         error = removed_engine_error(self.engine)
         if error:
             raise ValueError(error)
@@ -216,11 +206,6 @@ class AgentUpdate(BaseModel):
         default=None, pattern="^(restricted|standard|trusted)$"
     )
     permission_level_set: bool = False
-    # Issue #73 — runtime is editable post-creation. A real change
-    # requires a restart (bump_generation → machine respawns with
-    # the new runtime) which ``update_agent`` already triggers.
-    runtime: Optional[str] = None
-    runtime_set: bool = False
     # Issue #101 — avatar kind/value. Pure UI metadata; the PATCH
     # handler skips ``bump_generation`` when these are the only
     # fields that changed, so an admin reshuffling avatars never
@@ -298,9 +283,6 @@ class AgentOut(BaseModel):
     # falls back to the ``standard`` tier (= pre-#309 hardcoded
     # behaviour); the UI renders NULL as "Default".
     permission_level: Optional[str] = None
-    # Issue #73 — exposed read-only so the admin UI can render a
-    # badge next to the engine picker without re-querying.
-    runtime: str = "python"
     last_crash_reason: Optional[str] = None
     # Issue #101 — admin-chosen avatar override. Both NULL means
     # the UI falls back to the seed-driven initial.
@@ -573,7 +555,6 @@ async def create_agent(
         provider=body.provider,
         turn_timeout_sec=body.turn_timeout_sec,
         restart_policy=body.restart_policy,
-        runtime=body.runtime,
         description=body.description,
         permission_level=body.permission_level,
         base_url=endpoint.base_url if endpoint else None,
@@ -707,11 +688,6 @@ async def update_agent(
             "Use direct model connection settings to change this agent provider or model",
         )
 
-    if body.runtime_set and body.runtime is not None:
-        error = engine_runtime_error(agent.engine, body.runtime)
-        if error:
-            raise HTTPException(status_code=422, detail=error)
-
     runtime_changed = False
     peer_metadata_changed = False
     # #644 — set by edits to a field the participant roster *renders*
@@ -766,11 +742,6 @@ async def update_agent(
                     },
                 )
             )
-        runtime_changed = True
-    if body.runtime_set and body.runtime is not None:
-        # Issue #73 — runtime change needs a respawn to take effect,
-        # which ``bump_generation`` below will trigger.
-        agent.runtime = body.runtime
         runtime_changed = True
     if body.avatar_kind_set:
         agent.avatar_kind = body.avatar_kind
@@ -1190,7 +1161,6 @@ async def start_agent(
 
     error = (
         removed_engine_error(agent.engine)
-        or engine_runtime_error(agent.engine, agent.runtime)
         or pi_provider_error(agent.engine, agent.provider)
     )
     if error:

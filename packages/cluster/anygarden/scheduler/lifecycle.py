@@ -48,7 +48,6 @@ from anygarden.engines.endpoints import build_direct_engine_secrets
 from anygarden.engines.pi_auth import CAPABILITY as PI_AUTH_CAPABILITY
 from anygarden.engines.pi_auth import build_pi_native_engine_secrets
 from anygarden.engines.validation import (
-    engine_runtime_error,
     pi_provider_error,
     removed_engine_error,
 )
@@ -215,17 +214,11 @@ class AgentLifecycle:
                     logger.error("lifecycle.agent_not_found", agent_id=agent_id)
                     return
 
-                removed = removed_engine_error(agent.engine) or engine_runtime_error(
-                    agent.engine, getattr(agent, "runtime", None)
-                )
+                removed = removed_engine_error(agent.engine)
                 if removed:
                     agent.last_crash_reason = removed
                     _mark_unavailable(
-                        agent,
-                        "engine_removed"
-                        if removed_engine_error(agent.engine)
-                        else "invalid_runtime",
-                        {"engine": agent.engine},
+                        agent, "engine_removed", {"engine": agent.engine}
                     )
                     await db.commit()
                     return
@@ -1536,18 +1529,10 @@ class AgentLifecycle:
         """Build a ``sync_desired_state`` dict from DB data."""
         # Every reconnect/bump/deferred restart converges here. Never publish a
         # runnable manifest for legacy or corrupted Pi configuration.
-        removed = removed_engine_error(agent.engine) or engine_runtime_error(
-            agent.engine, getattr(agent, "runtime", None)
-        )
+        removed = removed_engine_error(agent.engine)
         if removed:
             agent.last_crash_reason = removed
-            _mark_unavailable(
-                agent,
-                "engine_removed"
-                if removed_engine_error(agent.engine)
-                else "invalid_runtime",
-                {"engine": agent.engine},
-            )
+            _mark_unavailable(agent, "engine_removed", {"engine": agent.engine})
             return {
                 "type": "sync_desired_state",
                 "agent_id": agent.id,
@@ -1804,11 +1789,6 @@ class AgentLifecycle:
             "restart_policy": agent.restart_policy,
             "max_restarts": agent.max_restarts,
             "restart_window_seconds": agent.restart_window_seconds,
-            # Issue #73 — forward the runtime selector to the machine
-            # daemon so it spawns via the right binary path. Pre-#73
-            # machines ignore the unknown key and fall back to the
-            # SpawnManifest default of ``"python"``.
-            "runtime": getattr(agent, "runtime", "python") or "python",
             # #277 — Plaintext bearer token for the anygarden self-MCP
             # entry the cluster just baked into ``files[<settings>]``.
             # Codex agents need this exposed in their process env as

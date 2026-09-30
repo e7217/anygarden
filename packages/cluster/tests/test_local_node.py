@@ -632,9 +632,8 @@ def test_incomplete_ownership_metadata_requires_recovery(tmp_path, missing, reas
     assert not (tmp_path / missing).exists()
 
 
-@pytest.mark.parametrize("runtime", ["python", "typescript"])
 async def test_integrated_agent_process_inherits_only_explicit_environment(
-    tmp_path, monkeypatch, runtime
+    tmp_path, monkeypatch
 ):
     import json
     import os
@@ -680,7 +679,6 @@ async def test_integrated_agent_process_inherits_only_explicit_environment(
             SpawnManifest(
                 agent_id=agent_id,
                 engine="echo",
-                runtime=runtime,
                 agent_token="scoped-agent-token",
                 anygarden_mcp_token="scoped-mcp-token",
                 engine_secrets={"OPENAI_API_KEY": "explicit-agent-secret"},

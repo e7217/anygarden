@@ -798,10 +798,6 @@ class MachineDaemon:
             # frame. ``getattr`` keeps pre-#493 in-memory manifests compatible.
             turn_timeout_sec=getattr(manifest, "turn_timeout_sec", None),
             sub_rooms=list(manifest.sub_rooms),
-            # Issue #73 — runtime passes through from the server frame.
-            # ``getattr`` keeps compatibility with in-memory manifest
-            # objects from earlier schema revisions in tests.
-            runtime=getattr(manifest, "runtime", "python") or "python",
             # Issue #277 — anygarden self-MCP bearer token from the
             # in-memory cache (manifest on disk strips it for the same
             # reasons engine_secrets are stripped).

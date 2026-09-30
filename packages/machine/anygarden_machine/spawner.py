@@ -96,14 +96,6 @@ class SpawnManifest:
     # leaves the engine adapter on its global env / hardcoded default.
     turn_timeout_sec: int | None = None
     sub_rooms: list[dict] = field(default_factory=list)
-    # Issue #73 — which runtime process should host this agent.
-    # ``"python"`` (default) spawns the existing Python ``anygarden-agent``
-    # binary; ``"typescript"`` spawns the Node ``anygarden-agent-ts``
-    # binary (falls back to ``npx -y @anygarden/agent-ts`` when the local
-    # bin isn't on PATH). Existing callers that don't set this field
-    # continue to get the Python runtime — the dataclass default
-    # guarantees backward compatibility.
-    runtime: str = "python"
     # Issue #277 — bearer token for the anygarden self-MCP entry that the
     # cluster baked into ``.codex/config.toml`` (codex) /
     # ``.mcp.json`` (claude-code) / ``.gemini/settings.json`` at frame
@@ -837,9 +829,6 @@ class Spawner:
         ):
             return SpawnResult(success=False, agent_id=agent_id,
                                error="Missing or invalid explicit agent provider")
-        if msg.runtime != "python" and (msg.engine in {"codex-cli", "pi-cli"} or msg.provider is not None or msg.endpoint_configured):
-            return SpawnResult(success=False, agent_id=agent_id,
-                               error="Provider/direct endpoint configuration requires the Python agent runtime")
         if msg.endpoint_configured and not msg.engine_secrets.get("AG_ENGINE_ENDPOINT_CONFIG"):
             return SpawnResult(
                 success=False,
@@ -1004,113 +993,65 @@ class Spawner:
         # didn't provide one (older versions).
         agent_server = self._agent_server_url or msg.server_url
 
-        # Build command. Branch on ``msg.runtime``:
-        #   "python"     → local anygarden-agent (PyPI) with uvx fallback.
-        #   "typescript" → local anygarden-agent-ts (npm) with
-        #                   ``npx -y @anygarden/agent-ts`` fallback.
+        # Build command: local anygarden-agent with uvx fallback.
         #
         # Log which source was picked so operators can later answer
         # the "which binary actually ran?" question without rebuilding
         # the environment. Two different spawns on the same machine
-        # can end up with different binaries (PATH shadowing, uvx/npx
+        # can end up with different binaries (PATH shadowing, uvx
         # cache drift) and the log is our only forensic trail.
-        runtime = msg.runtime or "python"
-        if runtime == "typescript":
-            agent_name = msg.name or f"agent-{agent_id[:8]}"
-            anygarden_agent_ts = (
-                shutil.which("anygarden-agent-ts") if self._base_environment is None
-                else shutil.which("anygarden-agent-ts", path=env.get("PATH", os.defpath))
-            )
-            if anygarden_agent_ts:
-                cmd = [
-                    anygarden_agent_ts,
-                    "--engine",
-                    msg.engine,
-                    "--name",
-                    agent_name,
-                    "--server",
-                    agent_server,
-                ]
-                log.info(
-                    "agent_binary_resolved",
-                    agent_id=agent_id,
-                    runtime="typescript",
-                    source="path",
-                    path=anygarden_agent_ts,
-                )
-            else:
-                cmd = [
-                    "npx",
-                    "-y",
-                    "@anygarden/agent-ts",
-                    "--engine",
-                    msg.engine,
-                    "--name",
-                    agent_name,
-                    "--server",
-                    agent_server,
-                ]
-                log.info(
-                    "agent_binary_resolved",
-                    agent_id=agent_id,
-                    runtime="typescript",
-                    source="npx",
-                    path=None,
-                )
+        #
+        # An integrated node has the agent package installed beside its
+        # own interpreter. Prefer that binary even when its bin directory
+        # was omitted from PATH by the shell that launched the node.
+        sibling_agent = Path(sys.executable).parent / "anygarden-agent"
+        if (
+            self._base_environment is not None
+            and sibling_agent.is_file()
+            and os.access(sibling_agent, os.X_OK)
+        ):
+            anygarden_agent = str(sibling_agent)
+            binary_source = "interpreter_sibling"
         else:
-            # An integrated node has the agent package installed beside its
-            # own interpreter. Prefer that binary even when its bin directory
-            # was omitted from PATH by the shell that launched the node.
-            sibling_agent = Path(sys.executable).parent / "anygarden-agent"
-            if (
-                self._base_environment is not None
-                and sibling_agent.is_file()
-                and os.access(sibling_agent, os.X_OK)
-            ):
-                anygarden_agent = str(sibling_agent)
-                binary_source = "interpreter_sibling"
-            else:
-                anygarden_agent = (
-                    shutil.which("anygarden-agent") if self._base_environment is None
-                    else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
-                )
-                binary_source = "path"
-            if anygarden_agent:
-                cmd = [
-                    anygarden_agent,
-                    "--engine",
-                    msg.engine,
-                    "--name",
-                    msg.name or f"agent-{agent_id[:8]}",
-                    "--server",
-                    agent_server,
-                ]
-                log.info(
-                    "agent_binary_resolved",
-                    agent_id=agent_id,
-                    runtime="python",
-                    source=binary_source,
-                    path=anygarden_agent,
-                )
-            else:
-                # anygarden-agent not in PATH — use uvx to fetch from PyPI
-                cmd = [
-                    "uvx",
-                    "anygarden-agent",
-                    "--engine",
-                    msg.engine,
-                    "--name",
-                    msg.name or f"agent-{agent_id[:8]}",
-                    "--server",
-                    agent_server,
-                ]
-                log.info(
-                    "agent_binary_resolved",
-                    agent_id=agent_id,
-                    runtime="python",
-                    source="uvx",
-                    path=None,
-                )
+            anygarden_agent = (
+                shutil.which("anygarden-agent") if self._base_environment is None
+                else shutil.which("anygarden-agent", path=env.get("PATH", os.defpath))
+            )
+            binary_source = "path"
+        if anygarden_agent:
+            cmd = [
+                anygarden_agent,
+                "--engine",
+                msg.engine,
+                "--name",
+                msg.name or f"agent-{agent_id[:8]}",
+                "--server",
+                agent_server,
+            ]
+            log.info(
+                "agent_binary_resolved",
+                agent_id=agent_id,
+                source=binary_source,
+                path=anygarden_agent,
+            )
+        else:
+            # anygarden-agent not in PATH — use uvx to fetch from PyPI
+            cmd = [
+                "uvx",
+                "anygarden-agent",
+                "--engine",
+                msg.engine,
+                "--name",
+                msg.name or f"agent-{agent_id[:8]}",
+                "--server",
+                agent_server,
+            ]
+            log.info(
+                "agent_binary_resolved",
+                agent_id=agent_id,
+                source="uvx",
+                path=None,
+            )
         if msg.profile_yaml.strip():
             cmd.extend(["--profile", str(profile_path)])
         for room in msg.rooms:

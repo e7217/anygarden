@@ -2,14 +2,8 @@
   "name": "anygarden-monorepo",
   "private": true,
   "workspaces": [
-    "packages/cluster/frontend",
-    "packages/agent-ts"
+    "packages/cluster/frontend"
   ],
-  "scripts": {
-    "test:ts": "npm -w @anygarden/agent-ts test",
-    "build:ts": "npm -w @anygarden/agent-ts run build",
-    "lint:ts": "npm -w @anygarden/agent-ts run lint"
-  },
   "engines": {
     "node": ">=20.0.0"
   }
