@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Optional
 
+import structlog
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -65,6 +66,8 @@ from anygarden.rooms.shared_files import (
     UnsupportedMimeError,
 )
 from anygarden.rooms.unread import compute_has_updates_map, mark_room_read
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/rooms", tags=["rooms"])
 
@@ -1257,27 +1260,34 @@ async def stop_all_agents_in_room(
         capability=Capability.AGENT_WAKE,
     )
 
-    # Find all agent participants in this room
     stmt = (
-        select(Participant)
+        select(Agent.id)
+        .join(Participant, Participant.agent_id == Agent.id)
         .where(Participant.room_id == room_id)
-        .where(Participant.agent_id.isnot(None))
+        .where(Agent.actual_state.in_(("running", "starting", "pending")))
     )
-    participants = (await db.execute(stmt)).scalars().all()
-    agent_ids = [p.agent_id for p in participants]
+    agent_ids = list((await db.execute(stmt)).scalars().unique())
+    # #772 — end the request transaction before stopping. request_stop
+    # writes the whole stop (desired_state included) through its own
+    # session; any lock or pending write left on this session makes that
+    # write wait on us and fail with "database is locked" on SQLite.
+    await db.commit()
 
     lifecycle = request.app.state.agent_lifecycle
-    stopped = []
+    stopped: list[str] = []
+    failed: list[dict[str, str]] = []
     for aid in agent_ids:
-        agent_result = await db.execute(select(Agent).where(Agent.id == aid))
-        agent = agent_result.scalar_one_or_none()
-        if agent and agent.actual_state in ("running", "starting", "pending"):
-            await lifecycle.request_stop(agent.id)
-            agent.desired_state = "stopped"
-            stopped.append(agent.id)
+        try:
+            await lifecycle.request_stop(aid)
+        except Exception as exc:
+            logger.warning(
+                "room.stop_agents.failed", room_id=room_id, agent_id=aid, exc_info=True
+            )
+            failed.append({"id": aid, "error": type(exc).__name__})
+        else:
+            stopped.append(aid)
 
-    await db.commit()
-    return {"stopped": stopped, "count": len(stopped)}
+    return {"stopped": stopped, "failed": failed, "count": len(stopped)}
 
 
 @router.get("/{room_id}/sub-rooms", response_model=list[RoomOut])

@@ -1073,9 +1073,9 @@ async def stop_agent(
         return {"id": agent.id, "actual_state": agent.actual_state}
 
     lifecycle = request.app.state.agent_lifecycle
+    # request_stop commits desired_state/actual_state through its own
+    # session; writing them again here only repeats that write (#772).
     await lifecycle.request_stop(agent.id)
-    agent.desired_state = "stopped"
-    await db.commit()
     await db.refresh(agent)
     return {"id": agent.id, "actual_state": agent.actual_state}
 

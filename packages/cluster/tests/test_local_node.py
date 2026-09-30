@@ -927,3 +927,108 @@ async def test_integrated_mode_stays_silent_about_disabled_local_execution(
         for entry in entries
         if entry["event"] == "startup.local_execution_disabled"
     ]
+
+
+def _bare_backend(tmp_path):
+    """Backend whose loops can run without a database or registration."""
+    owner = NodeOwner(tmp_path / "node")
+    owner.acquire()
+    shutdown = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=node_config(tmp_path / "node"),
+            node_shutdown_callback=lambda: shutdown.append(True),
+        )
+    )
+    return LocalExecutionBackend(app, owner), owner, shutdown
+
+
+@pytest.mark.asyncio
+async def test_transient_frame_error_does_not_shut_down_node(tmp_path, monkeypatch):
+    """#772: one frame failing on a locked DB must not stop the whole node."""
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    handled = []
+
+    async def handle(frame):
+        if frame["n"] == 1:
+            raise OperationalError("UPDATE agents", {}, Exception("database is locked"))
+        handled.append(frame["n"])
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    task = asyncio.create_task(backend._consume())
+    try:
+        for n in (1, 2):
+            backend.queue.put_nowait({"type": "sync_desired_state", "n": n})
+        await asyncio.wait_for(backend.queue.join(), 2)
+        assert handled == [2]
+        assert backend.failed is False
+        assert shutdown == []
+        assert not task.done()
+    finally:
+        backend.queue.put_nowait(None)
+        await asyncio.wait_for(task, 2)
+        owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_ownership_error_in_frame_still_shuts_down_node(tmp_path, monkeypatch):
+    backend, owner, shutdown = _bare_backend(tmp_path)
+
+    async def handle(frame):
+        raise NodeOwnershipError("mapping mismatch")
+
+    monkeypatch.setattr(backend.daemon, "_handle", handle)
+    task = asyncio.create_task(backend._consume())
+    backend.queue.put_nowait({"type": "sync_desired_state"})
+    with pytest.raises(NodeOwnershipError):
+        await asyncio.wait_for(task, 2)
+    assert backend.failed is True
+    assert shutdown == [True]
+    owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_survives_transient_errors(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+    calls = []
+
+    async def ensure_registered():
+        calls.append(True)
+        if len(calls) <= 2:
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+
+    monkeypatch.setattr(backend, "ensure_registered", ensure_registered)
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 3)
+    task = asyncio.create_task(backend._maintain())
+    try:
+        while len(calls) < 4:
+            await asyncio.sleep(0.05)
+        assert backend.failed is False
+        assert shutdown == []
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        owner.release(clean=True)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_gives_up_after_consecutive_failures(tmp_path, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    backend, owner, shutdown = _bare_backend(tmp_path)
+
+    async def ensure_registered():
+        raise OperationalError("SELECT", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr(backend, "ensure_registered", ensure_registered)
+    monkeypatch.setattr(backend, "MAX_MAINTENANCE_FAILURES", 3)
+    with pytest.raises(OperationalError):
+        await asyncio.wait_for(backend._maintain(), 5)
+    assert backend.failed is True
+    assert shutdown == [True]
+    owner.release(clean=True)

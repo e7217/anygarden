@@ -50,6 +50,11 @@ class LocalDaemon(MachineDaemon):
 
 
 class LocalExecutionBackend:
+    # Consecutive failed maintenance ticks tolerated before the node gives
+    # up (#772). Ticks are 0.25 s apart plus the SQLite lock wait, so this
+    # spans far longer than any single writer holds the lock.
+    MAX_MAINTENANCE_FAILURES = 40
+
     def __init__(self, app, owner):
         self.app = app
         self.owner = owner
@@ -161,6 +166,21 @@ class LocalExecutionBackend:
                 return
             await handle_machine_frame(self.app, self.machine_id, frame)
 
+    async def _handle_frame(self, frame: dict) -> None:
+        # #772 — match the remote daemon, which logs a frame it cannot
+        # handle and keeps reading. A transient error (e.g. SQLite
+        # "database is locked") loses one frame; the periodic state report
+        # and lifecycle reconciliation converge the rest. Ownership errors
+        # still stop the node.
+        try:
+            await self.daemon._handle(frame)
+        except NodeOwnershipError:
+            raise
+        except Exception:
+            log.exception(
+                "local_execution.frame_failed", frame_type=frame.get("type")
+            )
+
     def _failed(self, exc: Exception) -> None:
         self.failed = True
         log.error("local_execution.failed", error=type(exc).__name__)
@@ -175,7 +195,7 @@ class LocalExecutionBackend:
                 try:
                     if frame is None:
                         return
-                    await self.daemon._handle(frame)
+                    await self._handle_frame(frame)
                 finally:
                     self.queue.task_done()
         except asyncio.CancelledError:
@@ -187,15 +207,31 @@ class LocalExecutionBackend:
     async def _maintain(self) -> None:
         try:
             tick = 0
+            failures = 0
             while True:
                 if self.owner.stop_requested():
                     callback = getattr(self.app.state, "node_shutdown_callback", None)
                     if callback is not None:
                         callback()
                     return
-                await self.ensure_registered()
-                if self.ready and tick % 20 == 0:
-                    await self.daemon._report_actual_state()
+                try:
+                    await self.ensure_registered()
+                    if self.ready and tick % 20 == 0:
+                        await self.daemon._report_actual_state()
+                    failures = 0
+                except NodeOwnershipError:
+                    raise
+                except Exception:
+                    # A busy database must not end the node; the next tick
+                    # retries. Only a persistent failure is fatal.
+                    failures += 1
+                    if failures >= self.MAX_MAINTENANCE_FAILURES:
+                        raise
+                    log.warning(
+                        "local_execution.maintenance_failed",
+                        failures=failures,
+                        exc_info=True,
+                    )
                 tick += 1
                 await asyncio.sleep(0.25)
         except asyncio.CancelledError:
