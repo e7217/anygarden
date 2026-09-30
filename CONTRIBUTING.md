@@ -71,6 +71,13 @@ make test    # pytest across all Python packages
 make lint    # ruff across all packages
 ```
 
+The cluster suite takes a few minutes when run one test at a time. To use all
+cores, as CI does, run it with `pytest-xdist`:
+
+```bash
+cd packages/cluster && uv run pytest -n auto
+```
+
 For frontend changes, also type-check and bundle:
 
 ```bash
