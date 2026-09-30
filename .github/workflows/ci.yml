@@ -56,7 +56,8 @@ jobs:
 
       - name: Test cluster
         working-directory: packages/cluster
-        run: uv run pytest -x
+        # ~2,000 tests; one worker per runner core (#753).
+        run: uv run pytest -x -n auto
 
   test-windows:
     name: Test (Windows native)
