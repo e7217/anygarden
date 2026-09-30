@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import html
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
+from anygarden.db.models import Agent, Participant, Room, User
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.rooms.authorization import accessible_room_ids
 
@@ -33,6 +36,78 @@ def _fts_created_at_to_iso(value: object) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
+
+# FTS highlight() markers. Control characters cannot come from chat input
+# the way a literal "<mark>" can, so the snippet can be HTML-escaped first
+# and only these markers turned back into markup.
+_HL_OPEN = "\x02"
+_HL_CLOSE = "\x03"
+_MENTION_TOKEN = re.compile(r"<@user:([^>]+)>|<#room:([^>]+)>")
+
+
+def _render_snippet(
+    raw: str, users: dict[str, str], rooms: dict[str, str]
+) -> str:
+    """Turn a marker-highlighted FTS snippet into safe HTML.
+
+    Message text is escaped so user content never becomes markup; mention
+    tokens become ``@name`` / ``#room`` so results read like the chat.
+    """
+
+    def mention(match: re.Match[str]) -> str:
+        if match.group(1) is not None:
+            return f"@{users.get(match.group(1), '?')}"
+        return f"#{rooms.get(match.group(2), '?')}"
+
+    # Markers can land inside a token when the query hits the token text;
+    # strip them there so the token still resolves.
+    cleaned = re.sub(
+        r"<[@#][^>]*>",
+        lambda m: _MENTION_TOKEN.sub(
+            mention, m.group(0).replace(_HL_OPEN, "").replace(_HL_CLOSE, "")
+        ),
+        raw,
+    )
+    return (
+        html.escape(cleaned, quote=False)
+        .replace(_HL_OPEN, "<mark>")
+        .replace(_HL_CLOSE, "</mark>")
+    )
+
+
+async def _mention_names(
+    db: AsyncSession, snippets: list[str], visible_room_ids: set[str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    user_ids: set[str] = set()
+    room_ids: set[str] = set()
+    for snippet in snippets:
+        plain = snippet.replace(_HL_OPEN, "").replace(_HL_CLOSE, "")
+        for match in _MENTION_TOKEN.finditer(plain):
+            if match.group(1) is not None:
+                user_ids.add(match.group(1))
+            elif match.group(2) in visible_room_ids:
+                # Only name rooms the caller can already see.
+                room_ids.add(match.group(2))
+    users: dict[str, str] = {}
+    if user_ids:
+        rows = await db.execute(
+            select(Participant.id, Agent.name, User.display_name, User.email)
+            .outerjoin(Agent, Agent.id == Participant.agent_id)
+            .outerjoin(User, User.id == Participant.user_id)
+            .where(Participant.id.in_(user_ids))
+        )
+        for pid, agent_name, display_name, email in rows:
+            name = agent_name or display_name or email
+            if name:
+                users[pid] = name
+    rooms: dict[str, str] = {}
+    if room_ids:
+        rows = await db.execute(
+            select(Room.id, Room.name).where(Room.id.in_(room_ids))
+        )
+        rooms = {rid: name for rid, name in rows}
+    return users, rooms
+
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -83,7 +158,7 @@ async def search_messages(
                 m.parent_message_id,
                 m.root_message_id,
                 m.seq,
-                highlight(messages_fts, 0, '<mark>', '</mark>') as snippet
+                highlight(messages_fts, 0, char(2), char(3)) as snippet
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.message_id
             JOIN rooms r ON r.id = messages_fts.room_id
@@ -110,7 +185,7 @@ async def search_messages(
                 m.parent_message_id,
                 m.root_message_id,
                 m.seq,
-                highlight(messages_fts, 0, '<mark>', '</mark>') as snippet
+                highlight(messages_fts, 0, char(2), char(3)) as snippet
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.message_id
             WHERE messages_fts MATCH :query
@@ -133,6 +208,9 @@ async def search_messages(
             status_code=503, detail="Search index unavailable"
         ) from exc
 
+    users, rooms = await _mention_names(
+        db, [row.snippet for row in rows], set(allowed_room_ids)
+    )
     return [
         SearchResult(
             message_id=row.message_id,
@@ -143,7 +221,7 @@ async def search_messages(
             seq=row.seq,
             content=row.content,
             created_at=_fts_created_at_to_iso(row.created_at),
-            snippet=row.snippet,
+            snippet=_render_snippet(row.snippet, users, rooms),
         )
         for row in rows
     ]

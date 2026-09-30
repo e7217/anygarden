@@ -69,7 +69,7 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
             onChange={e => setQuery(e.target.value)}
             placeholder={t('chat.searchPlaceholder')}
             aria-label={t('chat.searchMessages')}
-            className="min-w-0 flex-1 bg-transparent px-2 py-1 text-base placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none! md:text-sm"
+            className="min-w-0 flex-1 bg-transparent px-2 py-1 text-base placeholder:text-[var(--color-foreground-subtle)] focus-visible:outline-none md:text-sm"
           />
           <DialogPrimitive.Close aria-label={t('chat.closeSearch')} className="flex h-11 w-11 shrink-0 items-center justify-center rounded hover:bg-[var(--color-surface-hover)]">
             <X aria-hidden="true" className="h-4 w-4" />
@@ -92,7 +92,7 @@ export default function SearchDialog({ open, onClose, projectId }: SearchDialogP
               }}
             >
               <div
-                className="text-sm line-clamp-2"
+                className="text-sm line-clamp-2 [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-brand-tint-bg)] [&_mark]:px-0.5 [&_mark]:text-[var(--color-brand-tint-text)]"
                 dangerouslySetInnerHTML={{ __html: r.snippet }}
               />
               <div className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-0.5">

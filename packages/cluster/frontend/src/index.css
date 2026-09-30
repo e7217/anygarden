@@ -257,10 +257,13 @@ code, pre, kbd, samp {
   font-family: ui-monospace, "SF Mono", "Menlo", "Consolas", monospace;
 }
 
-/* Keyboard focus ring */
-:focus-visible {
-  outline: 2px solid var(--color-brand-focus);
-  outline-offset: 2px;
+/* Keyboard focus ring. Layered so components that draw their own ring
+   (focus-visible:outline-none + ring) are not double-outlined. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--color-brand-focus);
+    outline-offset: 2px;
+  }
 }
 
 /* Scrollbar follows the selected surface theme. */
