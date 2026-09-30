@@ -12,7 +12,9 @@
  *   "Copied" feedback. Replaces the previous menu-level
  *   ``onCopyId`` handler, which silently swallowed failures in
  *   insecure contexts.
- * - Engine, State — read-only.
+ * - Engine — read-only, with a Change button that opens
+ *   ``EngineChangeDialog`` when the caller supports it (#769).
+ * - State — read-only.
  *
  * The Copy ID button falls back gracefully when the clipboard API
  * rejects (insecure context, denied permissions): it selects the
@@ -32,6 +34,7 @@ import { agentStatusLabel, deriveAgentOnline } from '@/lib/agent-liveness'
 import type { Agent, EngineCatalog } from '@/hooks/useAgents'
 import type { ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import AvatarPickerPanel from '@/components/agent-settings/AvatarPickerPanel'
+import EngineChangeDialog, { type EngineChange } from '@/components/agent-settings/EngineChangeDialog'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 type CopyState = 'idle' | 'ok' | 'fallback' | 'error'
@@ -94,14 +97,18 @@ interface Props {
    *  so existing tests that don't care about config editing keep
    *  passing; when absent, the rows render in read-only fallback. */
   fetchEngineCatalog?: (engine: string) => Promise<EngineCatalog | null>
+  /** #769 — both are needed for the engine Change button. */
+  changeAgentEngine?: (id: string, change: EngineChange) => Promise<Agent>
+  availableEngines?: string[]
   connectionState?: ConnectionState | null
   /** #716 — latest-turn health row rendered right after the process state. */
   recentTurn?: ReactNode
 }
 
-export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, connectionState, recentTurn }: Props) {
+export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, changeAgentEngine, availableEngines, connectionState, recentTurn }: Props) {
   const { t } = useLocale()
   const [showPicker, setShowPicker] = useState(false)
+  const [engineDialogOpen, setEngineDialogOpen] = useState(false)
   const [nameDraft, setNameDraft] = useState(agent?.name ?? '')
   const [nameSaving, setNameSaving] = useState(false)
   const [nameError, setNameError] = useState<string | null>(null)
@@ -187,6 +194,7 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
   }
 
   const machineOffline = agent.machine_online === false
+  const canChangeEngine = !!changeAgentEngine && (availableEngines ?? []).some(engine => engine !== agent.engine)
   const agentOnline = deriveAgentOnline(agent.actual_state, { machineOffline })
   const rawDisplayState = agentStatusLabel(agent.actual_state, { machineOffline })
   const stateLabels: Record<string, string> = {
@@ -474,6 +482,16 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
         <dt className="text-[var(--color-foreground-muted)]">{t('admin.overview.engine')}</dt>
         <dd className="flex items-center gap-2 text-[var(--color-foreground)]">
           <span>{agent.engine}</span>
+          {canChangeEngine ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEngineDialogOpen(true)}
+              data-testid="overview-change-engine"
+            >
+              {t('admin.overview.changeEngine')}
+            </Button>
+          ) : null}
           {catalogState.kind === 'ready' && catalogState.catalog.deprecated ? (
             <Badge
               variant="outline"
@@ -572,6 +590,16 @@ export default function OverviewPanel({ agent, updateAgent, fetchEngineCatalog, 
         </dd>
         {recentTurn}
       </dl>
+      {canChangeEngine ? (
+        <EngineChangeDialog
+          open={engineDialogOpen}
+          onOpenChange={setEngineDialogOpen}
+          currentEngine={agent.engine}
+          engines={availableEngines ?? []}
+          fetchEngineCatalog={fetchEngineCatalog}
+          onSubmit={async change => { await changeAgentEngine!(agent.id, change) }}
+        />
+      ) : null}
     </div>
   )
 }

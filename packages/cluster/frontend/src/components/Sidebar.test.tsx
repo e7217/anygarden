@@ -90,6 +90,7 @@ vi.mock('@/hooks/useAgents', () => ({
     fetchAttachedSkills: agentsMockState.fetchAttachedSkills,
     fetchSkillPreview: agentsMockState.fetchSkillPreview,
     fetchEngineCatalog: agentsMockState.fetchEngineCatalog,
+    availableEngines: [],
   }),
 }))
 vi.mock('@/hooks/useRooms', () => ({
