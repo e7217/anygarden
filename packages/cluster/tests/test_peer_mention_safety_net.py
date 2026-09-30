@@ -105,12 +105,12 @@ class TestPeerMentionStamping:
                 assert f"<@user:{peer_pid}>" in msg["content"]
 
     @pytest.mark.asyncio
-    async def test_agent_second_peer_mention_in_same_turn_stripped(
+    async def test_agent_calling_the_same_peer_twice_is_redundant(
         self, ws_env
     ) -> None:
-        """Second peer-ask in the same user turn exceeds
-        ``MAX_PEER_DEPTH=1`` → mention is stripped, ``peer_blocked``
-        flag is set, content remains readable."""
+        """A second call to a peer the same user turn already called is
+        dropped as redundant (#756): the peer is answering the first call.
+        Content remains readable."""
         app = ws_env["app"]
         sf = ws_env["session_factory"]
         room = ws_env["room"]
@@ -158,22 +158,23 @@ class TestPeerMentionStamping:
                 }))
                 first = json.loads(ws.receive_text())
                 assert first["metadata"]["peer_depth"] == 1
-                # Second peer-ask without a human turn-break in between
-                # exceeds MAX_PEER_DEPTH and gets the mention stripped.
+                # Second call to the same peer without a human turn-break
+                # in between would wake it twice, so the mention is stripped.
                 ws.send_text(json.dumps({
                     "type": "send",
                     "content": f"<@user:{peer_pid}> 2차 질문",
                 }))
                 second = json.loads(ws.receive_text())
                 meta = second.get("metadata") or {}
-                assert meta.get("peer_blocked") is True
+                assert meta.get("peer_redundant") is True
+                assert "peer_blocked" not in meta
                 # Content still flows through (so the user sees the
                 # response) but the peer-mention token is gone.
                 assert f"<@user:{peer_pid}>" not in second["content"]
                 assert "2차 질문" in second["content"]
                 # #743 — the UI shows which call was not delivered.
                 assert meta.get("peer_call_undelivered") == [
-                    {"participant_id": peer_pid, "reason": "limit_reached"}
+                    {"participant_id": peer_pid, "reason": "already_answering"}
                 ]
 
     @pytest.mark.asyncio
@@ -426,7 +427,8 @@ class TestUndeliveredPeerCall:
                 client, room.id, sender_token, f"<@user:{third_pid}> 첫 질문", "첫 질문",
             )
             assert first["metadata"].get("peer_depth") == 1
-            # peer is already answering; third would exceed the depth cap.
+            # peer is already answering; third was called by the first
+            # message and is answering that call.
             msg = _agent_send_and_capture(
                 client, room.id, sender_token,
                 f"<@user:{peer_pid}> <@user:{third_pid}> 두 분 의견도 주세요", "의견도 주세요",
@@ -436,7 +438,7 @@ class TestUndeliveredPeerCall:
         assert "두 분 의견도 주세요" in msg["content"]
         assert meta.get("peer_call_undelivered") == [
             {"participant_id": peer_pid, "reason": "already_answering"},
-            {"participant_id": third_pid, "reason": "limit_reached"},
+            {"participant_id": third_pid, "reason": "already_answering"},
         ]
 
     @pytest.mark.asyncio
@@ -493,7 +495,7 @@ class TestAgentEveryone:
         assert sender_pid not in {m["id"] for m in meta["mentions"]}
 
     @pytest.mark.asyncio
-    async def test_second_agent_everyone_in_same_turn_is_blocked(self, ws_env) -> None:
+    async def test_second_agent_everyone_in_same_turn_is_redundant(self, ws_env) -> None:
         app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
         sender_token, _sender_pid, _peer_pid = await _seed_sender_and_peer(sf, room)
 
@@ -507,8 +509,124 @@ class TestAgentEveryone:
             )
 
         meta = msg.get("metadata") or {}
-        assert meta.get("peer_blocked") is True
+        assert meta.get("peer_redundant") is True
         assert "mentions" not in meta
         assert meta.get("peer_call_undelivered") == [
-            {"participant_id": _peer_pid, "reason": "limit_reached"}
+            {"participant_id": _peer_pid, "reason": "already_answering"}
         ]
+
+
+class TestPeerCallHop:
+    """#756 — depth is the caller's hop; the budget counts called peers."""
+
+    @pytest.mark.asyncio
+    async def test_one_message_to_two_peers_passes_and_takes_two_slots(
+        self, ws_env
+    ) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token,
+                f"<@user:{peer_pid}> <@user:{third_pid}> 둘 다 봐 주세요", "둘 다",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_depth") == 1
+        assert "peer_call_undelivered" not in meta
+        budget = app.state.peer_handoff_budget
+        assert budget.remaining(room.id) == budget._capacity - 2
+        assert budget.peer_called(room.id) == {peer_pid, third_pid}
+
+    @pytest.mark.asyncio
+    async def test_same_agent_may_call_another_peer_later_in_the_turn(
+        self, ws_env
+    ) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 먼저", "먼저",
+            )
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{third_pid}> 다음", "다음",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_depth") == 1
+        assert "peer_blocked" not in meta
+
+    @pytest.mark.asyncio
+    async def test_called_peer_calling_on_is_depth_blocked(self, ws_env) -> None:
+        """The called peer's own call is hop 2, even without a turn proof."""
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+        peer_token = await _add_token(sf, peer_pid)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            _agent_send_and_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 도와줘", "도와줘",
+            )
+            msg = _agent_send_and_capture(
+                client, room.id, peer_token, f"<@user:{third_pid}> 이것도 봐 줘", "이것도",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_blocked") is True
+        assert meta.get("peer_depth") == 2
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": third_pid, "reason": "limit_reached"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_total_cap_counts_heads(self, ws_env) -> None:
+        from anygarden.orchestration.rules import PeerHandoffBudget
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+        app.state.peer_handoff_budget = PeerHandoffBudget(capacity=1)
+
+        with TestClient(app) as client:
+            _user_send(client, room.id, ws_env["token"], "새 질문")
+            msg = _agent_send_and_capture(
+                client, room.id, sender_token,
+                f"<@user:{peer_pid}> <@user:{third_pid}> 둘 다", "둘 다",
+            )
+
+        meta = msg.get("metadata") or {}
+        assert meta.get("peer_blocked") is True
+        assert [c["participant_id"] for c in meta["peer_call_undelivered"]] == [
+            peer_pid, third_pid,
+        ]
+
+
+async def _add_agent(sf, room, name: str) -> str:
+    async with sf() as db:
+        agent = Agent(name=name, engine="codex", actual_state="running")
+        db.add(agent)
+        await db.flush()
+        part = Participant(room_id=room.id, agent_id=agent.id, role="member")
+        db.add(part)
+        await db.commit()
+        return part.id
+
+
+async def _add_token(sf, participant_id: str) -> str:
+    async with sf() as db:
+        part = await db.get(Participant, participant_id)
+        plain = generate_token()
+        token_hash, lookup_hint = hash_agent_token(plain)
+        db.add(AgentToken(
+            agent_id=part.agent_id, token_hash=token_hash, lookup_hint=lookup_hint,
+        ))
+        await db.commit()
+        return plain

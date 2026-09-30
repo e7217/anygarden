@@ -116,6 +116,14 @@ class PendingPeerAsks:
     def pending(self, agent_id: str, room_id: str) -> list[PeerAsk]:
         return list(self._drop_expired((agent_id, room_id)))
 
+    def pending_in_room(self, room_id: str) -> list[tuple[str, PeerAsk]]:
+        """Every caller's live asks in *room_id*, as ``(agent_id, ask)``."""
+        return [
+            (key[0], ask)
+            for key in [k for k in self._asks if k[1] == room_id]
+            for ask in self._drop_expired(key)
+        ]
+
     def _drop_expired(self, key: tuple[str, str]) -> list[PeerAsk]:
         asks = self._asks.get(key, [])
         cutoff = self._clock() - self._ttl
@@ -153,6 +161,44 @@ class PeerAskDecision:
     since_turn_start: list[dict[str, Any]] = field(default_factory=list)
 
 
+async def turn_hop(db: AsyncSession, turn: AgentTurn | None) -> int:
+    """How deep a peer call made from *turn* goes (#756).
+
+    A call from a turn that a peer's call started is hop 2; any other
+    turn (a person's message, a delegation, a round-robin or handoff
+    nomination, or no known turn) calls at hop 1.
+    """
+    if turn is None or turn.trigger_message_id is None:
+        return 1
+    trigger = await db.get(Message, turn.trigger_message_id)
+    if trigger is None or trigger.participant_id is None:
+        return 1
+    author = await db.get(Participant, trigger.participant_id)
+    if author is None or author.agent_id is None:
+        return 1
+    meta = trigger.extra_metadata or {}
+    if "delegation_target_participant_id" in meta or meta.get("delegation_id"):
+        return 1
+    called = {
+        str(m.get("id"))
+        for m in meta.get("mentions") or []
+        if isinstance(m, dict) and m.get("type") == "user"
+    }
+    return 2 if turn.target_participant_id in called else 1
+
+
+async def sender_hop(
+    db: AsyncSession, *, request_id: str | None, participant_id: str
+) -> int:
+    """Hop of a reply that echoes *request_id*, trusting only the sender's turn."""
+    if not request_id:
+        return 1
+    turn = await db.get(AgentTurn, request_id)
+    if turn is None or turn.target_participant_id != participant_id:
+        return 1
+    return await turn_hop(db, turn)
+
+
 async def check_peer_ask(
     db: AsyncSession,
     *,
@@ -160,12 +206,15 @@ async def check_peer_ask(
     agent_id: str,
     room_id: str,
     target_pid: str,
+    pending: PendingPeerAsks | None = None,
 ) -> PeerAskDecision:
     """Decide whether *agent_id* may ask *target_pid* in *room_id* now.
 
     Reads the peer budget without consuming it: the slot is spent when
     the scheduled ask passes the WS safety net, so a tool call whose
-    reply never goes out costs nothing.
+    reply never goes out costs nothing. Asks already scheduled in the
+    room hold their slots here (#756), so an ask this returns as
+    ``scheduled`` still fits when it is posted.
     """
     caller = (
         await db.execute(
@@ -209,10 +258,19 @@ async def check_peer_ask(
     )
 
     if budget is not None:
-        if target.id in budget.woken(room_id):
+        # Re-asking a target this caller already scheduled replaces that
+        # ask, so it neither holds a second slot nor counts as a repeat.
+        reserved = [
+            (aid, ask)
+            for aid, ask in (pending.pending_in_room(room_id) if pending else [])
+            if not (aid == agent_id and ask.target_pid == target.id)
+        ]
+        if target.id in budget.woken(room_id) | budget.peer_called(room_id):
             decision.status = "rejected"
             decision.reason = REASON_ALREADY_ANSWERING
-        elif budget.would_block(room_id):
+        elif budget.would_block(
+            room_id, hop=await turn_hop(db, turn), reserved=len(reserved)
+        ):
             decision.status = "rejected"
             decision.reason = REASON_LIMIT_REACHED
     if decision.status == "rejected":

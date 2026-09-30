@@ -1224,6 +1224,7 @@ async def ask_peer(
     decision = await check_peer_ask(
         db,
         budget=budget,
+        pending=pending,
         agent_id=agent_id,
         room_id=room_id,
         target_pid=target_pid,

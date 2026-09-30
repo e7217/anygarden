@@ -187,6 +187,18 @@ class TestPeerMentionSafetyNet:
         budget.reset("room-1")
         assert budget.woken("room-1") == frozenset()
 
+    def test_peer_handoff_budget_tracks_peer_called_participants(self) -> None:
+        # #756 — peers the current user turn already called are remembered
+        # (cumulatively) until the next user turn resets the budget.
+        budget = PeerHandoffBudget(capacity=8)
+        assert budget.peer_called("room-1") == frozenset()
+        budget.mark_peer_called("room-1", ["p1"])
+        budget.mark_peer_called("room-1", ["p2"])
+        assert budget.peer_called("room-1") == {"p1", "p2"}
+        assert budget.peer_called("room-2") == frozenset()
+        budget.reset("room-1")
+        assert budget.peer_called("room-1") == frozenset()
+
     def test_peer_handoff_budget_consume_count_more_than_remaining(self) -> None:
         budget = PeerHandoffBudget(capacity=3)
         assert budget.consume("room-1", count=4) is False
