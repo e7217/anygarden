@@ -804,6 +804,9 @@ class TestAgentStopEndpoint:
     onto before the machine's next periodic report.
     """
 
+    # #772 — a file DB gives the request and lifecycle sessions separate
+    # connections, so a write left on the request session would lock.
+    @pytest.mark.parametrize("agents_env", ["memory", "file"], indirect=True)
     @pytest.mark.asyncio
     async def test_stop_sets_actual_state_stopping(self, agents_env) -> None:
         client = agents_env["client"]
