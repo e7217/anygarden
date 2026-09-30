@@ -22,12 +22,14 @@ from __future__ import annotations
 import json
 
 import pytest
+from sqlalchemy import select
 from starlette.testclient import TestClient
 
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.db.models import (
     Agent,
     AgentToken,
+    AgentTurn,
     Participant,
 )
 
@@ -630,3 +632,152 @@ async def _add_token(sf, participant_id: str) -> str:
         ))
         await db.commit()
         return plain
+
+
+def _send_capture(client, room_id: str, token: str, content: str, *, thread_root_id=None) -> dict:
+    """Send *content* (optionally as a thread reply) and return its echo."""
+    frame: dict = {"type": "send", "content": content}
+    if thread_root_id is not None:
+        frame["thread_root_id"] = thread_root_id
+    with client.websocket_connect(
+        f"/ws/rooms/{room_id}", subprotocols=["anygarden.v1", f"bearer.{token}"],
+    ) as ws:
+        ws.receive_text()  # welcome
+        ws.send_text(json.dumps(frame))
+        for _ in range(10):
+            msg = json.loads(ws.receive_text())
+            if msg.get("type") == "message" and msg.get("root_message_id") == thread_root_id:
+                return msg
+    pytest.fail("send was never echoed back")  # pragma: no cover
+
+
+async def _turn_targets(sf, trigger_message_id: str) -> set[str]:
+    async with sf() as db:
+        turns = (
+            await db.scalars(
+                select(AgentTurn).where(AgentTurn.trigger_message_id == trigger_message_id)
+            )
+        ).all()
+    return {t.target_participant_id for t in turns}
+
+
+class TestThreadReplySafetyNet:
+    """#763 — an agent's thread reply is held to the same peer-mention
+    safety net as a main-channel reply. Since #737 peer conversations
+    live in threads, so skipping the net there bypassed the hop and
+    budget caps entirely."""
+
+    @pytest.mark.asyncio
+    async def test_hop2_agent_thread_mention_is_depth_blocked(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+        peer_token = await _add_token(sf, peer_pid)
+
+        with TestClient(app) as client:
+            root = _send_capture(client, room.id, ws_env["token"], "새 질문")
+            _send_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 도와줘",
+                thread_root_id=root["id"],
+            )
+            msg = _send_capture(
+                client, room.id, peer_token, f"<@user:{third_pid}> 이것도 봐 줘",
+                thread_root_id=root["id"],
+            )
+
+        meta = msg.get("metadata") or {}
+        assert f"<@user:{third_pid}>" not in msg["content"]
+        assert meta.get("peer_blocked") is True
+        assert meta.get("peer_depth") == 2
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": third_pid, "reason": "limit_reached"}
+        ]
+        assert third_pid not in await _turn_targets(sf, msg["id"])
+
+    @pytest.mark.asyncio
+    async def test_thread_mention_consumes_turn_budget(self, ws_env) -> None:
+        from anygarden.orchestration.rules import PeerHandoffBudget
+
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+        third_pid = await _add_agent(sf, room, "third")
+        app.state.peer_handoff_budget = PeerHandoffBudget(capacity=1)
+
+        with TestClient(app) as client:
+            root = _send_capture(client, room.id, ws_env["token"], "새 질문")
+            first = _send_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 먼저",
+                thread_root_id=root["id"],
+            )
+            second = _send_capture(
+                client, room.id, sender_token, f"<@user:{third_pid}> 다음",
+                thread_root_id=root["id"],
+            )
+
+        assert (first.get("metadata") or {}).get("peer_depth") == 1
+        assert peer_pid in await _turn_targets(sf, first["id"])
+        meta = second.get("metadata") or {}
+        assert meta.get("peer_blocked") is True
+        assert third_pid not in await _turn_targets(sf, second["id"])
+
+    @pytest.mark.asyncio
+    async def test_thread_mention_to_already_called_peer_is_redundant(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            root = _send_capture(client, room.id, ws_env["token"], "새 질문")
+            _send_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 먼저",
+                thread_root_id=root["id"],
+            )
+            again = _send_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 한 번 더",
+                thread_root_id=root["id"],
+            )
+
+        meta = again.get("metadata") or {}
+        assert meta.get("peer_redundant") is True
+        assert meta.get("peer_call_undelivered") == [
+            {"participant_id": peer_pid, "reason": "already_answering"}
+        ]
+        assert peer_pid not in await _turn_targets(sf, again["id"])
+
+    @pytest.mark.asyncio
+    async def test_hop1_agent_thread_mention_still_wakes(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            root = _send_capture(client, room.id, ws_env["token"], "새 질문")
+            msg = _send_capture(
+                client, room.id, sender_token, f"<@user:{peer_pid}> 의견 줘",
+                thread_root_id=root["id"],
+            )
+
+        meta = msg.get("metadata") or {}
+        assert f"<@user:{peer_pid}>" in msg["content"]
+        assert meta.get("peer_depth") == 1
+        assert "peer_blocked" not in meta
+        assert peer_pid in await _turn_targets(sf, msg["id"])
+        assert peer_pid in app.state.peer_handoff_budget.peer_called(room.id)
+
+    @pytest.mark.asyncio
+    async def test_human_thread_mention_unaffected(self, ws_env) -> None:
+        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+        _sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+
+        with TestClient(app) as client:
+            root = _send_capture(client, room.id, ws_env["token"], "새 질문")
+            before = app.state.peer_handoff_budget.remaining(room.id)
+            msg = _send_capture(
+                client, room.id, ws_env["token"],
+                f"<@user:{sender_pid}> <@user:{peer_pid}> 둘 다 봐 줘",
+                thread_root_id=root["id"],
+            )
+
+        meta = msg.get("metadata") or {}
+        assert "peer_blocked" not in meta
+        assert "peer_depth" not in meta
+        assert app.state.peer_handoff_budget.remaining(room.id) == before
+        assert {sender_pid, peer_pid} <= await _turn_targets(sf, msg["id"])
