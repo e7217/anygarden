@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, type CSSProperties } from 'react'
 import { useModalDrawer } from '@/hooks/useModalDrawer'
 import { X } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -6,6 +6,7 @@ import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import TasksSection from '@/components/right-rail/TasksSection'
 import FilesSection from '@/components/right-rail/FilesSection'
 import GoalsSection from '@/components/right-rail/GoalsSection'
+import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 import type { Participant } from '@/pages/ChatPage'
 import { useLocale } from '@/i18n/LocaleProvider'
 
@@ -39,7 +40,7 @@ export default function RightContextRail({
   onClose,
 }: RightContextRailProps) {
   const { t } = useLocale()
-  const { collapsed } = useRightSidebarLayout()
+  const { collapsed, width } = useRightSidebarLayout()
   const panelRef = useRef<HTMLElement>(null)
   const { desktop, active: drawerActive } = useModalDrawer({ open: open && !!roomId, onClose, panelRef, desktopMinWidth: 1024 })
   const hidden = desktop ? collapsed : !open
@@ -82,20 +83,25 @@ export default function RightContextRail({
         aria-hidden={hidden ? true : undefined}
         inert={hidden}
         aria-label={t('chat.contextRail')}
+        style={{ '--right-rail-w': `${width}px` } as CSSProperties}
         // #329 — width is staged across breakpoints so the rail no
         // longer eats a fixed 384px below xl: w-72 (288px) on the
         // mobile drawer and md desktop, w-80 (320px) on lg, full
-        // w-96 (384px) only at xl+.
+        // w-96 (384px) only at xl+. #760 — desktop width is now the
+        // user's, shared with ThreadPanel through ``--right-rail-w``
+        // and capped at 40vw so a width saved on a wide screen cannot
+        // crush the chat column on a narrow one.
         className={`
           fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-72 flex-col border-l border-[var(--color-border)] bg-[var(--color-surface-alt)]
-          transform transition-all duration-200 ease-out
+          transform transition-all duration-200 ease-out data-[resizing]:transition-none
           ${open ? 'translate-x-0 shadow-deep' : 'translate-x-full'}
           ${collapsed
             ? 'lg:translate-x-full lg:w-0 lg:overflow-hidden lg:border-l-0'
-            : 'lg:static lg:z-auto lg:translate-x-0 lg:w-80'}
+            : 'lg:relative lg:z-auto lg:translate-x-0 lg:w-[var(--right-rail-w)] lg:max-w-[40vw]'}
         `}
       >
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
+        {!collapsed && <RailResizeHandle panelRef={panelRef} controls="room-context-rail" />}
+        <div data-testid="right-rail-header" className="flex h-14 lg:h-[var(--room-header-h,3.5rem)] shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
           <h2 className="text-sm font-semibold text-[var(--color-foreground-muted)]">
             {t('chat.context')}
           </h2>

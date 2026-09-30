@@ -162,7 +162,7 @@ export default function RoomHeader({
     // Container query, not a viewport breakpoint: opening the thread
     // panel narrows this column while the viewport is unchanged, so
     // ``sm:``/``lg:`` cannot see the squeeze that collapsed the title.
-    <div className="@container/header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div data-testid="room-header" className="@container/header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
       {/* Use the chat column's width, which also changes when the context
           rail or thread panel opens. On narrow columns, controls keep the
           first row and status moves below the room title. */}

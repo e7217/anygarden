@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type CSSProperties } from 'react'
 import { X, MessagesSquare } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
@@ -9,6 +9,8 @@ import type { MentionOption } from '@/components/MentionPopover'
 import { useRoomFiles } from '@/hooks/useRoomFiles'
 import { threadDraftKey } from '@/lib/composerDrafts'
 import { useLocale } from '@/i18n/LocaleProvider'
+import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
+import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 
 interface ThreadPanelProps {
   /** The top-level message the thread hangs off. */
@@ -56,6 +58,8 @@ export default function ThreadPanel({
 }: ThreadPanelProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLElement>(null)
+  const { width } = useRightSidebarLayout()
   const { files: roomFiles } = useRoomFiles(roomId)
 
   // ESC closes the panel, matching the rail's drawer behaviour.
@@ -85,21 +89,26 @@ export default function ThreadPanel({
       />
 
       <aside
+        ref={panelRef}
+        id="thread-panel"
         data-testid="thread-panel-root"
         aria-label={t('chat.thread')}
         // Width staging mirrors ``RightContextRail`` (#329) because the
         // two occupy the same slot — a thread must not resize the chat
-        // column relative to the rail it replaced.
+        // column relative to the rail it replaced. #760 — so they share
+        // the user-set ``--right-rail-w`` as well.
+        style={{ '--right-rail-w': `${width}px` } as CSSProperties}
         className="
           fixed inset-y-0 right-0 z-40 flex h-full min-w-0 w-full flex-col
           border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-deep
           sm:w-96
-          lg:static lg:z-auto lg:w-80 lg:shadow-none xl:w-96
+          lg:relative lg:z-auto lg:w-[var(--right-rail-w)] lg:max-w-[40vw] lg:shadow-none
         "
       >
+        <RailResizeHandle panelRef={panelRef} controls="thread-panel" />
         {/* Header carries the same brand tint the inline layout uses,
             so both surfaces read as one feature rather than two. */}
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-brand-tint-bg)] px-3">
+        <div data-testid="thread-panel-header" className="flex h-12 lg:h-[var(--room-header-h,3.5rem)] shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-brand-tint-bg)] px-3">
           <div className="flex min-w-0 items-center gap-2">
             <MessagesSquare className="h-4 w-4 shrink-0 text-[var(--color-brand-tint-text)]" />
             <h2 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--color-brand-tint-text)]">
