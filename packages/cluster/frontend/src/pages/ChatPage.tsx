@@ -7,7 +7,6 @@ import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import RoomArtifactsDialog from '@/components/RoomArtifactsDialog'
 import RoomActivityDialog from '@/components/RoomActivityDialog'
-import TypingIndicator from '@/components/TypingIndicator'
 import ManageRoomAgentsDialog from '@/components/ManageRoomAgentsDialog'
 import CreateSubRoomDialog from '@/components/CreateSubRoomDialog'
 import RoomEditDialog from '@/components/RoomEditDialog'
@@ -636,13 +635,6 @@ function LocalChatPage() {
                     )
                   : undefined
               }
-            />
-            <TypingIndicator
-              typingUsers={typingUsers}
-              typingStages={typingStages}
-              typingProgress={typingProgress}
-              participants={participants}
-              myParticipantId={myParticipantId}
             />
             <MessageInput
               onSend={send}
