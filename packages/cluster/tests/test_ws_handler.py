@@ -266,6 +266,39 @@ class TestWSEndpoint:
                 assert closed.value.code == 1011
 
     @pytest.mark.asyncio
+    async def test_ws_same_user_two_tabs_coexist(self, ws_env) -> None:
+        """#731 — a second tab of the same user in the same room must not
+        supersede (4040) the first; both tabs keep receiving messages."""
+        from starlette.testclient import TestClient
+
+        app = ws_env["app"]
+        token = ws_env["token"]
+        room_id = ws_env["room"].id
+
+        def _next_message(ws) -> dict:
+            while True:
+                data = json.loads(ws.receive_text())
+                if data["type"] == "message":
+                    return data
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                f"/ws/rooms/{room_id}",
+                subprotocols=["anygarden.v1", f"bearer.{token}"],
+            ) as tab_a:
+                assert json.loads(tab_a.receive_text())["type"] == "welcome"
+                with client.websocket_connect(
+                    f"/ws/rooms/{room_id}",
+                    subprotocols=["anygarden.v1", f"bearer.{token}"],
+                ) as tab_b:
+                    assert json.loads(tab_b.receive_text())["type"] == "welcome"
+                    assert app.state.connection_manager.active_connections == 2
+
+                    tab_b.send_text(json.dumps({"type": "send", "content": "from b"}))
+                    assert _next_message(tab_b)["content"] == "from b"
+                    assert _next_message(tab_a)["content"] == "from b"
+
+    @pytest.mark.asyncio
     async def test_ws_send_and_receive_message(self, ws_env) -> None:
         from starlette.testclient import TestClient
 
@@ -741,6 +774,48 @@ class TestWelcomeAgentId:
                 welcome = json.loads(ws.receive_text())
                 assert welcome["type"] == "welcome"
                 assert welcome.get("agent_id") == agent.id
+
+
+    @pytest.mark.asyncio
+    async def test_agent_second_connection_supersedes_first(self, ws_env) -> None:
+        """#79 stays in force for agents (#731 only relaxes it for humans):
+        a second connection with the same agent token closes the first
+        with 4040."""
+        from starlette.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        from anygarden.auth.token import generate_token, hash_agent_token
+        from anygarden.db.models import AgentToken
+
+        app = ws_env["app"]
+        sf = ws_env["session_factory"]
+        room = ws_env["room"]
+
+        async with sf() as db:
+            agent = Agent(name="dup-bot", engine="codex", actual_state="running")
+            db.add(agent)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id, role="member"))
+            agent_token_plain = generate_token()
+            token_hash, lookup_hint = hash_agent_token(agent_token_plain)
+            db.add(AgentToken(
+                agent_id=agent.id,
+                token_hash=token_hash,
+                lookup_hint=lookup_hint,
+            ))
+            await db.commit()
+
+        protocols = ["anygarden.v1", f"bearer.{agent_token_plain}"]
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/ws/rooms/{room.id}", subprotocols=protocols) as first:
+                assert json.loads(first.receive_text())["type"] == "welcome"
+                with client.websocket_connect(f"/ws/rooms/{room.id}", subprotocols=protocols) as second:
+                    assert json.loads(second.receive_text())["type"] == "welcome"
+                    with pytest.raises(WebSocketDisconnect) as closed:
+                        while True:
+                            first.receive_text()
+                    assert closed.value.code == 4040
+                    assert app.state.connection_manager.active_connections == 1
 
 
 class TestWelcomeParticipantsRoster:

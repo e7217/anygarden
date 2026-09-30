@@ -37,8 +37,10 @@ class ConnectionManager:
     def __init__(self) -> None:
         # room_id -> list of subscriptions
         self._rooms: dict[str, list[_Subscription]] = {}
-        # participant_id -> subscription (for direct sends)
-        self._by_participant: dict[str, _Subscription] = {}
+        # participant_id -> live subscriptions, oldest first (for direct
+        # sends). Agents hold at most one (#79); a human participant holds
+        # one per open tab/device (#731).
+        self._by_participant: dict[str, list[_Subscription]] = {}
         # Issue #266 — user_id -> set of participant_ids. Reverse index
         # for the per-user fanout used by ``push_to_users``. Populated
         # only when the caller hands ``subscribe`` a ``user_id``; agent
@@ -59,7 +61,36 @@ class ConnectionManager:
 
     @property
     def active_connections(self) -> int:
-        return len(self._by_participant)
+        return sum(len(subs) for subs in self._by_participant.values())
+
+    def _attach_locked(self, sub: _Subscription) -> None:
+        self._rooms.setdefault(sub.room_id, []).append(sub)
+        self._by_participant.setdefault(sub.participant_id, []).append(sub)
+        if sub.user_id is not None:
+            self._by_user.setdefault(sub.user_id, set()).add(sub.participant_id)
+
+    def _detach_locked(self, sub: _Subscription) -> None:
+        """Drop exactly *sub* from every index. Caller holds ``_lock``."""
+        room_subs = [s for s in self._rooms.get(sub.room_id, []) if s is not sub]
+        if room_subs:
+            self._rooms[sub.room_id] = room_subs
+        else:
+            self._rooms.pop(sub.room_id, None)
+        remaining = [
+            s for s in self._by_participant.get(sub.participant_id, []) if s is not sub
+        ]
+        if remaining:
+            self._by_participant[sub.participant_id] = remaining
+        else:
+            self._by_participant.pop(sub.participant_id, None)
+        if sub.user_id is not None and not any(
+            s.user_id == sub.user_id for s in remaining
+        ):
+            bucket = self._by_user.get(sub.user_id)
+            if bucket is not None:
+                bucket.discard(sub.participant_id)
+                if not bucket:
+                    del self._by_user[sub.user_id]
 
     def set_presence_service(self, presence: "PresenceService") -> None:
         """Inject the PresenceService used for publish-on-subscribe.
@@ -88,16 +119,24 @@ class ConnectionManager:
         user_id: str | None = None,
         generation: int | None = None,
         execution_control: bool = False,
+        exclusive: bool = True,
     ) -> None:
         """Register *ws* as listening on *room_id*.
 
-        Issue #79 — single-session policy. If *participant_id* already
-        has an active subscription, the older socket is evicted and
-        closed with code 4040 ("superseded"). Without this guard two
+        Issue #79 — single-session policy. When *exclusive* (the default,
+        and what agent connections use), every active subscription of
+        *participant_id* is evicted and closed with code 4040
+        ("superseded"). Without this guard two
         clients sharing an agent token (e.g. ``anygarden-machine`` reconcile
         racing a manual launch) would both stay in ``_rooms[room_id]``
         and every broadcast would fan out to both — doubling LLM calls,
         ``[ROOM_QUERY]`` forwards, and direct replies.
+
+        Issue #731 — human sessions pass ``exclusive=False``: a user who
+        opens the same room in several tabs shares one room-scoped
+        participant, and evicting would make the tabs knock each other
+        off in an endless reconnect loop. Those sockets coexist; the
+        participant is online while at least one of them is open.
 
         ``user_id`` (#266) — when supplied, the subscription is also
         added to the per-user reverse index that backs
@@ -113,47 +152,31 @@ class ConnectionManager:
             generation=generation,
             execution_control=execution_control,
         )
-        superseded: _Subscription | None = None
         async with self._lock:
-            old = self._by_participant.get(participant_id)
-            if old is not None:
-                superseded = old
-                old_subs = self._rooms.get(old.room_id, [])
-                self._rooms[old.room_id] = [
-                    s for s in old_subs if s.participant_id != participant_id
-                ]
-                if not self._rooms[old.room_id]:
-                    del self._rooms[old.room_id]
-                # Drop the old participant's entry from the user index
-                # too — the same participant may carry a different
-                # user_id on the new subscription (rare but defensible).
-                if old.user_id is not None:
-                    bucket = self._by_user.get(old.user_id)
-                    if bucket is not None:
-                        bucket.discard(participant_id)
-                        if not bucket:
-                            del self._by_user[old.user_id]
-            self._rooms.setdefault(room_id, []).append(sub)
-            self._by_participant[participant_id] = sub
-            if user_id is not None:
-                self._by_user.setdefault(user_id, set()).add(participant_id)
+            existing = list(self._by_participant.get(participant_id, []))
+            superseded = existing if exclusive else []
+            for old in superseded:
+                self._detach_locked(old)
+            self._attach_locked(sub)
+        came_online = exclusive or not existing
 
         # Close the superseded socket OUTSIDE the lock — ws.close awaits
         # the underlying ASGI send and we must not block other ops.
         # Best-effort: a socket that's already half-dead can throw on
         # close; we just need it to stop receiving frames.
-        if superseded is not None:
-            transport = getattr(self, "execution_transport", None)
+        transport = getattr(self, "execution_transport", None)
+        for old in superseded:
             if transport is not None:
-                transport.disconnected(participant_id, superseded.socket_epoch)
+                transport.disconnected(participant_id, old.socket_epoch)
             try:
-                await superseded.ws.close(code=4040, reason="superseded")
+                await old.ws.close(code=4040, reason="superseded")
             except Exception:
                 pass
 
         # Publish AFTER releasing the lock so the broadcast path's own
-        # lock acquisition doesn't deadlock with ours.
-        if self._presence is not None:
+        # lock acquisition doesn't deadlock with ours. A second tab of an
+        # already-online participant changes nothing observable.
+        if self._presence is not None and came_online:
             now = datetime.now(timezone.utc)
             await self._presence.publish(
                 room_id,
@@ -163,30 +186,28 @@ class ConnectionManager:
             )
 
     async def unsubscribe(self, participant_id: str, *, websocket: WebSocket | None = None) -> None:
-        """Remove the subscription for *participant_id*."""
+        """Remove *websocket*'s subscription, or every subscription of
+        *participant_id* when no socket is given.
+
+        The participant goes offline (last-seen memo + presence) only
+        once its last socket is gone.
+        """
         async with self._lock:
-            sub = self._by_participant.get(participant_id)
-            if sub is None or (websocket is not None and sub.ws is not websocket):
+            subs = self._by_participant.get(participant_id, [])
+            if websocket is not None:
+                subs = [s for s in subs if s.ws is websocket]
+            if not subs:
                 return
-            self._by_participant.pop(participant_id)
             transport = getattr(self, "execution_transport", None)
-            if transport is not None:
-                transport.disconnected(participant_id, sub.socket_epoch)
-            subs = self._rooms.get(sub.room_id, [])
-            self._rooms[sub.room_id] = [
-                s for s in subs if s.participant_id != participant_id
-            ]
-            if not self._rooms[sub.room_id]:
-                del self._rooms[sub.room_id]
-            if sub.user_id is not None:
-                bucket = self._by_user.get(sub.user_id)
-                if bucket is not None:
-                    bucket.discard(participant_id)
-                    if not bucket:
-                        del self._by_user[sub.user_id]
+            for sub in subs:
+                if transport is not None:
+                    transport.disconnected(participant_id, sub.socket_epoch)
+                self._detach_locked(sub)
+            if participant_id in self._by_participant:
+                return
             now = datetime.now(timezone.utc)
             self._last_seen[participant_id] = now
-            room_id = sub.room_id
+            room_id = subs[-1].room_id
 
         if self._presence is not None:
             await self._presence.publish(
@@ -213,19 +234,16 @@ class ConnectionManager:
         """
 
         async with self._lock:
-            participant_ids = [
-                sub.participant_id for sub in self._rooms.get(room_id, [])
-            ]
-            sockets = [sub.ws for sub in self._rooms.get(room_id, [])]
+            subs = list(self._rooms.get(room_id, []))
 
-        for ws in sockets:
+        for sub in subs:
             try:
-                await ws.close(code=code, reason=reason)
+                await sub.ws.close(code=code, reason=reason)
             except Exception:  # noqa: BLE001 — best-effort socket revocation
                 pass
-        for participant_id in participant_ids:
-            await self.unsubscribe(participant_id)
-        return len(participant_ids)
+        for sub in subs:
+            await self.unsubscribe(sub.participant_id, websocket=sub.ws)
+        return len({sub.participant_id for sub in subs})
 
     async def broadcast(
         self,
@@ -301,9 +319,8 @@ class ConnectionManager:
         revision, every agent owner) so their UI updates without
         polling.
 
-        Multiple subscriptions per user are *each* notified — that
-        matches existing semantics for room broadcasts (a user with two
-        tabs hears the same message twice). Per-recipient errors are
+        Every subscription of every matching participant is notified —
+        one frame per open tab or room. Per-recipient errors are
         swallowed; dead connections are cleaned up on next unsubscribe.
         """
         if not user_ids:
@@ -313,9 +330,7 @@ class ConnectionManager:
             targets: list[_Subscription] = []
             for uid in user_ids:
                 for pid in self._by_user.get(uid, set()):
-                    sub = self._by_participant.get(pid)
-                    if sub is not None:
-                        targets.append(sub)
+                    targets.extend(self._by_participant.get(pid, []))
         for sub in targets:
             try:
                 await sub.ws.send_text(payload)
@@ -333,13 +348,14 @@ class ConnectionManager:
 
     async def participant_generation(self, participant_id: str) -> int | None:
         async with self._lock:
-            sub = self._by_participant.get(participant_id)
-            return sub.generation if sub is not None else None
+            subs = self._by_participant.get(participant_id)
+            return subs[-1].generation if subs else None
 
     async def execution_connection(self, participant_id: str, *, websocket=None) -> tuple[int, str] | None:
         """Return the advertised control fence for exactly this live socket."""
         async with self._lock:
-            sub = self._by_participant.get(participant_id)
+            subs = self._by_participant.get(participant_id)
+            sub = subs[-1] if subs else None
             if (sub is None or not sub.execution_control or sub.generation is None
                     or (websocket is not None and sub.ws is not websocket)):
                 return None
@@ -353,17 +369,25 @@ class ConnectionManager:
         expected_generation: int | None = None,
         expected_socket_epoch: str | None = None,
     ) -> bool:
-        """Send directly, optionally fencing against a process generation."""
+        """Send to every socket of *participant_id*, optionally fencing
+        against a process generation / socket epoch.
+
+        Returns ``True`` when at least one socket accepted the frame.
+        """
         async with self._lock:
-            sub = self._by_participant.get(participant_id)
-        if sub is None:
-            return False
-        if expected_generation is not None and sub.generation != expected_generation:
-            return False
-        if expected_socket_epoch is not None and sub.socket_epoch != expected_socket_epoch:
-            return False
-        try:
-            await sub.ws.send_text(frame.model_dump_json())
-        except Exception:
-            return False
-        return True
+            subs = list(self._by_participant.get(participant_id, []))
+        payload: str | None = None
+        sent = False
+        for sub in subs:
+            if expected_generation is not None and sub.generation != expected_generation:
+                continue
+            if expected_socket_epoch is not None and sub.socket_epoch != expected_socket_epoch:
+                continue
+            if payload is None:
+                payload = frame.model_dump_json()
+            try:
+                await sub.ws.send_text(payload)
+            except Exception:  # noqa: S112 — dead socket; dropped on its unsubscribe
+                continue
+            sent = True
+        return sent

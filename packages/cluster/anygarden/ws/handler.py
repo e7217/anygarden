@@ -1148,6 +1148,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
             identity is not None and identity.kind == "agent"
             and parse_qs(raw_query).get("execution_control") == ["1"]
         ),
+        # #731 — only agents keep the one-socket-per-participant policy
+        # (#79). A user or guest opening the same room in several tabs
+        # shares one participant; evicting would make the tabs knock each
+        # other off in a reconnect loop.
+        exclusive=identity is None or identity.kind == "agent",
     )
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
 

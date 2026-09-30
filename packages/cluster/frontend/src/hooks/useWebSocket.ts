@@ -23,6 +23,10 @@ export function useWebSocket(roomId: string | null) {
   const reconnectRef = useRef(1);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const suppressReconnectRef = useRef(false);
+  // #731 — set when the server closed us with 4040 ("superseded"): another
+  // connection for the same participant took over. Retrying on a timer would
+  // just knock that one off in turn, so we wait for the user to come back.
+  const supersededRef = useRef(false);
   // Debounced typing expire timers — one per participant.
   // Each new typing=true RESETS the timer instead of stacking.
   const typingTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -49,6 +53,7 @@ export function useWebSocket(roomId: string | null) {
     let url = `${proto}//${host}/ws/rooms/${roomId}`;
     if (seqRef.current > 0) url += `?since_seq=${seqRef.current}`;
 
+    supersededRef.current = false;
     const ws = new WebSocket(url, ['anygarden.v1', `bearer.${token}`]);
     wsRef.current = ws;
 
@@ -70,6 +75,11 @@ export function useWebSocket(roomId: string | null) {
             detail: { code: evt.code, reason: evt.reason },
           }),
         );
+      }
+
+      if (evt.code === 4040) {
+        supersededRef.current = true;
+        return;
       }
 
       const currentToken = getAuthToken();
@@ -221,6 +231,21 @@ export function useWebSocket(roomId: string | null) {
       clearTyping();
     };
   }, [roomId, connect, clearTyping]);
+
+  // Reclaim a superseded room connection when this tab is back in front of
+  // the user — the most recently used tab ends up holding the connection.
+  useEffect(() => {
+    const revive = () => {
+      if (!supersededRef.current || document.visibilityState === 'hidden') return;
+      connect();
+    };
+    document.addEventListener('visibilitychange', revive);
+    window.addEventListener('focus', revive);
+    return () => {
+      document.removeEventListener('visibilitychange', revive);
+      window.removeEventListener('focus', revive);
+    };
+  }, [connect]);
 
   const send = useCallback((
     content: string,
