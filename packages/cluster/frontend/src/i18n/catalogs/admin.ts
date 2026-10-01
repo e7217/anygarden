@@ -588,7 +588,7 @@ export const adminEn = {
   'admin.system.checkUpdates': 'Check for updates',
   'admin.system.noPackages': 'No packages tracked.',
   'admin.system.current': 'current',
-  'admin.system.latest': 'latest',
+  'admin.system.latest': 'PyPI',
   'admin.system.updateCommand': 'To update, run:',
   'admin.system.lastChecked': 'Last checked {{date}}',
   'admin.system.checkFailed': 'check failed',
@@ -601,6 +601,7 @@ export const adminEn = {
   'admin.mcp.argLabel': 'Argument {{count}}',
   'admin.mcp.envKeyLabel': 'Variable {{count}} name',
   'admin.mcp.envValueLabel': 'Variable {{count}} value',
+  'admin.system.aheadOfPypi': 'newer than PyPI',
 } as const
 
 export const adminKo: Record<keyof typeof adminEn, string> = {
@@ -1193,7 +1194,7 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.system.checkUpdates': '업데이트 확인',
   'admin.system.noPackages': '추적 중인 패키지가 없습니다.',
   'admin.system.current': '현재',
-  'admin.system.latest': '최신',
+  'admin.system.latest': 'PyPI',
   'admin.system.updateCommand': '업데이트 명령:',
   'admin.system.lastChecked': '마지막 확인 {{date}}',
   'admin.system.checkFailed': '확인 실패',
@@ -1206,4 +1207,5 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.mcp.argLabel': '{{count}}번째 인수',
   'admin.mcp.envKeyLabel': '{{count}}번째 변수 이름',
   'admin.mcp.envValueLabel': '{{count}}번째 변수 값',
+  'admin.system.aheadOfPypi': 'PyPI보다 최신',
 }

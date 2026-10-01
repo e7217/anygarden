@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Input } from '@/components/ui/input'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
 import PresenceDot from '@/components/PresenceDot'
 import UpdateDot from '@/components/UpdateDot'
@@ -646,6 +646,7 @@ export default function Sidebar({
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{t('chat.createProject')}</DialogTitle>
+              <DialogDescription>{t('workspace.createProjectDescription')}</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-2">
               <Input
@@ -689,6 +690,7 @@ export default function Sidebar({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t('chat.createRoom')}</DialogTitle>
+            <DialogDescription>{t('workspace.createRoomDescription')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             {roomNeedsProjectChoice && (
@@ -736,7 +738,9 @@ export default function Sidebar({
           {deleteProjectTarget && (() => {
             const roomCount = (rooms[deleteProjectTarget.id] ?? []).length
             return (
-              <div className="space-y-2 py-2 text-sm text-[var(--color-foreground)]">
+              // The consequence text doubles as the dialog's description.
+              <DialogDescription asChild className="space-y-2 py-2 text-sm text-[var(--color-foreground)]">
+              <div>
                 {roomCount === 0 ? (
                   <p>{t('chat.deleteProjectEmptyPrompt', { name: deleteProjectTarget.name })}</p>
                 ) : (
@@ -744,6 +748,7 @@ export default function Sidebar({
                 )}
                 <p className="text-[var(--color-foreground-muted)]">{t('chat.cannotUndo')}</p>
               </div>
+              </DialogDescription>
             )
           })()}
           <DialogFooter>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import ChatArea from '@/components/ChatArea'
 import MessageInput from '@/components/MessageInput'
 import ParticipantListPopover from '@/components/ParticipantListPopover'
@@ -161,7 +161,10 @@ export default function GuestRoomPage() {
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-w-sm">
-                <DialogHeader><DialogTitle>{t('guest.preferences')}</DialogTitle></DialogHeader>
+                <DialogHeader>
+                  <DialogTitle>{t('guest.preferences')}</DialogTitle>
+                  <DialogDescription>{t('guest.preferencesDescription')}</DialogDescription>
+                </DialogHeader>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-[var(--color-foreground-muted)]">{t('common.language')}</span>
                   <LocaleToggle compact />
