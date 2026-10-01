@@ -25,7 +25,7 @@
 ## Action
 
 - `be670ef` — `pages/NotFoundPage.tsx` 신규, `App.tsx`에 `path="*"` 라우트 추가, `common.notFound*`/`common.goHome` i18n
-- `d21c6c1` — `components/SearchDialog.tsx`를 공용 Radix `Dialog`로 교체(sr-only 제목·설명, 입력에 초기 포커스), 쓰이지 않게 된 `chat.closeSearch` 제거
+- ~~`d21c6c1` — SearchDialog Radix 교체~~ → main에 먼저 머지된 #775(6a74178)가 같은 교체(+스니펫 XSS 수정)를 포함해, rebase 시 이 커밋은 제외했다. `chat.closeSearch`는 #775가 계속 사용하므로 유지
 - `5f10153` — 스킬 검색
   - 백엔드 `api/v1/skills.py`: 2자 미만 쿼리는 upstream을 호출하지 않고 `[]`를 반환한다(`MIN_SEARCH_QUERY_LENGTH`)
   - 프론트 `AdminSkills.tsx`: 열 때 검색하지 않고, 2자 미만이면 버튼을 비활성화하며 안내 문구를 보여 준다. 실패는 읽기 쉬운 문구와 `role="alert"`로 표시하고 upstream detail은 노출하지 않는다
@@ -39,7 +39,7 @@
   - `Sidebar.tsx`의 다이얼로그 3개와 `GuestRoomPage.tsx` 1개에 `DialogDescription`을 추가했다
   - 한국어 `chat.projectActions`를 "프로젝트 메뉴"로 바꿨다
 - 테스트
-  - 신규: `NotFoundPage.test.tsx`, `SearchDialog.test.tsx`, `AdminSkills.test.tsx`, `AdminSystem.test.tsx`
+  - 신규: `NotFoundPage.test.tsx`, `AdminSkills.test.tsx`, `AdminSystem.test.tsx` (`SearchDialog.test.tsx`는 #775 버전 사용)
   - 추가: `UsageSection.test.tsx`, `RoomEditDialog.test.tsx`, `useFederation.test.tsx`
   - 백엔드: `test_skills_library_stale_and_search.py`, `test_usage_api.py`
 
