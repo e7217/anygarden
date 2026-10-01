@@ -275,7 +275,7 @@ export const chatKo: Record<keyof typeof chatEn, string> = {
   'chat.failedRemoveParticipant': '참여자 제거 실패 ({{status}})',
   'chat.failedDeleteRoom': '룸 삭제 실패 ({{status}})',
   'chat.failedDeleteConversation': '대화 삭제 실패 ({{status}})',
-  'chat.projectActions': '프로젝트 작업',
+  'chat.projectActions': '프로젝트 메뉴',
   'chat.roomActions': '룸 작업',
   'chat.rename': '이름 변경',
   'chat.deleteRoom': '룸 삭제',

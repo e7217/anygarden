@@ -67,6 +67,18 @@ describe('useFederation', () => {
     await waitFor(() => expect(result.current.nodesCapability).toBe('disabled'))
   })
 
+  it('derives disabled capability from PEERING_DISABLED 503 (#773)', async () => {
+    // No peer certificate on this node: the server answers 503 before any
+    // peering call. That is a known, configurable state, not "unknown".
+    mockFetch((url) =>
+      url.includes('/node/')
+        ? jsonResponse({ code: 'PEERING_DISABLED' }, 503)
+        : emptyNodes(url),
+    )
+    const { result } = renderHook(() => useFederation())
+    await waitFor(() => expect(result.current.nodesCapability).toBe('disabled'))
+  })
+
   it('loads and orders the roster for a selected channel', async () => {
     const snapshot = {
       authority_node_id: 'auth-1',

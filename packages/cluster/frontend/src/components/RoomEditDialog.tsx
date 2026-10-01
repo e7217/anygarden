@@ -51,7 +51,8 @@ interface ParticipantLite {
 
 interface PerAgentStat {
   participant_id: string
-  agent_name: string
+  /** Null for human participants; the API reports them separately. */
+  agent_name: string | null
   tokens: number
   messages: number
   last_active_at: string | null
@@ -82,20 +83,24 @@ function PerAgentTokenPanel({
       string,
       { name: string; tokens1h: number; tokens24h: number; lastActive: string | null }
     >()
-    for (const row of stats.window_24h) {
+    // #773 — the panel is per agent; human rows (agent_name null) used to
+    // show up as a bare participant id.
+    const agentRows = (rows: PerAgentStat[]) =>
+      rows.filter((row): row is PerAgentStat & { agent_name: string } => !!row.agent_name)
+    for (const row of agentRows(stats.window_24h)) {
       map.set(row.participant_id, {
-        name: row.agent_name || row.participant_id,
+        name: row.agent_name,
         tokens1h: 0,
         tokens24h: row.tokens,
         lastActive: row.last_active_at,
       })
     }
-    for (const row of stats.window_1h) {
+    for (const row of agentRows(stats.window_1h)) {
       const entry = map.get(row.participant_id)
       if (entry) entry.tokens1h = row.tokens
       else
         map.set(row.participant_id, {
-          name: row.agent_name || row.participant_id,
+          name: row.agent_name,
           tokens1h: row.tokens,
           tokens24h: 0,
           lastActive: row.last_active_at,

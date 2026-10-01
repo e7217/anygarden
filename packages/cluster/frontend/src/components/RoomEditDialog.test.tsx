@@ -188,3 +188,23 @@ describe('RoomEditDialog – admin context-window toggle (#225)', () => {
     })
   })
 })
+
+describe('RoomEditDialog – per-agent token panel (#773)', () => {
+  it('lists agents only, not human participants by id', async () => {
+    const rows = [
+      { participant_id: 'p-agent', agent_name: 'garden-pm', tokens: 740, messages: 3, last_active_at: null },
+      { participant_id: 'p-human-uuid', agent_name: null, tokens: 336, messages: 2, last_active_at: null },
+    ]
+    installFetch({ isAdmin: true }, url =>
+      url.includes('/token-stats')
+        ? jsonResponse({ window_1h: { per_agent: rows }, window_24h: { per_agent: rows } })
+        : undefined,
+    )
+
+    render(<RoomEditDialog roomId="r1" open={true} onOpenChange={() => {}} />)
+
+    const panel = await screen.findByTestId('room-edit-token-panel')
+    await waitFor(() => expect(panel).toHaveTextContent('garden-pm'))
+    expect(panel).not.toHaveTextContent('p-human-uuid')
+  })
+})

@@ -71,7 +71,14 @@ function PackageRow({ update }: { update: PackageUpdate }) {
             )}
           </p>
         </div>
-        <StatusBadge available={update_available} error={error} checked={!!checked_at} />
+        <StatusBadge
+          available={update_available}
+          // #773 — the server already compared versions; a different PyPI
+          // version with no update means this build is ahead of the release.
+          ahead={!update_available && !!latest && latest !== current}
+          error={error}
+          checked={!!checked_at}
+        />
       </div>
 
       {update_available && (
@@ -94,10 +101,12 @@ function PackageRow({ update }: { update: PackageUpdate }) {
 
 function StatusBadge({
   available,
+  ahead,
   error,
   checked,
 }: {
   available: boolean
+  ahead: boolean
   error: string | null
   checked: boolean
 }) {
@@ -125,7 +134,7 @@ function StatusBadge({
   }
   return (
     <span className="shrink-0 rounded-full bg-[var(--color-surface-alt)] px-2 py-0.5 text-badge font-semibold text-[var(--color-foreground-muted)]">
-      {t('admin.system.upToDate')}
+      {ahead ? t('admin.system.aheadOfPypi') : t('admin.system.upToDate')}
     </span>
   )
 }

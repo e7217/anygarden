@@ -7,6 +7,8 @@ export interface UsageBucket {
   prompt_tokens: number
   completion_tokens: number
   cost_usd: number
+  /** #773 — display name when ``key`` is an id (agent buckets). */
+  label?: string | null
 }
 
 export interface UsageReport {

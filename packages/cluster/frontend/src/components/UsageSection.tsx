@@ -174,9 +174,16 @@ function AgentList({ buckets }: { buckets: UsageBucket[] }) {
       <ul className="divide-y divide-[var(--color-border)]">
         {buckets.map(b => (
           <li key={b.key} className="flex items-center justify-between px-4 py-2.5">
-            <code className="text-badge font-normal text-[var(--color-foreground-muted)]">
-              {b.key}
-            </code>
+            {b.label ? (
+              <span className="truncate text-caption font-normal text-[var(--color-foreground)]" title={b.key}>
+                {b.label}
+              </span>
+            ) : (
+              // A ledger row whose agent no longer resolves keeps its id.
+              <code className="text-badge font-normal text-[var(--color-foreground-muted)]">
+                {b.key}
+              </code>
+            )}
             <span className="text-caption font-normal text-[var(--color-foreground)]">
               {t('admin.usage.requestCount', { count: formatCount(b.request_count) })}
             </span>

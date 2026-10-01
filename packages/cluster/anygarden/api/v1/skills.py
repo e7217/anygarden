@@ -588,6 +588,9 @@ async def detach_skill(
 # ── #126 — search proxy + stale check + refresh ──────────────────────
 
 
+MIN_SEARCH_QUERY_LENGTH = 2
+
+
 @router.get("/search", response_model=list[SkillSearchResultOut])
 async def search_skills_endpoint(
     request: Request,
@@ -602,6 +605,11 @@ async def search_skills_endpoint(
     failures return 502 with a short detail so the UI can render a
     "search unavailable" fallback instead of a generic 5xx.
     """
+    # #773 — skills.sh answers queries under 2 characters with a 400; an
+    # empty result is the honest answer, not an upstream failure.
+    if len(q.strip()) < MIN_SEARCH_QUERY_LENGTH:
+        return []
+
     cache = _search_cache(request)
     key = (q, limit)
     now = time.monotonic()

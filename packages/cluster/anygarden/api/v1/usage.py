@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import UsageLedger
+from anygarden.db.models import Agent, UsageLedger
 from anygarden.dependencies import get_admin_identity, get_db
 
 router = APIRouter(prefix="/api/v1/usage", tags=["usage"])
@@ -23,6 +23,8 @@ class UsageBucket(BaseModel):
     # the SQL layer (``coalesce(sum(cost_usd), 0)``); rows with no cost
     # signal contribute 0.
     cost_usd: float = 0.0
+    # #773 — human-readable name for ``key`` when it is an id (by_agent).
+    label: str | None = None
 
 
 class UsageOut(BaseModel):
@@ -102,6 +104,19 @@ async def get_usage(
         )
     ).all()
 
+    agent_ids = [agent_id for (agent_id, *_rest) in by_agent_rows]
+    agent_names = (
+        dict(
+            (
+                await db.execute(
+                    select(Agent.id, Agent.name).where(Agent.id.in_(agent_ids))
+                )
+            ).all()
+        )
+        if agent_ids
+        else {}
+    )
+
     return UsageOut(
         window_hours=hours,
         total_requests=int(total or 0),
@@ -119,6 +134,7 @@ async def get_usage(
         by_agent=[
             UsageBucket(
                 key=str(agent_id),
+                label=agent_names.get(agent_id),
                 request_count=int(cnt),
                 prompt_tokens=int(pt),
                 completion_tokens=int(ct),

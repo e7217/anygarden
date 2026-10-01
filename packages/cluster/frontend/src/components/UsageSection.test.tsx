@@ -28,6 +28,16 @@ describe('Usage screen', () => {
     await waitFor(() => expect(apiFetch).toHaveBeenLastCalledWith('/api/v1/usage?window=7d'))
     expect(screen.queryByText('Apply')).toBeNull()
   })
+  it('names agents instead of showing their ids (#773)', async () => {
+    const named = {
+      ...report,
+      by_agent: [{ ...report.by_agent[0], key: 'c75b6366-uuid', label: 'garden-pm' }],
+    }
+    vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify(named)))
+    render(<UsageSection />)
+    await waitFor(() => expect(screen.getByText('garden-pm')).toBeTruthy())
+    expect(screen.queryByText('c75b6366-uuid')).toBeNull()
+  })
   it('shows API failures and retries using Refresh', async () => {
     vi.mocked(apiFetch).mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'denied' }), { status: 403 }))
     render(<UsageSection />)

@@ -106,6 +106,10 @@ async def test_usage_aggregates_by_model_and_agent(env) -> None:
     by_agent = {row["key"]: row for row in body["by_agent"]}
     assert by_agent[a_id]["request_count"] == 2
     assert by_agent[b_id]["request_count"] == 1
+    # #773 — the admin page shows names, not agent UUIDs.
+    assert by_agent[a_id]["label"] == "A"
+    assert by_agent[b_id]["label"] == "B"
+    assert all(row["label"] is None for row in body["by_model"])
 
 
 async def test_usage_aggregates_cost_usd_nullable_safe(env) -> None:

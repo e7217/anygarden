@@ -203,7 +203,9 @@ export const adminEn = {
   'admin.skills.installs': '{{count}} installs',
   'admin.skills.registerFailed': 'Register failed ({{status}})',
   'admin.skills.loadFailed': 'Could not load skills ({{status}})',
-  'admin.skills.searchFailed': 'Search failed ({{status}})',
+  'admin.skills.searchFailed': 'skills.sh search is unavailable right now ({{status}}). Try again later.',
+  'admin.skills.searchUnavailable': 'Could not reach the server. Check your connection and try again.',
+  'admin.skills.searchHint': 'Type at least 2 characters to search.',
   'admin.skills.refreshFailed': 'Refresh failed ({{status}})',
   'admin.skills.attachUnapproved': 'Unapproved skills cannot be attached.',
   'admin.skills.confirmReject': '"{{name}}" is attached to {{count}} agents. Rejecting it removes it on their next spawn. Continue?',
@@ -586,7 +588,7 @@ export const adminEn = {
   'admin.system.checkUpdates': 'Check for updates',
   'admin.system.noPackages': 'No packages tracked.',
   'admin.system.current': 'current',
-  'admin.system.latest': 'latest',
+  'admin.system.latest': 'PyPI',
   'admin.system.updateCommand': 'To update, run:',
   'admin.system.lastChecked': 'Last checked {{date}}',
   'admin.system.checkFailed': 'check failed',
@@ -599,6 +601,7 @@ export const adminEn = {
   'admin.mcp.argLabel': 'Argument {{count}}',
   'admin.mcp.envKeyLabel': 'Variable {{count}} name',
   'admin.mcp.envValueLabel': 'Variable {{count}} value',
+  'admin.system.aheadOfPypi': 'newer than PyPI',
 } as const
 
 export const adminKo: Record<keyof typeof adminEn, string> = {
@@ -806,7 +809,9 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.skills.installs': '설치 {{count}}회',
   'admin.skills.registerFailed': '등록 실패 ({{status}})',
   'admin.skills.loadFailed': '스킬을 불러오지 못했습니다 ({{status}})',
-  'admin.skills.searchFailed': '검색 실패 ({{status}})',
+  'admin.skills.searchFailed': '지금은 skills.sh 검색을 사용할 수 없습니다 ({{status}}). 잠시 후 다시 시도하세요.',
+  'admin.skills.searchUnavailable': '서버에 연결하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.',
+  'admin.skills.searchHint': '2자 이상 입력한 뒤 검색하세요.',
   'admin.skills.refreshFailed': '새로고침 실패 ({{status}})',
   'admin.skills.attachUnapproved': '승인되지 않은 스킬은 연결할 수 없습니다.',
   'admin.skills.confirmReject': '"{{name}}" 스킬이 에이전트 {{count}}개에 연결되어 있습니다. 거부하면 다음 실행 때 제거됩니다. 계속하시겠습니까?',
@@ -1189,7 +1194,7 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.system.checkUpdates': '업데이트 확인',
   'admin.system.noPackages': '추적 중인 패키지가 없습니다.',
   'admin.system.current': '현재',
-  'admin.system.latest': '최신',
+  'admin.system.latest': 'PyPI',
   'admin.system.updateCommand': '업데이트 명령:',
   'admin.system.lastChecked': '마지막 확인 {{date}}',
   'admin.system.checkFailed': '확인 실패',
@@ -1202,4 +1207,5 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.mcp.argLabel': '{{count}}번째 인수',
   'admin.mcp.envKeyLabel': '{{count}}번째 변수 이름',
   'admin.mcp.envValueLabel': '{{count}}번째 변수 값',
+  'admin.system.aheadOfPypi': 'PyPI보다 최신',
 }

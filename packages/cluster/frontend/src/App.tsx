@@ -5,6 +5,7 @@ import { RoomsProvider } from '@/hooks/useRooms'
 import { SidebarLayoutProvider } from '@/hooks/useSidebarLayout'
 import { RightSidebarLayoutProvider } from '@/hooks/useRightSidebarLayout'
 import LoginPage from '@/pages/LoginPage'
+import NotFoundPage from '@/pages/NotFoundPage'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 // Chat and guest shells pull in react-markdown, remark-gfm, anser and
@@ -125,6 +126,9 @@ export default function App() {
                 </ProtectedRoute>
               }
             />
+            {/* #773 — anything unmatched (including the DEV-only
+                /__preview/federation in production) used to render blank. */}
+            <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </RightSidebarLayoutProvider>
         </SidebarLayoutProvider>
