@@ -95,12 +95,15 @@ export interface TrackedSubmission extends SubmissionView {
 /**
  * Derive node capability from a failing peers call. The product server does
  * not wire the federation services yet (#34): 404 means the admin router is
- * not mounted, 503 SHARING_DISABLED means the channel service is absent.
- * Both render an honest “sharing disabled” surface instead of mock data.
+ * not mounted, 503 SHARING_DISABLED means the channel service is absent and
+ * 503 PEERING_DISABLED means the node has no peer certificate (#773).
+ * All render an honest “sharing disabled” surface instead of mock data.
  */
+const DISABLED_CODES = new Set(['SHARING_DISABLED', 'PEERING_DISABLED'])
+
 export function capabilityFromError(error: unknown): NodeCapability {
   if (error instanceof FederationApiError) {
-    if (error.status === 404 || error.code === 'SHARING_DISABLED') return 'disabled'
+    if (error.status === 404 || DISABLED_CODES.has(error.code ?? '')) return 'disabled'
   }
   return 'unknown'
 }

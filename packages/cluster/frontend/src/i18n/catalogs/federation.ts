@@ -83,7 +83,7 @@ const copy = {
   'federation.statusReady': ['Node API reachable', '노드 API 연결됨'],
   'federation.statusUnknown': ['Node API state unknown', '노드 API 상태를 확인할 수 없음'],
   'federation.sharingDisabledTitle': ['Sharing disabled on this node.', '이 노드에서 공유가 비활성화되어 있습니다.'],
-  'federation.sharingDisabledBody': ['This build does not mount federation services yet. The controls below will work once this node exposes /api/v1/node and /api/v1/shared-channels.', '현재 빌드에는 연합 서비스가 연결되지 않았습니다. 이 노드가 /api/v1/node와 /api/v1/shared-channels를 제공하면 아래 기능을 사용할 수 있습니다.'],
+  'federation.sharingDisabledBody': ['This node does not serve /api/v1/node and /api/v1/shared-channels yet. They start once the node has its peer certificate (peer-cert.pem and peer-key.pem in its peer directory); until then the controls below are unavailable.', '이 노드는 아직 /api/v1/node와 /api/v1/shared-channels를 제공하지 않습니다. 노드 인증서(peer 디렉터리의 peer-cert.pem, peer-key.pem)를 준비하면 시작되며, 그 전에는 아래 기능을 사용할 수 없습니다.'],
   'federation.tabConnection': ['1. Connection', '1. 연결'],
   'federation.tabChannel': ['2. Shared channel', '2. 공유 채널'],
   'federation.tabTask': ['3. Task handoff', '3. 작업 전달'],
