@@ -56,7 +56,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
         <h3 className="text-sm font-semibold text-[var(--color-foreground)]">
           {t('guest.sharedFiles')}
         </h3>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
           {files.length}
         </span>
       </header>
@@ -64,7 +64,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
       {error && (
         <p
           role="alert"
-          className="px-3 py-1 text-[11px] text-[var(--color-destructive)]"
+          className="px-3 py-1 text-caption font-normal text-[var(--color-destructive)]"
         >
           {error}
         </p>
@@ -72,7 +72,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
 
       <div className="min-w-0 px-1">
         {files.length === 0 && (
-          <div className="px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
+          <div className="px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
             {t('files.empty')}
           </div>
         )}
@@ -85,12 +85,12 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
             <FileText className="h-3.5 w-3.5 shrink-0 text-[var(--color-foreground-subtle)]" />
             <div className="min-w-0 flex-1">
               <p
-                className="truncate text-[13px] text-[var(--color-foreground)]"
+                className="truncate text-caption font-normal text-[var(--color-foreground)]"
                 title={f.filename}
               >
                 {f.filename}
               </p>
-              <p className="truncate text-[10px] text-[var(--color-foreground-subtle)]">
+              <p className="truncate text-badge font-normal text-[var(--color-foreground-subtle)]">
                 {formatBytes(f.size_bytes)} · {f.mime}
               </p>
             </div>
@@ -99,7 +99,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
                 section header's right-side counter. */}
             <button
               onClick={() => handleDelete(f.id)}
-              className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-all hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
+              className="absolute right-1 top-1/2 flex min-h-9 min-w-9 -translate-y-1/2 items-center justify-center rounded text-[var(--color-destructive)] opacity-100 transition-[background-color,opacity] hover:bg-[var(--color-danger-soft)] lg:right-2 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100"
               aria-label={t('guest.deleteFile', { name: f.filename })}
             >
               <Trash2 className="h-3 w-3" />
@@ -124,7 +124,7 @@ export default function FilesSection({ roomId }: FilesSectionProps) {
           className="w-full justify-start"
         >
           <Upload className="h-3.5 w-3.5 mr-1.5" />
-          <span className="text-[13px]">{uploading ? t('files.uploading') : t('files.upload')}</span>
+          <span className="text-caption font-normal">{uploading ? t('files.uploading') : t('files.upload')}</span>
         </Button>
       </div>
     </section>

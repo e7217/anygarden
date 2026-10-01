@@ -181,7 +181,7 @@ export default memo(function MessageBubble({
   const pendingBadge = isPendingQuestion ? (
     <span
       data-testid="question-pending-badge"
-      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-foreground-subtle)]"
+      className="inline-flex items-center gap-1 text-badge font-normal text-[var(--color-foreground-subtle)]"
     >
       <BrailleSpinner />
       <span>{t('chat.awaitingResponse')}</span>
@@ -272,7 +272,7 @@ export default memo(function MessageBubble({
           title={title || t('chat.untitledTask')}
           assignee={assignee}
         />
-        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
       </div>
@@ -308,7 +308,7 @@ export default memo(function MessageBubble({
             resolveRoom={resolveRoom}
           />
         </div>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
       </div>
@@ -336,7 +336,7 @@ export default memo(function MessageBubble({
             targetRoomName={targetRoomName}
           />
         </div>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
       </div>
@@ -403,7 +403,7 @@ export default memo(function MessageBubble({
             fileReferenceCandidates={fileReferenceCandidates}
           />
         </div>
-        <span className="text-[11px] text-[var(--color-foreground-subtle)] mt-1 pl-1">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
       </div>
@@ -430,7 +430,7 @@ export default memo(function MessageBubble({
         </div>
         <div className="mt-1 pr-1 flex items-center gap-2 justify-end">
           {pendingBadge}
-          <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+          <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
             {formatTime(message.created_at)}
           </span>
         </div>
@@ -478,7 +478,7 @@ export default memo(function MessageBubble({
       </div>
       <div className="mt-1 pl-1 flex items-center gap-2">
         {pendingBadge}
-        <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+        <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
           {formatTime(message.created_at)}
         </span>
       </div>

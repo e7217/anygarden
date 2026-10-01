@@ -40,7 +40,7 @@ export function UsageSection() {
           <h1 className="text-heading text-[var(--color-foreground)]">
             {t('admin.usage.title')}
           </h1>
-          <p className="mt-1 text-[13px] text-[var(--color-foreground-muted)]">
+          <p className="mt-1 text-caption font-normal text-[var(--color-foreground-muted)]">
             {t('admin.usage.description')}
           </p>
         </div>
@@ -63,7 +63,7 @@ export function UsageSection() {
       </header>
 
       {status === 'error' && (
-        <div className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-[13px] text-[var(--color-destructive)]">
+        <div className="mb-4 rounded-[var(--radius-md)] border border-[var(--color-destructive)]/30 bg-[var(--color-destructive)]/10 px-3 py-2 text-caption font-normal text-[var(--color-destructive)]">
           {t('admin.usage.loadError', { error: displayError ?? '' })}
         </div>
       )}
@@ -87,7 +87,7 @@ export function UsageSection() {
 
       {/* By model */}
       <section className="mb-6">
-        <h2 className="mb-2 text-[14px] font-semibold text-[var(--color-foreground)]">
+        <h2 className="mb-2 text-caption font-semibold text-[var(--color-foreground)]">
           {t('admin.usage.byModel')}
         </h2>
         {usage && usage.by_model.length > 0 ? (
@@ -99,8 +99,8 @@ export function UsageSection() {
 
       {/* By agent */}
       <section>
-        <h2 className="mb-2 text-[14px] font-semibold text-[var(--color-foreground)]">
-          {t('admin.usage.byAgent')} <span className="text-[12px] font-normal text-[var(--color-foreground-muted)]">{t('admin.usage.topFive')}</span>
+        <h2 className="mb-2 text-caption font-semibold text-[var(--color-foreground)]">
+          {t('admin.usage.byAgent')} <span className="text-badge font-normal text-[var(--color-foreground-muted)]">{t('admin.usage.topFive')}</span>
         </h2>
         {usage && usage.by_agent.length > 0 ? (
           <AgentList buckets={usage.by_agent.slice(0, 5)} />
@@ -117,14 +117,14 @@ function SummaryCard({
 }: { value: string; label: string; hint?: string }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-4 shadow-whisper">
-      <p className="text-[20px] font-bold tracking-tight text-[var(--color-foreground)]">
+      <p className="text-lead font-bold tracking-tight text-[var(--color-foreground)]">
         {value}
       </p>
-      <p className="mt-0.5 text-[12px] text-[var(--color-foreground-muted)]">
+      <p className="mt-0.5 text-badge font-normal text-[var(--color-foreground-muted)]">
         {label}
       </p>
       {hint && (
-        <p className="mt-1 text-[10px] text-[var(--color-foreground-subtle)]">
+        <p className="mt-1 text-badge font-normal text-[var(--color-foreground-subtle)]">
           {hint}
         </p>
       )}
@@ -143,10 +143,10 @@ function ModelBars({ buckets }: { buckets: UsageBucket[] }) {
           return (
             <div key={b.key}>
               <div className="mb-0.5 flex items-baseline justify-between gap-2">
-                <span className="text-[13px] font-medium text-[var(--color-foreground)]">
+                <span className="text-caption font-medium text-[var(--color-foreground)]">
                   {b.key}
                 </span>
-                <span className="text-[12px] text-[var(--color-foreground-muted)]">
+                <span className="text-badge font-normal text-[var(--color-foreground-muted)]">
                   {t('admin.usage.requestCount', { count: formatCount(b.request_count) })}
                 </span>
               </div>
@@ -156,7 +156,7 @@ function ModelBars({ buckets }: { buckets: UsageBucket[] }) {
                   style={{ width: `${pct}%` }}
                 />
               </div>
-              <p className="mt-0.5 text-[11px] text-[var(--color-foreground-muted)]">
+              <p className="mt-0.5 text-badge font-normal text-[var(--color-foreground-muted)]">
                 {t('admin.usage.tokenBreakdown', { prompt: formatTokens(b.prompt_tokens), completion: formatTokens(b.completion_tokens) })}
               </p>
             </div>
@@ -174,10 +174,10 @@ function AgentList({ buckets }: { buckets: UsageBucket[] }) {
       <ul className="divide-y divide-[var(--color-border)]">
         {buckets.map(b => (
           <li key={b.key} className="flex items-center justify-between px-4 py-2.5">
-            <code className="text-[12px] text-[var(--color-foreground-muted)]">
+            <code className="text-badge font-normal text-[var(--color-foreground-muted)]">
               {b.key}
             </code>
-            <span className="text-[13px] text-[var(--color-foreground)]">
+            <span className="text-caption font-normal text-[var(--color-foreground)]">
               {t('admin.usage.requestCount', { count: formatCount(b.request_count) })}
             </span>
           </li>
@@ -191,7 +191,7 @@ function EmptyBlock({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-4 py-6">
       <BarChart3 className="h-5 w-5 text-[var(--color-foreground-subtle)]" />
-      <p className="text-[13px] text-[var(--color-foreground-muted)]">{label}</p>
+      <p className="text-caption font-normal text-[var(--color-foreground-muted)]">{label}</p>
     </div>
   )
 }

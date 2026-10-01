@@ -17,19 +17,19 @@ export default function LoginPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)]">
+      <main className="flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)]">
         <p className="text-caption text-[var(--color-foreground-muted)]">{t('common.loading')}</p>
-      </div>
+      </main>
     )
   }
 
   return (
-    <div className="relative flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)] px-4 py-16">
+    <main className="relative flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)] px-4 py-16">
       <div className="absolute right-4 top-4 flex items-center gap-2">
         <LocaleToggle compact />
         <ThemeToggle />
       </div>
       <LoginForm />
-    </div>
+    </main>
   )
 }

@@ -74,7 +74,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[12px] text-[var(--color-foreground-muted)]">
+        <p className="text-caption font-normal text-[var(--color-foreground-muted)]">
           {t('admin.goals.description')}
         </p>
         <div className="ml-auto flex items-center gap-1">
@@ -112,26 +112,29 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
       )}
 
       {goals.length === 0 && !showForm && !loading && !error && (
-        <p className="rounded-[var(--radius-sm)] border border-dashed border-[var(--color-border)] px-3 py-4 text-center text-[12px] text-[var(--color-foreground-subtle)]">
+        <p className="rounded-[var(--radius-sm)] border border-dashed border-[var(--color-border)] px-3 py-4 text-center text-caption font-normal text-[var(--color-foreground-subtle)]">
           {t('admin.goals.none')}
         </p>
       )}
 
-      {goals.map((g) => (
+      {goals.map((g) => {
+        const statusText = g.status === 'active' ? t('admin.goals.status.active') : g.status === 'paused' ? t('admin.goals.status.paused') : g.status === 'failed' ? t('admin.goals.status.failed') : g.status
+        return (
         <div
           key={g.id}
           className="flex flex-wrap items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-3 py-2"
         >
           <span
             className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${statusDot(g.status)}`}
-            title={g.status === 'active' ? t('admin.goals.status.active') : g.status === 'paused' ? t('admin.goals.status.paused') : g.status === 'failed' ? t('admin.goals.status.failed') : g.status}
+            title={statusText}
+            aria-hidden="true"
           />
           <div className="min-w-0 flex-1 basis-40">
             <p className="truncate text-sm text-[var(--color-foreground)]">
               {g.title}
             </p>
-            <p className="text-[11px] text-[var(--color-foreground-subtle)]">
-              {g.trigger_type === 'cron' ? t('admin.goals.trigger.cron') : g.trigger_type === 'interval' ? t('admin.goals.trigger.interval') : g.trigger_type}
+            <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">
+              {statusText} · {g.trigger_type === 'cron' ? t('admin.goals.trigger.cron') : g.trigger_type === 'interval' ? t('admin.goals.trigger.interval') : g.trigger_type}
               {g.trigger_type === 'cron' && (
                 <> · {(g.trigger_config as { cron?: string }).cron}</>
               )}
@@ -147,7 +150,7 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
                 </span>
               )}
             </p>
-            <p className="mt-1 line-clamp-2 text-[11px] text-[var(--color-foreground-muted)]">
+            <p className="mt-1 line-clamp-2 text-badge font-normal text-[var(--color-foreground-muted)]">
               {g.spec}
             </p>
             {g.report_room_id && <Button variant="ghost" size="sm" className="mt-1 max-w-full" title={g.report_room_id} onClick={() => { onNavigateAway?.(); navigate(`/rooms/${g.report_room_id}`) }}>{t('agentSetup.openReportRoom')}</Button>}
@@ -198,7 +201,8 @@ function AgentGoalsPanel({ agentId, agentName = '', onNavigateAway }: GoalsPanel
             </Button>
           </div>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

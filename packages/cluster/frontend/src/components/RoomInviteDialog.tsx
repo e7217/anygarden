@@ -170,8 +170,9 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
-              <Label>{t('guest.expiry')}</Label>
+              <Label htmlFor="invite-expiry">{t('guest.expiry')}</Label>
               <select
+                id="invite-expiry"
                 value={expirySeconds === null ? 'never' : String(expirySeconds)}
                 onChange={(e) => {
                   const v = e.target.value
@@ -218,7 +219,7 @@ export default function RoomInviteDialog({ roomId, open, onOpenChange }: Props) 
               readOnly
               rows={2}
               value={inviteUrl(freshToken)}
-              className="w-full resize-none rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-xs"
+              className="w-full resize-none rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-sm"
               aria-label={t('guest.copyLink')}
               onFocus={(e) => e.target.select()}
             />

@@ -23,7 +23,7 @@
   gap: 8px;
   font-family: Inter, system-ui, sans-serif;
   box-sizing: border-box;
-  transition: border-color 180ms, border-width 180ms;
+  transition: border-color 180ms, outline-color 180ms;
 }
 
 .agent-node__glyph {

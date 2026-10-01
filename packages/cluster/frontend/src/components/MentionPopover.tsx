@@ -57,7 +57,7 @@ export default function MentionPopover({
             }`}
             onMouseDown={(e) => { e.preventDefault(); onSelect(option) }}
           >
-            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-[10px]">
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-alt)] text-badge">
               {option.kind === 'room'
                 ? '#'
                 : option.kind === 'everyone'
@@ -72,15 +72,15 @@ export default function MentionPopover({
               <span className="flex items-center gap-2">
                 <span className="truncate">{option.display}</span>
                 {option.kind === 'agent' && (
-                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">{t('chat.agentLabel')}</span>
+                  <span className="ml-auto shrink-0 text-badge font-normal text-[var(--color-foreground-subtle)]">{t('chat.agentLabel')}</span>
                 )}
                 {option.kind === 'file' && (
-                  <span className="ml-auto shrink-0 text-[10px] text-[var(--color-foreground-subtle)]">{t('chat.fileLabel')}</span>
+                  <span className="ml-auto shrink-0 text-badge font-normal text-[var(--color-foreground-subtle)]">{t('chat.fileLabel')}</span>
                 )}
               </span>
               {hasDesc && (
                 <span
-                  className="truncate text-[11px] text-[var(--color-foreground-subtle)]"
+                  className="truncate text-badge font-normal text-[var(--color-foreground-subtle)]"
                   data-testid="mention-option-description"
                 >
                   {desc}

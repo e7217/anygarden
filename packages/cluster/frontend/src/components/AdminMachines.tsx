@@ -365,7 +365,7 @@ export default function AdminMachines() {
                 <button
                   key={m.id}
                   onClick={() => setSelectedId(m.id)}
-                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-all lg:w-full ${
+                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border px-3 py-2.5 transition-[background-color,border-color,box-shadow] lg:w-full ${
                     selectedId === m.id
                       ? 'bg-[var(--color-brand-tint-bg)] border-[var(--color-brand)] shadow-[var(--shadow-card)]'
                       : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'
@@ -389,7 +389,7 @@ export default function AdminMachines() {
               {unplacedAgents.length > 0 && (
                 <button
                   onClick={() => setSelectedId(UNPLACED)}
-                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-all lg:w-full ${
+                  className={`w-48 shrink-0 text-left rounded-[var(--radius-lg)] border border-dashed px-3 py-2.5 transition-[background-color,border-color,box-shadow] lg:w-full ${
                     isUnplacedView
                       ? 'bg-[color:color-mix(in_srgb,var(--color-warning)_8%,transparent)] border-[var(--color-warning)] shadow-[var(--shadow-card)]'
                       : 'bg-[var(--color-surface-elevated)] border-[var(--color-border)] hover:shadow-[var(--shadow-card)]'

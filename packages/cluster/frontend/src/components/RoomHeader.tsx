@@ -208,7 +208,7 @@ export default function RoomHeader({
         ) : (
           <Hash className="h-5 w-5 shrink-0 text-[var(--color-foreground-subtle)]" />
         )}
-        <h2 className="min-w-0 truncate text-base font-semibold text-[var(--color-foreground)]" title={roomName}>{roomName}</h2>
+        <h1 className="min-w-0 truncate text-base font-semibold tracking-[-0.015em] text-[var(--color-foreground)]" title={roomName}>{roomName}</h1>
       </div>
       <div className="col-span-2 row-start-2 flex min-w-0 items-center gap-2 overflow-hidden pl-1 @[54rem]/header:col-span-1 @[54rem]/header:col-start-2 @[54rem]/header:row-start-1 @[54rem]/header:pl-0">
         {participantCount !== undefined && (
@@ -270,7 +270,7 @@ export default function RoomHeader({
             data-testid="room-header-ephemeral-toggle"
             className={`inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors ${
               ephemeral
-                ? 'bg-[var(--color-brand)] text-white hover:bg-[var(--color-brand-hover)]'
+                ? 'bg-[var(--color-brand)] text-[var(--color-on-brand)] hover:bg-[var(--color-brand-hover)]'
                 : 'border border-[var(--color-border)] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-foreground)]'
             }`}
           >

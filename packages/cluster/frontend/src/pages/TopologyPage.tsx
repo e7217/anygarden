@@ -233,12 +233,13 @@ export default function TopologyPage() {
 
   return (
     <PageShell title={t('topology.title')} scroll={false}>
+      <h1 className="sr-only md:hidden">{t('topology.title')}</h1>
       {/* Desktop header */}
       <div className="hidden h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-6 md:flex">
         <div className="flex items-baseline gap-3">
-          <span className="text-[17px] font-bold tracking-tight text-[var(--color-foreground)]">
+          <h1 className="text-body leading-normal font-bold tracking-tight text-[var(--color-foreground)]">
             {t('topology.title')}
-          </span>
+          </h1>
           {data && (
             <span className="text-xs text-[var(--color-foreground-muted)]">
               {t('topology.summary', {

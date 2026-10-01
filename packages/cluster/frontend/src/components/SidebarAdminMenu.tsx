@@ -27,7 +27,7 @@ function ExperimentalNavBadge() {
     <span
       aria-hidden="true"
       title={t('navigation.experimentalFeature')}
-      className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-[10px] font-semibold leading-4 text-[var(--color-brand-tint-text)]"
+      className="ml-auto shrink-0 rounded-[var(--radius-pill)] border border-[var(--color-border-subtle)] bg-[var(--color-brand-tint-bg)] px-1.5 py-[1px] text-badge font-semibold leading-4 text-[var(--color-brand-tint-text)]"
     >
       {t('navigation.experimental')}
     </span>
@@ -114,7 +114,7 @@ export default function SidebarAdminMenu({ pathname, updateAvailable, onGo }: Si
                 <Icon className="mr-2 h-4 w-4 shrink-0 text-[var(--color-foreground-subtle)]" />
                 <span className="min-w-0 truncate">{t(link.labelKey)}</span>
                 {link.path === '/admin/system' && updateAvailable && (
-                  <span className="ml-auto rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-tint-text)]" title={t('navigation.updateAvailable')}>
+                  <span className="ml-auto rounded-full bg-[var(--color-brand-tint-bg)] px-2 py-0.5 text-badge font-semibold text-[var(--color-brand-tint-text)]" title={t('navigation.updateAvailable')}>
                     {t('navigation.update')}
                   </span>
                 )}

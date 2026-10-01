@@ -1,8 +1,9 @@
 # Anygarden UI — build conventions
 
-Notion-inspired **warm-neutral** design system (React 19 + Radix primitives + Tailwind v4).
-Single accent: **Notion Blue `#0075de`**. Text is **near-black `rgba(0,0,0,0.95)`**, never pure black.
-Borders are whisper-weight `1px solid rgba(0,0,0,0.1)`; shadows are sub-0.05 opacity.
+**Quiet teal** design system, light by default with a dark theme (React 19 + Radix primitives + Tailwind v4).
+Teal marks interactive intent only (primary action `#0f766e`, white text via `--color-on-brand`); green/amber/red
+mark success/caution/error. Text is a tinted near-black (`#122522`), never pure black. Dividers use `--color-border`;
+elevation is reserved for overlays and raised cards. See the repo root `DESIGN.md` for the full contract.
 
 ## Setup — no provider needed
 
@@ -24,16 +25,16 @@ For your **own layout glue**, style with the design tokens below — never inven
 spacing. Reference them as `var(--token)` in `style={{…}}` or via the matching Tailwind class.
 
 **Color** (`var(--color-*)`):
-`background` · `foreground` (near-black) · `foreground-muted` (secondary text) · `foreground-subtle`
-· `surface` · `surface-alt` (warm off-white sections) · `surface-dark`
-· `brand` (`#0075de`, the only accent) · `brand-hover` · `brand-tint-bg` / `brand-tint-text` (pill badges)
-· `success` · `warning` · `danger` (`#c83a2b`, destructive) · `border` (whisper) · `border-strong` (inputs)
+`background` · `foreground` (tinted near-black) · `foreground-muted` (secondary text) · `foreground-subtle`
+· `surface` · `surface-alt` (secondary sections) · `surface-elevated` · `surface-hover` · `surface-selected` · `surface-dark`
+· `brand` (`#0f766e`, interactive intent only) · `brand-hover` · `brand-text` (teal links/labels) · `on-brand` · `brand-tint-bg` / `brand-tint-text` (pill badges)
+· `success` · `warning` · `danger` (`#c83a2b`, destructive) · `border` (dividers) · `border-strong` (inputs) · `overlay` (modal backdrops)
 · `status-online` · `tone-1..8` / `tone-N-fg` (seeded avatar tints).
 
 **Radius** (`var(--radius*)`): `--radius` 4px (buttons/inputs) · `-sm` 5px · `-md` 8px · `-lg` 12px (cards/dialogs) · `-xl` 16px · `-pill`.
 **Spacing** (`var(--space-N)`): 1=4px 2=8px 3=12px 4=16px 5=20px 6=24px (canonical card/dialog/section pad) 8=32px 12=48px.
 **Shadow** (`var(--shadow-*)`): `whisper` · `card` (standard elevation) · `deep` (dialogs/popovers) · `focus`.
-**Type utilities** (class — sets size + weight + line-height + tracking together; color is NOT set, apply `var(--color-foreground*)` separately): `text-display` 48 · `text-title` 32 · `text-heading` 24 · `text-lead` 20 · `text-caption` 14 · `text-badge` 12. Body is 16px Inter.
+**Type utilities** (class — sets size + weight + line-height + tracking together; color is NOT set, apply `var(--color-foreground*)` separately): `text-display` 48 · `text-title` 32 · `text-heading` 24 · `text-lead` 20 · `text-body` 16 · `text-caption` 14 · `text-badge` 12 (compact metadata only). Body is 16px Inter.
 **Custom utilities**: `shadow-card` · `shadow-deep` · `shadow-whisper` · `surface-alt`.
 **Font**: Inter (`var(--font-sans)`), loaded via the stylesheet.
 

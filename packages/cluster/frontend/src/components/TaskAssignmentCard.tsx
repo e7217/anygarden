@@ -26,13 +26,13 @@ export default function TaskAssignmentCard({ meta, title, assignee }: Props) {
   return (
     <div
       data-testid="task-assignment-card"
-      className="inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+      className="inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm shadow-whisper"
     >
       <ClipboardList
         className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand-text)]"
         aria-hidden
       />
-      <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
+      <span className="text-badge font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
         {t(meta.event === 'assigned' ? 'chat.taskAssigned' : 'chat.taskReassigned')}
       </span>
       <span className="truncate text-[var(--color-foreground)]">

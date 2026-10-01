@@ -343,7 +343,7 @@ test.describe('thread composer contract', () => {
     await threadTrigger(page).click()
     await expect(page.getByTestId('thread-panel-root')).toBeVisible()
 
-    const title = page.getByRole('heading', { name: 'e2e-room', level: 2 })
+    const title = page.getByRole('heading', { name: 'e2e-room', level: 1 })
     await expect(title).toBeVisible()
     const box = await title.boundingBox()
     expect(box).not.toBeNull()
@@ -361,7 +361,7 @@ test.describe('thread composer contract', () => {
 
     for (const width of [375, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 800 })
-      const title = page.getByRole('heading', { name: 'e2e-room', level: 2 })
+      const title = page.getByRole('heading', { name: 'e2e-room', level: 1 })
       await expect(title).toBeVisible()
       const titleBox = await title.boundingBox()
       expect(titleBox).not.toBeNull()
@@ -417,7 +417,7 @@ test.describe('thread composer contract', () => {
     const after = await expand.boundingBox()
     expect(after!.x).toBe(before!.x)
     expect(after!.y).toBe(before!.y)
-    const title = await page.getByRole('heading', { name: 'e2e-room', level: 2 }).boundingBox()
+    const title = await page.getByRole('heading', { name: 'e2e-room', level: 1 }).boundingBox()
     expect(title!.x).toBeGreaterThanOrEqual(after!.x + after!.width)
     await expand.click()
     await expect(collapse).toBeVisible()
@@ -427,7 +427,7 @@ test.describe('thread composer contract', () => {
     await page.setViewportSize({ width: 768, height: 800 })
     await openRoom(page)
 
-    const header = page.getByRole('heading', { name: 'e2e-room', level: 2 }).locator('..').locator('..')
+    const header = page.getByRole('heading', { name: 'e2e-room', level: 1 }).locator('..').locator('..')
     const before = await header.boundingBox()
     await page.getByTestId('right-rail-toggle').click()
     await expect(page.getByTestId('right-rail-root')).toBeVisible()

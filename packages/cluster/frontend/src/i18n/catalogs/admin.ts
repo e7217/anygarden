@@ -593,6 +593,12 @@ export const adminEn = {
   'admin.system.notChecked': 'not checked',
   'admin.system.updateAvailable': 'update available',
   'admin.system.upToDate': 'up to date',
+  'admin.manifest.newFilePath': 'New file path',
+  'admin.manifest.newSkillName': 'New skill name',
+  'admin.manifest.fileContent': 'Contents of {{path}}',
+  'admin.mcp.argLabel': 'Argument {{count}}',
+  'admin.mcp.envKeyLabel': 'Variable {{count}} name',
+  'admin.mcp.envValueLabel': 'Variable {{count}} value',
 } as const
 
 export const adminKo: Record<keyof typeof adminEn, string> = {
@@ -1190,4 +1196,10 @@ export const adminKo: Record<keyof typeof adminEn, string> = {
   'admin.system.notChecked': '확인 전',
   'admin.system.updateAvailable': '업데이트 가능',
   'admin.system.upToDate': '최신 버전',
+  'admin.manifest.newFilePath': '새 파일 경로',
+  'admin.manifest.newSkillName': '새 스킬 이름',
+  'admin.manifest.fileContent': '{{path}} 내용',
+  'admin.mcp.argLabel': '{{count}}번째 인수',
+  'admin.mcp.envKeyLabel': '{{count}}번째 변수 이름',
+  'admin.mcp.envValueLabel': '{{count}}번째 변수 값',
 }

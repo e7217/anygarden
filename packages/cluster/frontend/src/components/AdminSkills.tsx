@@ -487,7 +487,7 @@ export default function AdminSkills() {
                           {t(`admin.skills.${skill.status}`)}
                         </Badge>
                         <Badge variant="outline">
-                          <code className="text-[11px]">{skill.pinned_rev.slice(0, 8)}</code>
+                          <code className="text-badge font-normal">{skill.pinned_rev.slice(0, 8)}</code>
                         </Badge>
                         {skill.scripts_detected.length > 0 && (
                           <Badge
@@ -697,14 +697,14 @@ export default function AdminSkills() {
           {preview && (
             <div className="space-y-3 min-w-0">
               <div className="min-w-0">
-                <Label className="text-xs">SKILL.md</Label>
+                <Label>SKILL.md</Label>
                 <pre className="mt-1 max-h-72 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-3 text-xs">
                   {preview.skill_md}
                 </pre>
               </div>
               {preview.extra_files.length > 0 && (
                 <div className="min-w-0">
-                  <Label className="text-xs">
+                  <Label>
                     {t('admin.skills.extraFiles', { count: preview.extra_files.length })}
                   </Label>
                   <ul className="mt-1 max-h-40 max-w-full overflow-auto rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-xs">
@@ -757,7 +757,7 @@ export default function AdminSkills() {
                     </span>
                   </div>
                   {Object.keys(a.detail).length > 0 && (
-                    <pre className="mt-1 overflow-x-auto text-[11px] text-[var(--color-foreground-muted)]">
+                    <pre className="mt-1 overflow-x-auto text-badge font-normal text-[var(--color-foreground-muted)]">
                       {JSON.stringify(a.detail, null, 2)}
                     </pre>
                   )}
@@ -843,6 +843,7 @@ export default function AdminSkills() {
           <div className="flex items-center gap-2 py-2">
             <Input
               placeholder={t('admin.skills.searchPlaceholder')}
+              aria-label={t('admin.skills.searchSkills')}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => {

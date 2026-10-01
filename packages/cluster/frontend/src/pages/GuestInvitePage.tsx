@@ -71,14 +71,14 @@ export default function GuestInvitePage() {
   }
 
   return (
-    <div className="relative flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)] p-4 py-16">
+    <main className="relative flex min-h-dvh items-center justify-center bg-[var(--color-surface-alt)] p-4 py-16">
       <div className="absolute right-4 top-4 flex items-center gap-2">
         <LocaleToggle compact />
         <ThemeToggle />
       </div>
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>{t('guest.joinTitle')}</CardTitle>
+          <CardTitle as="h1">{t('guest.joinTitle')}</CardTitle>
           <CardDescription>{t('guest.joinDescription')}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -114,6 +114,6 @@ export default function GuestInvitePage() {
           </form>
         </CardContent>
       </Card>
-    </div>
+    </main>
   )
 }

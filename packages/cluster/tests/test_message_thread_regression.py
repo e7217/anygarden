@@ -556,3 +556,28 @@ def test_websocket_reply_replay_and_removed_member_fresh_gate(thread_env: dict) 
             assert exc.value.code == 4003
 
     assert asyncio.run(_message_count(thread_env["factory"], room_id)) == 2
+
+
+@pytest.mark.asyncio
+async def test_search_snippet_escapes_markup_and_names_mentions(thread_env) -> None:
+    agent_pid = thread_env["agent_participant_ids"]["a"]
+    transport = ASGITransport(app=thread_env["app"])
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await _create_root(
+            client,
+            thread_env["room_a"],
+            thread_env["tokens"]["member"],
+            f'<img src=x onerror="alert(1)"> <@user:{agent_pid}> snippetneedle',
+        )
+        search = await client.get(
+            "/api/v1/search",
+            params={"q": "snippetneedle"},
+            headers=_auth(thread_env["tokens"]["member"]),
+        )
+
+    assert search.status_code == 200, search.text
+    snippet = search.json()[0]["snippet"]
+    assert "<img" not in snippet
+    assert "&lt;img" in snippet
+    assert "<@user:" not in snippet and "&lt;@user:" not in snippet
+    assert "<mark>snippetneedle</mark>" in snippet

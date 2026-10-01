@@ -245,10 +245,10 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
                 aria-hidden="true"
               />
               <Icon className="h-3 w-3 text-[var(--color-foreground-muted)]" />
-              <span className="text-[11px] font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
+              <span className="text-badge font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
                 {statusLabels[status]}
               </span>
-              <span className="text-[11px] text-[var(--color-foreground-subtle)]">
+              <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
                 ({total})
               </span>
               {terminal && total > 0 ? (
@@ -260,7 +260,7 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
                     setConfirmClear(status)
                   }}
                   disabled={busy || loading}
-                  className="ml-auto min-h-[var(--control-sm-height)] text-[11px] text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
+                  className="ml-auto min-h-[var(--control-sm-height)] text-badge font-normal text-[var(--color-foreground-muted)] hover:text-[var(--color-foreground)] transition-colors"
                   data-testid={`tasks-clear-all-${status}`}
                 >
                   {t('admin.tasks.clearAll')}
@@ -282,7 +282,7 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
                       <button
                         type="button"
                         onClick={() => { onNavigateAway?.(); navigate(`/rooms/${task.room_id}`) }}
-                        className="inline-flex min-h-[var(--control-sm-height)] max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-[11px] text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
+                        className="inline-flex min-h-[var(--control-sm-height)] max-w-[12rem] items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-elevated)] px-2 py-0.5 text-badge text-[var(--color-foreground-muted)] hover:border-[var(--color-brand)] hover:text-[var(--color-link)] transition-colors"
                         title={t('admin.tasks.openRoom', { name: task.room_name })}
                       >
                         <span className="truncate">{task.room_name}</span>
@@ -308,7 +308,7 @@ export default function TasksPanel({ agentId, onNavigateAway }: { agentId: strin
                     onClick={() =>
                       setShowAll(prev => ({ ...prev, [status]: true }))
                     }
-                    className="mt-1.5 w-full rounded-[var(--radius-sm)] py-1 text-[11px] text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-foreground)] transition-colors"
+                    className="mt-1.5 w-full rounded-[var(--radius-sm)] py-1 text-badge font-normal text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-alt)] hover:text-[var(--color-foreground)] transition-colors"
                     data-testid={`tasks-show-all-${status}`}
                   >
                     {t('admin.tasks.showAll', { count: total })}

@@ -173,7 +173,7 @@ export default function ParticipantListPopover({
                     keep their original single-line layout. */}
                 {p.description?.trim() ? (
                   <span
-                    className="truncate text-[11px] text-[var(--color-foreground-subtle)]"
+                    className="truncate text-badge font-normal text-[var(--color-foreground-subtle)]"
                     data-testid={`participant-description-${p.id}`}
                   >
                     {p.description}
@@ -182,12 +182,12 @@ export default function ParticipantListPopover({
               </span>
               <span className="ml-auto flex shrink-0 items-center gap-1">
                 {p.kind === 'agent' && (
-                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-foreground-muted)]">
+                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-1.5 py-0 text-badge font-normal uppercase tracking-wide text-[var(--color-foreground-muted)]">
                     {t('participants.agent')}
                   </span>
                 )}
                 {p.is_anonymous && (
-                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-brand)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand-text)]">
+                  <span className="rounded-[var(--radius-sm)] border border-[var(--color-brand)] px-1.5 py-0 text-badge font-normal uppercase tracking-wide text-[var(--color-brand-text)]">
                     {t('participants.guest')}
                   </span>
                 )}
@@ -198,7 +198,7 @@ export default function ParticipantListPopover({
                     today, but the guard keeps it that way if the
                     data ever slips. */}
                 {!p.is_anonymous && (p.role === 'owner' || p.role === 'admin') && (
-                  <span className="rounded-[var(--radius-sm)] bg-[var(--color-brand-tint-bg)] px-1.5 py-0 text-[10px] uppercase tracking-wide text-[var(--color-brand-tint-text)]">
+                  <span className="rounded-[var(--radius-sm)] bg-[var(--color-brand-tint-bg)] px-1.5 py-0 text-badge font-normal uppercase tracking-wide text-[var(--color-brand-tint-text)]">
                     {t(p.role === 'owner' ? 'participants.owner' : 'participants.admin')}
                   </span>
                 )}
