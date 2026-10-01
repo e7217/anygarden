@@ -122,6 +122,9 @@ export default function AdminSkills() {
   const [searchResults, setSearchResults] = useState<SearchHit[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [searched, setSearched] = useState(false)
+  // #773 — skills.sh rejects queries shorter than this with a 400.
+  const canSearch = searchQuery.trim().length >= 2
   // Track which rows are mid-register so the button can show a
   // per-row spinner (register can take a few seconds — N+1 raw
   // fetches per skill directory).
@@ -233,25 +236,26 @@ export default function AdminSkills() {
     if (resp.status === 204) await load()
   }, [load, t, confirmAction])
 
-  // #126 — run a skills.sh search. Called on open and on every
-  // submit; TTL-cached on the server so re-opens are cheap.
+  // #126 — run a skills.sh search on submit; TTL-cached on the server.
+  // #773 — not on open: an empty query is rejected by skills.sh.
   const runSearch = useCallback(async (query: string) => {
+    if (query.trim().length < 2) return
     setSearchLoading(true)
     setSearchError(null)
+    setSearched(true)
     try {
       const qs = new URLSearchParams({ q: query, limit: '20' })
       const resp = await apiFetch(`/api/v1/admin/skills/search?${qs.toString()}`)
       if (!resp.ok) {
-        let detail = t('admin.skills.searchFailed', { status: resp.status })
-        try {
-          const body = await resp.json()
-          if (body?.detail) detail = body.detail
-        } catch { /* ignore */ }
-        throw new Error(detail)
+        // The upstream detail (e.g. "skills.sh returned 503: …") is for
+        // operators; the admin gets a readable message.
+        setSearchError(t('admin.skills.searchFailed', { status: resp.status }))
+        setSearchResults([])
+        return
       }
       setSearchResults(await resp.json())
-    } catch (e) {
-      setSearchError(e instanceof Error ? e.message : String(e))
+    } catch {
+      setSearchError(t('admin.skills.searchUnavailable'))
       setSearchResults([])
     } finally {
       setSearchLoading(false)
@@ -409,7 +413,6 @@ export default function AdminSkills() {
             size="sm"
             onClick={() => {
               setSearchOpen(true)
-              if (searchResults.length === 0) void runSearch('')
             }}
             data-testid="admin-skill-search-open"
           >
@@ -847,27 +850,27 @@ export default function AdminSkills() {
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter') void runSearch(searchQuery)
+                if (e.key === 'Enter' && canSearch) void runSearch(searchQuery)
               }}
               data-testid="admin-skill-search-input"
             />
             <Button
               onClick={() => void runSearch(searchQuery)}
-              disabled={searchLoading}
+              disabled={searchLoading || !canSearch}
               data-testid="admin-skill-search-submit"
             >
               {searchLoading ? t('admin.skills.searching') : t('common.search')}
             </Button>
           </div>
           {searchError && (
-            <div className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
+            <div role="alert" className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[color:color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-2 text-xs text-[var(--color-danger)]">
               {searchError}
             </div>
           )}
           <div className="max-h-[26rem] overflow-auto">
             {searchResults.length === 0 && !searchLoading ? (
               <p className="py-6 text-center text-sm text-[var(--color-foreground-muted)]">
-                {t('admin.skills.noSearchResults')}
+                {searched ? t('admin.skills.noSearchResults') : t('admin.skills.searchHint')}
               </p>
             ) : (
               <ul className="space-y-1">

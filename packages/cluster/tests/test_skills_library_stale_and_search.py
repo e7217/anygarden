@@ -559,6 +559,35 @@ async def test_search_endpoint_502_on_upstream_error(api_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "a", "  b  "])
+async def test_search_endpoint_skips_queries_skills_sh_rejects(
+    api_env, monkeypatch, query
+):
+    """#773 — skills.sh rejects queries under 2 characters with a 400.
+
+    Answer with an empty list instead of proxying the call and surfacing
+    the upstream error to the admin.
+    """
+    client: AsyncClient = api_env["client"]
+    token = api_env["token"]
+
+    async def fake_search(query, *, limit=20, client=None, timeout=10.0):
+        raise AssertionError("skills.sh must not be called for short queries")
+
+    monkeypatch.setattr(
+        "anygarden.api.v1.skills.skills_sh_search", fake_search,
+    )
+
+    resp = await client.get(
+        "/api/v1/admin/skills/search",
+        params={"q": query},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == []
+
+
+@pytest.mark.asyncio
 async def test_stale_endpoint_returns_cache_contents(api_env):
     client: AsyncClient = api_env["client"]
     token = api_env["token"]
