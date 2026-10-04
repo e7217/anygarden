@@ -537,10 +537,14 @@ export default function Sidebar({
                   }
                   <span className="truncate">{project.name}</span>
                 </button>
-                <SidebarProjectMenu
-                  projectId={project.id}
-                  onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
-                />
+                {/* The menu holds only "Delete project", so it is hidden when
+                    the caller may not delete (#783). */}
+                {project.can_delete && (
+                  <SidebarProjectMenu
+                    projectId={project.id}
+                    onDelete={() => setDeleteProjectTarget({ id: project.id, name: project.name })}
+                  />
+                )}
               </div>
 
               {expandedProjects.has(project.id) && (

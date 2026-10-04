@@ -51,6 +51,14 @@ class Project(Base):
         Text, nullable=True, default=None
     )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    # #783 — project access follows its creator and room membership.
+    # NULL for projects created before 082 (creator unknown).
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        default=None,
+    )
 
     # ``passive_deletes=True`` defers child cleanup to the FK's
     # ``ON DELETE CASCADE`` — without it, SA tries to UPDATE

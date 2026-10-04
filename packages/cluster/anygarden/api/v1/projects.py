@@ -6,12 +6,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.db.models import Participant, Project, Room
 from anygarden.dependencies import forbid_guest, get_db
+from anygarden.rooms.authorization import is_global_admin
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -31,7 +32,47 @@ class ProjectOut(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    model_config = {"from_attributes": True}
+    created_by: Optional[str] = None
+    # #783 — lets the UI hide actions the caller is not allowed to take.
+    can_delete: bool = False
+
+
+# ── Access rules (#783) ──────────────────────────────────────────────
+#
+# A project is visible to a global admin, to its creator, and to anyone
+# who participates in one of its rooms. Only the creator or a global
+# admin may delete it; projects created before migration 082 have no
+# recorded creator and are deletable by admins only.
+
+
+def _member_project_ids(identity: Identity):
+    """Subquery of project ids where *identity* participates in a room."""
+    member = (
+        Participant.agent_id == identity.id
+        if identity.kind == "agent"
+        else Participant.user_id == identity.id
+    )
+    return (
+        select(Room.project_id)
+        .join(Participant, Participant.room_id == Room.id)
+        .where(member, Room.project_id.isnot(None))
+    )
+
+
+def _can_delete(project: Project, identity: Identity) -> bool:
+    if is_global_admin(identity):
+        return True
+    return identity.kind == "user" and project.created_by == identity.id
+
+
+def _out(project: Project, identity: Identity) -> ProjectOut:
+    return ProjectOut(
+        id=project.id,
+        name=project.name,
+        description=project.description,
+        created_by=project.created_by,
+        can_delete=_can_delete(project, identity),
+    )
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -46,12 +87,16 @@ async def create_project(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new project."""
-    project = Project(name=body.name, description=body.description)
+    """Create a new project owned by the calling user."""
+    project = Project(
+        name=body.name,
+        description=body.description,
+        created_by=identity.id if identity.kind == "user" else None,
+    )
     db.add(project)
     await db.commit()
     await db.refresh(project)
-    return project
+    return _out(project, identity)
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -62,19 +107,25 @@ async def list_projects(
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all projects."""
-    result = await db.execute(select(Project).order_by(Project.created_at))
-    return list(result.scalars().all())
+    """List the projects the caller may see (see access rules above)."""
+    stmt = select(Project).order_by(Project.created_at)
+    if not is_global_admin(identity):
+        stmt = stmt.where(
+            or_(
+                Project.created_by == identity.id,
+                Project.id.in_(_member_project_ids(identity)),
+            )
+        )
+    result = await db.execute(stmt)
+    return [_out(p, identity) for p in result.scalars().all()]
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
     project_id: str,
     request: Request,
-    # Same gate as create/list: registered users only. Project-level
-    # owner/admin roles are not modelled separately today, so any
-    # non-guest may delete any project — matching the existing write
-    # surface on this resource.
+    # Guests never reach projects; the creator/admin rule below (#783)
+    # decides for everyone else.
     identity: Identity = Depends(forbid_guest),
     db: AsyncSession = Depends(get_db),
 ):
@@ -93,6 +144,23 @@ async def delete_project(
     ).scalar_one_or_none()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    if not _can_delete(project, identity):
+        # #783 — callers who cannot see the project get the same 404 as
+        # for a missing one, so deletion attempts don't reveal it exists.
+        is_member = (
+            await db.execute(
+                select(Project.id).where(
+                    Project.id == project_id,
+                    Project.id.in_(_member_project_ids(identity)),
+                )
+            )
+        ).scalar_one_or_none()
+        if is_member is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(
+            status_code=403,
+            detail="Only the project creator or an admin can delete this project",
+        )
 
     # Audience capture before the cascade: room ids for per-room
     # broadcasts, plus the set of user ids who participate in any of

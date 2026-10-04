@@ -10,7 +10,8 @@ import {
 import { createElement } from 'react';
 import { apiFetch } from '@/lib/api';
 
-interface Project { id: string; name: string; description?: string; }
+// ``can_delete`` (#783): the caller is the project's creator or a global admin.
+interface Project { id: string; name: string; description?: string; created_by?: string | null; can_delete?: boolean; }
 
 export interface WorkspaceAttachmentSummary {
   id: string;
