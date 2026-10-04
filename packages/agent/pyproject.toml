@@ -39,3 +39,6 @@ packages = ["anygarden_agent"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "req(*ids): requirement IDs this test verifies (see scripts/req_report.py)",
+]

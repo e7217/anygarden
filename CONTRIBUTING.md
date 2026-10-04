@@ -78,6 +78,24 @@ cores, as CI does, run it with `pytest-xdist`:
 cd packages/cluster && uv run pytest -n auto
 ```
 
+### Linking tests to requirements
+
+When a test verifies a numbered requirement (for example `AUTH-08`), mark it so
+its status can be reported from test results instead of maintained by hand:
+
+```python
+@pytest.mark.req("AUTH-08")
+def test_revoked_invite_rejects_existing_guest(): ...
+```
+
+```bash
+cd packages/cluster && uv run pytest -n auto --junitxml=/tmp/cluster.xml
+python scripts/req_report.py /tmp/cluster.xml [--spec <requirements.md>]
+```
+
+The report lists each requirement as `pass`, `fail`, `skipped` or `untested`
+(listed in `--spec` but covered by no test) and exits 1 if any test fails.
+
 For frontend changes, also type-check and bundle:
 
 ```bash
