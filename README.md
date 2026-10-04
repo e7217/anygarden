@@ -112,7 +112,7 @@ Anygarden is a `uv` workspace of two packages:
 ## Docs
 
 - Integrated local node (`anygarden start`) — [`docs/runbook/local-node.md`](docs/runbook/local-node.md)
-- Local LLM (Ollama) setup — [`docs/runbook/openhands-ollama-setup.md`](docs/runbook/openhands-ollama-setup.md)
+- Direct / self-hosted model endpoints — [`docs/runbook/direct-model-endpoints.md`](docs/runbook/direct-model-endpoints.md)
 - Architecture & design — [`docs/design/`](docs/design) · operational runbooks — [`docs/runbook/`](docs/runbook)
 - Environment variables — [`.env.example`](.env.example) · [`packages/cluster/README.md`](packages/cluster/README.md)
 - Contributing — [`CONTRIBUTING.md`](CONTRIBUTING.md)
