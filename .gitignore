@@ -61,3 +61,6 @@ ds-bundle/
 .design-sync/learnings/
 .design-sync/node_modules
 packages/cluster/frontend/dist/
+
+# Local secrets (never commit)
+/.secret/
