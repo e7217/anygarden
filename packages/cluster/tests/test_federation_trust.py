@@ -890,7 +890,10 @@ async def test_actual_jwt_admin_gate_and_peer_disabled_mode(pair):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         assert (await client.get("/api/v1/node/peers")).status_code == 401
-        token = create_user_token(a.admin, "a@example.test", False, secret=secret)
+        member = uid()
+        async with a.s.sessions.begin() as db:
+            db.add(User(id=member, email="m@example.test", password_hash="synthetic"))
+        token = create_user_token(member, "m@example.test", False, secret=secret)
         assert (
             await client.get(
                 "/api/v1/node/peers", headers={"Authorization": f"Bearer {token}"}

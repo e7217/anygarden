@@ -29,6 +29,9 @@ class _Subscription:
     generation: Optional[int] = None
     execution_control: bool = False
     socket_epoch: str = field(default_factory=lambda: str(uuid4()))
+    # #782 — the invite a guest session was admitted with, so revoking
+    # the invite can close the sockets it already let in.
+    invite_id: Optional[str] = None
 
 
 class ConnectionManager:
@@ -120,6 +123,7 @@ class ConnectionManager:
         generation: int | None = None,
         execution_control: bool = False,
         exclusive: bool = True,
+        invite_id: str | None = None,
     ) -> None:
         """Register *ws* as listening on *room_id*.
 
@@ -151,6 +155,7 @@ class ConnectionManager:
             user_id=user_id,
             generation=generation,
             execution_control=execution_control,
+            invite_id=invite_id,
         )
         async with self._lock:
             existing = list(self._by_participant.get(participant_id, []))
@@ -235,6 +240,37 @@ class ConnectionManager:
 
         async with self._lock:
             subs = list(self._rooms.get(room_id, []))
+
+        for sub in subs:
+            try:
+                await sub.ws.close(code=code, reason=reason)
+            except Exception:  # noqa: BLE001 — best-effort socket revocation
+                pass
+        for sub in subs:
+            await self.unsubscribe(sub.participant_id, websocket=sub.ws)
+        return len({sub.participant_id for sub in subs})
+
+    async def revoke_invite(
+        self,
+        invite_id: str,
+        *,
+        code: int = 4001,
+        reason: str = "Invite revoked",
+    ) -> int:
+        """Close every guest socket admitted with *invite_id* (#782).
+
+        Token checks stop new requests and reconnects; this closes the
+        sockets that were already open. Returns the number of guest
+        participants disconnected.
+        """
+
+        async with self._lock:
+            subs = [
+                sub
+                for room_subs in self._rooms.values()
+                for sub in room_subs
+                if sub.invite_id == invite_id
+            ]
 
         for sub in subs:
             try:

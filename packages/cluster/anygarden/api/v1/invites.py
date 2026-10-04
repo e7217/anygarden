@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -297,6 +297,7 @@ async def list_invites(
 @router.delete("/api/v1/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_invite(
     invite_id: str,
+    request: Request,
     identity: Identity = Depends(get_current_identity),
     db: AsyncSession = Depends(get_db),
 ):
@@ -316,4 +317,9 @@ async def revoke_invite(
     if invite.revoked_at is None:
         invite.revoked_at = datetime.now(timezone.utc)
         await db.commit()
+    # #782 — new requests from this invite's guests fail the identity
+    # check; also close the sockets they already have open.
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        await manager.revoke_invite(invite_id)
     return None
