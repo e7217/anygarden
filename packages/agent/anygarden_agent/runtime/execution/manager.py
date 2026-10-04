@@ -35,6 +35,158 @@ class LocalExecutionManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._closed = False
         self._queue_limit = queue_limit
+        # Exact durable attempts keep one local invocation across retries and
+        # restarts. Tombstones contain no lease, credential or native handle.
+        self._store.db.execute("""
+            CREATE TABLE IF NOT EXISTS turn_bindings (
+                turn_key TEXT PRIMARY KEY, identity TEXT NOT NULL,
+                local_execution_id TEXT, cancelled INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        self._store.db.execute("""
+            CREATE TABLE IF NOT EXISTS turn_stop_receipts (
+                turn_key TEXT PRIMARY KEY, was_finished INTEGER, receipt TEXT
+            )
+        """)
+        self._store.db.commit()
+
+    def _invocation_cancelled(self, local_execution_id: str) -> bool:
+        return self._store.db.execute(
+            "SELECT 1 FROM turn_bindings WHERE local_execution_id=? AND cancelled=1",
+            (local_execution_id,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _turn_key(identity: dict) -> str:
+        from .contracts import canonical
+        from .project_turn import identity_key
+
+        return canonical(identity_key(identity))
+
+    def bind_turn(self, identity: dict, local_execution_id: str) -> str:
+        """One invocation per delivered attempt; never replace an older ID."""
+        from .contracts import canonical
+        from .project_turn import ProjectTurnError, canonical_uuid
+
+        canonical_uuid(local_execution_id)
+        key = self._turn_key(identity)
+        row = self._store.db.execute("SELECT * FROM turn_bindings WHERE turn_key=?", (key,)).fetchone()
+        if row is not None:
+            import json
+
+            previous = json.loads(row["identity"])
+            if previous["execution_id"] != identity["execution_id"] or previous["input_revision"] != identity["input_revision"]:
+                raise ProjectTurnError("TURN_BINDING_CHANGED")
+            if row["cancelled"]:
+                raise ProjectTurnError("TURN_CANCELLED")
+            if row["local_execution_id"] is not None:
+                return row["local_execution_id"]
+        with self._store.db:
+            self._store.db.execute(
+                "INSERT INTO turn_bindings(turn_key,identity,local_execution_id) VALUES(?,?,?) "
+                "ON CONFLICT(turn_key) DO UPDATE SET local_execution_id=excluded.local_execution_id "
+                "WHERE turn_bindings.cancelled=0 AND turn_bindings.local_execution_id IS NULL",
+                (key, canonical(identity), local_execution_id),
+            )
+        row = self._store.db.execute("SELECT * FROM turn_bindings WHERE turn_key=?", (key,)).fetchone()
+        if row["cancelled"]:
+            raise ProjectTurnError("TURN_CANCELLED")
+        return row["local_execution_id"]
+
+    def turn_cancelled(self, identity: dict) -> bool:
+        row = self._store.db.execute("SELECT cancelled FROM turn_bindings WHERE turn_key=?", (self._turn_key(identity),)).fetchone()
+        return bool(row and row[0])
+
+    def turn_receipt(self, identity: dict) -> Receipt | None:
+        row = self._store.db.execute("SELECT local_execution_id FROM turn_bindings WHERE turn_key=?", (self._turn_key(identity),)).fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            return self._store.get(row[0])
+        except KeyError:
+            return None
+
+    async def stop_turn(self, identity: dict, local_execution_id: str | None, *, timeout: float = 8) -> dict:
+        """Persist the tombstone before cancellation; report actual process proof."""
+        import json
+
+        from .contracts import canonical
+        from .project_turn import ProjectTurnError
+
+        key = self._turn_key(identity)
+        row = self._store.db.execute("SELECT * FROM turn_bindings WHERE turn_key=?", (key,)).fetchone()
+        known = row is not None
+        if row is not None:
+            previous = json.loads(row["identity"])
+            # An initial operating turn is bound by MCP after native start.
+            # The saved local ID permits only this one-way adoption.
+            if previous["execution_id"] is not None and (
+                previous["execution_id"] != identity["execution_id"]
+                or previous["input_revision"] != identity["input_revision"]
+            ):
+                raise ProjectTurnError("TURN_BINDING_CHANGED")
+            if local_execution_id is not None and row["local_execution_id"] not in {None, local_execution_id}:
+                raise ProjectTurnError("LOCAL_EXECUTION_MISMATCH")
+            local_execution_id = row["local_execution_id"] or local_execution_id
+        with self._store.db:
+            self._store.db.execute(
+                "INSERT INTO turn_bindings VALUES(?,?,?,1) ON CONFLICT(turn_key) DO UPDATE SET "
+                "identity=excluded.identity,local_execution_id=excluded.local_execution_id,cancelled=1",
+                (key, canonical(identity), local_execution_id),
+            )
+        saved = self._store.db.execute("SELECT * FROM turn_stop_receipts WHERE turn_key=?", (key,)).fetchone()
+        if saved is not None and saved["receipt"] is not None:
+            cached = json.loads(saved["receipt"])
+            if cached["status"] != "unknown":
+                return cached
+
+        def persist(result):
+            with self._store.db:
+                self._store.db.execute(
+                    "INSERT INTO turn_stop_receipts(turn_key,receipt) VALUES(?,?) "
+                    "ON CONFLICT(turn_key) DO UPDATE SET receipt=excluded.receipt",
+                    (key, canonical(result)),
+                )
+            return result
+
+        result = {"local_execution_id": local_execution_id, "status": "unknown",
+                  "process_state": "unknown", "outcome": "unknown", "code": "LOCAL_EXECUTION_UNKNOWN"}
+        if local_execution_id is None:
+            return persist({**result, "status": "not_started", "process_state": "not_started",
+                            "outcome": "cancelled", "code": None})
+        try:
+            before = self._store.get(local_execution_id)
+        except KeyError:
+            # A binding created by an earlier unknown stop is not proof that
+            # this process prepared the invocation. Never promote missing
+            # persisted evidence to not_started just because stop was replayed.
+            unknown_origin = saved is not None and saved["receipt"] is not None and json.loads(saved["receipt"]).get("code") == "LOCAL_EXECUTION_UNKNOWN"
+            if known and not unknown_origin:
+                return persist({**result, "status": "not_started", "process_state": "not_started",
+                                "outcome": "cancelled", "code": None})
+            return persist(result)
+        was_finished = bool(saved["was_finished"]) if saved is not None and saved["was_finished"] is not None else before.outcome is not None
+        with self._store.db:
+            self._store.db.execute(
+                "INSERT INTO turn_stop_receipts(turn_key,was_finished) VALUES(?,?) "
+                "ON CONFLICT(turn_key) DO UPDATE SET was_finished=COALESCE(turn_stop_receipts.was_finished,excluded.was_finished)",
+                (key, int(was_finished)),
+            )
+        await self.owned_cancel(local_execution_id)
+        task = self._tasks.get(local_execution_id)
+        if task is not None and not task.done():
+            await asyncio.wait({task}, timeout=timeout)
+        receipt = self.owned_receipt(local_execution_id)
+        result.update(process_state=receipt.process_state, outcome=receipt.outcome)
+        if receipt.outcome is None or receipt.process_state in {"running", "unknown"}:
+            result.update(process_state="unknown", code="STOP_UNCONFIRMED")
+        elif receipt.process_state == "not_started":
+            result.update(status="not_started", code=None)
+        elif was_finished:
+            result.update(status="already_finished", process_state="finished", code=None)
+        elif receipt.process_state in {"stopped", "finished"}:
+            result.update(status="confirmed", process_state="stopped", code=None)
+        return persist(result)
 
     def capabilities(self) -> Capabilities:
         return self._runtime.capabilities()
@@ -43,6 +195,10 @@ class LocalExecutionManager:
         if self._closed:
             raise RuntimeError("execution manager is closed")
         invocation.validate()
+        if self._invocation_cancelled(invocation.execution_id):
+            from .project_turn import ProjectTurnError
+
+            raise ProjectTurnError("TURN_CANCELLED")
         if not self._authorize(invocation.scope):
             raise PermissionError("local execution permission denied")
         # Snapshot the caller-owned mapping before fingerprinting and scheduling.
@@ -64,7 +220,7 @@ class LocalExecutionManager:
         key, execution_id = invocation.scope.key, invocation.execution_id
         try:
             async with self._locks.setdefault(key, asyncio.Lock()):
-                if self._store.get(execution_id).state == "cancel_requested":
+                if self._store.get(execution_id).state == "cancel_requested" or self._invocation_cancelled(execution_id):
                     result = RuntimeResult(
                         "cancelled", "not_started", "cancelled_before_start"
                     )
@@ -97,9 +253,8 @@ class LocalExecutionManager:
                     self._store.get(execution_id).state == "cancel_requested"
                     and result.outcome == "succeeded"
                 ):
-                    result = RuntimeResult(
-                        "cancelled", "stopped", "completed_after_cancel", usage=result.usage
-                    )
+                    result = replace(result, outcome="cancelled", process_state="stopped",
+                                     reason="completed_after_cancel", text=None)
                 self._store.finish(execution_id, result)
         except asyncio.CancelledError:
             # Cancellation before runtime start has no child. Runtime.run must

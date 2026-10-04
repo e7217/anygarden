@@ -8,6 +8,7 @@ import json
 import os
 import random
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
@@ -18,7 +19,14 @@ from websockets.asyncio.client import connect as ws_connect
 
 from anygarden_agent.integrations.cycle_guard import hash_content
 from anygarden_agent.observability import metrics
-from anygarden_agent.protocol.frames import LifecycleFrame, SendFrame
+from anygarden_agent.protocol.frames import (
+    LifecycleFrame,
+    SendFrame,
+    TurnStartFrame,
+    TurnStartPermitOut,
+    TurnStopOut,
+    TurnStopResultFrame,
+)
 from anygarden_agent.protocol.versioning import build_subprotocols
 from anygarden_agent.room_cursor_store import load_cursors, save_cursors
 
@@ -179,6 +187,9 @@ class ChatClient:
         # room_id -> asyncio task
         self._tasks: dict[str, asyncio.Task] = {}
         self._handler_tasks: set[asyncio.Task] = set()
+        self._turn_start_waiters: dict[tuple, asyncio.Future] = {}
+        self._turn_stop_tasks: dict[str, asyncio.Task] = {}
+        self._execution_input_context = ContextVar("execution_input_context", default=None)
 
         # Callbacks
         self._message_handlers: list[MessageHandler] = []
@@ -223,7 +234,8 @@ class ChatClient:
         # agent); ``ephemeral`` is per-room because the user can toggle
         # it per DM.
         self._room_ephemeral: dict[str, bool] = {}
-        self._memory_md: str | None = None
+        self._memory_md: str | None = None  # Legacy archive; never used as room context.
+        self._room_memory: dict[str, dict] = {}
 
         # Per-room agent-only consecutive message counter.
         # Counts how many messages in a row came from agents (non-human)
@@ -524,7 +536,11 @@ class ChatClient:
         self._running = False
         for cancel in list(self._delegation_cleanups):
             cancel()
-        tasks = [*self._tasks.values(), *self._handler_tasks]
+        tasks = [*self._tasks.values(), *self._handler_tasks, *self._turn_stop_tasks.values()]
+        for future in self._turn_start_waiters.values():
+            if not future.done():
+                future.cancel()
+        self._turn_start_waiters.clear()
         for task in tasks:
             task.cancel()
         # Wait for tasks to finish cancellation
@@ -550,6 +566,26 @@ class ChatClient:
             self._http = None
 
     # ── Internal ─────────────────────────────────────────────────────
+
+    def _cache_room_memory(self, room_id, value, *, replace=False):
+        from anygarden_agent.memory.scope import room_memory_snapshot
+
+        snapshot = room_memory_snapshot(
+            value, room_id=room_id, generation=self._generation,
+        )
+        if snapshot is None:
+            if replace:
+                self._room_memory.pop(room_id, None)
+            return
+        previous = self._room_memory.get(room_id)
+        if previous is not None and (
+            snapshot["generation"] < previous["generation"]
+            or (snapshot["generation"] == previous["generation"]
+                and snapshot["revision"] < previous["revision"])
+        ):
+            return
+        self._room_memory[room_id] = snapshot
+        self._room_ephemeral[room_id] = snapshot.get("ephemeral", False)
 
     def _cache_roster(
         self, room_id: str, entries: list[dict[str, Any]] | None
@@ -773,7 +809,30 @@ class ChatClient:
     async def _process_frame(self, room_id: str, data: dict[str, Any], *, background_handlers: bool = False) -> None:
         """Handle a single incoming WS frame (called from _room_loop)."""
         msg_type = data.get("type")
-        if msg_type == "execution_control":
+        if msg_type == "turn_start_permit":
+            try:
+                frame = TurnStartPermitOut.model_validate(data)
+            except ValueError:
+                return
+            if frame.room_id != room_id:
+                return
+            key = (room_id, frame.request_id, frame.attempt, frame.generation, frame.local_execution_id)
+            future = self._turn_start_waiters.get(key)
+            if future is not None and not future.done():
+                future.set_result(frame)
+        elif msg_type == "turn_stop":
+            try:
+                frame = TurnStopOut.model_validate(data)
+            except ValueError:
+                return
+            if frame.room_id != room_id or frame.agent_id != self._agent_id:
+                return
+            existing = self._turn_stop_tasks.get(frame.stop_id)
+            if existing is None or existing.done():
+                task = asyncio.create_task(self._handle_turn_stop(room_id, frame))
+                self._turn_stop_tasks[frame.stop_id] = task
+                task.add_done_callback(lambda done, key=frame.stop_id: self._turn_stop_tasks.pop(key, None) if self._turn_stop_tasks.get(key) is done else None)
+        elif msg_type == "execution_control":
             await self._handle_execution_control(room_id, data)
         elif msg_type == "message":
             # Issue #157 Phase B — record the message for cycle detection
@@ -787,7 +846,13 @@ class ChatClient:
 
             # Hard filter: skip messages sent by our own participant.
             sender = data.get("participant_id")
-            if sender and sender in self._my_participant_ids:
+            from anygarden_agent.integrations.base import is_leased_task_assignment
+
+            leased_assignment = is_leased_task_assignment(data, self)
+            # Older assignment records can have the assignee as sender.
+            # A fresh server lease still authorizes that concrete task;
+            # ordinary self echoes retain the filter below.
+            if sender and sender in self._my_participant_ids and not leased_assignment:
                 # Issue #67 — a self-emitted ``[ROOM_QUERY]``/
                 # ``[DELEGATED]`` is a task boundary even though the
                 # frame is our own echo. Reset so agent-only rooms
@@ -979,12 +1044,9 @@ class ChatClient:
             # ``bump_generation`` cycle propagates cleanly.
             if "ephemeral" in data:
                 self._room_ephemeral[room_id] = bool(data.get("ephemeral"))
-            if "memory_md" in data:
-                # Server sends ``None`` when the agent has never written;
-                # preserve None so the compose helper can pick a default
-                # placeholder instead of a quoted literal ``"None"``.
-                mm = data.get("memory_md")
-                self._memory_md = mm if isinstance(mm, str) else None
+            # A missing/empty reconnect snapshot clears this room's cache;
+            # legacy top-level memory_md has no attributable room.
+            self._cache_room_memory(room_id, data.get("room_memory"), replace=True)
             # Issue #159 Phase A — cache the room's speaker-strategy
             # fields so ``decide_policy`` can dispatch on them. Default
             # 'mentioned_only' keeps pre-#159 rooms on the legacy path.
@@ -1008,6 +1070,10 @@ class ChatClient:
                 if pending not in self._tasks:
                     logger.info("ws.pending_room_join", room_id=pending, via=room_id)
                     await self.join_room(pending)
+        elif msg_type == "room_memory_changed":
+            target_room = data.get("room_id")
+            if target_room == room_id and data.get("agent_id") == self._agent_id:
+                self._cache_room_memory(target_room, data.get("room_memory"))
         elif msg_type == "room_settings_changed":
             # Issue #221 — admin PATCH on room-level settings. Only
             # non-None fields overwrite cached values so a partial
@@ -1069,6 +1135,62 @@ class ChatClient:
                 logger.error("handler.message_error", error=str(exc))
                 metrics.client_handler_error_total.inc()
 
+    async def request_turn_start(self, identity: dict, local_execution_id: str, lease: str):
+        """Fail closed if the exact server start grant cannot be obtained."""
+        from anygarden_agent.runtime.execution.project_turn import ProjectTurnError
+
+        room_id = identity["room_id"]
+        ws = self._connections.get(room_id)
+        if ws is None:
+            raise ProjectTurnError("TURN_START_DISCONNECTED")
+        packet = TurnStartFrame(
+            **{key: identity[key] for key in ("request_id", "attempt", "generation", "execution_id", "input_revision")},
+            local_execution_id=local_execution_id, lease=lease,
+        )
+        key = (room_id, identity["request_id"], identity["attempt"], identity["generation"], local_execution_id)
+        if key in self._turn_start_waiters:
+            raise ProjectTurnError("TURN_START_CONFLICT")
+        future = asyncio.get_running_loop().create_future()
+        self._turn_start_waiters[key] = future
+        try:
+            await ws.send(packet.model_dump_json())
+            try:
+                frame = await asyncio.wait_for(future, timeout=10)
+            except TimeoutError:
+                raise ProjectTurnError("TURN_START_TIMEOUT") from None
+            if not frame.allowed:
+                raise ProjectTurnError("TURN_START_DENIED")
+            if frame.execution_id != identity["execution_id"] or frame.input_revision != identity["input_revision"]:
+                raise ProjectTurnError("TURN_BINDING_CHANGED")
+            return frame.input_snapshot
+        finally:
+            self._turn_start_waiters.pop(key, None)
+
+    async def _handle_turn_stop(self, room_id: str, frame: TurnStopOut) -> None:
+        result = {"status": "unknown", "process_state": "unknown", "outcome": "unknown",
+                  "local_execution_id": frame.local_execution_id, "code": "STOP_UNCONFIRMED"}
+        adapter = getattr(self, "_execution_adapter", None)
+        if frame.generation != self._generation:
+            result["code"] = "STALE_IDENTITY"
+        elif adapter is not None and hasattr(adapter, "stop_turn"):
+            try:
+                result = await adapter.stop_turn(frame.model_dump())
+            except Exception:  # noqa: BLE001 — closed stop code, never provider details
+                # Closed code only; never expose the launch, provider or payload.
+                result["code"] = "STOP_UNCONFIRMED"
+        ws = self._connections.get(room_id)
+        if ws is not None:
+            packet = TurnStopResultFrame(
+                **{key: getattr(frame, key) for key in ("stop_id", "request_id", "attempt", "generation", "execution_id", "input_revision")},
+                **result,
+            )
+            try:
+                await ws.send(packet.model_dump_json())
+            except Exception:  # noqa: BLE001, S110 — durable stop replay recovers delivery
+                # Durable local tombstone/receipt survives; server stop replay
+                # obtains the same proof when this room reconnects.
+                pass
+
     def _can_control_execution(self) -> bool:
         adapter = getattr(self, "_execution_adapter", None)
         return bool(
@@ -1078,8 +1200,11 @@ class ChatClient:
         )
 
     async def _handle_execution_control(self, room_id: str, data: dict[str, Any]) -> None:
-        from anygarden_agent.runtime.execution.control import AgentExecutionControl, ControlError
         from anygarden_agent.runtime.execution.codex import CodexRuntime
+        from anygarden_agent.runtime.execution.control import (
+            AgentExecutionControl,
+            ControlError,
+        )
         from anygarden_agent.runtime.execution.pi import PiRuntime
 
         request_id, action = data.get("request_id"), data.get("action")
@@ -1151,6 +1276,8 @@ class ChatClient:
                 query: list[str] = ["ready=1"]
                 if self._can_control_execution():
                     query.append("execution_control=1")
+                if self.execution_launch_ready and hasattr(getattr(self, "_execution_adapter", None), "stop_turn"):
+                    query.append("turn_control=1")
                 if since > 0:
                     query.append(f"since_seq={since}")
                 if self._generation is not None:
@@ -1252,6 +1379,9 @@ class ChatClient:
             except Exception as exc:
                 logger.error("ws.unexpected_error", room_id=room_id, error=str(exc))
             finally:
+                for key, future in list(self._turn_start_waiters.items()):
+                    if key[0] == room_id and not future.done():
+                        future.set_exception(RuntimeError("TURN_START_DISCONNECTED"))
                 if self._execution_control is not None:
                     await self._execution_control.disconnected(room_id)
                 self._connections.pop(room_id, None)

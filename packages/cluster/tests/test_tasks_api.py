@@ -35,6 +35,24 @@ from anygarden.db.models import (
 from anygarden.messages.service import append_message
 
 
+@pytest.mark.asyncio
+async def test_task_spec_is_persisted_returned_and_supplied_to_assignee(tasks_env):
+    env = tasks_env
+    spec = "CAREER-ONLY: use the supplied resume; do not invent performance figures."
+    response = await env["client"].post(
+        f"/api/v1/rooms/{env['room'].id}/tasks",
+        headers={"Authorization": f"Bearer {env['token']}"},
+        json={"title": "Improve resume", "spec": spec, "assignee_participant_id": env["agent_a_p_id"]},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["spec"] == spec
+    async with env["factory"]() as db:
+        task = await db.get(Task, response.json()["id"])
+        message = (await db.scalars(select(Message).where(Message.room_id == env["room"].id))).one()
+        assert task.spec == spec
+        assert spec in message.content
+
+
 @pytest_asyncio.fixture()
 async def tasks_env() -> AsyncIterator[dict]:
     """Spin up an app + DB + room with a creator user and an assignable agent."""

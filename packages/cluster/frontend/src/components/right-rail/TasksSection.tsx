@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Plus,
   CheckCircle2,
@@ -13,7 +14,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import MarkdownContent from '@/components/MarkdownContent'
+import { DispositionNotice } from '@/components/ExecutionState'
+import TaskRecoveryState, { hasTaskRecovery } from '@/components/TaskRecoveryState'
 import { useRoomTasks, type Task } from '@/hooks/useRoomTasks'
+import { taskPresentation } from '@/lib/taskPresentation'
 import { autoRouteUnassigned } from '@/lib/routing'
 import type { Participant } from '@/pages/ChatPage'
 import { useLocale } from '@/i18n/LocaleProvider'
@@ -22,6 +27,7 @@ import { useFeedback } from '@/components/feedback/FeedbackProvider'
 interface TasksSectionProps {
   roomId: string
   participants: Record<string, Participant>
+  onNavigate?: () => void
 }
 
 // #319 — ``blocked`` / ``failed`` are system-set statuses (the goals
@@ -29,13 +35,73 @@ interface TasksSectionProps {
 // stamp ``blocked`` themselves via ``mark_task_status``). They render
 // in their own status group but are deliberately *not* in the user
 // toggle cycle — the click toggle stays on actionable transitions.
-const STATUS_ORDER = ['todo', 'in_progress', 'blocked', 'failed', 'done'] as const
+const STATUS_ORDER = ['in_progress', 'cancelling', 'blocked', 'failed', 'todo'] as const
 const STATUS_ICON: Record<string, typeof Circle> = {
   todo: Circle,
   in_progress: Clock,
   done: CheckCircle2,
   blocked: PauseCircle,
   failed: XCircle,
+  cancelled: XCircle,
+  cancelling: PauseCircle,
+  superseded: PauseCircle,
+}
+
+function TaskExecutionDetails({ task, onNavigate }: { task: Task; onNavigate?: () => void }) {
+  const { t, formatDate } = useLocale()
+  const dependencies = task.dependency_results ?? []
+  const schedule = task.schedule_context
+  const originalRequest = task.execution_operating_room_id && task.execution_source_message_id
+    ? `/rooms/${task.execution_operating_room_id}?message=${encodeURIComponent(task.execution_source_message_id)}` : null
+  if (!task.spec?.trim() && !task.result_markdown?.trim() && dependencies.length === 0 && !schedule && !originalRequest && !task.execution_objective?.trim()) return null
+  return (
+    <details data-testid={`right-rail-task-details-${task.id}`} className="min-w-0 px-2 pb-2">
+      <summary className="min-h-11 cursor-pointer content-center text-xs font-medium text-[var(--color-foreground-muted)] md:min-h-8">
+        {t('tasks.details')}
+      </summary>
+      <div className="min-w-0 space-y-3 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-alt)] p-2 text-sm [overflow-wrap:anywhere]">
+        {task.execution_objective?.trim() && (
+          <div><p className="mb-1 text-xs font-semibold">{t('tasks.originalRequest')}</p><MarkdownContent content={task.execution_objective} /></div>
+        )}
+        {originalRequest && <Link data-testid={`right-rail-task-source-${task.id}`} to={originalRequest} onClick={onNavigate} className="flex min-h-11 items-center text-xs text-[var(--color-brand-text)] underline md:min-h-8">{t('tasks.openOriginalRequest')}</Link>}
+        {task.parent_task_title && <p className="text-xs text-[var(--color-foreground-muted)]">{t('tasks.parentTask')}: {task.parent_task_title}</p>}
+        {task.spec?.trim() && (
+          <div><p className="mb-1 text-xs font-semibold">{t('tasks.instructions')}</p><MarkdownContent content={task.spec} /></div>
+        )}
+        {task.result_markdown?.trim() && (
+          <div><p className="mb-1 text-xs font-semibold">{t('tasks.result')}</p>{task.result_version != null && task.result_version > 0 && <p className="mb-1 text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: task.result_version })}</p>}<MarkdownContent content={task.result_markdown} /></div>
+        )}
+        {dependencies.length > 0 && (
+          <div>
+            <p className="mb-1 text-xs font-semibold">{t('tasks.sourceResults')}</p>
+            <div className="space-y-2">
+              {dependencies.map(source => (
+                <div key={source.task_id} className="min-w-0 border-l-2 border-[var(--color-border)] pl-2">
+                  <p className="font-medium">{source.title}</p>
+                  <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceTask')}: <code>{source.task_id}</code></p>
+                  {source.room_id && <p className="break-all text-xs text-[var(--color-foreground-muted)]">{t('tasks.sourceRoom')}: <code>{source.room_id}</code></p>}
+                  {source.result_version != null && <p className="text-xs text-[var(--color-foreground-muted)]">{t('tasks.resultVersion', { version: source.result_version })}</p>}
+                  {source.result_sha256 && <p className="truncate font-mono text-xs text-[var(--color-foreground-muted)]" title={source.result_sha256}>SHA-256: {source.result_sha256.slice(0, 12)}…</p>}
+                  {source.result_markdown?.trim() && <div className="mt-1"><MarkdownContent content={source.result_markdown} /></div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {schedule && (
+          <div className="space-y-1 text-xs text-[var(--color-foreground-muted)]">
+            <p className="font-semibold text-[var(--color-foreground)]">{t('tasks.schedule')}</p>
+            <p className="break-all">{t('tasks.goalSource')}: <code>{schedule.goal_id}</code></p>
+            {schedule.scheduled_for && <p>{t('tasks.scheduledFor')}: <time dateTime={schedule.scheduled_for}>{formatDate(new Date(schedule.scheduled_for), { dateStyle: 'medium', timeStyle: 'short', timeZone: schedule.timezone })}</time></p>}
+            <p>{t('tasks.timezone')}: <span>{schedule.timezone}</span></p>
+            {schedule.overlap_policy === 'wait' && <p>{t('tasks.overlapWait')}</p>}
+            {schedule.trigger_source === 'scheduler' && <p>{t('tasks.scheduledTrigger')}</p>}
+            {schedule.trigger_source === 'manual' && <p>{t('tasks.manualTrigger')}</p>}
+          </div>
+        )}
+      </div>
+    </details>
+  )
 }
 /**
  * Compact tasks panel for the right rail (#302). Shares the
@@ -52,7 +118,7 @@ const STATUS_ICON: Record<string, typeof Circle> = {
  * by selecting an agent. Single-agent rooms auto-fill the picker so
  * the chip is read-only — there is only one valid choice.
  */
-export default function TasksSection({ roomId, participants }: TasksSectionProps) {
+export default function TasksSection({ roomId, participants, onNavigate }: TasksSectionProps) {
   const { t } = useLocale()
   const { confirm, notify } = useFeedback()
   const statusLabel = (status: string): string => {
@@ -108,9 +174,9 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   const unassignedCount = useMemo(
     () =>
       tasks.filter(
-        (t) => t.assignee_participant_id === null && t.status !== 'done',
+        (t) => t.room_id === roomId && !t.execution_id && t.assignee_participant_id === null && t.status !== 'done',
       ).length,
-    [tasks],
+    [tasks, roomId],
   )
 
   const handleAutoRoute = async () => {
@@ -159,23 +225,18 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }
 
   const grouped = useMemo(() => {
-    // #319 — pre-seed every known status so the iteration order in
-    // STATUS_ORDER is deterministic and ``blocked`` / ``failed``
-    // sections render even when the only items in those buckets
-    // arrived via a sweeper or agent self-report.
-    const groups: Record<string, Task[]> = {
-      todo: [],
-      in_progress: [],
-      blocked: [],
-      failed: [],
-      done: [],
+    const groups: Record<string, Task[]> = {}
+    for (const task of tasks) {
+      const presentation = taskPresentation(task)
+      const status = presentation.history ? 'history' : presentation.status
+      ;(groups[status] ??= []).push(task)
     }
-    for (const t of tasks) {
-      const bucket = groups[t.status] ?? (groups[t.status] = [])
-      bucket.push(t)
-    }
+    groups.history?.sort((a, b) => b.created_at.localeCompare(a.created_at))
     return groups
   }, [tasks])
+  const recentResults = (grouped.history ?? []).filter(task => taskPresentation(task).status === 'done').slice(0, 3)
+  const remainingHistory = (grouped.history ?? []).filter(task => !recentResults.includes(task))
+  const statuses = [...STATUS_ORDER, ...Object.keys(grouped).filter(status => status !== 'history' && !STATUS_ORDER.includes(status as typeof STATUS_ORDER[number]))]
 
   const cycleStatus = async (task: Task) => {
     if (task.status === 'todo') {
@@ -222,21 +283,28 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
   }
 
   const renderRow = (task: Task) => {
-    const Icon = STATUS_ICON[task.status] ?? Circle
+    const presentation = taskPresentation(task)
+    const label = presentation.label ? t(presentation.label) : presentation.status
+    const Icon = STATUS_ICON[presentation.status] ?? Circle
+    const readOnly = Boolean(task.execution_id) || task.room_id !== roomId || presentation.history && task.status !== 'done'
     const assignee = task.assignee_participant_id
       ? participants[task.assignee_participant_id]
       : undefined
+    const assigneeName = assignee?.display_name ?? task.assignee_display_name ?? t('tasks.unassigned')
     return (
-      <div
+      <article
         key={task.id}
         data-testid={`right-rail-task-row-${task.id}`}
-        className="group relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-hover)] md:pointer-fine:flex-nowrap"
+        className="group min-w-0 rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)]"
       >
+      <div className="relative flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 md:pointer-fine:flex-nowrap">
         <Button
           variant="ghost"
           size="icon"
           onClick={() => cycleStatus(task)}
-          aria-label={t('tasks.cycle', { status: statusLabel(task.status) })}
+          aria-label={readOnly ? label : t('tasks.cycle', { status: label })}
+          disabled={readOnly}
+          title={label}
           className="shrink-0"
         >
           <Icon
@@ -258,7 +326,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             task.status === 'done'
               ? 'line-through text-[var(--color-foreground-muted)]'
               : task.status === 'failed'
-                ? 'line-through text-[var(--color-foreground-muted)]'
+                ? 'text-[var(--color-danger)]'
                 : 'text-[var(--color-foreground)]'
           }`}
           title={task.title}
@@ -268,7 +336,7 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
         {/* Keep the native picker usable on touch; desktop hover replaces
             the assignee label without reserving another row. The delete
             action has its own target beside the picker. */}
-        <div className={`relative ml-[calc(var(--control-icon-size)+.5rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.5rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_8rem] ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
+        {readOnly ? <span data-testid={`right-rail-task-owner-${task.id}`} className="max-w-full truncate text-xs text-[var(--color-foreground-muted)]" title={assigneeName}>{assigneeName}</span> : <div className={`relative ml-[calc(var(--control-icon-size)+.5rem)] flex h-[var(--control-sm-height)] w-[calc(100%-var(--control-icon-size)-.5rem)] min-w-0 items-center md:pointer-fine:ml-0 md:pointer-fine:w-auto md:pointer-fine:min-w-[5rem] md:pointer-fine:max-w-[8rem] md:pointer-fine:flex-[0_1_8rem] ${task.source_message_id ? '' : 'pr-[calc(var(--control-icon-size)+.25rem)]'}`}>
           <span
             aria-hidden="true"
             className="invisible block w-full min-w-0 max-w-full truncate text-right text-xs text-[var(--color-foreground-subtle)] md:pointer-fine:visible md:pointer-fine:group-hover:invisible md:pointer-fine:group-focus-within:invisible"
@@ -291,8 +359,8 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
               </option>
             ))}
           </Select>
-        </div>
-        {!task.source_message_id ? (
+        </div>}
+        {!readOnly && !task.source_message_id ? (
           <Button
             variant="ghost"
             size="icon"
@@ -306,6 +374,30 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
           </Button>
         ) : null}
       </div>
+      {task.execution_id && <div className="flex min-w-0 flex-wrap items-center gap-x-2 px-2 pb-1 text-xs text-[var(--color-foreground-muted)]">
+        <Link data-testid={`right-rail-task-room-${task.id}`} to={`/rooms/${task.room_id}`} onClick={onNavigate} className="flex min-h-11 min-w-0 items-center break-words text-[var(--color-brand-text)] underline md:min-h-8">{task.room_name ?? t('tasks.openTaskRoom')}</Link>
+        <span>{label}</span>
+        {task.input_revision != null && <span>{t('executions.inputVersion', { version: task.input_revision })}</span>}
+      </div>}
+      {task.execution_id && <div className="px-2 pb-2"><DispositionNotice disposition={task.disposition} inputRevision={task.input_revision} operationAction={task.execution_operation_action} /></div>}
+      {hasTaskRecovery(task.recovery) && <details className="mx-2 mb-2 min-w-0">
+        <summary className="min-h-11 cursor-pointer content-center text-sm text-[var(--color-foreground-muted)]">{t('contextRail.processingDetails')}</summary>
+        <TaskRecoveryState recovery={task.recovery} taskId={task.id} inputRevision={task.input_revision} />
+      </details>}
+      {(task.status === 'blocked' || task.status === 'failed') && task.error?.trim() && (
+        (task.error === 'APPROVAL_REJECTED' && task.recovery?.reason_code !== 'APPROVAL_REJECTED') ||
+        !(hasTaskRecovery(task.recovery) && task.recovery?.reason_code)
+      ) && (
+        <p data-testid={`right-rail-task-reason-${task.id}`} className={`break-words px-2 pb-2 text-xs [overflow-wrap:anywhere] ${task.status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-foreground-muted)]'}`}>
+          <span className="font-medium">{t('tasks.reason')}: </span>{task.error === 'APPROVAL_REJECTED' ? t('taskRecovery.reason.APPROVAL_REJECTED') : task.error}
+        </p>
+      )}
+      {task.status === 'blocked' && (task.blocked_by?.length ?? 0) > 0 && <div data-testid={`right-rail-task-blockers-${task.id}`} className="space-y-1 px-2 pb-2 text-xs text-[var(--color-foreground-muted)] [overflow-wrap:anywhere]">
+        <p className="font-medium">{t('tasks.waitingForWork')}</p>
+        {task.blocked_by!.map(blocker => <p key={blocker.task_id}><Link to={`/rooms/${blocker.room_id}`} onClick={onNavigate} className="inline-flex min-h-11 items-center text-[var(--color-brand-text)] underline md:min-h-8">{blocker.title}</Link> · {statusLabel(blocker.status)}</p>)}
+      </div>}
+      <TaskExecutionDetails task={task} onNavigate={onNavigate} />
+      </article>
     )
   }
 
@@ -362,18 +454,30 @@ export default function TasksSection({ roomId, participants }: TasksSectionProps
             {t('tasks.empty')}
           </div>
         )}
-        {STATUS_ORDER.map((status) => {
+        {statuses.map((status) => {
           const items = grouped[status] ?? []
           if (items.length === 0) return null
           return (
             <div key={status} className="mb-1 min-w-0">
               <div className="px-3 pt-1 pb-0.5 text-xs uppercase tracking-wider text-[var(--color-foreground-subtle)]">
-                {statusLabel(status)}
+                {status === 'cancelling' ? t('executions.status.cancelling') : statusLabel(status)} · {items.length}
               </div>
-              {items.map(renderRow)}
+              {items.slice(0, 5).map(renderRow)}
+              {items.length > 5 && <details className="min-w-0">
+                <summary className="min-h-11 cursor-pointer content-center px-3 text-sm text-[var(--color-brand-text)]">{t('contextRail.more', { count: items.length })}</summary>
+                {items.slice(5).map(renderRow)}
+              </details>}
             </div>
           )
         })}
+        {recentResults.length > 0 && <div className="min-w-0 pt-2" data-testid="right-rail-recent-results">
+          <h4 className="px-3 py-1 text-sm font-semibold">{t('contextRail.recentResults')}</h4>
+          {recentResults.map(renderRow)}
+        </div>}
+        {remainingHistory.length > 0 && <details className="min-w-0" data-testid="right-rail-task-history">
+          <summary className="min-h-11 cursor-pointer content-center px-3 text-sm text-[var(--color-brand-text)]">{t('contextRail.history')} ({remainingHistory.length})</summary>
+          {remainingHistory.map(renderRow)}
+        </details>}
       </div>
       {/* Inline create input + assignee picker (#312). The picker
           renders even on rooms with a single agent — disabled in

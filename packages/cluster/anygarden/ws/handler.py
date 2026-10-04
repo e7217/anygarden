@@ -9,11 +9,15 @@ from uuid import UUID, uuid4
 
 import structlog
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from sqlalchemy import func, select, update as sa_update
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.auth.dependencies import Identity, get_identity
 from anygarden.config import AnygardenSettings
+from anygarden.db.engine import begin_write_transaction
 from anygarden.db.models import (
     ActivityLog,
     Agent,
@@ -25,24 +29,14 @@ from anygarden.db.models import (
     Task,
     User,
 )
-from anygarden.agent_availability import room_notice_for_unavailable
 from anygarden.db.repository import replay_since_seq
 from anygarden.messages.metadata import REPLY_REQUEST_ID_KEY, strip_turn_proof
-from anygarden.messages.serialization import message_to_frame
-from anygarden.messages.service import append_message
-from anygarden.rooms.authorization import (
-    AGENT_EXECUTION_ROLES,
-    Capability,
-    require_capability,
-    room_authorization_session,
-)
-from anygarden.rooms.membership import ensure_agent_in_room
-from anygarden.rooms.roster import build_participants_brief
 from anygarden.messages.references import (
     InvalidSharedFileReference,
     canonicalize_shared_file_references,
 )
-from anygarden.tasks_status import TERMINAL_STATUSES
+from anygarden.messages.serialization import message_to_frame
+from anygarden.messages.service import append_message
 from anygarden.observability.metrics import (
     agent_turns_total,
     engine_call_duration_ms,
@@ -50,7 +44,6 @@ from anygarden.observability.metrics import (
     guest_rate_limited_total,
     task_redispatched_total,
 )
-from anygarden.ws.manager import ConnectionManager
 from anygarden.orchestration.rules import (
     MAX_PEER_DEPTH,
     MAX_TOTAL_PEER_HANDOFFS_PER_USER_TURN,
@@ -64,17 +57,30 @@ from anygarden.orchestration.rules import (
     strip_peer_mentions_from_content,
     undelivered_peer_calls,
 )
+from anygarden.rooms.authorization import (
+    AGENT_EXECUTION_ROLES,
+    Capability,
+    require_capability,
+    room_authorization_session,
+)
+from anygarden.rooms.membership import ensure_agent_in_room
+from anygarden.rooms.roster import build_participants_brief
+from anygarden.tasks_status import TERMINAL_STATUSES
+from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import (
     ErrorOut,
     ExecutionControlResultFrame,
     LifecycleFrame,
     MessageOut,
     ParticipantBrief,
+    SendFrame,
+    TurnStartFrame,
+    TurnStartPermitOut,
+    TurnStopResultFrame,
+    TypingFrame,
     TypingOut,
     WelcomeOut,
     parse_incoming,
-    SendFrame,
-    TypingFrame,
 )
 
 logger = structlog.get_logger(__name__)
@@ -159,6 +165,11 @@ def _lifecycle_details(frame: LifecycleFrame) -> dict[str, Any]:
         out["attempt"] = frame.turn_attempt
     if frame.turn_generation is not None:
         out["generation"] = frame.turn_generation
+    usage_metadata = getattr(frame, "usage_metadata", None)
+    if usage_metadata is not None:
+        # Protocol validation admits only counters, closed provenance codes,
+        # and hashed session identities; native text remains private.
+        out["usage_metadata"] = usage_metadata
     return out
 
 
@@ -274,7 +285,7 @@ def _capability_for_frame(frame: Any) -> Capability:
         return Capability.MESSAGE_SEND
     if isinstance(frame, TypingFrame):
         return Capability.TYPING_SEND
-    if isinstance(frame, LifecycleFrame):
+    if isinstance(frame, (LifecycleFrame, TurnStartFrame)):
         return Capability.LIFECYCLE_WRITE
     # create_room/join_room are not supported on this room endpoint, but still
     # require current read access before the handler returns the protocol error.
@@ -340,6 +351,10 @@ async def _redispatch_task_by_request_id(
     if mapping is None:
         # Live (non-assignment) turn — scope invariant: untouched.
         return False
+    # Durable attempts own their retry budget and invocation receipt. The
+    # legacy bridge must never create a second request for the same task.
+    if await db.get(AgentTurn, request_id) is not None:
+        return False
     if mapping.redispatch_count >= _MAX_TASK_REDISPATCH:
         logger.info(
             "ws.task_redispatch.bound_reached",
@@ -354,6 +369,8 @@ async def _redispatch_task_by_request_id(
     if task is None:
         # Task was deleted (CASCADE would normally take the mapping
         # too, but guard anyway).
+        return False
+    if task.execution_id is not None:
         return False
     if task.status not in _UNRESOLVED_TASK_STATUSES:
         # Already resolved (done / failed / cancelled / blocked) —
@@ -1018,10 +1035,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # agent was offline).  The SDK will auto-join them.
     pending_rooms: list[str] = []
     agent_opt_out = False
-    # Issue #237 — per-agent memory_md snapshot stamped into the welcome
-    # frame so the SDK can inject it into the engine's system prompt.
-    # None for user/guest connections.
-    agent_memory_md: str | None = None
+    # Exact connection-room memory; the legacy global archive never enters
+    # a welcome, including empty/missing scoped memory.
+    agent_room_memory: dict | None = None
     # Issue #159 Phase A — speaker strategy fields cached from the
     # Room row so the SDK can dispatch in ``decide_policy``. Defaults
     # here reproduce the pre-#159 behaviour for welcome flows that
@@ -1053,13 +1069,17 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 await db.execute(
                     select(
                         Agent.context_window_opt_out,
-                        Agent.memory_md,
                     ).where(Agent.id == identity.id)
                 )
             ).first()
             if opt_out_row is not None:
                 agent_opt_out = bool(opt_out_row[0])
-                agent_memory_md = opt_out_row[1]
+            from anygarden.memory.service import get_room_memories
+
+            # Membership may be removed or a room archived between transport
+            # authorization and welcome. An absent active scope clears cache.
+            room_memories = await get_room_memories(db, identity.id, [room_id])
+            agent_room_memory = room_memories.get(room_id)
         connected_pids = await manager.connected_participant_ids()
         connected_room_ids = {
             pid_to_room[pid] for pid in pid_to_room if pid in connected_pids
@@ -1117,7 +1137,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         next_speaker_participant_id=next_speaker_participant_id,
         participants=participants_brief,
         ephemeral=bool(room_ephemeral),
-        memory_md=agent_memory_md,
+        room_memory=agent_room_memory,
     )
     # Issue #176 — the welcome send sits OUTSIDE the main receive-loop
     # try/except (which starts at the ``try:`` on the Subscribe block
@@ -1171,6 +1191,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         execution_control=(
             identity is not None and identity.kind == "agent"
             and parse_qs(raw_query).get("execution_control") == ["1"]
+        ),
+        turn_control=(
+            identity is not None and identity.kind == "agent"
+            and parse_qs(raw_query).get("turn_control") == ["1"]
         ),
         # #731 — only agents keep the one-socket-per-participant policy
         # (#79). A user or guest opening the same room in several tabs
@@ -1257,10 +1281,15 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
         if "ready=1" in raw_query.split("&"):
             if identity is not None and identity.kind == "agent":
+                from anygarden.project_executions.stop_service import (
+                    deliver_pending_stops,
+                )
                 from anygarden.turns.service import deliver_pending_outbox
 
+                await deliver_pending_stops(session_factory, manager,
+                                            participant_ids=[participant.id])
                 await deliver_pending_outbox(
-                    session_factory, manager, participant_ids=[participant.id]
+                    session_factory, manager, participant_ids=[participant.id], app=websocket.app
                 )
             # Opt-in SDK barrier: welcome precedes subscription, so it is
             # insufficient to prove a newly joined room can receive work.
@@ -1316,6 +1345,113 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 )
                 await websocket.close(code=4003, reason=str(exc.detail))
                 return
+
+            if isinstance(frame_in, TurnStartFrame):
+                if identity.kind == "agent":
+                    if parse_qs(raw_query).get("turn_control") != ["1"]:
+                        await websocket.send_text(TurnStartPermitOut(
+                            room_id=room_id, request_id=frame_in.request_id,
+                            attempt=frame_in.attempt, generation=frame_in.generation,
+                            local_execution_id=frame_in.local_execution_id,
+                            execution_id=frame_in.execution_id,
+                            input_revision=frame_in.input_revision,
+                            allowed=False, code="NATIVE_TURN_CONTROL_REQUIRED",
+                        ).model_dump_json())
+                        continue
+                    from anygarden.turns.start_service import authorize_native_start
+
+                    limit_messages = []
+                    limit_tasks = set()
+                    usage_updates = set()
+                    sqlite_write = False
+                    try:
+                        async with session_factory() as db:
+                            sqlite_write = db.get_bind().dialect.name == "sqlite"
+                            await begin_write_transaction(db)
+                            permit = await authorize_native_start(
+                                db, agent_id=identity.id, room_id=room_id,
+                                participant_id=participant.id, packet=frame_in,
+                            )
+                            limit_messages = list(db.info.pop("project_execution_messages", []))
+                            limit_tasks = set(db.info.pop("project_execution_deadline_tasks", []))
+                            usage_updates = set(db.info.pop("project_execution_usage_updated", []))
+                            # The stop path must be able to find this native ID
+                            # even if the process starts and our socket disappears.
+                            await db.commit()
+                    except OperationalError as exc:
+                        # SQLite waits for the writer before any read snapshot.
+                        # If its bounded busy timeout expires, answer the exact
+                        # attempt with a closed denial instead of losing the
+                        # permission reply and stranding a leased worker.
+                        code = getattr(exc.orig, "sqlite_errorcode", None)
+                        if not sqlite_write or code is None or code & 0xFF not in {5, 6}:
+                            raise
+                        limit_messages, limit_tasks, usage_updates = [], set(), set()
+                        permit = TurnStartPermitOut(
+                            room_id=room_id, request_id=frame_in.request_id,
+                            attempt=frame_in.attempt, generation=frame_in.generation,
+                            local_execution_id=frame_in.local_execution_id,
+                            execution_id=frame_in.execution_id,
+                            input_revision=frame_in.input_revision,
+                            allowed=False, code="START_AUTHORIZATION_BUSY",
+                        )
+                        logger.warning("ws.native_start_busy", room_id=room_id,
+                                       request_id=frame_in.request_id)
+                    # Admission is durable before the reply. Fanout must not
+                    # delay or discard a committed permit at the SDK timeout.
+                    await websocket.send_text(permit.model_dump_json())
+                    if limit_messages or limit_tasks or usage_updates:
+                        async with session_factory() as db:
+                            from anygarden.mcp.project_tools import (
+                                broadcast_project_messages,
+                            )
+                            from anygarden.project_executions.limits import (
+                                fanout_deadline_tasks,
+                            )
+                            from anygarden.project_executions.serialization import (
+                                fanout_execution_update,
+                            )
+
+                            await broadcast_project_messages(db, app=websocket.app, messages=limit_messages)
+                            await fanout_deadline_tasks(db, manager=manager, task_ids=limit_tasks)
+                            for execution_id in usage_updates:
+                                await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                continue
+
+            if isinstance(frame_in, TurnStopResultFrame):
+                if identity.kind == "agent":
+                    from anygarden.mcp.project_tools import broadcast_project_messages
+                    from anygarden.project_executions.limits import (
+                        fanout_deadline_tasks,
+                    )
+                    from anygarden.project_executions.serialization import (
+                        fanout_execution_update,
+                    )
+                    from anygarden.project_executions.service import ExecutionConflict
+                    from anygarden.project_executions.stop_service import (
+                        record_stop_receipt,
+                    )
+                    from anygarden.turns.service import deliver_pending_outbox
+
+                    async with session_factory() as db:
+                        await begin_write_transaction(db)
+                        try:
+                            stop = await record_stop_receipt(
+                                db, agent_id=identity.id, room_id=room_id, packet=frame_in,
+                            )
+                        except ExecutionConflict as exc:
+                            await db.rollback()
+                            await websocket.send_text(ErrorOut(detail=exc.code).model_dump_json())
+                            continue
+                        messages = list(db.info.pop("project_execution_messages", []))
+                        deadline_tasks = set(db.info.pop("project_execution_deadline_tasks", []))
+                        execution_id = stop.execution_id
+                        await db.commit()
+                        await broadcast_project_messages(db, app=websocket.app, messages=messages)
+                        await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                        await fanout_deadline_tasks(db, manager=manager, task_ids=deadline_tasks)
+                    await deliver_pending_outbox(session_factory, manager, app=websocket.app)
+                continue
 
             if isinstance(frame_in, ExecutionControlResultFrame):
                 transport = getattr(manager, "execution_transport", None)
@@ -1836,6 +1972,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                 # BEFORE the commit-and-broadcast so the stamp persists on
                 # the stored row and replays correctly on reconnect.
                 async with session_factory() as db:
+                    await begin_write_transaction(db)
                     try:
                         directed_target_pid = await _directed_delegation_target(
                             db,
@@ -1854,13 +1991,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         continue
                     completion_decision = None
-                    reply_request_id: str | None = None
+                    is_execution_reply = False
                     if identity is not None and identity.kind == "agent":
                         from anygarden.turns.service import begin_completion
 
                         raw_rid = metadata.get("request_id")
-                        if isinstance(raw_rid, str):
-                            reply_request_id = raw_rid
                         raw_attempt = metadata.get("turn_attempt")
                         raw_generation = metadata.get("turn_generation")
                         raw_lease = metadata.get("turn_lease")
@@ -1881,10 +2016,26 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             lease_token=(
                                 raw_lease if isinstance(raw_lease, str) else None
                             ),
+                            reply_outcome=(metadata.get("turn_outcome")
+                                           if isinstance(metadata.get("turn_outcome"), str) else None),
                         )
                         if completion_decision.outcome in {"idempotent", "stale"}:
                             await db.commit()
                             continue
+                        if completion_decision.turn is not None and completion_decision.turn.task_id:
+                            bound_task = await db.get(Task, completion_decision.turn.task_id)
+                            is_execution_reply = bool(bound_task and bound_task.execution_id)
+                            if is_execution_reply:
+                                # Execution result/question tools dispatch the
+                                # next bound task. The visible model reply is
+                                # context, and must not start room chatter.
+                                metadata["ingest_only"] = True
+                                metadata["system_origin"] = (
+                                    "project_execution_failure"
+                                    if completion_decision.outcome == "failure"
+                                    else "project_execution_response"
+                                )
+                                directed_target_pid = None
                         # #762 — a turn that asked peers does not post its
                         # reply: it becomes the fan-in draft and the turn
                         # closes. The caller is woken with the peers'
@@ -1896,6 +2047,30 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             and completion_decision.attempt is not None
                             and not is_delegation_result
                         ):
+                            # Execution completion already publishes its one
+                            # final report transactionally. The model's return
+                            # text closes this turn without a second report.
+                            execution_task_id = completion_decision.turn.task_id
+                            if execution_task_id:
+                                from anygarden.db.models import ProjectExecution
+
+                                execution = await db.scalar(select(ProjectExecution).where(
+                                    ProjectExecution.root_task_id == execution_task_id,
+                                    ProjectExecution.operating_room_id == room_id,
+                                    ProjectExecution.lead_agent_id == identity.id,
+                                    ProjectExecution.status == "completed",
+                                    ProjectExecution.final_report_message_id.isnot(None),
+                                ))
+                                if execution is not None:
+                                    from anygarden.turns.service import finish_deferred
+
+                                    completion_decision.turn.accepted_message_id = execution.final_report_message_id
+                                    await finish_deferred(
+                                        db, turn=completion_decision.turn,
+                                        attempt=completion_decision.attempt,
+                                    )
+                                    await db.commit()
+                                    continue
                             from anygarden.orchestration.peer_fanin import (
                                 absorb_caller_reply,
                             )
@@ -1968,7 +2143,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # a stale value across sends). Drives the agent→agent
                     # causal fan-out below.
                     nominated_pid = (
-                        directed_target_pid if not is_delegation_result else None
+                        directed_target_pid
+                        if not is_delegation_result and not is_execution_reply
+                        else None
                     )
                     if nominated_pid is not None:
                         metadata["next_speaker_participant_id"] = directed_target_pid
@@ -1987,6 +2164,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # ``_compute_round_robin_next`` for the details.
                     if (
                         directed_target_pid is None
+                        and not is_execution_reply
                         and not is_delegation_result
                         and not is_thread_reply
                         and speaker_strategy == "round_robin"
@@ -2032,6 +2210,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     handoff_pid = None
                     if (
                         directed_target_pid is None
+                        and not is_execution_reply
                         and not is_delegation_result
                         and not is_thread_reply
                     ):
@@ -2062,6 +2241,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # with persona reinforcement).
                     if (
                         directed_target_pid is None
+                        and not is_execution_reply
                         and not is_delegation_result
                         and not is_thread_reply
                         and speaker_strategy == "orchestrator"
@@ -2158,6 +2338,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             attempt=completion_decision.attempt,
                             message_id=msg.id,
                         )
+                    elif (
+                        completion_decision is not None
+                        and completion_decision.outcome == "failure"
+                        and completion_decision.turn is not None
+                        and completion_decision.attempt is not None
+                    ):
+                        from anygarden.turns.service import finish_failure_notice
+
+                        await finish_failure_notice(db, turn=completion_decision.turn,
+                            attempt=completion_decision.attempt, message_id=msg.id)
                     # #425 — bind the message id so ingest/broadcast logs
                     # below carry it (cleared next loop iteration).
                     structlog.contextvars.bind_contextvars(message_id=msg.id)
@@ -2231,7 +2421,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # nomination (single-agent round_robin wraps to the
                         # sender) is skipped: a turn must not causally link
                         # to its own author.
-                        if is_delegation_result:
+                        if is_delegation_result or is_execution_reply:
                             # Result subscribers consume control replies;
                             # they never start an engine invocation. Minting
                             # a peer turn here would leave an orphan forever.
@@ -2482,7 +2672,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         await deliver_pending_outbox(
                             session_factory,
                             manager,
-                            participant_ids=connected_targets,
+                            participant_ids=connected_targets, app=websocket.app,
                         )
 
                 # Send system message if representative agent is offline
@@ -2524,32 +2714,101 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     )
                     try:
                         async with session_factory() as db:
+                            await begin_write_transaction(db)
+                            from anygarden.project_executions.limits import (
+                                close_execution_limit,
+                            )
+                            from anygarden.project_executions.usage import (
+                                settle_native_usage,
+                            )
                             from anygarden.turns.service import record_lifecycle
 
+                            # Accounting authenticates the persisted permit separately
+                            # from current workflow authority. A late historical metric
+                            # can settle once without reopening a result or task.
+                            settlement = await settle_native_usage(
+                                db, agent_id=identity.id, room_id=room_id, frame=frame_in,
+                            )
+                            if settlement.accepted and settlement.duplicate:
+                                # Transport replay of an immutable settlement
+                                # must not add another workflow audit, quota
+                                # event or redispatch after its first mirror.
+                                await db.commit()
+                                continue
                             accepted = await record_lifecycle(
                                 db, agent_id=identity.id, frame=frame_in
                             )
-                            if not accepted:
-                                await db.commit()
-                                continue
-                            await _persist_lifecycle_event(
-                                db, agent_id=identity.id, frame=frame_in
-                            )
+                            if accepted:
+                                await _persist_lifecycle_event(
+                                    db, agent_id=identity.id, frame=frame_in
+                                )
+                            # Record the exact terminal receipt first so automatic
+                            # closure can distinguish a finished process from one
+                            # that still needs a stop receipt.
+                            if settlement.accepted and settlement.limit_reason:
+                                await close_execution_limit(
+                                    db, execution_id=settlement.execution_id,
+                                    reason_code=settlement.limit_reason,
+                                )
                             # #625 (D-2) — quota availability as a first-class
                             # state: a quota-classified engine failure blocks
                             # routing with the promised reset instant; any
                             # successful engine call proves the quota recovered
                             # and clears the block. Never overrides the other
                             # not-running codes.
-                            await _apply_quota_availability(
-                                db,
-                                agent_id=identity.id,
-                                frame=frame_in,
-                                node_id=getattr(
-                                    websocket.app.state, "federation_node_id", None
-                                ),
-                            )
+                            if accepted:
+                                await _apply_quota_availability(
+                                    db,
+                                    agent_id=identity.id,
+                                    frame=frame_in,
+                                    node_id=getattr(
+                                        websocket.app.state, "federation_node_id", None
+                                    ),
+                                )
+                            recovery_messages = list(db.info.pop("project_execution_messages", []))
+                            recovery_task_ids = set(db.info.pop("project_execution_recovery_tasks", set()))
+                            limit_task_ids = set(db.info.pop("project_execution_deadline_tasks", set()))
+                            usage_updates = set(db.info.pop("project_execution_usage_updated", set()))
+                            usage_denials = dict(db.info.pop("project_execution_usage_denials", {}))
+                            if settlement.summary_changed and settlement.execution_id:
+                                usage_updates.add(settlement.execution_id)
                             await db.commit()
+                            if recovery_messages:
+                                from anygarden.mcp.project_tools import (
+                                    broadcast_project_messages,
+                                )
+
+                                await broadcast_project_messages(
+                                    db, app=websocket.app, messages=recovery_messages,
+                                )
+                            if limit_task_ids or usage_updates:
+                                from anygarden.project_executions.limits import (
+                                    fanout_deadline_tasks,
+                                )
+                                from anygarden.project_executions.serialization import (
+                                    fanout_execution_update,
+                                )
+
+                                await fanout_deadline_tasks(db, manager=manager, task_ids=limit_task_ids)
+                                for execution_id in usage_updates:
+                                    await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                        if usage_denials:
+                            from anygarden.project_executions.limits import (
+                                apply_queued_usage_denials,
+                            )
+
+                            await apply_queued_usage_denials(websocket.app, denials=usage_denials)
+                        if recovery_task_ids:
+                            from anygarden.project_executions.recovery import (
+                                fanout_recovery_updates,
+                            )
+
+                            await fanout_recovery_updates(session_factory, manager, recovery_task_ids)
+                        if not accepted:
+                            # Historical accounting already committed and fanned out;
+                            # stale workflow frames cannot affect task redispatch or
+                            # agent availability, and never duplicate the legacy ledger.
+                            continue
                         # #420 — mirror the event into the OTEL span tree.
                         _apply_lifecycle_to_trace(
                             tracing, agent_id=identity.id, frame=frame_in
@@ -2563,7 +2822,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # back the ActivityLog commit above). openhands
                         # leaves these None — it is counted via the gateway
                         # reverse-proxy — so no double-counted row is written.
-                        if _frame_carries_usage(frame_in):
+                        if (_frame_carries_usage(frame_in)
+                            and not (settlement.accepted and settlement.duplicate)):
                             await _write_lifecycle_usage_row(
                                 session_factory,
                                 agent_id=identity.id,

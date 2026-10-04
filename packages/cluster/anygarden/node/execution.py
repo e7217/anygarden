@@ -6,15 +6,16 @@ import asyncio
 import copy
 import os
 import socket
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import exists, func, select, tuple_, update
 
-from anygarden.db.models import Machine, User
+from anygarden.db.models import Agent, AgentTurn, AgentTurnAttempt, Machine, User
+from anygarden.machine.daemon import MachineDaemon
 from anygarden.node.ownership import NodeOwnershipError
 from anygarden.ws.machine_handler import handle_machine_frame
-from anygarden.machine.daemon import MachineDaemon
 
 log = structlog.get_logger(__name__)
 
@@ -217,10 +218,87 @@ class LocalExecutionBackend:
                 task.cancel()
         self.queue.put_nowait(None)
         await asyncio.gather(*self.tasks, return_exceptions=True)
+        # Remember the generations this executor owns before stopping them.
+        # A concurrent placement/generation change must not let this shutdown
+        # fence a replacement process on another executor.
+        async with self.app.state.session_factory() as db:
+            owned_generations = list(
+                (
+                    await db.execute(
+                        select(Agent.id, Agent.generation).where(
+                            Agent.placed_on_machine_id == self.machine_id,
+                        )
+                    )
+                ).all()
+            )
         await self.daemon.close_local_execution()
+        # close_local_execution confirms every process group is gone and raises
+        # on uncertain cleanup. Never make a retry eligible before that proof.
+        await self._recover_closed_turns(owned_generations)
         await self.app.state.machine_bus.unregister_local(self.machine_id, self)
         async with self.app.state.session_factory() as db:
             machine = await db.get(Machine, self.machine_id)
             if machine is not None:
                 machine.status = "offline"
                 await db.commit()
+
+    async def _recover_closed_turns(
+        self, owned_generations: list[tuple[str, int]]
+    ) -> None:
+        """Persist bounded retries after confirmed local process cleanup."""
+        if not owned_generations:
+            return
+        from anygarden.turns.service import (
+            ACTIVE_ATTEMPT_STATES,
+            OPEN_TURN_STATES,
+            recover_stalled_turns,
+        )
+
+        now = datetime.now(UTC)
+        async with self.app.state.session_factory() as db:
+            fenced = await db.execute(
+                update(AgentTurnAttempt)
+                .where(
+                    tuple_(AgentTurnAttempt.agent_id, AgentTurnAttempt.generation).in_(
+                        owned_generations
+                    ),
+                    AgentTurnAttempt.state.in_(ACTIVE_ATTEMPT_STATES),
+                    exists(
+                        select(AgentTurn.request_id).where(
+                            AgentTurn.request_id == AgentTurnAttempt.turn_id,
+                            AgentTurn.state.in_(OPEN_TURN_STATES),
+                        )
+                    ),
+                    exists(
+                        select(Agent.id).where(
+                            Agent.id == AgentTurnAttempt.agent_id,
+                            Agent.generation == AgentTurnAttempt.generation,
+                            Agent.placed_on_machine_id == self.machine_id,
+                        )
+                    ),
+                )
+                .values(
+                    lease_expires_at=now,
+                    reason=func.coalesce(AgentTurnAttempt.reason, "node_shutdown"),
+                )
+                .returning(AgentTurnAttempt.id)
+            )
+            attempt_ids = set(fenced.scalars().all())
+            await db.commit()
+        if not attempt_ids:
+            return
+        # No transport delivery on shutdown. The normal next-start dispatcher
+        # consumes the newly persisted attempts/outbox, retaining retry limits.
+        recovered = await recover_stalled_turns(
+            self.app.state.session_factory,
+            None,
+            now=now,
+            attempt_ids=attempt_ids,
+        )
+        log.info(
+            "local_execution.turns_recovered_after_cleanup",
+            attempt_count=len(attempt_ids),
+            redispatched=recovered.redispatched,
+            cancelled=recovered.cancelled,
+            failed=recovered.failed,
+        )

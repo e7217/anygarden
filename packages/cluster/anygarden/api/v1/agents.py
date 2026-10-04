@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import AfterValidator, BaseModel, Field, model_validator
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -223,8 +223,8 @@ class AgentUpdate(BaseModel):
     # Issue #237 — admin editable memory_md. Same ``_set`` flag pattern
     # as ``agents_md``: explicit opt-in lets an admin clear the field
     # (send ``memory_md=None, memory_md_set=True``) while omitting the
-    # field leaves the stored value untouched. Machine-level syncs
-    # write here too (machine -> DB flush on file change).
+    # field leaves the stored legacy archive untouched. Runtime memory uses
+    # the explicit room-scoped endpoints; daemon writes never target this field.
     memory_md: Optional[str] = None
     memory_md_set: bool = False
     # Issue #271 — public-facing introduction. ``_set`` flag follows
@@ -293,12 +293,11 @@ class AgentOut(BaseModel):
     # will wire this into the spawn path so agents actually honour
     # the flag at runtime.
     context_window_opt_out: bool = False
-    # Issue #237 — per-agent long-term memory snapshot (markdown). None
-    # for agents that have never written anything; the file at
-    # ``~/.anygarden/agents/<id>/memory/notes.md`` on the hosting machine
-    # is the runtime truth. Exposed so the admin UI can render / edit
-    # the scratchpad.
+    # Unattributed legacy archive remains readable/editable and requires an
+    # explicit room import before it can become runtime context.
     memory_md: Optional[str] = None
+    memory_scope: str = "legacy_archive"
+    memory_runtime_active: bool = False
     # Issue #271 — public-facing self-introduction. None for agents
     # that have never set one; otherwise capped at 200 chars and
     # surfaced through the WS welcome frame to peers and the LLM roster.
@@ -670,7 +669,7 @@ async def update_agent(
             body.reasoning_effort if body.reasoning_effort_set else agent.reasoning_effort,
         )
 
-    # Two change counters so peer-only metadata edits can skip the
+    # Separate change flags let peer metadata and archive edits skip the
     # ``bump_generation`` call: avatars and descriptions are read by
     # *other* clients/agents (UI rendering, peer LLM rosters), never
     # by this agent's own subprocess, so restarting it for a metadata
@@ -690,6 +689,7 @@ async def update_agent(
 
     runtime_changed = False
     peer_metadata_changed = False
+    archive_changed = False
     # #644 — set by edits to a field the participant roster *renders*
     # (``name`` → ``display_name``, ``description``). Those lines live
     # in every peer's cached roster across every shared room, so they
@@ -757,12 +757,10 @@ async def update_agent(
         agent.context_window_opt_out = bool(body.context_window_opt_out)
         runtime_changed = True
     if body.memory_md_set:
-        # #237 — admin manually edited the memory scratchpad. This
-        # becomes the new DB-side snapshot; the next spawn / resume
-        # will materialize it to ``memory/notes.md`` on the hosting
-        # machine. The restart picks up the new content.
+        # Preserve archive editing without restarting or injecting it. Runtime
+        # use requires an explicit import to a selected room's scoped memory.
         agent.memory_md = body.memory_md
-        runtime_changed = True
+        archive_changed = True
     if body.description_set:
         # #271 — public-facing introduction. The agent itself never
         # consumes this field at runtime; only *peers* see it via
@@ -779,7 +777,7 @@ async def update_agent(
         peer_metadata_changed = True
         roster_changed = True
 
-    if runtime_changed or peer_metadata_changed:
+    if runtime_changed or peer_metadata_changed or archive_changed:
         await db.commit()
         await db.refresh(agent)
 
@@ -1093,6 +1091,20 @@ async def delete_agent(
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    from anygarden.db.native_invocation_models import NativeInvocationAccounting
+
+    dm_ids = select(Room.id).join(Participant, Participant.room_id == Room.id).where(
+        Participant.agent_id == agent_id, Room.is_dm.is_(True),
+    )
+    if await db.scalar(select(NativeInvocationAccounting.id).where(or_(
+        NativeInvocationAccounting.agent_id == agent_id,
+        NativeInvocationAccounting.room_id.in_(dm_ids),
+    )).limit(1)):
+        raise HTTPException(status_code=409, detail={
+            "code": "NATIVE_INVOCATION_HISTORY_DELETE_FORBIDDEN",
+            "detail": "Recorded invocation history must be retained; stop the agent instead of deleting it",
+        })
+
     # Stop if running
     lifecycle = request.app.state.agent_lifecycle
     if agent.actual_state in ("running", "starting", "pending"):
@@ -1274,7 +1286,7 @@ async def list_agent_rooms(
     result = await db.execute(
         select(Participant, Room.name, Room.is_dm)
         .join(Room, Room.id == Participant.room_id)
-        .where(Participant.agent_id == agent_id)
+        .where(Participant.agent_id == agent_id, Room.archived_at.is_(None))
     )
     return [
         AgentRoomOut(
@@ -1663,10 +1675,18 @@ async def bulk_delete_agent_tasks(
         .where(Participant.agent_id == agent_id)
         .where(Task.status == status)
         .where(Task.source_message_id.is_(None))
+        .where(Task.is_silent.is_(False))
     )
     target_ids = list((await db.execute(id_stmt)).scalars().all())
     if target_ids:
-        await db.execute(delete(Task).where(Task.id.in_(target_ids)))
+        # Scheduled run keys must survive housekeeping so replaying a
+        # consumed slot cannot recreate work or lose verification history.
+        await db.execute(update(Task).where(
+            Task.id.in_(target_ids), Task.goal_id.isnot(None),
+        ).values(is_silent=True))
+        await db.execute(delete(Task).where(
+            Task.id.in_(target_ids), Task.goal_id.is_(None),
+        ))
         await db.commit()
     return {"deleted_count": len(target_ids)}
 

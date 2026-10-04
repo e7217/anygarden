@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -376,6 +376,36 @@ async def list_messages(
 
     await _read_access(db, room_id=room_id, identity=identity)
     return await get_message_history(db, room_id, since_seq, limit)
+
+
+@router.get("/{room_id}/messages/{message_id}/context", response_model=list[MessageOut])
+async def get_message_context(
+    room_id: str,
+    message_id: str,
+    identity: Annotated[Identity, Depends(get_current_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Resolve an exact message link even outside the latest history page."""
+    await _read_access(db, room_id=room_id, identity=identity)
+    message = await db.scalar(
+        select(MessageRow).where(MessageRow.room_id == room_id, MessageRow.id == message_id)
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found in this room")
+    root_id = message.root_message_id or message.parent_message_id or message.id
+    return (
+        await db.execute(
+            select(MessageRow)
+            .where(
+                MessageRow.room_id == room_id,
+                or_(
+                    MessageRow.seq.between(max(1, message.seq - 25), message.seq + 25),
+                    MessageRow.id == root_id,
+                ),
+            )
+            .order_by(MessageRow.seq)
+        )
+    ).scalars().all()
 
 
 @router.get("/{room_id}/thread-roots", response_model=list[MessageOut])

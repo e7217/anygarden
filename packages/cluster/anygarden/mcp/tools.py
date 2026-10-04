@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+from hashlib import sha256
 from typing import Any
 
 from fastapi import HTTPException
@@ -148,7 +149,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "Only the agent that owns the task's assignee participant "
             "may call this. Use this when you finish a unit of work, "
             "begin one, or hit a blocker so the room (and the task's "
-            "human stakeholders) stay in sync."
+            "human stakeholders) stay in sync. A completed independent QA review "
+            "uses status=done with verification verdict=pass or fail and the exact "
+            "bound target task/version. Describe fixable findings in the failed review "
+            "result; use blocked for unavailable required inputs or execution capability."
         ),
         "inputSchema": {
             "type": "object",
@@ -157,6 +161,25 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "status": {
                     "type": "string",
                     "enum": list(TASK_STATUS_VALUES),
+                },
+                "result_markdown": {
+                    "type": "string",
+                    "description": "Result and verification evidence, passed to dependent tasks.",
+                },
+                "error": {
+                    "type": "string",
+                    "description": "Actionable reason for a failed or blocked task.",
+                },
+                "artifacts": {
+                    "type": "array", "items": {"type": "object"},
+                    "description": "Optional selection of actual publications. Omit or "
+                                   "leave empty to connect this invocation's published files "
+                                   "automatically. Each supplied reference needs artifact_id "
+                                   "only; supplied metadata must match the server exactly.",
+                },
+                "verification": {
+                    "type": "object",
+                    "description": "Actual verification evidence; QA includes verdict and exact target version.",
                 },
             },
             "required": ["task_id", "status"],
@@ -193,6 +216,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "self-loops). Omit to create an unassigned "
                         "task that you intend to delegate later."
                     ),
+                },
+                "spec": {
+                    "type": "string",
+                    "maxLength": 100000,
+                    "description": "Objective, supplied inputs, constraints, expected output and completion criteria.",
                 },
                 "status": {
                     "type": "string",
@@ -530,6 +558,7 @@ async def mark_task_status(
     *,
     agent_id: str,
     arguments: dict[str, Any],
+    proof: Any = None,
 ) -> dict[str, Any]:
     """Flip a task's ``status`` on behalf of the calling agent.
 
@@ -554,11 +583,40 @@ async def mark_task_status(
             f"{sorted(TASK_STATUS_VALUES)}"
         )
 
+    for field in ("result_markdown", "error"):
+        if field in arguments and not isinstance(arguments[field], str):
+            return _error_result(f"{field} must be a string")
+
     task = (
         await db.execute(select(Task).where(Task.id == task_id))
     ).scalar_one_or_none()
     if task is None:
         return _error_result(f"task not found: {task_id}")
+    if task.execution_id is not None:
+        from anygarden.project_executions import service as execution_service
+
+        try:
+            if proof is None:
+                return _error_result("Execution tasks require the current delivered turn lease")
+            turn = await execution_service.authorize_turn(db, agent_id=agent_id, proof=proof)
+            if turn.task_id != task.id:
+                return _error_result("Execution task does not belong to this turn")
+            execution = await db.get(execution_service.ProjectExecution, task.execution_id)
+            if execution is None or execution.input_revision != task.input_revision:
+                return _error_result("Execution input revision is no longer current")
+            if execution.status in {"completed", "cancelled", "failed", "limit_reached"}:
+                return _error_result("Execution is no longer accepting task updates")
+            if task.id == execution.root_task_id and status == "done":
+                return _error_result("Use complete_project_execution to check required work and publish the final report")
+            if status == "done" and task.status != "done":
+                await execution_service.finalize_task_result(
+                    db, task=task, agent_id=agent_id, proof=proof,
+                    result_markdown=arguments.get("result_markdown", ""),
+                    artifacts=arguments.get("artifacts"),
+                    verification=arguments.get("verification"),
+                )
+        except (HTTPException, ValueError) as exc:
+            return _error_result(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
     from anygarden.task_service import (
         TaskMutationConflict,
         claim_task_cas,
@@ -636,6 +694,10 @@ async def mark_task_status(
     except TaskMutationConflict as exc:
         return _error_result(f"{exc.code}: {exc.detail}")
 
+    if "result_markdown" in arguments:
+        task.result_markdown = arguments["result_markdown"]
+    if "error" in arguments:
+        task.error = arguments["error"]
     await db.flush()
 
     # #459 (Wave 2c) — resolve-wake. When this task reaches a terminal
@@ -645,6 +707,16 @@ async def mark_task_status(
     woken: list[str] = []
     if status in TERMINAL_STATUSES:
         woken = await resolve_task_blockers(db, completed_task_id=task.id)
+        if task.execution_id is not None:
+            from anygarden.project_executions.service import reconcile_execution
+
+            await reconcile_execution(db, task=task)
+
+    deleted = False
+    if task.goal_id is not None and status in TERMINAL_STATUSES:
+        from anygarden.goals.executor import apply_completion
+
+        deleted = await apply_completion(db, task, final_status=status)
 
     return _ok_result(
         f"task {task_id} status -> {status}",
@@ -652,7 +724,10 @@ async def mark_task_status(
             "task_id": task_id,
             "status": status,
             "woken": woken,
-            "event": "claimed" if status == "in_progress" else "updated",
+            "event": "deleted" if deleted else (
+                "claimed" if status == "in_progress" else "updated"
+            ),
+            "deleted": deleted,
         },
     )
 
@@ -757,6 +832,9 @@ async def create_task(
             )
 
     clean_title = title.strip()
+    spec = arguments.get("spec")
+    if spec is not None and (not isinstance(spec, str) or len(spec) > 100000):
+        return _error_result("spec must be a string of at most 100000 characters")
 
     # ── Soft in-flight dedup (#484) ──────────────────────────────
     # An orchestrator LLM that calls create_task twice in one turn (or
@@ -781,6 +859,7 @@ async def create_task(
                 if assignee_pid is not None
                 else Task.assignee_participant_id.is_(None),
                 Task.title == clean_title,
+                Task.spec == spec if spec is not None else Task.spec.is_(None),
                 Task.status.in_(_OPEN_TASK_STATUSES),
             )
             .limit(1)
@@ -841,6 +920,7 @@ async def create_task(
         # leave it NULL. The synthetic message metadata carries the
         # full provenance.
         created_by=None,
+        spec=spec,
     )
     db.add(task)
     await db.flush()
@@ -990,6 +1070,30 @@ async def add_task_blocker(
     if blocker is None:
         return _error_result(f"blocker task not found: {blocked_by}")
 
+    # Prerequisites may cross sub-rooms within one project, never projects.
+    # A non-project room is isolated to itself.
+    own_room = await db.get(Room, task.room_id)
+    blocker_room = await db.get(Room, blocker.room_id)
+    if (
+        own_room is None or blocker_room is None
+        or (own_room.id != blocker_room.id and (
+            own_room.project_id is None
+            or own_room.project_id != blocker_room.project_id
+        ))
+    ):
+        return _error_result("forbidden: prerequisite must belong to the same project")
+    try:
+        await require_capability(
+            db, room_id=blocker.room_id,
+            identity=Identity(kind="agent", id=agent_id),
+            capability=Capability.TASK_READ,
+        )
+    except HTTPException as exc:
+        return _error_result(f"forbidden: {exc.detail}")
+
+    if task.status not in {"todo", "in_progress", "blocked"}:
+        return _error_result("cannot add a prerequisite to a terminal task")
+
     # Cycle guard: if the prospective blocker already (transitively)
     # depends on this task, adding ``task_id -> blocked_by`` would close a
     # cycle (A→B→A) and neither could ever clear. Reject at add time.
@@ -1011,6 +1115,11 @@ async def add_task_blocker(
     if existing is None:
         db.add(TaskBlocker(task_id=task_id, blocked_by_task_id=blocked_by))
         await db.flush()
+
+    # An already successful prerequisite must immediately supply its input;
+    # otherwise this edge would wait forever for an event that already fired.
+    if blocker.status in TERMINAL_STATUSES:
+        await resolve_task_blockers(db, completed_task_id=blocker.id)
 
     return _ok_result(
         f"task {task_id} now blocked by {blocked_by}",
@@ -1064,26 +1173,32 @@ async def resolve_task_blockers(
     *,
     completed_task_id: str,
 ) -> list[str]:
-    """Resolve-wake hook for a task that just reached a terminal status.
+    """Capture successful inputs and wake only fully satisfied dependents.
 
-    Called from BOTH terminal paths (``mark_task_status`` here and
-    ``api/v1/tasks.update_task``) after the status write + flush. For each
-    dependent that was blocked by ``completed_task_id``:
-
-    1. delete the now-satisfied ``(dependent, completed)`` edge;
-    2. check the dependent's *remaining* blockers — if every one of them is
-       terminal (done/failed), the dependent is fully unblocked;
-    3. only then (and only if the dependent is currently in a waiting state —
-       ``blocked``/``todo``/``failed``) return it to ``todo``, refresh
-       ``assigned_at``, and re-inject its assignment mention so the assignee
-       agent wakes through the existing mention path.
-
-    "Wake only when ALL blockers are cleared" (plan §3.2): waking on a
-    partial release would re-activate a task still stuck behind other
-    prerequisites. Returns the list of woken dependent task ids (for tests
-    and observability). Bounded + resilient — a single dependent failing to
-    wake is logged and does not abort the rest.
+    Failed prerequisites retain their edge and an actionable waiting reason.
+    Successful result snapshots survive edge removal and retries, and are
+    supplied to the assignee in the resumed assignment message.
     """
+    completed = await db.get(Task, completed_task_id)
+    if completed is None or completed.status not in TERMINAL_STATUSES:
+        return []
+    qa_failed = False
+    if completed.execution_id and completed.role == "qa" and completed.status == "done":
+        from anygarden.db.models import TaskResult
+
+        qa_result = await db.scalar(select(TaskResult).where(
+            TaskResult.task_id == completed.id,
+            TaskResult.execution_id == completed.execution_id,
+            TaskResult.input_revision == completed.input_revision,
+            TaskResult.version == completed.result_version,
+        ))
+        qa_failed = qa_result is None or (qa_result.verification or {}).get("verdict") != "pass"
+        if not qa_failed:
+            from anygarden.project_executions.qa_repairs import (
+                rewire_satisfied_qa_edges,
+            )
+
+            await rewire_satisfied_qa_edges(db, execution_id=completed.execution_id)
     # Reverse lookup — every dependent that names this task as a blocker.
     dependent_ids = (
         await db.execute(
@@ -1112,7 +1227,71 @@ async def resolve_task_blockers(
 
     woken: list[str] = []
     for dep_id in dependent_ids:
+        savepoint = None
         try:
+            # Removing the last edge, freezing its result and dispatching the
+            # dependent are one unit. A lost claim must retain the old edge.
+            savepoint = await db.begin_nested()
+            dep = await db.get(Task, dep_id)
+            if dep is None or dep.status not in {"blocked", "todo", "in_progress"}:
+                continue
+            dep_room = await db.get(Room, dep.room_id)
+            completed_room = await db.get(Room, completed.room_id)
+            if (
+                dep_room is None or completed_room is None
+                or (dep_room.id != completed_room.id and (
+                    dep_room.project_id is None
+                    or dep_room.project_id != completed_room.project_id
+                ))
+            ):
+                continue
+            if completed.status == "failed" or qa_failed:
+                if dep.status == "todo":
+                    dep = await transition_task_status_cas(
+                        db, task=dep, target_status="blocked",
+                    )
+                dep.error = ("DEPENDENCY_QA_NOT_PASSED" if qa_failed else
+                             f"Prerequisite {completed.id} failed: "
+                             f"{completed.error or 'retry or explicitly replace this prerequisite'}")
+                await db.flush()
+                continue
+
+            result = completed.result_markdown
+            snapshot = {
+                "task_id": completed.id,
+                "room_id": completed.room_id,
+                "title": completed.title,
+                "result_markdown": result,
+                "result_sha256": sha256(result.encode()).hexdigest() if result is not None else None,
+                "finished_at": completed.finished_at.isoformat() if completed.finished_at else None,
+            }
+            if completed.execution_id:
+                from anygarden.db.models import TaskResult
+
+                accepted = await db.scalar(select(TaskResult).where(
+                    TaskResult.task_id == completed.id,
+                    TaskResult.execution_id == completed.execution_id,
+                    TaskResult.input_revision == completed.input_revision,
+                    TaskResult.version == completed.result_version,
+                ))
+                if dep.execution_id != completed.execution_id or dep.input_revision != completed.input_revision:
+                    continue
+                if accepted is None:
+                    dep.error = "Prerequisite has no accepted result for this execution input revision"
+                    await db.flush()
+                    continue
+                snapshot.update({
+                    "execution_id": completed.execution_id,
+                    "input_revision": accepted.input_revision,
+                    "result_id": accepted.id, "result_version": accepted.version,
+                    "result_sha256": accepted.result_sha256,
+                    "result_markdown": accepted.result_markdown,
+                    "artifacts": accepted.artifacts, "verification": accepted.verification,
+                    "result_created_at": accepted.created_at.isoformat(),
+                })
+            snapshots = list(dep.dependency_results or [])
+            if snapshot not in snapshots:
+                dep.dependency_results = [*snapshots, snapshot]
             # 1. Drop the satisfied edge.
             await db.execute(
                 delete(TaskBlocker).where(
@@ -1134,17 +1313,12 @@ async def resolve_task_blockers(
                     .where(TaskBlocker.task_id == dep_id)
                 )
             ).scalars().all()
-            if any(s not in TERMINAL_STATUSES for s in remaining):
+            if remaining:
                 # Still blocked by something unfinished — do not wake.
                 continue
 
             # 3. Fully unblocked. Wake the dependent if it is in a waiting
             # state and still has an agent assignee to notify.
-            dep = (
-                await db.execute(select(Task).where(Task.id == dep_id))
-            ).scalar_one_or_none()
-            if dep is None:
-                continue
             if dep.status not in ("blocked", "todo"):
                 # Moving or terminal work must not be reopened implicitly.
                 continue
@@ -1156,6 +1330,7 @@ async def resolve_task_blockers(
                         target_status="todo",
                     )
                 except TaskMutationConflict:
+                    await savepoint.rollback()
                     continue
             if not dep.assignee_participant_id:
                 # No assignee to wake; status was normalized above.
@@ -1180,6 +1355,13 @@ async def resolve_task_blockers(
                     )
                 ).scalar_one_or_none()
                 if room is not None:
+                    if dep.execution_id:
+                        from anygarden.task_service import claim_task_cas
+
+                        dep = await claim_task_cas(
+                            db, task_id=dep.id, room_id=dep.room_id,
+                            participant_id=dep.assignee_participant_id,
+                        )
                     await inject_task_assignment_message(
                         db,
                         room=room,
@@ -1189,12 +1371,17 @@ async def resolve_task_blockers(
                     )
             woken.append(dep_id)
         except Exception:  # pragma: no cover — defence in depth
+            if savepoint is not None and savepoint.is_active:
+                await savepoint.rollback()
             log.exception(
                 "resolve_task_blockers: failed to process dependent %s "
                 "(blocker %s); continuing",
                 dep_id,
                 completed_task_id,
             )
+        finally:
+            if savepoint is not None and savepoint.is_active:
+                await savepoint.commit()
 
     if woken:
         log.info(

@@ -1,8 +1,8 @@
 """Room artifact service (#290 Phase B).
 
 Handles ``room_artifact_produced`` frames coming from the machine
-daemon: validate payload, fan-out to every room the producing agent
-is currently placed in, persist bytes + DB row, broadcast
+daemon: validate payload, fan-out within the producing room's project,
+persist bytes + DB row, broadcast
 ``room_artifact.added`` to live WebSocket subscribers.
 
 Distinct from :mod:`anygarden.rooms.shared_files` — that module covers
@@ -11,10 +11,9 @@ flow. The two share patterns (disk + DB split, sha256 dedup) but
 their MIME / size policies and broadcast directions are inverted, so
 they live as siblings rather than getting merged.
 
-Routing decision (plan §3.2 D8): for the first cut we fan-out to
-*every* room the producing agent is placed in, with sha256 dedup per
-room. Tighter scoping (mention-driven, last-spoken-room) is a
-follow-up once real usage tells us which heuristic feels right.
+Artifacts never cross project boundaries. A source ``room_id`` selects
+the project; legacy unscoped frames are accepted only when the agent's
+active room memberships identify one project without ambiguity.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Agent, Participant, RoomArtifact
+from anygarden.db.models import Agent, Participant, Room, RoomArtifact
 from anygarden.rooms import artifact_storage
 from anygarden.rooms.shared_files import (
     InvalidFilenameError,
@@ -119,9 +118,10 @@ async def handle_artifact_produced(
     frame: dict[str, Any],
     *,
     artifact_files_dir: Path,
+    expected_machine_id: str | None = None,
 ) -> list[RoomArtifact]:
-    """Persist *frame* into every room the producing agent participates
-    in. Returns the freshly inserted rows (omitting silently dedup'd
+    """Persist *frame* into the agent's rooms in its source project.
+    Returns the freshly inserted rows (omitting silently dedup'd
     duplicates) so the caller can broadcast ``room_artifact.added``.
 
     Idempotent thanks to ``UniqueConstraint(room_id, sha256)`` —
@@ -144,23 +144,66 @@ async def handle_artifact_produced(
     if agent is None:
         log.warning("room_artifact_unknown_agent", agent_id=agent_id)
         return []
+    if expected_machine_id is not None and agent.placed_on_machine_id != expected_machine_id:
+        log.warning(
+            "room_artifact_rejected",
+            reason="producer does not belong to the authenticated machine",
+            agent_id=agent_id,
+            machine_id=expected_machine_id,
+        )
+        return []
 
-    # Find every room this agent is currently placed in. Use
-    # Participant rows because that's the source of truth for
-    # placement; ``Agent.placed_on_machine_id`` only tells us which
-    # *machine* hosts it, not which rooms.
+    # Membership validates the claimed source as well as its audience.
+    # An agent may serve multiple projects, so its placement alone must
+    # never become an artifact's publishing scope.
     rows = (
         await session.execute(
-            select(Participant.room_id).where(
-                Participant.agent_id == agent_id
+            select(Room)
+            .join(Participant, Participant.room_id == Room.id)
+            .where(
+                Participant.agent_id == agent_id,
+                Room.archived_at.is_(None),
             )
         )
     ).scalars().all()
-    target_rooms = list(dict.fromkeys(rows))  # preserve order, dedup
+    rooms = {room.id: room for room in rows}
 
-    if not target_rooms:
+    if not rooms:
         log.info("room_artifact_no_target_rooms", agent_id=agent_id)
         return []
+
+    source_room_id = frame.get("room_id")
+    if source_room_id is not None:
+        source = rooms.get(source_room_id) if isinstance(source_room_id, str) else None
+        if source is None:
+            log.warning(
+                "room_artifact_rejected",
+                reason="source room must be an active room the agent participates in",
+                agent_id=agent_id,
+                room_id=source_room_id,
+            )
+            return []
+    elif len(rooms) == 1:
+        source = next(iter(rooms.values()))
+    else:
+        project_ids = {room.project_id for room in rooms.values()}
+        if len(project_ids) != 1 or None in project_ids:
+            log.warning(
+                "room_artifact_rejected",
+                reason="ambiguous artifact source; write to memory/outbox/<room_id>/",
+                agent_id=agent_id,
+            )
+            return []
+        source = next(iter(rooms.values()))
+
+    # A DM has no project, so only the explicit (or sole) source DM is
+    # eligible. Project rooms retain their intentional same-project fanout.
+    target_rooms = [
+        room.id
+        for room in rooms.values()
+        if room.id == source.id
+        or (source.project_id is not None and room.project_id == source.project_id)
+    ]
 
     inserted: list[RoomArtifact] = []
     for room_id in target_rooms:

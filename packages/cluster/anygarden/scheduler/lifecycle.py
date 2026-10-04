@@ -18,8 +18,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import structlog
-from sqlalchemy import and_, case, event, func, or_, select, update
+from sqlalchemy import and_, case, event, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from anygarden.agent_availability import (
     CRASHED,
@@ -42,6 +43,7 @@ from anygarden.db.models import (
     Participant,
     Room,
     SkillLibraryEntry,
+    TaskResult,
     WorkspaceAttachment,
 )
 from anygarden.engines.endpoints import build_direct_engine_secrets
@@ -63,6 +65,57 @@ logger = structlog.get_logger(__name__)
 GENERATION_REPORT_CAPABILITY = "agent_generation_reports_v1"
 LIFECYCLE_LEASE_SEC_DEFAULT = 120
 _RETRYABLE_DELIVERY_STATES = frozenset({"dispatching", "pending_ack", "unknown"})
+
+
+async def _remap_unstarted_pending_attempts(
+    db: AsyncSession, *, agent_id: str, old_generation: int, generation: int
+) -> None:
+    """Move only undelivered current intents; native/history proofs stay fixed."""
+    from anygarden.rooms.authorization import AGENT_EXECUTION_ROLES
+    from anygarden.turns.service import OPEN_TURN_STATES
+
+    producing_attempt = aliased(AgentTurnAttempt)
+    accepted_result = exists(
+        select(TaskResult.id)
+        .join(producing_attempt, producing_attempt.id == TaskResult.attempt_id)
+        .where(producing_attempt.turn_id == AgentTurn.request_id)
+        .correlate(AgentTurn)
+    )
+    current_intent = exists(
+        select(AgentTurn.request_id)
+        .join(Participant, Participant.id == AgentTurn.target_participant_id)
+        .join(Room, Room.id == Participant.room_id)
+        .where(
+            AgentTurn.request_id == AgentTurnAttempt.turn_id,
+            AgentTurn.agent_id == agent_id,
+            AgentTurn.active_attempt == AgentTurnAttempt.attempt_number,
+            AgentTurn.state.in_(OPEN_TURN_STATES),
+            AgentTurn.accepted_message_id.is_(None),
+            Participant.agent_id == agent_id,
+            Participant.room_id == AgentTurn.room_id,
+            Participant.role.in_(AGENT_EXECUTION_ROLES),
+            Room.archived_at.is_(None),
+            ~accepted_result,
+        )
+        .correlate(AgentTurnAttempt)
+    )
+    await db.execute(
+        update(AgentTurnAttempt)
+        .where(
+            AgentTurnAttempt.agent_id == agent_id,
+            AgentTurnAttempt.generation == old_generation,
+            AgentTurnAttempt.state == "pending",
+            AgentTurnAttempt.local_execution_id.is_(None),
+            AgentTurnAttempt.leased_at.is_(None),
+            AgentTurnAttempt.started_at.is_(None),
+            AgentTurnAttempt.ended_at.is_(None),
+            AgentTurnAttempt.lease_expires_at.is_(None),
+            AgentTurnAttempt.outcome.is_(None),
+            current_intent,
+        )
+        .values(generation=generation)
+        .execution_options(synchronize_session=False)
+    )
 
 
 def _lifecycle_lease_expiry(now: datetime) -> datetime:
@@ -87,6 +140,13 @@ def _manifest_hash(frame: dict, *, agent: Agent | None = None) -> str:
     stable = dict(frame)
     stable.pop("generation", None)
     stable.pop("anygarden_mcp_token", None)
+    # Generation is delivery provenance, including each room snapshot's
+    # fence. It must not make an otherwise identical config restart again.
+    if isinstance(stable.get("room_memories"), dict):
+        stable["room_memories"] = {
+            room_id: {key: value for key, value in snapshot.items() if key != "generation"}
+            for room_id, snapshot in stable["room_memories"].items()
+        }
     if agent is not None:
         stable["_context_window_opt_out"] = bool(agent.context_window_opt_out)
     body = json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str)
@@ -1313,14 +1373,9 @@ class AgentLifecycle:
                 # advance the generation consumed by the next spawn.
                 old_generation = int(agent.generation or 0)
                 agent.generation = old_generation + 1
-                await db.execute(
-                    update(AgentTurnAttempt)
-                    .where(
-                        AgentTurnAttempt.agent_id == agent.id,
-                        AgentTurnAttempt.state == "pending",
-                        AgentTurnAttempt.generation == old_generation,
-                    )
-                    .values(generation=agent.generation)
+                await _remap_unstarted_pending_attempts(
+                    db, agent_id=agent.id, old_generation=old_generation,
+                    generation=agent.generation,
                 )
                 await db.commit()
                 return
@@ -1342,14 +1397,9 @@ class AgentLifecycle:
                     agent.restart_requested_at = None
                     agent.restart_deadline_at = None
                     agent.pending_manifest_hash = None
-                    await db.execute(
-                        update(AgentTurnAttempt)
-                        .where(
-                            AgentTurnAttempt.agent_id == agent.id,
-                            AgentTurnAttempt.state == "pending",
-                            AgentTurnAttempt.generation == cancelled_generation,
-                        )
-                        .values(generation=agent.generation)
+                    await _remap_unstarted_pending_attempts(
+                        db, agent_id=agent.id, old_generation=cancelled_generation,
+                        generation=agent.generation,
                     )
                     db.add(
                         ActivityLog(
@@ -1383,12 +1433,19 @@ class AgentLifecycle:
                     )
                 except ValueError:
                     drain_sec = 60
+                previous_pending_generation = agent.pending_generation
                 agent.pending_generation = int(
                     (agent.pending_generation or agent.generation or 0) + 1
                 )
                 agent.restart_requested_at = now
                 agent.restart_deadline_at = now + timedelta(seconds=drain_sec)
                 agent.pending_manifest_hash = candidate_hash
+                if previous_pending_generation is not None:
+                    await _remap_unstarted_pending_attempts(
+                        db, agent_id=agent.id,
+                        old_generation=previous_pending_generation,
+                        generation=agent.pending_generation,
+                    )
                 db.add(
                     ActivityLog(
                         agent_id=agent.id,
@@ -1405,15 +1462,16 @@ class AgentLifecycle:
                 old_generation = int(agent.generation or 0)
                 agent.generation = old_generation + 1
                 candidate["generation"] = agent.generation
+                # The candidate was built for the live generation. Advance
+                # its room fences with the same new process generation.
+                candidate["room_memories"] = {
+                    room_id: {**snapshot, "generation": agent.generation}
+                    for room_id, snapshot in candidate.get("room_memories", {}).items()
+                }
                 agent.manifest_hash = candidate_hash
-                await db.execute(
-                    update(AgentTurnAttempt)
-                    .where(
-                        AgentTurnAttempt.agent_id == agent.id,
-                        AgentTurnAttempt.state == "pending",
-                        AgentTurnAttempt.generation == old_generation,
-                    )
-                    .values(generation=agent.generation)
+                await _remap_unstarted_pending_attempts(
+                    db, agent_id=agent.id, old_generation=old_generation,
+                    generation=agent.generation,
                 )
                 frame = candidate
                 target_machine_id = agent.placed_on_machine_id
@@ -1433,7 +1491,10 @@ class AgentLifecycle:
             agent = await self._get_agent(db, agent_id)
             if agent is None or agent.pending_generation is None:
                 return False
-            from anygarden.turns.service import active_lease_count
+            from anygarden.turns.service import (
+                ACTIVE_ATTEMPT_STATES,
+                active_lease_count,
+            )
 
             active = await active_lease_count(
                 db, agent_id=agent.id, generation=int(agent.generation or 0)
@@ -1444,12 +1505,36 @@ class AgentLifecycle:
                 select(Participant.room_id).where(Participant.agent_id == agent.id)
             )
             rooms = [row[0] for row in room_result.all()]
-            agent.generation = agent.pending_generation
-            agent.pending_generation = None
-            agent.manifest_hash = agent.pending_manifest_hash
-            agent.pending_manifest_hash = None
-            agent.restart_requested_at = None
-            agent.restart_deadline_at = None
+            old_generation = int(agent.generation or 0)
+            generation = agent.pending_generation
+            promoted = await db.scalar(
+                update(Agent)
+                .where(
+                    Agent.id == agent.id,
+                    Agent.generation == old_generation,
+                    Agent.pending_generation == generation,
+                    ~exists(select(AgentTurnAttempt.id).where(
+                        AgentTurnAttempt.agent_id == agent.id,
+                        AgentTurnAttempt.generation == old_generation,
+                        AgentTurnAttempt.state.in_(ACTIVE_ATTEMPT_STATES),
+                    )),
+                )
+                .values(
+                    generation=generation, pending_generation=None,
+                    manifest_hash=agent.pending_manifest_hash,
+                    pending_manifest_hash=None, restart_requested_at=None,
+                    restart_deadline_at=None,
+                )
+                .returning(Agent.id)
+            )
+            if promoted is None:
+                await db.rollback()
+                return False
+            await db.refresh(agent)
+            await _remap_unstarted_pending_attempts(
+                db, agent_id=agent.id, old_generation=old_generation,
+                generation=generation,
+            )
             if agent.desired_state == "running" and agent.placed_on_machine_id:
                 frame = await self._build_sync_frame(db, agent, rooms)
                 frame["generation"] = agent.generation
@@ -1754,6 +1839,9 @@ class AgentLifecycle:
 
             workspace_descriptor = attachment_frame(workspace_attachment)
 
+        from anygarden.memory.service import get_room_memories
+
+        room_memories = await get_room_memories(db, agent.id, rooms, generation=agent.generation)
         return {
             "type": "sync_desired_state",
             "agent_id": agent.id,
@@ -1768,7 +1856,8 @@ class AgentLifecycle:
             # machine seeds ``memory/notes.md`` from this on materialize;
             # subsequent file writes by the agent flow back via
             # ``agent_memory_update`` frames.
-            "memory_md": agent.memory_md,
+            "memory_md": None,
+            "room_memories": room_memories,
             "files": files_map,
             "endpoint_configured": bool(agent.base_url),
             "pi_auth_configured": agent.engine == "pi-cli" and not bool(agent.base_url),

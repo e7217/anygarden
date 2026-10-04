@@ -19,26 +19,27 @@ existing task auto-execution flow. When a goal fires, the executor:
 The materialize policy applies on completion, not at trigger time:
 the Task is always created so the agent has a target to mark
 ``done`` / ``failed``. ``apply_completion`` (called from the existing
-``PUT /api/v1/tasks/{id}`` handler) then deletes the row if the goal
-is ``interesting_only`` and the result was a silent success.
+``PUT /api/v1/tasks/{id}`` handler) then hides a silent success from
+ordinary task lists. Its durable row and consumed execution key remain
+available in the goal's history.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.db.models import Goal, Participant, Room, Task
 from anygarden.goals.policy import (
     GOAL_FAILURE_PAUSE_THRESHOLD,
     MaterializeDecision,
-    apply_completion_to_failure_counter,
     materialize_decision,
+    trigger_timezone,
 )
 from anygarden.messages.service import inject_task_assignment_message
 from anygarden.rooms.authorization import require_active_room
@@ -50,7 +51,7 @@ log = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class GoalExecutionError(RuntimeError):
@@ -83,7 +84,8 @@ async def trigger_goal(
     *,
     trigger_source: str = "scheduler",
     idempotency_key: str | None = None,
-    manager: "ConnectionManager | None" = None,
+    scheduled_for: datetime | None = None,
+    manager: ConnectionManager | None = None,
 ) -> Task:
     """Fire one execution of *goal*. Returns the freshly-created Task.
 
@@ -112,21 +114,22 @@ async def trigger_goal(
     the synthetic mention frame actually reaches the agent's WS
     session (#314). Defaults to ``None`` for legacy callers / unit
     tests that don't wire up a ``ConnectionManager``.
+
+    ``scheduled_for`` is the claimed schedule slot, rather than the time
+    execution happened. Manual fires leave it unset. Schedule context is
+    snapshotted on the Task so later goal edits cannot rewrite its history.
     """
     if not goal.report_room_id:
         # Silent goals (no report room) aren't fireable in the MVP —
         # the agent has nowhere to read the mention from. The API
         # rejects such configurations at create time; this is a
         # belt-and-braces check for stale rows.
-        raise GoalExecutionError(
-            f"goal {goal.id} has no report_room_id — cannot fire"
-        )
+        raise GoalExecutionError(f"goal {goal.id} has no report_room_id — cannot fire")
 
     room = await db.get(Room, goal.report_room_id)
     if room is None:
         raise GoalExecutionError(
-            f"room {goal.report_room_id} no longer exists — pausing "
-            f"goal {goal.id}"
+            f"room {goal.report_room_id} no longer exists — pausing goal {goal.id}"
         )
     try:
         require_active_room(room)
@@ -161,6 +164,17 @@ async def trigger_goal(
         # #449 — deterministic dedup token; the UNIQUE index makes a
         # second fire of the same slot raise IntegrityError.
         idempotency_key=idempotency_key,
+        schedule_context={
+            "goal_id": goal.id,
+            "scheduled_for": (
+                scheduled_for.astimezone(UTC).isoformat()
+                if scheduled_for is not None
+                else None
+            ),
+            "timezone": trigger_timezone(goal.trigger_config).key,
+            "overlap_policy": "wait",
+            "trigger_source": trigger_source,
+        },
     )
     db.add(task)
     await db.flush()  # populate task.id before message inject
@@ -212,12 +226,14 @@ async def apply_completion(
     """Hook called from the Task PUT handler when a goal-derived task
     transitions to a terminal status.
 
-    Returns ``True`` if the task was deleted (silent success on a
-    materialize=interesting_only goal). Caller commits the
-    transaction. Side-effects:
+    Returns ``True`` if the task is hidden from ordinary task lists
+    (silent success on a materialize=interesting_only goal). The row,
+    result, schedule provenance, and idempotency key remain durable.
+    Caller commits the transaction. A persisted CAS marker makes repeat
+    completion events harmless, including after server restart. Effects:
     - increments / resets ``Goal.consecutive_failures``
     - flips ``Goal.status='paused'`` if the threshold is crossed
-    - sets ``task.finished_at = now``
+    - records ``task.finished_at`` if it was not set by the transition
     """
     if task.goal_id is None:
         return False
@@ -228,35 +244,71 @@ async def apply_completion(
     if goal is None:
         return False
 
-    now = _utcnow()
-    task.finished_at = now
+    claimed = await db.scalar(
+        update(Task)
+        .where(
+            Task.id == task.id,
+            Task.goal_id == task.goal_id,
+            Task.status == final_status,
+            Task.goal_completion_applied.is_(False),
+        )
+        .values(
+            goal_completion_applied=True,
+            finished_at=task.finished_at or _utcnow(),
+        )
+        .returning(Task)
+        .execution_options(populate_existing=True)
+    )
+    if claimed is None:
+        current = await db.get(Task, task.id, populate_existing=True)
+        return bool(current and current.is_silent)
+    task = claimed
 
     # Failure counter — reset on success, increment on failure,
     # pause-flag once threshold crossed.
-    counter = apply_completion_to_failure_counter(
-        current=goal.consecutive_failures, final_status=final_status  # type: ignore[arg-type]
+    old_status = goal.status
+    new_count = 0 if final_status == "done" else Goal.consecutive_failures + 1
+    pause_status = (
+        Goal.status
+        if final_status == "done"
+        else case(
+            (
+                (Goal.status == "active") & (new_count >= GOAL_FAILURE_PAUSE_THRESHOLD),
+                "paused",
+            ),
+            else_=Goal.status,
+        )
     )
-    goal.consecutive_failures = counter.new_count
-    if counter.pause and goal.status == "active":
-        goal.status = "paused"
+    goal = await db.scalar(
+        update(Goal)
+        .where(Goal.id == task.goal_id)
+        .values(consecutive_failures=new_count, status=pause_status)
+        .returning(Goal)
+        .execution_options(populate_existing=True)
+    )
+    if goal is None:
+        return False
+    if old_status == "active" and goal.status == "paused":
         log.warning(
             "goal_paused_on_repeated_failure",
             extra={
                 "goal_id": goal.id,
-                "consecutive_failures": counter.new_count,
+                "consecutive_failures": goal.consecutive_failures,
                 "threshold": GOAL_FAILURE_PAUSE_THRESHOLD,
             },
         )
 
     # Materialize decision — silent success on interesting_only goals
-    # removes the row so the rail does not accumulate "all green"
-    # noise. Failures and full-mode rows always persist.
+    # hides the row so the rail does not accumulate "all green" noise.
+    # Keeping the ledger preserves completion/retry history and the
+    # consumed slot key; deleting it would allow a replay to execute again.
     decision = materialize_decision(
         materialize=goal.materialize,
         final_status=final_status,  # type: ignore[arg-type]
         is_interesting=task.is_interesting,
     )
     if decision is MaterializeDecision.DELETE:
-        await db.delete(task)
+        task.is_silent = True
         return True
+    task.is_silent = False
     return False

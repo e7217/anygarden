@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from .contracts import (
@@ -57,6 +57,12 @@ class ReceiptStore:
                 CREATE TABLE IF NOT EXISTS bindings (scope TEXT PRIMARY KEY, materialization TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sessions (
                     scope TEXT PRIMARY KEY, handle TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS session_usage_counters (
+                    scope TEXT NOT NULL, handle TEXT NOT NULL,
+                    cumulative TEXT, execution_id TEXT NOT NULL,
+                    valid INTEGER NOT NULL,
+                    PRIMARY KEY(scope,handle)
                 );
             """)
             with self.db:
@@ -208,12 +214,69 @@ class ReceiptStore:
                     and result.process_state not in {"not_started", "stopped"}
                 )
             ):
-                result = RuntimeResult(
-                    "unknown", "unknown", "invalid_terminal_evidence"
-                )
+                result = replace(result, outcome="unknown", process_state="unknown",
+                                 reason="invalid_terminal_evidence", text=None,
+                                 session_handle=None)
             current = self.get(execution_id)
             if current.outcome is not None:
                 return current
+            # Same-scope manager FIFO serialization makes this baseline stable;
+            # its update shares the terminal receipt transaction, including gaps.
+            from .usage import SOURCE, counters, invocation_usage
+
+            codex_usage = result.usage_source == SOURCE
+            missing_codex_usage = (
+                not codex_usage
+                and result.process_state != "not_started"
+                and self.scope_for(execution_id).engine == "codex-cli"
+            )
+            if codex_usage or missing_codex_usage:
+                scope = self.db.execute("SELECT scope FROM executions WHERE id=?", (execution_id,)).fetchone()[0]
+                requested = self.session(scope)
+                row = self.db.execute(
+                    "SELECT cumulative,execution_id,valid FROM session_usage_counters WHERE scope=? AND handle=?",
+                    (scope, requested),
+                ).fetchone() if requested else None
+                baseline = None if row is None else {
+                    "cumulative": json.loads(row["cumulative"]) if row["cumulative"] else None,
+                    "execution_id": row["execution_id"], "valid": bool(row["valid"]),
+                }
+                # Recovery and manager exceptions may lack provider evidence.
+                # A started gap must still invalidate an existing Codex counter;
+                # known not-started work and other runtimes remain unchanged.
+                if missing_codex_usage and baseline is not None:
+                    result = replace(
+                        result, usage_source=SOURCE, usage_cumulative=None,
+                        usage_session_handle=None, usage_terminal=False,
+                    )
+                    codex_usage = True
+            if codex_usage:
+                normalized = invocation_usage(
+                    requested_session=requested,
+                    observed_session=result.usage_session_handle,
+                    provider_cumulative=result.usage_cumulative,
+                    terminal_usage=result.usage_terminal,
+                    process_state=result.process_state, baseline=baseline,
+                )
+                result = replace(result, usage=normalized)
+                if result.process_state != "not_started":
+                    raw = counters(result.usage_cumulative)
+                    valid = bool(result.usage_terminal and result.process_state in {"finished", "stopped"}
+                                 and raw is not None and raw["input_tokens"] is not None and raw["output_tokens"] is not None)
+                    # A missing terminal or a different observed handle cannot
+                    # leave the old successful baseline valid for the next call.
+                    for handle in {requested, result.usage_session_handle} - {None}:
+                        handle_valid = valid and handle == result.usage_session_handle
+                        evidence = raw if handle_valid else (baseline["cumulative"] if baseline and handle == requested else None)
+                        evidence_execution_id = (baseline["execution_id"]
+                                                 if not handle_valid and baseline and handle == requested
+                                                 else execution_id)
+                        self.db.execute(
+                            "INSERT INTO session_usage_counters VALUES(?,?,?,?,?) "
+                            "ON CONFLICT(scope,handle) DO UPDATE SET cumulative=excluded.cumulative,"
+                            "execution_id=excluded.execution_id,valid=excluded.valid",
+                            (scope, handle, canonical(evidence) if evidence is not None else None, evidence_execution_id, int(handle_valid)),
+                        )
             state = "completed" if result.outcome == "succeeded" else result.outcome
             self.db.execute(
                 "UPDATE executions SET state=?,process_state=?,outcome=?,reason=?,"

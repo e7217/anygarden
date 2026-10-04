@@ -16,9 +16,6 @@ import secrets
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-
 from anygarden.app import create_app
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
@@ -27,19 +24,24 @@ from anygarden.db.models import (
     Agent,
     AgentToken,
     Base,
+    Message,
     Participant,
+    Project,
     Room,
     Task,
     TaskBlocker,
 )
 from anygarden.mcp.tools import (
     add_task_blocker,
+    claim_task,
     clear_task_blocker,
     mark_task_status,
 )
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 
 async def _agent_with_task(
@@ -344,9 +346,8 @@ async def test_resolve_wake_only_when_all_blockers_cleared(db, monkeypatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_resolve_wake_failed_blocker_also_unblocks(db, monkeypatch) -> None:
-    """A blocker that ``failed`` (not just ``done``) is still terminal and
-    unblocks its dependent."""
+async def test_failed_prerequisite_keeps_dependent_blocked(db, monkeypatch) -> None:
+    """A failed analysis provides no accepted input for the dependent."""
     room = await _room(db)
     a, agent_a, _ = await _agent_with_task(db, agent_name="a", room=room)
     b, agent_b, _ = await _agent_with_task(
@@ -372,8 +373,89 @@ async def test_resolve_wake_failed_blocker_also_unblocks(db, monkeypatch) -> Non
         db, agent_id=agent_a.id, arguments={"task_id": a.id, "status": "failed"}
     )
     await db.refresh(b)
+    assert b.status == "blocked"
+    assert injected == []
+    assert await _blocker_count(db, task_id=b.id) == 1
+    assert a.id in b.error
+
+
+@pytest.mark.asyncio
+async def test_successful_results_are_preserved_and_delivered_on_final_wake(db, engine) -> None:
+    from hashlib import sha256
+
+    room = await _room(db)
+    a, agent_a, _ = await _agent_with_task(db, agent_name="analysis", room=room)
+    c, agent_c, _ = await _agent_with_task(db, agent_name="facts", room=room)
+    b, agent_b, _ = await _agent_with_task(db, agent_name="writer", room=room, status="blocked")
+    b.spec = "Use confirmed facts only; never invent performance numbers."
+    for prerequisite in (a, c):
+        assert not (await add_task_blocker(
+            db, agent_id=agent_b.id,
+            arguments={"task_id": b.id, "blocked_by_task_id": prerequisite.id},
+        ))["isError"]
+
+    analysis = "CAREER-ONLY: the opening requires Python."
+    r = await mark_task_status(db, agent_id=agent_a.id, arguments={
+        "task_id": a.id, "status": "done", "result_markdown": analysis,
+    })
+    assert r["structuredContent"]["woken"] == []
+    assert b.status == "blocked"
+    assert b.dependency_results[0]["task_id"] == a.id
+    assert b.dependency_results[0]["result_sha256"] == sha256(analysis.encode()).hexdigest()
+
+    facts = "Confirmed: reduced batch runtime from 10 to 7 minutes."
+    r = await mark_task_status(db, agent_id=agent_c.id, arguments={
+        "task_id": c.id, "status": "done", "result_markdown": facts,
+    })
+    assert r["structuredContent"]["woken"] == [b.id]
+    msg = (await db.scalars(select(Message).where(Message.room_id == room.id))).one()
+    assert analysis in msg.content and facts in msg.content and b.spec in msg.content
+    assert msg.extra_metadata["task_assignment"]["dependency_results"] == b.dependency_results
+    b_id, snapshots = b.id, b.dependency_results
+    await db.commit()
+    async with build_session_factory(engine)() as fresh:
+        restored = await fresh.get(Task, b_id)
+        assert restored.dependency_results == snapshots
+        assert restored.status == "todo"
+
+
+@pytest.mark.asyncio
+async def test_pending_prerequisite_prevents_claim_and_premature_completion(db) -> None:
+    room = await _room(db)
+    a, _, _ = await _agent_with_task(db, agent_name="a", room=room)
+    b, agent_b, _ = await _agent_with_task(db, agent_name="b", room=room, status="todo")
+    await add_task_blocker(db, agent_id=agent_b.id, arguments={
+        "task_id": b.id, "blocked_by_task_id": a.id,
+    })
+    result = await claim_task(db, agent_id=agent_b.id, arguments={"task_id": b.id})
+    assert result["isError"]
     assert b.status == "todo"
-    assert injected == [b.id]
+    # A task that attached a prerequisite during execution cannot call itself done.
+    b.status = "in_progress"
+    await db.flush()
+    result = await mark_task_status(db, agent_id=agent_b.id, arguments={"task_id": b.id, "status": "done"})
+    assert result["isError"]
+    assert b.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_dependency_cannot_import_another_project_even_for_shared_agent(db) -> None:
+    career, garden = Project(name="Career"), Project(name="Garden")
+    db.add_all([career, garden])
+    await db.flush()
+    room_a = Room(name="career", project_id=career.id)
+    room_b = Room(name="garden", project_id=garden.id)
+    db.add_all([room_a, room_b])
+    await db.flush()
+    dep, shared, _ = await _agent_with_task(db, agent_name="shared", room=room_a)
+    blocker, _, _ = await _agent_with_task(db, agent_name="dev", room=room_b)
+    db.add(Participant(room_id=room_b.id, agent_id=shared.id, role="member"))
+    await db.flush()
+    result = await add_task_blocker(db, agent_id=shared.id, arguments={
+        "task_id": dep.id, "blocked_by_task_id": blocker.id,
+    })
+    assert result["isError"]
+    assert await _blocker_count(db, task_id=dep.id) == 0
 
 
 @pytest.mark.asyncio

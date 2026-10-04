@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 const names = new Set(['create_skill', 'update_skill', 'list_my_skills', 'delete_my_skill', 'claim_task', 'mark_task_status', 'create_task', 'add_task_blocker', 'clear_task_blocker']);
+const projectNames = new Set(['begin_project_execution', 'delegate_project_task', 'seal_project_plan', 'get_project_execution', 'complete_project_execution', 'request_project_input', 'publish_project_artifact', 'read_project_artifact', 'request_project_approval', 'execute_approved_project_action']);
 const limit = 262144;
 
 export default function registerAnygardenTools(pi) {
@@ -18,12 +19,12 @@ export default function registerAnygardenTools(pi) {
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
     throw new Error('Anygarden self tools require the configured chat server.');
   }
-  if (!Array.isArray(config.tools) || config.tools.length !== names.size || new Set(config.tools.map(tool => tool.name)).size !== names.size) {
+  if (!Array.isArray(config.tools) || new Set(config.tools.map(tool => tool.name)).size !== config.tools.length || [...names].some(name => !config.tools.some(tool => tool.name === name))) {
     throw new Error('Anygarden self tools configuration is incomplete.');
   }
   const redact = value => String(value).replaceAll(token, '[redacted]').slice(0, 500);
   for (const tool of config.tools) {
-    if (!names.has(tool.name) || typeof tool.description !== 'string' || tool.inputSchema?.type !== 'object') {
+    if (!(names.has(tool.name) || projectNames.has(tool.name)) || typeof tool.description !== 'string' || tool.inputSchema?.type !== 'object') {
       throw new Error('Anygarden self tools configuration contains an invalid tool.');
     }
     pi.registerTool({
@@ -37,10 +38,19 @@ export default function registerAnygardenTools(pi) {
         const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
         let response;
         let payload;
+        const turnHeaders = {};
+        for (const [header, variable] of [
+          ['X-Anygarden-Turn-Request-Id', 'ANYGARDEN_TURN_REQUEST_ID'],
+          ['X-Anygarden-Turn-Attempt', 'ANYGARDEN_TURN_ATTEMPT'],
+          ['X-Anygarden-Turn-Generation', 'ANYGARDEN_TURN_GENERATION'],
+          ['X-Anygarden-Turn-Lease', 'ANYGARDEN_TURN_LEASE'],
+        ]) {
+          if (process.env[variable]) turnHeaders[header] = process.env[variable];
+        }
         try {
           response = await fetch(endpoint, {
             method: 'POST', redirect: 'error', signal: combined,
-            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...turnHeaders },
             body: JSON.stringify({ jsonrpc: '2.0', id: toolCallId, method: 'tools/call', params: { name: tool.name, arguments: params } }),
           });
           if (!response.ok) {

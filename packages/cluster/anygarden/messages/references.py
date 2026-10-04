@@ -30,7 +30,7 @@ async def canonicalize_shared_file_references(
     Clients may send only a stable ``id``. Display names, storage names,
     and hashes are reloaded from ``room_shared_files`` so a forged
     payload cannot point at another room's file or spoof the agent-side
-    ``memory/shared/<storage_name>`` path.
+    ``memory/shared/<room_id>/<storage_name>`` path.
     """
     out = dict(metadata)
     raw = out.get("references")
@@ -88,6 +88,7 @@ async def canonicalize_shared_file_references(
         item: dict[str, Any] = {
             "type": "shared_file",
             "id": row.id,
+            "room_id": row.room_id,
             "name": row.filename,
             "storage_name": row.storage_name,
             "sha256": row.sha256,

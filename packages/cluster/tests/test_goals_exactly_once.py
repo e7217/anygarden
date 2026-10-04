@@ -18,20 +18,19 @@ polling loop's timing is exercised elsewhere.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
-
 from anygarden.db.engine import build_session_factory
 from anygarden.db.models import Agent, Goal, Participant, Room, Task, User
 from anygarden.goals.executor import trigger_goal
 from anygarden.goals.scheduler import MAX_GOALS_PER_TICK, GoalScheduler
+from sqlalchemy import func, select, update
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class _FakeManager:
@@ -88,7 +87,9 @@ async def test_same_slot_fired_twice_creates_exactly_one_task(engine):
     async with factory() as db:
         room, _, agent, user = await _seed_room_with_agent(db)
         goal = _make_goal(
-            agent=agent, user=user, room=room,
+            agent=agent,
+            user=user,
+            room=room,
             next_run_at=_utcnow() - timedelta(seconds=5),
         )
         db.add(goal)
@@ -102,9 +103,7 @@ async def test_same_slot_fired_twice_creates_exactly_one_task(engine):
     async with factory() as db:
         count = (
             await db.execute(
-                select(func.count())
-                .select_from(Task)
-                .where(Task.goal_id == goal_id)
+                select(func.count()).select_from(Task).where(Task.goal_id == goal_id)
             )
         ).scalar_one()
         assert count == 1
@@ -134,6 +133,14 @@ async def test_scheduler_fire_advances_next_run_at(engine):
         assert goal.next_run_at > _utcnow() - timedelta(seconds=5)
         assert goal.claimed_at is not None
         assert goal.last_run_at is not None
+        task = (await db.scalars(select(Task).where(Task.goal_id == goal_id))).one()
+        assert task.schedule_context == {
+            "goal_id": goal_id,
+            "scheduled_for": due.isoformat(),
+            "timezone": "UTC",
+            "overlap_policy": "wait",
+            "trigger_source": "scheduler",
+        }
 
 
 @pytest.mark.asyncio
@@ -160,6 +167,9 @@ async def test_run_now_does_not_advance_next_run_at(engine):
         # next_run_at unchanged; last_run_at recorded.
         assert goal.next_run_at == slot
         assert goal.last_run_at is not None
+        task = (await db.scalars(select(Task).where(Task.goal_id == goal_id))).one()
+        assert task.schedule_context["scheduled_for"] is None
+        assert task.schedule_context["trigger_source"] == "manual"
 
 
 @pytest.mark.asyncio
@@ -172,22 +182,16 @@ async def test_trigger_goal_idempotency_key_collision_raises(engine):
     factory = build_session_factory(engine)
     async with factory() as db:
         room, _, agent, user = await _seed_room_with_agent(db)
-        goal = _make_goal(
-            agent=agent, user=user, room=room, next_run_at=_utcnow()
-        )
+        goal = _make_goal(agent=agent, user=user, room=room, next_run_at=_utcnow())
         db.add(goal)
         await db.commit()
         goal_id = goal.id
 
-        await trigger_goal(
-            db, goal, idempotency_key=f"{goal_id}:dup"
-        )
+        await trigger_goal(db, goal, idempotency_key=f"{goal_id}:dup")
         await db.commit()
 
         with pytest.raises(IntegrityError):
-            await trigger_goal(
-                db, goal, idempotency_key=f"{goal_id}:dup"
-            )
+            await trigger_goal(db, goal, idempotency_key=f"{goal_id}:dup")
             await db.commit()
         await db.rollback()
 
@@ -196,14 +200,17 @@ async def test_trigger_goal_idempotency_key_collision_raises(engine):
 
 
 @pytest.mark.asyncio
-async def test_in_flight_task_blocks_refire(engine):
+@pytest.mark.parametrize("status", ["todo", "in_progress", "blocked"])
+async def test_in_flight_task_blocks_refire(engine, status):
     """A goal whose previous run is still ``todo`` must not be
     re-fired even when ``next_run_at`` is due again."""
     factory = build_session_factory(engine)
     async with factory() as db:
         room, p, agent, user = await _seed_room_with_agent(db)
         goal = _make_goal(
-            agent=agent, user=user, room=room,
+            agent=agent,
+            user=user,
+            room=room,
             next_run_at=_utcnow() - timedelta(seconds=5),
         )
         db.add(goal)
@@ -212,7 +219,7 @@ async def test_in_flight_task_blocks_refire(engine):
         open_task = Task(
             room_id=room.id,
             title="prev",
-            status="in_progress",
+            status=status,
             assignee_participant_id=p.id,
             assigned_at=_utcnow(),
             created_by=user.id,
@@ -229,9 +236,7 @@ async def test_in_flight_task_blocks_refire(engine):
     async with factory() as db:
         count = (
             await db.execute(
-                select(func.count())
-                .select_from(Task)
-                .where(Task.goal_id == goal_id)
+                select(func.count()).select_from(Task).where(Task.goal_id == goal_id)
             )
         ).scalar_one()
         # Still just the one open task — no sibling fire.
@@ -240,6 +245,232 @@ async def test_in_flight_task_blocks_refire(engine):
         # And the schedule was NOT advanced (we skipped before the CAS).
         assert goal.next_run_at is not None
         assert goal.next_run_at <= _utcnow()
+
+
+@pytest.mark.asyncio
+async def test_blocked_run_completion_allows_one_waiting_schedule_fire(engine):
+    factory = build_session_factory(engine)
+    async with factory() as db:
+        room, p, agent, user = await _seed_room_with_agent(db)
+        goal = _make_goal(
+            agent=agent,
+            user=user,
+            room=room,
+            next_run_at=_utcnow() - timedelta(seconds=5),
+        )
+        db.add(goal)
+        await db.flush()
+        previous = Task(
+            room_id=room.id,
+            title="awaiting input",
+            status="blocked",
+            goal_id=goal.id,
+            assignee_participant_id=p.id,
+        )
+        db.add(previous)
+        await db.commit()
+        goal_id, previous_id = goal.id, previous.id
+
+    scheduler = GoalScheduler(factory)
+    await scheduler._tick()
+    async with factory() as db:
+        previous = await db.get(Task, previous_id)
+        previous.status = "done"
+        await db.commit()
+    await scheduler._tick()
+    await scheduler._tick()
+    async with factory() as db:
+        statuses = (
+            await db.scalars(select(Task.status).where(Task.goal_id == goal_id))
+        ).all()
+        assert sorted(statuses) == ["done", "todo"]
+
+
+@pytest.mark.asyncio
+async def test_disabled_goal_cannot_fire_from_stale_session(engine):
+    factory = build_session_factory(engine)
+    async with factory() as stale_db:
+        room, _, agent, user = await _seed_room_with_agent(stale_db)
+        goal = _make_goal(
+            agent=agent,
+            user=user,
+            room=room,
+            next_run_at=_utcnow() - timedelta(seconds=5),
+        )
+        stale_db.add(goal)
+        await stale_db.commit()
+        goal_id = goal.id
+        async with factory() as db:
+            await db.execute(
+                update(Goal).where(Goal.id == goal_id).values(status="paused")
+            )
+            await db.commit()
+        await GoalScheduler(factory)._claim_and_fire(stale_db, goal_id, _utcnow())
+
+    async with factory() as db:
+        assert not (await db.scalars(select(Task).where(Task.goal_id == goal_id))).all()
+        assert (await db.get(Goal, goal_id)).status == "paused"
+
+
+@pytest.mark.asyncio
+async def test_changed_due_slot_cannot_be_overwritten_by_stale_tick(engine):
+    factory = build_session_factory(engine)
+    async with factory() as stale_db:
+        room, _, agent, user = await _seed_room_with_agent(stale_db)
+        goal = _make_goal(
+            agent=agent,
+            user=user,
+            room=room,
+            next_run_at=_utcnow() - timedelta(seconds=30),
+        )
+        stale_db.add(goal)
+        await stale_db.commit()
+        goal_id = goal.id
+        new_slot = _utcnow() - timedelta(seconds=5)
+        async with factory() as db:
+            await db.execute(
+                update(Goal).where(Goal.id == goal_id).values(next_run_at=new_slot)
+            )
+            await db.commit()
+        await GoalScheduler(factory)._claim_and_fire(stale_db, goal_id, _utcnow())
+
+    async with factory() as db:
+        assert not (await db.scalars(select(Task).where(Task.goal_id == goal_id))).all()
+        assert (await db.get(Goal, goal_id)).next_run_at == new_slot
+
+
+@pytest.mark.asyncio
+async def test_run_created_after_overlap_scan_fences_scheduler_claim(
+    engine, monkeypatch
+):
+    from sqlalchemy.sql.dml import Update
+
+    factory = build_session_factory(engine)
+    async with factory() as db:
+        room, p, agent, user = await _seed_room_with_agent(db)
+        goal = _make_goal(
+            agent=agent,
+            user=user,
+            room=room,
+            next_run_at=_utcnow() - timedelta(seconds=5),
+        )
+        db.add(goal)
+        await db.commit()
+        goal_id, room_id, participant_id = goal.id, room.id, p.id
+        original_execute = db.execute
+        inserted = False
+
+        async def execute_with_racing_run(statement, *args, **kwargs):
+            nonlocal inserted
+            if (
+                not inserted
+                and isinstance(statement, Update)
+                and statement.table.name == "agent_goals"
+            ):
+                inserted = True
+                async with factory() as competing_db:
+                    competing_db.add(
+                        Task(
+                            room_id=room_id,
+                            title="concurrent run",
+                            status="blocked",
+                            goal_id=goal_id,
+                            assignee_participant_id=participant_id,
+                        )
+                    )
+                    await competing_db.commit()
+            return await original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", execute_with_racing_run)
+        await GoalScheduler(factory)._claim_and_fire(db, goal_id, _utcnow())
+
+    async with factory() as db:
+        tasks = (await db.scalars(select(Task).where(Task.goal_id == goal_id))).all()
+        assert len(tasks) == 1
+        assert tasks[0].title == "concurrent run"
+        assert (await db.get(Goal, goal_id)).last_run_at is None
+
+
+@pytest.mark.asyncio
+async def test_run_schedule_context_survives_goal_timezone_edit(engine):
+    factory = build_session_factory(engine)
+    due = datetime(2026, 9, 30, 0, 0, tzinfo=UTC)
+    async with factory() as db:
+        room, _, agent, user = await _seed_room_with_agent(db)
+        goal = _make_goal(agent=agent, user=user, room=room, next_run_at=due)
+        goal.trigger_type = "cron"
+        goal.trigger_config = {"cron": "0 9 * * *", "timezone": "Asia/Seoul"}
+        db.add(goal)
+        await db.commit()
+        goal_id = goal.id
+
+    await GoalScheduler(factory)._tick()
+    async with factory() as db:
+        goal = await db.get(Goal, goal_id)
+        goal.trigger_config = {"cron": "0 9 * * *", "timezone": "UTC"}
+        await db.commit()
+    async with factory() as db:
+        task = (await db.scalars(select(Task).where(Task.goal_id == goal_id))).one()
+        assert task.schedule_context["timezone"] == "Asia/Seoul"
+        assert task.schedule_context["scheduled_for"] == due.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_blocked_due_goals_do_not_starve_ready_goals(engine):
+    factory = build_session_factory(engine)
+    async with factory() as db:
+        room, p, agent, user = await _seed_room_with_agent(db)
+        base = _utcnow() - timedelta(seconds=600)
+        for i in range(MAX_GOALS_PER_TICK):
+            goal = _make_goal(agent=agent, user=user, room=room, next_run_at=base)
+            db.add(goal)
+            await db.flush()
+            db.add(
+                Task(
+                    room_id=room.id,
+                    title=f"waiting {i}",
+                    status="blocked",
+                    goal_id=goal.id,
+                    assignee_participant_id=p.id,
+                )
+            )
+        ready = _make_goal(
+            agent=agent, user=user, room=room, next_run_at=base + timedelta(seconds=1)
+        )
+        db.add(ready)
+        await db.commit()
+        ready_id = ready.id
+
+    await GoalScheduler(factory)._tick()
+    async with factory() as db:
+        assert (
+            len((await db.scalars(select(Task).where(Task.goal_id == ready_id))).all())
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_invalid_persisted_schedule_pauses_without_task(engine):
+    factory = build_session_factory(engine)
+    async with factory() as db:
+        room, _, agent, user = await _seed_room_with_agent(db)
+        goal = _make_goal(
+            agent=agent,
+            user=user,
+            room=room,
+            next_run_at=_utcnow() - timedelta(seconds=5),
+        )
+        goal.trigger_config = {"interval_seconds": 1}
+        db.add(goal)
+        await db.commit()
+        goal_id = goal.id
+
+    scheduler = GoalScheduler(factory)
+    await scheduler._tick()
+    await scheduler._tick()
+    async with factory() as db:
+        assert (await db.get(Goal, goal_id)).status == "paused"
+        assert not (await db.scalars(select(Task).where(Task.goal_id == goal_id))).all()
 
 
 # ── Per-tick cap ─────────────────────────────────────────────────────
@@ -257,7 +488,9 @@ async def test_per_tick_cap_limits_fires(engine):
         for i in range(total):
             db.add(
                 _make_goal(
-                    agent=agent, user=user, room=room,
+                    agent=agent,
+                    user=user,
+                    room=room,
                     # Stagger the due times so ASC ordering is well-defined.
                     next_run_at=base + timedelta(seconds=i),
                 )
@@ -268,15 +501,11 @@ async def test_per_tick_cap_limits_fires(engine):
     await scheduler._tick()
 
     async with factory() as db:
-        fired = (
-            await db.execute(select(func.count()).select_from(Task))
-        ).scalar_one()
+        fired = (await db.execute(select(func.count()).select_from(Task))).scalar_one()
         assert fired == MAX_GOALS_PER_TICK
 
     # Second tick fires the remaining backlog.
     await scheduler._tick()
     async with factory() as db:
-        fired = (
-            await db.execute(select(func.count()).select_from(Task))
-        ).scalar_one()
+        fired = (await db.execute(select(func.count()).select_from(Task))).scalar_one()
         assert fired == total

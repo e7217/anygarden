@@ -260,10 +260,9 @@ def anygarden_default_entry(
       because neither CLI supports placeholder interpolation in those
       manifests today.
     - codex (.codex/config.toml) takes
-      ``{"url", "bearer_token_env_var"}`` — codex resolves the token
-      from process env at runtime, so the manifest never holds the
-      plaintext. The matching env var (``ANYGARDEN_TOKEN_ENV_VAR``) is
-      injected by the machine spawner.
+      ``{"url", "bearer_token_env_var", "default_tools_approval_mode"}``.
+      Codex resolves credentials and turn headers from process environment
+      variables. The manifest never holds their values.
 
     Engines without MCP support (echo / openai / anthropic / unknown)
     return ``None`` so callers can skip without a guard at every
@@ -284,6 +283,16 @@ def anygarden_default_entry(
             config={
                 "url": f"{cluster_url}/mcp/rpc",
                 "bearer_token_env_var": ANYGARDEN_TOKEN_ENV_VAR,
+                # Local room agents run without interactive approvals. The
+                # self-MCP still enforces agent ownership and capabilities;
+                # this override applies only to this built-in server.
+                "default_tools_approval_mode": "approve",
+                "env_http_headers": {
+                    "X-Anygarden-Turn-Request-Id": "ANYGARDEN_TURN_REQUEST_ID",
+                    "X-Anygarden-Turn-Attempt": "ANYGARDEN_TURN_ATTEMPT",
+                    "X-Anygarden-Turn-Generation": "ANYGARDEN_TURN_GENERATION",
+                    "X-Anygarden-Turn-Lease": "ANYGARDEN_TURN_LEASE",
+                },
             },
         )
     return None

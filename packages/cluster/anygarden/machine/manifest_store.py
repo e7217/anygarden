@@ -100,7 +100,34 @@ class ManifestStore:
                     current.desired_state,
                 )
                 return False
+            if frame.generation == current.generation:
+                memories = dict(frame.room_memories)
+                for room_id, snapshot in current.room_memories.items():
+                    incoming = memories.get(room_id)
+                    if incoming is not None and snapshot.revision > incoming.revision:
+                        memories[room_id] = snapshot
+                frame = frame.model_copy(update={"room_memories": memories})
 
+        self.save(frame)
+        return True
+
+    def update_room_memory(self, agent_id, snapshot) -> bool:
+        """Persist an acknowledged snapshot without losing in-memory auth."""
+        frame = self.load(agent_id)
+        if (frame is None or frame.desired_state != "running"
+                or frame.generation != snapshot.generation
+                or snapshot.room_id not in frame.rooms):
+            return False
+        previous = frame.room_memories.get(snapshot.room_id)
+        if previous is not None and snapshot.revision < previous.revision:
+            return False
+        memories = dict(frame.room_memories)
+        memories[snapshot.room_id] = snapshot
+        frame = frame.model_copy(update={
+            "room_memories": memories,
+            "engine_secrets": self.get_secrets(agent_id),
+            "anygarden_mcp_token": self.get_anygarden_mcp_token(agent_id),
+        })
         self.save(frame)
         return True
 

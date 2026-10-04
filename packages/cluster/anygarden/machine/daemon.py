@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
+from uuid import uuid4
 
 import structlog
 import websockets
@@ -25,6 +26,8 @@ from anygarden.machine.protocol.frames import (
     AgentActual,
     AgentMemorySharedFileDeleteFrame,
     AgentMemorySharedFileWriteFrame,
+    AgentMemoryUpdateAckFrame,
+    AgentRoomMemorySnapshotFrame,
     EngineCheckResultFrame,
     EngineUpdateResultFrame,
     ManagedWorkspaceRequestFrame,
@@ -39,6 +42,7 @@ from anygarden.machine.protocol.frames import (
     WorkspaceRevokeReceiptFrame,
     parse_server_frame,
 )
+from anygarden.machine.safefs import safe_write_text, secure_chmod
 from anygarden.machine.spawner import Spawner, SpawnManifest
 from anygarden.machine.sysinfo import collect_system_info
 from anygarden.machine.updater import run_update
@@ -175,6 +179,10 @@ class MachineDaemon:
         )
         self._crash_budgets: dict[str, CrashBudget] = {}
         self._token_futures: dict[str, asyncio.Future[str]] = {}
+        # Every token wait and reservation is owned by one unique spawn intent.
+        # Generations alone cannot distinguish competing intents at the same
+        # generation or protect a live process from an obsolete timeout.
+        self._spawn_owners: dict[str, tuple[int, str]] = {}
         self._running_generations: dict[str, int] = {}
         # Per-agent serialization. Every mutation of
         # ``_running_generations`` or dispatch of a spawn task for a
@@ -200,7 +208,9 @@ class MachineDaemon:
         # Used by the report loop to cheaply detect mutation since the
         # last sync. Populated lazily on first read. Wiped when the
         # agent stops so a re-spawn performs a clean first-read.
-        self._memory_last_hash: dict[str, str] = {}
+        self._memory_last_hash: dict[tuple[str, str, int], str] = {}
+        self._memory_pending: dict[tuple[str, str, int], dict] = {}
+        self._memory_rejected: set[tuple[str, str, int]] = set()
 
         # Issue #290 — per-(agent_id, filename) sha256 cache for the
         # ``memory/outbox/`` watcher. Same idea as the notes hash but
@@ -440,6 +450,10 @@ class MachineDaemon:
                 await self._handle_agent_memory_shared_file_write(frame)
             case "agent_memory_shared_file_delete":
                 await self._handle_agent_memory_shared_file_delete(frame)
+            case "agent_memory_update_ack":
+                await self._handle_memory_update_ack(frame)
+            case "agent_room_memory_snapshot":
+                await self._handle_room_memory_snapshot(frame)
             case "self_update":
                 await self._handle_self_update(frame)
             case "engine_check":
@@ -600,7 +614,18 @@ class MachineDaemon:
         the persisted tombstone must win operationally as well as on disk.
         """
         async with self._lock_for(frame.agent_id):
+            previous = self._manifest_store.load(frame.agent_id)
             accepted = self._manifest_store.save_if_authoritative(frame)
+            current = self._manifest_store.load(frame.agent_id)
+            if (accepted and current is not None and current.desired_state == "running"
+                    and self._running_generations.get(frame.agent_id) == current.generation):
+                for room_id, snapshot in current.room_memories.items():
+                    old = previous.room_memories.get(room_id) if previous else None
+                    if old != snapshot:
+                        self._install_room_memory(
+                            frame.agent_id, snapshot,
+                            overwrite=not self._room_memory_is_accepted_echo(frame.agent_id, snapshot, old),
+                        )
         if not accepted:
             log.warning(
                 "stale_desired_state_rejected",
@@ -684,6 +709,12 @@ class MachineDaemon:
                 )
                 await self._spawner.kill(agent_id)
 
+            # A newer desired generation fences an in-flight token round trip.
+            # The old intent's cleanup is identity-checked below.
+            token_future = self._token_futures.get(agent_id)
+            if token_future is not None and not token_future.done():
+                token_future.cancel()
+
             # Reset crash budget since this is a server-driven reconcile
             # (not a crash-driven restart).
             budget = self._crash_budgets.get(agent_id)
@@ -731,16 +762,54 @@ class MachineDaemon:
         """Request an agent token from the server, then spawn the agent."""
         if self._draining:
             return
+        owner = (manifest.generation, str(uuid4()))
+        async with self._lock_for(agent_id):
+            current = self._manifest_store.load(agent_id)
+            if (current is None or current.desired_state != "running"
+                    or current.generation != manifest.generation):
+                return
+            running = self._spawner.get_running(agent_id)
+            if (running is not None
+                    and isinstance(running.generation, int)
+                    and running.generation >= manifest.generation):
+                self._running_generations[agent_id] = running.generation
+                return
+            previous = self._spawn_owners.get(agent_id)
+            pending = self._token_futures.get(agent_id)
+            if (previous is not None and previous[0] == manifest.generation
+                    and pending is not None):
+                return
+            if pending is not None and not pending.done():
+                pending.cancel()
+            self._spawn_owners[agent_id] = owner
+        try:
+            await self._spawn_owned(agent_id, manifest, owner)
+        finally:
+            async with self._lock_for(agent_id):
+                if self._spawn_owners.get(agent_id) == owner:
+                    self._spawn_owners.pop(agent_id, None)
+
+    async def _clear_spawn_transitional(
+        self, agent_id: str, owner: tuple[int, str]
+    ) -> None:
+        async with self._lock_for(agent_id):
+            if (self._spawn_owners.get(agent_id) == owner
+                    and self._running_generations.get(agent_id) in {None, owner[0]}):
+                self._clear_transitional(agent_id)
+
+    async def _spawn_owned(
+        self, agent_id: str, manifest: SyncDesiredStateFrame, owner: tuple[int, str]
+    ) -> None:
         # Create a future for the token grant
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
         self._token_futures[agent_id] = future
 
         # Send token request
-        token_req = TokenRequestFrame(agent_ids=[agent_id])
-        await self._send(token_req.model_dump())
+        token_req = TokenRequestFrame(agent_ids=[agent_id], request_id=owner[1])
 
         try:
+            await self._send(token_req.model_dump())
             agent_token = await asyncio.wait_for(future, timeout=TOKEN_REQUEST_TIMEOUT)
         except asyncio.CancelledError:
             # Preserve real task cancellation (daemon shutdown). A stop fence
@@ -753,14 +822,15 @@ class MachineDaemon:
                 agent_id=agent_id,
                 generation=manifest.generation,
             )
-            await self._rollback_reservation(agent_id, manifest.generation)
-            self._clear_transitional(agent_id)
+            await self._rollback_reservation(agent_id, manifest.generation, owner=owner)
+            await self._clear_spawn_transitional(agent_id, owner)
             await self._report_actual_state()
             return
         except asyncio.TimeoutError:
             log.error("token_request_timeout", agent_id=agent_id)
             # Roll back the pre-reservation so a retry can proceed.
-            await self._rollback_reservation(agent_id, manifest.generation)
+            await self._rollback_reservation(agent_id, manifest.generation, owner=owner)
+            await self._clear_spawn_transitional(agent_id, owner)
             return
         finally:
             if self._token_futures.get(agent_id) is future:
@@ -787,6 +857,8 @@ class MachineDaemon:
             # materialize ``memory/notes.md`` on cold start. ``getattr``
             # keeps compatibility with pre-#237 frames that omit the field.
             memory_md=getattr(manifest, "memory_md", None),
+            room_memories={room_id: snapshot.model_dump()
+                           for room_id, snapshot in manifest.room_memories.items()},
             reasoning_effort=manifest.reasoning_effort,
             model=manifest.model,
             provider=manifest.provider,
@@ -823,6 +895,8 @@ class MachineDaemon:
                 or current is None
                 or current.desired_state != "running"
                 or current.generation != manifest.generation
+                or self._spawn_owners.get(agent_id) != owner
+                or self._running_generations.get(agent_id) != manifest.generation
             ):
                 fenced = True
                 result = None
@@ -835,8 +909,8 @@ class MachineDaemon:
                 agent_id=agent_id,
                 generation=manifest.generation,
             )
-            await self._rollback_reservation(agent_id, manifest.generation)
-            self._clear_transitional(agent_id)
+            await self._rollback_reservation(agent_id, manifest.generation, owner=owner)
+            await self._clear_spawn_transitional(agent_id, owner)
             await self._report_actual_state()
             return
 
@@ -858,21 +932,27 @@ class MachineDaemon:
                 agent_id=agent_id,
                 error=result.error,
             )
-            await self._rollback_reservation(agent_id, manifest.generation)
+            await self._rollback_reservation(agent_id, manifest.generation, owner=owner)
         # #219 — the spawn is done (success or fail). Drop the
         # ``starting`` annotation so the final report reflects the true
         # state: running (if spawner.list_running picks it up) or
         # absent (server converges to stopped via absent-from-report).
-        self._clear_transitional(agent_id)
+        await self._clear_spawn_transitional(agent_id, owner)
         await self._report_actual_state()
 
-    async def _rollback_reservation(self, agent_id: str, generation: int) -> None:
+    async def _rollback_reservation(
+        self, agent_id: str, generation: int, *, owner: tuple[int, str] | None = None
+    ) -> None:
         """Undo the pre-reservation in ``_running_generations`` for
         *agent_id* at *generation*, holding the per-agent lock so we
         don't clobber a higher generation reserved by a newer reconcile
         that arrived while this spawn was in flight (#183).
         """
         async with self._lock_for(agent_id):
+            if owner is not None and self._spawn_owners.get(agent_id) != owner:
+                return
+            if self._spawner.get_running(agent_id) is not None:
+                return
             if self._running_generations.get(agent_id) == generation:
                 self._running_generations.pop(agent_id, None)
 
@@ -881,7 +961,11 @@ class MachineDaemon:
     def _handle_token_grant(self, frame: Any) -> None:
         """Resolve the pending Future for a token request."""
         future = self._token_futures.get(frame.agent_id)
-        if future is not None and not future.done():
+        owner = self._spawn_owners.get(frame.agent_id)
+        # Production intents always require the echoed UUID. Untracked legacy
+        # futures are retained solely for callers using the pre-correlation API.
+        correlated = (frame.request_id == owner[1]) if owner else frame.request_id is None
+        if future is not None and not future.done() and correlated:
             future.set_result(frame.agent_token)
         else:
             log.warning(
@@ -894,6 +978,8 @@ class MachineDaemon:
     async def _on_agent_stopped(self, agent_id: str, exit_code: int) -> None:
         """Callback when an agent exits normally (exit code 0)."""
         async with self._lock_for(agent_id):
+            if self._spawner.get_running(agent_id) is not None:
+                return
             self._running_generations.pop(agent_id, None)
         # #219 — process actually gone, release the transitional marker
         # so the next report is absent-from-report (→ server converges
@@ -907,6 +993,8 @@ class MachineDaemon:
     ) -> None:
         """Callback when an agent crashes. Attempt local restart if budget allows."""
         async with self._lock_for(agent_id):
+            if self._spawner.get_running(agent_id) is not None:
+                return
             self._running_generations.pop(agent_id, None)
         # #219 — crash implies the spawn lifecycle ended, whatever
         # transitional marker was there (typically ``starting`` from a
@@ -1074,65 +1162,139 @@ class MachineDaemon:
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("artifact_flush_failed", error=str(exc))
 
-    async def _flush_memory_updates(self) -> None:
-        """Detect ``memory/notes.md`` changes for each running agent and
-        emit ``agent_memory_update`` frames.
-
-        Direction (#237 plan §3.2 decision 4): file is the runtime
-        truth; the cluster's ``agents.memory_md`` is the snapshot. We
-        hash the file body and only send when the hash differs from
-        the last one we sent. Empty / missing files are reported as
-        empty strings on first observation so the server can clear
-        stale snapshots — but only once (the cached "" hash suppresses
-        repeats).
-        """
+    def _room_memory_is_accepted_echo(self, agent_id, snapshot, previous):
         import hashlib
 
+        pending = self._memory_pending.get((agent_id, snapshot.room_id, snapshot.generation))
+        return (
+            pending is not None and previous is not None
+            and snapshot.session_epoch == previous.session_epoch
+            and snapshot.revision > pending["base_revision"]
+            and hashlib.sha256(snapshot.memory_md.encode()).hexdigest() == pending["digest"]
+        )
+
+    def _install_room_memory(self, agent_id, snapshot, *, overwrite=True):
+        import hashlib
+
+        from anygarden.machine.room_memory import write_room_notes
+
+        key = (agent_id, snapshot.room_id, snapshot.generation)
+        if overwrite:
+            write_room_notes(
+                self._spawner.get_agent_root(agent_id), snapshot.room_id,
+                snapshot.memory_md, preserve_current=True,
+            )
+        self._memory_last_hash[key] = hashlib.sha256(snapshot.memory_md.encode()).hexdigest()
+        self._memory_pending.pop(key, None)
+        self._memory_rejected.discard(key)
+
+    async def _handle_room_memory_snapshot(self, frame: AgentRoomMemorySnapshotFrame):
+        async with self._lock_for(frame.agent_id):
+            snapshot = frame.room_memory
+            if (frame.generation != snapshot.generation
+                    or self._running_generations.get(frame.agent_id) != frame.generation):
+                return
+            current = self._manifest_store.load(frame.agent_id)
+            previous = current.room_memories.get(snapshot.room_id) if current else None
+            accepted_echo = self._room_memory_is_accepted_echo(frame.agent_id, snapshot, previous)
+            if not self._manifest_store.update_room_memory(frame.agent_id, snapshot):
+                return
+            try:
+                self._install_room_memory(frame.agent_id, snapshot, overwrite=not accepted_echo)
+            except (OSError, ValueError, UnicodeError):
+                log.warning("room_memory_snapshot_file_rejected", agent_id=frame.agent_id,
+                            room_id=snapshot.room_id)
+
+    async def _handle_memory_update_ack(self, frame: AgentMemoryUpdateAckFrame):
+        async with self._lock_for(frame.agent_id):
+            key = (frame.agent_id, frame.room_id, frame.generation)
+            pending = self._memory_pending.get(key)
+            if (self._running_generations.get(frame.agent_id) != frame.generation
+                    or pending is None or pending["base_revision"] != frame.base_revision):
+                return
+            snapshot = frame.room_memory
+            if snapshot is None:
+                self._memory_pending.pop(key, None)
+                self._memory_rejected.add(key)
+                return
+            if (snapshot.room_id != frame.room_id or snapshot.generation != frame.generation
+                    or not self._manifest_store.update_room_memory(frame.agent_id, snapshot)):
+                return
+            # An accepted older body must not erase a newer local append.
+            # Conflicts install server authority and retain local bytes in an archive.
+            try:
+                self._install_room_memory(
+                    frame.agent_id, snapshot, overwrite=frame.status != "accepted",
+                )
+            except (OSError, ValueError, UnicodeError):
+                log.warning("room_memory_ack_file_rejected", agent_id=frame.agent_id,
+                            room_id=frame.room_id)
+                return
+            if frame.status == "rejected":
+                self._memory_rejected.add(key)
+
+    async def _flush_memory_updates(self) -> None:
+        """Sync only active room notes; hashes/revisions advance after server ack."""
+        import hashlib
+        import time
+
+        from anygarden.machine.protocol.frames import AgentMemoryUpdateFrame
+        from anygarden.machine.room_memory import read_room_notes
+
+        active_keys = set()
         for info in self._spawner.list_running():
             agent_id = info["agent_id"]
-            try:
-                agent_root = self._spawner.get_agent_root(agent_id)
-            except AttributeError:
-                # Tests may stub the spawner with MagicMock; in that case
-                # the accessor is missing entirely and there's nothing
-                # to sync. Skipping silently keeps existing tests happy.
+            manifest = self._manifest_store.load(agent_id)
+            if (manifest is None or manifest.desired_state != "running"
+                    or self._running_generations.get(agent_id) != manifest.generation):
                 continue
-            notes_path = agent_root / "memory" / "notes.md"
-            # File won't exist yet when the agent's spawn path was
-            # skipped (e.g. unit tests with stubbed spawner). Skip the
-            # frame entirely in that case — the first real sync will
-            # fire as soon as materialize lays the empty file.
-            if not notes_path.is_file():
-                continue
-            try:
-                body = notes_path.read_text()
-            except OSError as exc:
-                log.warning("memory_read_failed", agent_id=agent_id, error=str(exc))
-                continue
-            digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-            if self._memory_last_hash.get(agent_id) == digest:
-                continue
-            self._memory_last_hash[agent_id] = digest
-            from anygarden.machine.protocol.frames import AgentMemoryUpdateFrame
-
-            frame = AgentMemoryUpdateFrame(agent_id=agent_id, memory_md=body)
-            await self._send(frame.model_dump())
-            log.info(
-                "memory_synced",
-                agent_id=agent_id,
-                bytes=len(body),
-            )
+            for room_id, snapshot in manifest.room_memories.items():
+                key = (agent_id, room_id, manifest.generation)
+                active_keys.add(key)
+                if snapshot.ephemeral or key in self._memory_rejected:
+                    continue
+                try:
+                    body = read_room_notes(self._spawner.get_agent_root(agent_id), room_id)
+                except (OSError, ValueError, UnicodeError):
+                    log.warning("room_memory_read_rejected", agent_id=agent_id, room_id=room_id)
+                    continue
+                digest = hashlib.sha256(body.encode()).hexdigest()
+                baseline = hashlib.sha256(snapshot.memory_md.encode()).hexdigest()
+                self._memory_last_hash.setdefault(key, baseline)
+                pending = self._memory_pending.get(key)
+                if pending is None:
+                    if self._memory_last_hash[key] == digest:
+                        continue
+                    pending = {"base_revision": snapshot.revision, "digest": digest,
+                               "body": body, "sent_at": 0.0}
+                    self._memory_pending[key] = pending
+                if time.monotonic() - pending["sent_at"] < REPORT_INTERVAL:
+                    continue
+                frame = AgentMemoryUpdateFrame(
+                    agent_id=agent_id, room_id=room_id, generation=manifest.generation,
+                    base_revision=pending["base_revision"], memory_md=pending["body"],
+                )
+                await self._send(frame.model_dump())
+                pending["sent_at"] = time.monotonic()
+                log.info("room_memory_update_sent", agent_id=agent_id, room_id=room_id,
+                         generation=manifest.generation, base_revision=pending["base_revision"])
+        for cache in (self._memory_last_hash, self._memory_pending):
+            for key in set(cache) - active_keys:
+                cache.pop(key, None)
+        self._memory_rejected.intersection_update(active_keys)
 
     async def _flush_outbox_artifacts(self) -> None:
         """Detect new / changed files under each running agent's
         ``memory/outbox/`` and emit ``room_artifact_produced`` frames.
+        A single UUID-named subdirectory selects the source room. Other
+        directories and symlinks are never traversed.
 
         Mirrors :meth:`_flush_memory_updates` but the body is binary
         (base64'd on the wire) and the cache is keyed by filename
         because one agent can drop many artifacts in parallel.
 
         Skipped silently:
-          - non-regular entries (subdirs, symlinks)
+          - non-regular entries (unscoped subdirs, nested dirs, symlinks)
           - filenames that look path-traversal-y (``/`` or
             ``..``-anchored — shouldn't happen since we only
             ``listdir`` the outbox, but defence in depth)
@@ -1147,6 +1309,7 @@ class MachineDaemon:
         import base64
         import hashlib
         import mimetypes
+        from uuid import UUID
 
         for info in self._spawner.list_running():
             agent_id = info["agent_id"]
@@ -1157,15 +1320,33 @@ class MachineDaemon:
                 # ``_flush_memory_updates``.
                 continue
             outbox = agent_root / "memory" / "outbox"
-            if not outbox.is_dir():
+            if not outbox.is_dir() or outbox.is_symlink():
                 continue
 
+            candidates: list[tuple[Path, str | None]] = []
             for entry in sorted(outbox.iterdir()):
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir():
+                    try:
+                        room_id = str(UUID(entry.name))
+                    except ValueError:
+                        continue
+                    # Only canonical room UUIDs are directories. We never
+                    # recurse beyond one level or accept arbitrary paths.
+                    if room_id != entry.name:
+                        continue
+                    candidates.extend((child, room_id) for child in sorted(entry.iterdir()))
+                else:
+                    candidates.append((entry, None))
+
+            for entry, room_id in candidates:
                 if not entry.is_file() or entry.is_symlink():
                     continue
                 name = entry.name
                 if "/" in name or name in ("", ".", ".."):
                     continue
+                cache_key = (agent_id, entry.relative_to(outbox).as_posix())
                 try:
                     size = entry.stat().st_size
                 except OSError:
@@ -1185,14 +1366,14 @@ class MachineDaemon:
                     # change. Use a sentinel hash entry so we don't
                     # spam the log on every report tick.
                     sentinel = f"unsupported:{mime}"
-                    if self._artifact_last_hash.get((agent_id, name)) != sentinel:
+                    if self._artifact_last_hash.get(cache_key) != sentinel:
                         log.info(
                             "outbox_skipped_mime",
                             agent_id=agent_id,
                             filename=name,
                             mime=mime,
                         )
-                        self._artifact_last_hash[(agent_id, name)] = sentinel
+                        self._artifact_last_hash[cache_key] = sentinel
                     continue
                 try:
                     raw = entry.read_bytes()
@@ -1205,14 +1386,15 @@ class MachineDaemon:
                     )
                     continue
                 digest = hashlib.sha256(raw).hexdigest()
-                if self._artifact_last_hash.get((agent_id, name)) == digest:
+                if self._artifact_last_hash.get(cache_key) == digest:
                     continue
-                self._artifact_last_hash[(agent_id, name)] = digest
+                self._artifact_last_hash[cache_key] = digest
 
                 from anygarden.machine.protocol.frames import RoomArtifactProducedFrame
 
                 frame = RoomArtifactProducedFrame(
                     agent_id=agent_id,
+                    room_id=room_id,
                     filename=name,
                     mime=mime,
                     content_b64=base64.b64encode(raw).decode("ascii"),
@@ -1384,11 +1566,62 @@ class MachineDaemon:
 
     # ── Room shared file handlers (#246) ───────────────────────────────
 
+    def _shared_file_path(
+        self,
+        agent_root: Path,
+        *,
+        agent_id: str,
+        room_id: str | None,
+        storage_name: str,
+        create: bool,
+    ) -> Path | None:
+        """Resolve a safe room-scoped path, including sole-room legacy frames."""
+        from uuid import UUID
+
+        if room_id is None:
+            manifest = self._manifest_store.load(agent_id)
+            rooms = list(dict.fromkeys(manifest.rooms)) if manifest is not None else []
+            if len(rooms) != 1:
+                log.warning("shared_file_ambiguous_room", agent_id=agent_id)
+                return None
+            room_id = rooms[0]
+        try:
+            canonical_room_id = str(UUID(room_id))
+        except (ValueError, TypeError, AttributeError):
+            return None
+        if canonical_room_id != room_id:
+            return None
+        if (
+            "/" in storage_name
+            or "\\" in storage_name
+            or storage_name in ("", ".", "..")
+            or "\x00" in storage_name
+        ):
+            log.warning("shared_file_path_rejected", agent_id=agent_id)
+            return None
+
+        directory = agent_root
+        for component in ("memory", "shared", room_id):
+            directory = directory / component
+            if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
+                log.warning("shared_file_symlink_rejected", agent_id=agent_id)
+                return None
+            if create:
+                directory.mkdir(exist_ok=True)
+                secure_chmod(directory, 0o700)
+            elif not directory.is_dir():
+                return None
+        target = directory / storage_name
+        if target.is_symlink():
+            log.warning("shared_file_symlink_rejected", agent_id=agent_id)
+            return None
+        return target
+
     async def _handle_agent_memory_shared_file_write(
         self, frame: AgentMemorySharedFileWriteFrame
     ) -> None:
         """Materialize a room-shared file under
-        ``<agent_root>/memory/shared/<storage_name>``.
+        ``<agent_root>/memory/shared/<room_id>/<storage_name>``.
 
         Idempotent by design — if the on-disk file already matches
         ``frame.content_sha256`` the write is skipped so backfill /
@@ -1404,28 +1637,22 @@ class MachineDaemon:
             # re-deliver once the agent is back.
             return
 
-        # Defensive: refuse path components in ``storage_name``. The
-        # server already sanitises, but the daemon runs unprivileged
-        # filesystem writes that shouldn't implicitly trust upstream
-        # strings.
-        if "/" in frame.storage_name or frame.storage_name in ("", ".", ".."):
-            log.warning(
-                "shared_file_write_rejected",
-                agent_id=frame.agent_id,
-                storage_name=frame.storage_name,
-            )
+        target = self._shared_file_path(
+            agent_root,
+            agent_id=frame.agent_id,
+            room_id=frame.room_id,
+            storage_name=frame.storage_name,
+            create=True,
+        )
+        if target is None:
             return
-
-        shared_dir = agent_root / "memory" / "shared"
-        shared_dir.mkdir(parents=True, exist_ok=True)
-        target = shared_dir / frame.storage_name
 
         if target.exists():
             existing = hashlib.sha256(target.read_bytes()).hexdigest()
             if existing == frame.content_sha256:
                 return
 
-        target.write_text(frame.content, encoding="utf-8")
+        safe_write_text(target, frame.content, mode=0o600)
         log.info(
             "shared_file_written",
             agent_id=frame.agent_id,
@@ -1442,10 +1669,15 @@ class MachineDaemon:
         except (AttributeError, KeyError):
             return
 
-        if "/" in frame.storage_name or frame.storage_name in ("", ".", ".."):
+        target = self._shared_file_path(
+            agent_root,
+            agent_id=frame.agent_id,
+            room_id=frame.room_id,
+            storage_name=frame.storage_name,
+            create=False,
+        )
+        if target is None:
             return
-
-        target = agent_root / "memory" / "shared" / frame.storage_name
         target.unlink(missing_ok=True)
 
     # ── WebSocket send ─────────────────────────────────────────────────

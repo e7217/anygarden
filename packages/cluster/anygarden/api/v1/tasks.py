@@ -7,13 +7,22 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.api.v1.errors import make_api_error
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import Message, Participant, Room, Task
+from anygarden.db.models import (
+    Agent,
+    Message,
+    Participant,
+    ProjectExecution,
+    Room,
+    Task,
+    TaskBlocker,
+    User,
+)
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import (
@@ -58,6 +67,7 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     status: str = "todo"
     assignee_participant_id: Optional[str] = None
+    spec: str | None = Field(default=None, max_length=100000)
 
     _check_status = field_validator("status")(_validate_task_status)
 
@@ -86,6 +96,32 @@ class TaskOut(BaseModel):
     goal_id: Optional[str] = None
     triggered_by: str = "manual"
     is_interesting: bool = False
+    spec: str | None = None
+    result_markdown: str | None = None
+    error: str | None = None
+    dependency_results: list[dict] | None = None
+    schedule_context: dict | None = None
+    is_silent: bool = False
+    execution_id: str | None = None
+    parent_task_id: str | None = None
+    parent_task_title: str | None = None
+    input_revision: int | None = None
+    delegation_depth: int = 0
+    role: str | None = None
+    result_version: int = 0
+    room_name: str | None = None
+    assignee_display_name: str | None = None
+    execution_operating_room_id: str | None = None
+    execution_source_message_id: str | None = None
+    execution_objective: str | None = None
+    execution_status: str | None = None
+    execution_input_revision: int | None = None
+    execution_operation_action: str | None = None
+    execution_error: str | None = None
+    is_current: bool = True
+    disposition: str = "current"
+    recovery: dict | None = None
+    blocked_by: list[dict] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -93,6 +129,7 @@ class TaskOut(BaseModel):
 class MessageTaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     assignee_participant_id: Optional[str] = None
+    spec: str | None = Field(default=None, max_length=100000)
 
 
 class TaskRequeue(BaseModel):
@@ -100,7 +137,79 @@ class TaskRequeue(BaseModel):
     assignee_participant_id: Optional[str] = None
 
 
-async def _to_out(db: AsyncSession, task: Task) -> TaskOut:
+async def _participant_display_name(db: AsyncSession, participant: Participant | None) -> str | None:
+    if participant is None:
+        return None
+    if participant.agent_id:
+        agent = await db.get(Agent, participant.agent_id)
+        return agent.name if agent else None
+    if participant.user_id:
+        user = await db.get(User, participant.user_id)
+        if user:
+            return user.display_name or (user.email.split("@")[0] if user.email else "Guest")
+    return None
+
+
+async def _to_out(
+    db: AsyncSession,
+    task: Task,
+    *,
+    room: Room | None = None,
+    assignee: Participant | None = None,
+    execution: ProjectExecution | None = None,
+    access=None,
+) -> TaskOut:
+    room = room or await db.get(Room, task.room_id)
+    if assignee is None and task.assignee_participant_id:
+        assignee = await db.get(Participant, task.assignee_participant_id)
+    if assignee is not None and assignee.room_id != task.room_id:
+        assignee = None
+    if execution is None and task.execution_id:
+        execution = await db.get(ProjectExecution, task.execution_id)
+    if execution is not None and (room is None or room.project_id != execution.project_id):
+        execution = None
+    parent_title = None
+    if task.parent_task_id and execution is not None:
+        parent_title = await db.scalar(
+            select(Task.title).join(Room, Room.id == Task.room_id).where(
+                Task.id == task.parent_task_id,
+                Task.execution_id == execution.id,
+                Room.project_id == execution.project_id,
+            )
+        )
+    blocked_by = []
+    if task.status == "blocked":
+        blockers = (
+            select(Task.id, Task.title, Task.room_id, Task.status, Room.name)
+            .join(TaskBlocker, TaskBlocker.blocked_by_task_id == Task.id)
+            .join(Room, Room.id == Task.room_id)
+            .where(TaskBlocker.task_id == task.id)
+        )
+        if execution is not None:
+            blockers = blockers.where(
+                Task.execution_id == execution.id,
+                Room.project_id == execution.project_id,
+            )
+        else:
+            blockers = blockers.where(Task.room_id == task.room_id)
+        blocked_by = [
+            {"task_id": blocker_id, "title": title, "room_id": blocker_room, "status": status, "room_name": room_name}
+            for blocker_id, title, blocker_room, status, room_name in (await db.execute(blockers.order_by(Task.created_at, Task.id))).all()
+        ]
+    from anygarden.project_executions.authorization import disposition
+
+    is_current, task_disposition = disposition(execution, task.input_revision) if execution else (True, "current")
+    from anygarden.project_executions.recovery import (
+        public_reason_code,
+        task_recovery_payload,
+    )
+
+    recovery = await task_recovery_payload(db, task, execution=execution, access=access) if execution else None
+    from anygarden.project_executions.serialization import (
+        execution_operation_projection,
+    )
+
+    operation = await execution_operation_projection(db, execution) if execution else {}
     return TaskOut(
         id=task.id,
         room_id=task.room_id,
@@ -114,7 +223,41 @@ async def _to_out(db: AsyncSession, task: Task) -> TaskOut:
         goal_id=task.goal_id,
         triggered_by=task.triggered_by,
         is_interesting=task.is_interesting,
+        spec=task.spec,
+        result_markdown=task.result_markdown,
+        error=public_reason_code(task.error) if execution else task.error,
+        dependency_results=task.dependency_results,
+        schedule_context=task.schedule_context,
+        is_silent=task.is_silent,
+        execution_id=task.execution_id,
+        parent_task_id=task.parent_task_id,
+        parent_task_title=parent_title,
+        input_revision=task.input_revision,
+        delegation_depth=task.delegation_depth,
+        role=task.role,
+        result_version=task.result_version,
+        room_name=room.name if room else None,
+        assignee_display_name=await _participant_display_name(db, assignee),
+        execution_operating_room_id=execution.operating_room_id if execution else None,
+        execution_source_message_id=execution.source_message_id if execution else None,
+        execution_objective=execution.objective if execution else None,
+        execution_status=execution.status if execution else None,
+        execution_input_revision=execution.input_revision if execution else None,
+        is_current=is_current,
+        disposition=task_disposition,
+        recovery=recovery,
+        blocked_by=blocked_by,
+        **operation,
     )
+
+
+def _reject_execution_mutation(task: Task) -> None:
+    if task.execution_id is not None:
+        raise make_api_error(
+            status_code=409,
+            code="PROJECT_EXECUTION_TASK_MANAGED",
+            message="Execution tasks must use the project execution workflow",
+        )
 
 
 def _raise_conflict(exc: TaskMutationConflict) -> None:
@@ -304,6 +447,7 @@ async def create_task(
         assignee_participant_id=body.assignee_participant_id,
         assigned_at=now if body.assignee_participant_id else None,
         created_by=identity.id if identity.kind == "user" else None,
+        spec=body.spec,
     )
     db.add(task)
     await db.flush()  # surface ``task.id`` for the injection metadata
@@ -386,6 +530,7 @@ async def create_message_task(
     task = Task(
         room_id=room_id,
         source_message_id=source.id,
+        spec=body.spec if body.spec is not None else source.content,
         title=body.title,
         status="todo",
         assignee_participant_id=body.assignee_participant_id,
@@ -447,20 +592,41 @@ async def list_tasks(
     ``goal_id`` (#302). The Goal detail's "recent runs" panel uses
     ``?goal_id=<id>`` to scope the room's tasks down to a single
     responsibility — backed by the ``ix_tasks_goal_created`` index."""
-    await require_capability(
+    access = await require_capability(
         db,
         room_id=room_id,
         identity=identity,
         capability=Capability.TASK_READ,
     )
-    stmt = select(Task).where(Task.room_id == room_id)
+    stmt = (
+        select(Task, Room, Participant, ProjectExecution)
+        .join(Room, Room.id == Task.room_id)
+        .outerjoin(Participant, Participant.id == Task.assignee_participant_id)
+        .outerjoin(ProjectExecution, ProjectExecution.id == Task.execution_id)
+        .where(
+            or_(
+                Task.room_id == room_id,
+                and_(
+                    ProjectExecution.operating_room_id == room_id,
+                    ProjectExecution.project_id == access.room.project_id,
+                    Room.project_id == access.room.project_id,
+                    access.room.project_id is not None,
+                ),
+            )
+        )
+    )
     if status:
         stmt = stmt.where(Task.status == status)
     if goal_id:
         stmt = stmt.where(Task.goal_id == goal_id)
+    else:
+        stmt = stmt.where(Task.is_silent.is_(False))
     stmt = stmt.order_by(Task.created_at)
-    rows = (await db.execute(stmt)).scalars().all()
-    return [await _to_out(db, task) for task in rows]
+    rows = (await db.execute(stmt)).all()
+    return [
+        await _to_out(db, task, room=room, assignee=assignee, execution=execution, access=access)
+        for task, room, assignee, execution in rows
+    ]
 
 
 @router.put("/api/v1/tasks/{task_id}", response_model=TaskOut)
@@ -490,9 +656,9 @@ async def update_task(
     )
 
     previous_assignee = task.assignee_participant_id
+    _reject_execution_mutation(task)
     new_assignee_participant: Optional[Participant] = None
     previous_status = task.status
-    task_source_thread_root_id = await source_thread_root_id(db, task)
 
     assignee_was_set = "assignee_participant_id" in body.model_fields_set
     if assignee_was_set and body.status is not None:
@@ -572,7 +738,7 @@ async def update_task(
     # #459 (Wave 2c) — resolve-wake. When this REST update flips the task
     # into a terminal status, run the same dependency-resolution hook the
     # MCP ``mark_task_status`` path uses so tasks blocked *by* this one get
-    # returned to ``todo`` + re-woken once all their blockers are terminal.
+    # returned to ``todo`` + re-woken once all prerequisites succeed.
     woken_blocker_ids: list[str] = []
     if (
         body.status is not None
@@ -588,9 +754,9 @@ async def update_task(
     # #302 — materialize hook for goal-derived tasks. When the agent
     # marks a goal-derived task as ``done`` or ``failed``, run the
     # policy: increment/reset failure counter, optionally pause the
-    # goal, and (for ``interesting_only`` silent successes) drop the
-    # task row so the rail doesn't accumulate "all green" noise.
-    task_was_deleted = False
+    # goal, and hide silent successes from ordinary work queues while
+    # preserving the run ledger and its consumed idempotency key.
+    task_was_hidden = False
     if (
         task.goal_id is not None
         and body.status is not None
@@ -599,7 +765,7 @@ async def update_task(
     ):
         from anygarden.goals.executor import apply_completion
 
-        task_was_deleted = await apply_completion(
+        task_was_hidden = await apply_completion(
             db, task, final_status=body.status
         )
 
@@ -656,13 +822,7 @@ async def update_task(
                 break
         woken_payloads.append((w_task, w_room, w_match))
 
-    # Snapshot pre-commit so the WS frame can survive a delete on the
-    # silent-success path. ``_to_out`` reads attributes that detach
-    # after ``db.delete`` + ``commit`` — building the WS payload from
-    # the snapshot keeps the response shape consistent.
-    task_snapshot_for_response = (
-        await _to_out(db, task) if not task_was_deleted else None
-    )
+    task_snapshot_for_response = await _to_out(db, task)
 
     await db.commit()
 
@@ -684,40 +844,12 @@ async def update_task(
             room_name=w_room.name if w_room else "",
         )
 
-    if task_was_deleted:
-        # Treat the silent-success delete as a regular task delete on
-        # the wire so subscribers prune the row from their local cache.
-        if room is not None:
-            await fanout_task_event(
-                db,
-                manager=manager,
-                event="deleted",
-                task=task,
-                room_name=room.name,
-            )
-        # Mirror the legacy DELETE handler's response shape so the
-        # client can detect the row vanished and update its UI.
-        return TaskOut(
-            id=task.id,
-            room_id=task.room_id,
-            title=task.title,
-            status=body.status or task.status,
-            assignee_participant_id=task.assignee_participant_id,
-            created_by=task.created_by,
-            created_at=task.created_at.isoformat(),
-            source_message_id=task.source_message_id,
-            source_thread_root_id=task_source_thread_root_id,
-            goal_id=task.goal_id,
-            triggered_by=task.triggered_by,
-            is_interesting=task.is_interesting,
-        )
-
     await db.refresh(task)
     if room is not None:
         await fanout_task_event(
             db,
             manager=manager,
-            event=fanout_event,  # type: ignore[arg-type]
+            event="deleted" if task_was_hidden else fanout_event,  # type: ignore[arg-type]
             task=task,
             room_name=room.name,
         )
@@ -754,6 +886,7 @@ async def claim_task(
             code="TASK_ROOM_PARTICIPANT_REQUIRED",
             message="Room participant required",
         )
+    _reject_execution_mutation(task)
     if identity.kind == "user" and not access.room.allow_human_assignment:
         raise make_api_error(
             status_code=403,
@@ -808,6 +941,7 @@ async def requeue_task(
         task=task,
     )
     assignee: Participant | None = None
+    _reject_execution_mutation(task)
     if body.assignee_participant_id is not None:
         assignee = await _validate_assignee_in_room(
             db, task.room_id, body.assignee_participant_id
@@ -874,6 +1008,7 @@ async def delete_task(
         changed_fields={"delete"},
     )
 
+    _reject_execution_mutation(task)
     if task.source_message_id is not None:
         raise HTTPException(
             status_code=409,
@@ -892,7 +1027,21 @@ async def delete_task(
     room_name = room.name if room else ""
     snapshot = task
 
-    await db.delete(task)
+    if task.goal_id is not None:
+        if task.status not in {"done", "failed"}:
+            raise HTTPException(status_code=409, detail="An active goal run cannot be cleared")
+        task.is_silent = True
+    else:
+        from anygarden.db.native_invocation_models import NativeInvocationAccounting
+
+        if await db.scalar(select(NativeInvocationAccounting.id).where(
+            NativeInvocationAccounting.task_id == task_id,
+        ).limit(1)):
+            raise HTTPException(status_code=409, detail={
+                "code": "NATIVE_INVOCATION_HISTORY_DELETE_FORBIDDEN",
+                "detail": "A task with recorded invocation history cannot be deleted",
+            })
+        await db.delete(task)
     await db.commit()
 
     manager = _connection_manager(request)

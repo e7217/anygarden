@@ -83,6 +83,26 @@ describe('useRoomTasks', () => {
     expect(url).toContain('?status=todo')
   })
 
+  it('hides silent runs from the work queue but preserves them in goal history', async () => {
+    const silentRun = { ...sampleTasks[0], id: 'silent-run', is_silent: true, goal_id: 'goal-1' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([...sampleTasks, silentRun]))
+    const { result, rerender } = renderHook(({ goalId }: { goalId?: string }) => useRoomTasks(ROOM, { goalId }), { initialProps: {} })
+    await waitFor(() => expect(result.current.tasks.map(task => task.id)).toEqual(['t1']))
+    rerender({ goalId: 'goal-1' })
+    await waitFor(() => expect(result.current.tasks.map(task => task.id)).toEqual(['t1', 'silent-run']))
+    expect(fetchMock.mock.calls[1][0]).toBe(`/api/v1/rooms/${ROOM}/tasks?goal_id=goal-1`)
+  })
+
+  it('refreshes a silent deleted event as retained ledger history for its goal', async () => {
+    const silentRun = { ...sampleTasks[0], id: 'silent-run', status: 'done', is_silent: true, goal_id: 'goal-1' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([silentRun]))
+    const { result } = renderHook(() => useRoomTasks(ROOM, { goalId: 'goal-1' }))
+    await waitFor(() => expect(result.current.tasks[0]?.id).toBe('silent-run'))
+    act(() => { window.dispatchEvent(new CustomEvent('anygarden:task:updated', { detail: { event: 'deleted', task: silentRun } })) })
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(result.current.tasks[0]).toMatchObject({ id: 'silent-run', status: 'done', is_silent: true }))
+  })
+
   it('refetches when anygarden:task:updated fires for the same room', async () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -36,3 +36,15 @@ def build_engine(db_url: str) -> AsyncEngine:
 def build_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     """Return a session factory bound to *engine*."""
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def begin_write_transaction(session: AsyncSession) -> None:
+    """Acquire SQLite's writer before a fresh mutation session reads scope.
+
+    A SAVEPOINT followed by a scope read otherwise creates a deferred read
+    snapshot. If another writer commits, upgrading it fails immediately with
+    SQLITE_BUSY_SNAPSHOT even when busy_timeout is set. PostgreSQL keeps the
+    existing execution/turn row locks; ordinary read sessions stay unchanged.
+    """
+    if session.get_bind().dialect.name == "sqlite":
+        await session.execute(text("BEGIN IMMEDIATE"))

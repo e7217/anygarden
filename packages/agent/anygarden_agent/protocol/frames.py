@@ -8,8 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel, Field, field_validator
 
 # ── Incoming (client -> server) ──────────────────────────────────────
 
@@ -40,6 +39,66 @@ class ExecutionControlOut(BaseModel):
     payload: dict[str, Any]
 
 
+class TurnStartFrame(BaseModel):
+    """Exact delivered attempt asks permission immediately before native spawn."""
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_start"] = "turn_start"
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    lease: str = Field(min_length=1, max_length=128, repr=False)
+    local_execution_id: str = Field(min_length=36, max_length=36)
+    execution_id: str | None = Field(default=None, min_length=36, max_length=36)
+    input_revision: int | None = Field(default=None, ge=1, strict=True)
+
+
+class TurnStartPermitOut(BaseModel):
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_start_permit"] = "turn_start_permit"
+    room_id: str
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    local_execution_id: str = Field(min_length=36, max_length=36)
+    execution_id: str | None = Field(default=None, min_length=36, max_length=36)
+    input_revision: int | None = Field(default=None, ge=1, strict=True)
+    allowed: bool
+    code: str | None = Field(default=None, max_length=128)
+    input_snapshot: dict[str, Any] | None = None
+
+
+class TurnStopOut(BaseModel):
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_stop"] = "turn_stop"
+    stop_id: str = Field(min_length=36, max_length=36)
+    agent_id: str
+    room_id: str
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    execution_id: str = Field(min_length=36, max_length=36)
+    input_revision: int = Field(ge=1, strict=True)
+    local_execution_id: str | None = Field(default=None, min_length=36, max_length=36)
+    reason: str = Field(min_length=1, max_length=128)
+
+
+class TurnStopResultFrame(BaseModel):
+    """Process receipt only; contains neither leases nor native session handles."""
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_stop_result"] = "turn_stop_result"
+    stop_id: str = Field(min_length=36, max_length=36)
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    execution_id: str = Field(min_length=36, max_length=36)
+    input_revision: int = Field(ge=1, strict=True)
+    local_execution_id: str | None = Field(default=None, min_length=36, max_length=36)
+    status: Literal["confirmed", "not_started", "already_finished", "unknown"]
+    process_state: Literal["stopped", "not_started", "finished", "unknown"] = "unknown"
+    outcome: Literal["succeeded", "failed", "cancelled", "unknown"] | None = None
+    code: str | None = Field(default=None, max_length=128)
+
+
 class SendFrame(BaseModel):
     type: Literal["send"] = "send"
     content: str
@@ -64,6 +123,29 @@ class JoinRoomFrame(BaseModel):
     type: Literal["join_room"] = "join_room"
     room_id: str
 
+
+class _UsageCounters(BaseModel):
+    model_config = {"extra": "forbid"}
+    input_tokens: int | None = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
+    output_tokens: int | None = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
+    cached_input_tokens: int | None = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
+
+
+class _UsageMetadata(BaseModel):
+    model_config = {"extra": "forbid"}
+    source: Literal["codex-session-cumulative-v1"]
+    status: Literal[
+        "fresh_measured", "measured_delta", "baseline_missing", "baseline_invalidated",
+        "counter_rollback", "session_changed", "session_unobserved",
+        "terminal_usage_missing", "provider_usage_invalid", "process_outcome_unknown",
+        "not_started",
+    ]
+    baseline_status: Literal["fresh", "valid", "absent", "invalidated"]
+    provider_cumulative: _UsageCounters | None = None
+    baseline: _UsageCounters | None = None
+    requested_session_sha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    observed_session_sha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    baseline_execution_sha256: str | None = Field(default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 class LifecycleFrame(BaseModel):
     """Agent-emitted handler/engine lifecycle event.
@@ -114,9 +196,19 @@ class LifecycleFrame(BaseModel):
             "skipped",
         ]
     ] = None
-    duration_ms: Optional[int] = None
+    duration_ms: Optional[int] = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
     engine: Optional[str] = None
     error: Optional[str] = None
+    # Actual native receipt, authenticated against this exact leased attempt.
+    # These fields carry no PID, native handle, raw provider error or secret.
+    local_execution_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
+    native_outcome: Optional[Literal["succeeded", "failed", "cancelled", "unknown"]] = None
+    native_process_state: Optional[Literal["not_started", "running", "finished", "stopped", "unknown"]] = None
+    native_reason_code: Optional[Literal[
+        "MODEL_CONFIGURATION_INVALID", "AUTHENTICATION_FAILED", "MODEL_TRANSIENT_FAILURE",
+        "MODEL_EXECUTION_FAILED", "PROCESS_OUTCOME_UNKNOWN",
+    ]] = None
+    native_transient: Optional[bool] = Field(default=None, strict=True)
     # #433 — gateway-free LLM turn I/O. On ``engine_call_finished`` the
     # supervisor may carry the augmented input the adapter handed the
     # engine (``prompt``) and the engine's reply (``completion``) so the
@@ -145,13 +237,20 @@ class LifecycleFrame(BaseModel):
     # surface usage (openhands leaves them None — it is already counted
     # via the gateway reverse-proxy — so no double-counting).
     model: Optional[str] = None
-    input_tokens: Optional[int] = None
-    output_tokens: Optional[int] = None
-    cost_usd: Optional[float] = None
+    input_tokens: Optional[int] = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
+    output_tokens: Optional[int] = Field(default=None, strict=True, ge=0, le=(1 << 63) - 1)
+    cost_usd: Optional[float] = Field(default=None, strict=True, ge=0, allow_inf_nan=False)
+    usage_metadata: dict[str, Any] | None = None
+
+    @field_validator("usage_metadata")
+    @classmethod
+    def _bounded_usage_metadata(cls, value):
+        return _UsageMetadata.model_validate(value).model_dump() if value is not None else None
 
 
 IncomingFrame = (
     SendFrame | TypingFrame | CreateRoomFrame | JoinRoomFrame | LifecycleFrame | ExecutionControlResultFrame
+    | TurnStartFrame | TurnStopResultFrame
 )
 
 
@@ -159,6 +258,10 @@ def parse_incoming(data: dict[str, Any]) -> IncomingFrame:
     """Dispatch raw JSON to the correct frame model."""
     frame_type = data.get("type")
     match frame_type:
+        case "turn_start":
+            return TurnStartFrame.model_validate(data)
+        case "turn_stop_result":
+            return TurnStopResultFrame.model_validate(data)
         case "execution_control_result":
             return ExecutionControlResultFrame.model_validate(data)
         case "send":
@@ -215,6 +318,7 @@ class WelcomeOut(BaseModel):
     type: Literal["welcome"] = "welcome"
     participant_id: str
     pending_rooms: list[str] = []
+    room_memory: dict | None = None
 
 
 class ErrorOut(BaseModel):
@@ -222,4 +326,7 @@ class ErrorOut(BaseModel):
     detail: str
 
 
-OutgoingFrame = MessageOut | RoomCreatedOut | JoinRoomOut | TypingOut | WelcomeOut | ErrorOut
+OutgoingFrame = (
+    MessageOut | RoomCreatedOut | JoinRoomOut | TypingOut | WelcomeOut | ErrorOut
+    | TurnStartPermitOut | TurnStopOut
+)

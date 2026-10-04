@@ -4,6 +4,9 @@ import { X } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import TasksSection from '@/components/right-rail/TasksSection'
+import ExecutionRequestsSection from '@/components/right-rail/ExecutionRequestsSection'
+import ExecutionApprovalsSection from '@/components/right-rail/ExecutionApprovalsSection'
+import ProjectExecutionsSection from '@/components/right-rail/ProjectExecutionsSection'
 import FilesSection from '@/components/right-rail/FilesSection'
 import GoalsSection from '@/components/right-rail/GoalsSection'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
@@ -24,14 +27,9 @@ interface RightContextRailProps {
  * left navigation Sidebar; mirrors the same mobile-drawer pattern
  * (``Sidebar.tsx:354-376``) so users carry one mental model.
  *
- * Sections rendered top-to-bottom:
- *   - Goals (#302 Phase 3) — recurring responsibilities reporting here
- *   - Tasks (#266 / #302)  — current room's tasks (manual + scheduled)
- *   - Shared Files (#246)  — current room's uploaded files
- *
- * The "Responsibilities" section is at the top because it's the most
- * proactive — it shapes what the agents *will* do, while Tasks shows
- * what they *are* doing and Files shows what's available.
+ * Prioritize pending questions and approvals, then current execution/task
+ * summaries and recent results. Responsibilities and shared files remain
+ * reachable in a collapsed resource section below the work queue.
  */
 export default function RightContextRail({
   roomId,
@@ -119,12 +117,15 @@ export default function RightContextRail({
         </div>
 
         <ScrollArea className="min-w-0 flex-1">
-          <GoalsSection
-            roomId={roomId}
-            agentParticipants={agentParticipants}
-          />
-          <TasksSection roomId={roomId} participants={participants} />
-          <FilesSection roomId={roomId} />
+          <ExecutionRequestsSection roomId={roomId} onNavigate={onClose} />
+          <ExecutionApprovalsSection roomId={roomId} onNavigate={onClose} />
+          <ProjectExecutionsSection roomId={roomId} onNavigate={onClose} />
+          <TasksSection roomId={roomId} participants={participants} onNavigate={onClose} />
+          <details className="min-w-0 border-t border-[var(--color-border)]">
+            <summary className="min-h-11 cursor-pointer content-center px-3 py-2 text-sm font-semibold">{t('contextRail.resources')}</summary>
+            <GoalsSection roomId={roomId} agentParticipants={agentParticipants} />
+            <FilesSection roomId={roomId} />
+          </details>
         </ScrollArea>
       </aside>
     </>

@@ -167,11 +167,11 @@ async def get_thread_messages(
 async def inject_task_assignment_message(
     db: AsyncSession,
     *,
-    room: "Room",
-    task: "Task",
+    room: Room,
+    task: Task,
     sender_participant_id: str | None,
     event: Literal["assigned", "reassigned"] = "assigned",
-    manager: "ConnectionManager | None" = None,
+    manager: ConnectionManager | None = None,
     request_id: str | None = None,
     redispatch_count: int = 0,
 ) -> Message:
@@ -222,6 +222,11 @@ async def inject_task_assignment_message(
         raise ValueError(
             "inject_task_assignment_message requires task.assignee_participant_id"
         )
+    # An assignment is a server instruction, even when the assignee is the
+    # room's orchestrator. Recording it as that agent's own message would
+    # make the SDK discard both the notification and the leased execution.
+    if sender_participant_id == assignee_pid:
+        sender_participant_id = None
 
     active_room_id = await db.scalar(
         select(Room.id).where(Room.id == room.id, Room.archived_at.is_(None))
@@ -250,6 +255,17 @@ async def inject_task_assignment_message(
     }
     if sender_participant_id is None:
         metadata["system_origin"] = "task_assignment"
+    if task.dependency_results:
+        metadata["task_assignment"]["dependency_results"] = task.dependency_results
+    if task.schedule_context:
+        metadata["task_assignment"]["schedule_context"] = task.schedule_context
+    if task.execution_id:
+        metadata["task_assignment"].update({
+            "execution_id": task.execution_id,
+            "parent_task_id": task.parent_task_id,
+            "input_revision": task.input_revision,
+            "role": task.role,
+        })
 
     # Multi-line content (#275, #338). First line stays the canonical
     # ``<@user:pid> [TASK] {title}`` form so ``decide_policy`` mention
@@ -275,8 +291,31 @@ async def inject_task_assignment_message(
         '2. **응답 완료 시**: 같은 도구로 `status="done"` 을 호출. '
         '차단되면 `status="blocked"` + 이유 설명.\n'
         "\n"
-        "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다."
+        + ("이 실행의 기한과 서버 상태를 따르세요. 질문이나 승인 대기 중에는 완료로 표시하지 마세요."
+           if task.execution_id else "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다.")
     )
+    if task.spec:
+        content += f"\n\n**TASK INPUT AND CONSTRAINTS**\n{task.spec}"
+    if task.execution_id:
+        content += (
+            f"\n\n**PROJECT EXECUTION**\nExecution: {task.execution_id}; "
+            f"task: {task.id}; input revision: {task.input_revision}.\n"
+            "완료할 때 mark_task_status에 실제 result_markdown과 검증 근거를 전달하세요. "
+            "추가 사실이 필요하면 request_project_input을 사용하세요. "
+            "서버가 운영실로 질문을 전달하고 사용자 답변 후 같은 작업을 재개합니다. "
+            "문서 산출물은 publish_project_artifact로 실제 파일을 저장하세요."
+        )
+    if task.dependency_results:
+        content += "\n\n**ACCEPTED PREREQUISITE RESULTS**"
+        for item in task.dependency_results:
+            content += (
+                f"\n\nTask {item['task_id']} ({item['title']}); "
+                f"result SHA-256: {item['result_sha256'] or 'not collected'}\n"
+                + (f"Accepted result ID: {item['result_id']}; numeric result version: {item['result_version']}\n"
+                   if item.get("result_id") and item.get("result_version") else "")
+                + (f"Accepted artifact references: {item['artifacts']}\n" if item.get("artifacts") else "")
+                + f"{item['result_markdown'] if item['result_markdown'] is not None else 'Result not collected; do not infer missing evidence.'}"
+            )
 
     from anygarden.task_service import source_thread_root_id
 
@@ -289,6 +328,11 @@ async def inject_task_assignment_message(
         metadata,
         thread_root_id=thread_root_id,
     )
+    if task.execution_id:
+        # Preserve the original human authorization on ProjectExecution;
+        # this Task source is the concrete wake required by workspace fencing.
+        task.source_message_id = msg.id
+        await db.flush()
     assignee_agent_id = await db.scalar(
         select(Participant.agent_id).where(
             Participant.id == assignee_pid,
@@ -371,7 +415,7 @@ async def inject_task_assignment_message(
 
 
 async def _build_task_ws_payload(
-    db: AsyncSession, task: "Task", room_name: str
+    db: AsyncSession, task: Task, room_name: str
 ) -> dict[str, Any]:
     """Shape the WS ``task.updated`` ``task`` payload.
 
@@ -388,7 +432,7 @@ async def _build_task_ws_payload(
             agent_id = p.agent_id
     from anygarden.task_service import source_thread_root_id
 
-    return {
+    payload = {
         "id": task.id,
         "room_id": task.room_id,
         "room_name": room_name,
@@ -400,7 +444,44 @@ async def _build_task_ws_payload(
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "source_message_id": task.source_message_id,
         "source_thread_root_id": await source_thread_root_id(db, task),
+        "goal_id": task.goal_id,
+        "triggered_by": task.triggered_by,
+        "spec": task.spec,
+        "result_markdown": task.result_markdown,
+        "error": task.error,
+        "dependency_results": task.dependency_results,
+        "schedule_context": task.schedule_context,
+        "is_silent": task.is_silent,
     }
+    if task.execution_id:
+        from anygarden.db.models import ProjectExecution
+
+        execution = await db.get(ProjectExecution, task.execution_id)
+        room = await db.get(Room, task.room_id)
+        if execution and room and room.project_id == execution.project_id:
+            from anygarden.project_executions.authorization import disposition
+            from anygarden.project_executions.serialization import (
+                execution_operation_projection,
+            )
+
+            is_current, task_disposition = disposition(execution, task.input_revision)
+            payload.update(await execution_operation_projection(db, execution))
+            payload.update({
+                "execution_id": execution.id,
+                "execution_operating_room_id": execution.operating_room_id,
+                "execution_source_message_id": execution.source_message_id,
+                "execution_objective": execution.objective,
+                "execution_status": execution.status,
+                "execution_input_revision": execution.input_revision,
+                "is_current": is_current,
+                "disposition": task_disposition,
+                "parent_task_id": task.parent_task_id,
+                "input_revision": task.input_revision,
+                "delegation_depth": task.delegation_depth,
+                "role": task.role,
+                "result_version": task.result_version,
+            })
+    return payload
 
 
 async def _admin_user_ids(db: AsyncSession) -> set[str]:
@@ -418,11 +499,11 @@ async def _admin_user_ids(db: AsyncSession) -> set[str]:
 async def fanout_task_event(
     db: AsyncSession,
     *,
-    manager: "ConnectionManager | None",
+    manager: ConnectionManager | None,
     event: Literal[
         "created", "updated", "deleted", "assigned", "reassigned", "claimed"
     ],
-    task: "Task",
+    task: Task,
     room_name: str,
 ) -> None:
     """Push a ``task.updated`` frame to both the room channel (1차) and
@@ -439,6 +520,9 @@ async def fanout_task_event(
     payload = await _build_task_ws_payload(db, task, room_name)
     frame = TaskUpdateOut(event=event, task=payload)
     await manager.broadcast(task.room_id, frame)
+    operating_room_id = payload.get("execution_operating_room_id")
+    if operating_room_id and operating_room_id != task.room_id:
+        await manager.broadcast(operating_room_id, frame)
     user_ids = await _admin_user_ids(db)
     if user_ids:
         await manager.push_to_users(user_ids, frame)

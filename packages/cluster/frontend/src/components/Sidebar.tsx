@@ -28,7 +28,7 @@ import SidebarPreferencesMenu from '@/components/SidebarPreferencesMenu'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
   Hash, Plus, ChevronDown, ChevronRight, LogOut, MessageSquare, X,
-  Pin, PinOff, GripVertical, PanelLeftClose, Link2,
+  Pin, PinOff, GripVertical, PanelLeftClose, Link2, Inbox,
 } from 'lucide-react'
 import {
   DndContext, closestCenter, KeyboardSensor, PointerSensor,
@@ -468,6 +468,8 @@ export default function Sidebar({
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      <div className="px-2 pb-2"><button type="button" onClick={() => go('/inbox')} aria-current={location.pathname === '/inbox' ? 'page' : undefined} data-testid="sidebar-inbox" className={`flex min-h-11 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-sm font-medium ${location.pathname === '/inbox' ? 'bg-[var(--color-surface-hover)] text-[var(--color-brand-text)]' : 'text-[var(--color-foreground)] hover:bg-[var(--color-surface-hover)]'}`}><Inbox className="h-4 w-4 shrink-0" />{t('inbox.title')}</button></div>
 
       {/* Projects & Rooms */}
       <ScrollArea className="min-h-0 flex-1">

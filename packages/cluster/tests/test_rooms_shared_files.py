@@ -156,6 +156,86 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 class TestUpload:
+    async def test_same_named_project_inputs_survive_backfill_and_scoped_delete(
+        self, client: AsyncClient, shared_files_env, tmp_path: Path
+    ) -> None:
+        from unittest.mock import MagicMock
+
+        from anygarden.machine.daemon import MachineDaemon
+        from anygarden.scheduler.lifecycle import AgentLifecycle
+
+        env = shared_files_env
+        async with env["session_factory"]() as db:
+            project = Project(name="second-project")
+            db.add(project)
+            await db.flush()
+            other_room = Room(project_id=project.id, name="other-control")
+            db.add(other_room)
+            await db.flush()
+            db.add_all([
+                Participant(room_id=other_room.id, user_id=env["owner"].id, role="admin"),
+                Participant(room_id=other_room.id, agent_id=env["agent"].id),
+            ])
+            await db.commit()
+            other_room_id = other_room.id
+
+        ids: dict[str, str] = {}
+        room_inputs = {env["room"].id: b"CAREER-ONLY", other_room_id: b"GARDEN-ONLY"}
+        for room_id, marker in room_inputs.items():
+            response = await client.post(
+                f"/api/v1/rooms/{room_id}/files",
+                headers=_auth_headers(env["owner_token"]),
+                files={"upload": ("input.md", marker, "text/markdown")},
+            )
+            assert response.status_code == 201
+            ids[room_id] = response.json()["id"]
+        await _wait_for_tasks()
+
+        agent_root = tmp_path / "agent-root"
+        agent_root.mkdir()
+        daemon = MachineDaemon(
+            server_url="ws://localhost/ws/machines/m1", machine_id="m1",
+            machine_token="unused", labels={}, agent_dirs_root=tmp_path / "agents",
+            workspace_registry_path=tmp_path / "workspaces.json",
+            workspace_signing_key_path=tmp_path / "workspace-signing.key",
+        )
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        writes = [frame for _, frame in env["bus"].sent if frame["type"] == "agent_memory_shared_file_write"]
+        assert {frame["room_id"] for frame in writes} == set(room_inputs)
+        for frame in writes:
+            await daemon._handle(frame)
+        shared = agent_root / "memory" / "shared"
+        for room_id, marker in room_inputs.items():
+            assert (shared / room_id / "input.md").read_bytes() == marker
+
+        # Remove local materializations and replay the same authoritative
+        # bootstrap used after agents reach running on a reconnect/restart.
+        for room_id in room_inputs:
+            (shared / room_id / "input.md").unlink()
+        env["bus"].sent.clear()
+        lifecycle = AgentLifecycle(
+            db_factory=env["session_factory"], machine_bus=env["bus"],
+            room_files_dir=env["config"].room_files_dir,
+        )
+        await lifecycle._backfill_shared_files_for_agents([env["agent"].id])
+        assert {frame["room_id"] for _, frame in env["bus"].sent} == set(room_inputs)
+        for _, frame in env["bus"].sent:
+            await daemon._handle(frame)
+        for room_id, marker in room_inputs.items():
+            assert (shared / room_id / "input.md").read_bytes() == marker
+
+        env["bus"].sent.clear()
+        response = await client.delete(
+            f"/api/v1/rooms/{env['room'].id}/files/{ids[env['room'].id]}",
+            headers=_auth_headers(env["owner_token"]),
+        )
+        assert response.status_code == 204
+        await _wait_for_tasks()
+        for _, frame in env["bus"].sent:
+            await daemon._handle(frame)
+        assert not (shared / env["room"].id / "input.md").exists()
+        assert (shared / other_room_id / "input.md").read_bytes() == b"GARDEN-ONLY"
+
     async def test_upload_creates_row_and_disk_file(
         self, client: AsyncClient, shared_files_env
     ) -> None:
@@ -194,6 +274,7 @@ class TestUpload:
         ]
         assert len(writes) == 1
         assert writes[0]["agent_id"] == env["agent"].id
+        assert writes[0]["room_id"] == env["room"].id
         assert writes[0]["storage_name"] == "notes.md"
         assert writes[0]["content"] == "one\n"
 
@@ -331,6 +412,7 @@ class TestDelete:
         ]
         assert len(delete_frames) == 1
         assert delete_frames[0]["storage_name"] == "spec.md"
+        assert delete_frames[0]["room_id"] == env["room"].id
 
     async def test_delete_missing_returns_404(
         self, client: AsyncClient, shared_files_env
@@ -451,6 +533,7 @@ class TestMembershipHooks:
         ]
         assert len(targeted) == 1
         assert targeted[0]["storage_name"] == "seed.md"
+        assert targeted[0]["room_id"] == env["room"].id
 
     async def test_remove_agent_triggers_targeted_delete(
         self, client: AsyncClient, shared_files_env
@@ -496,6 +579,7 @@ class TestMembershipHooks:
         ]
         assert len(deletes) == 1
         assert deletes[0]["storage_name"] == "seed.md"
+        assert deletes[0]["room_id"] == env["room"].id
 
 
 class TestSanitize:

@@ -17,6 +17,7 @@ from uuid import uuid4
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from anygarden.db.engine import begin_write_transaction
 from anygarden.db.models import (
     ActivityLog,
     Agent,
@@ -25,7 +26,11 @@ from anygarden.db.models import (
     AgentTurnOutbox,
     Message,
     Participant,
+    ProjectExecution,
+    ProjectExecutionEvent,
     Room,
+    Task,
+    TaskResult,
 )
 from anygarden.messages.serialization import message_to_frame
 from anygarden.messages.service import append_message
@@ -44,6 +49,40 @@ def _now() -> datetime:
 
 def _lease_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+class _TurnBindingChanged(Exception):
+    """One-way source adoption raced an unlocked scope observation."""
+
+
+async def _lock_scoped_turn(db: AsyncSession, request_id: str):
+    """Lock Execution before Turn, without granting any workflow permission.
+
+    A changed NULL binding rolls back the acquisition savepoint, so a caller
+    never retains a Turn lock before trying the newly adopted Execution.
+    """
+    try:
+        async with db.begin_nested():
+            with db.no_autoflush:
+                binding = (await db.execute(select(
+                    AgentTurn.execution_id, AgentTurn.execution_input_revision,
+                    AgentTurn.task_id,
+                ).where(AgentTurn.request_id == request_id))).first()
+                if binding is None:
+                    return None, False
+                if binding.execution_id is not None:
+                    await db.execute(update(ProjectExecution).where(
+                        ProjectExecution.id == binding.execution_id,
+                    ).values(state_revision=ProjectExecution.state_revision,
+                             updated_at=ProjectExecution.updated_at))
+                turn = await db.get(AgentTurn, request_id, populate_existing=True,
+                                    with_for_update=True)
+                if (turn is None or (turn.execution_id, turn.execution_input_revision,
+                                     turn.task_id) != tuple(binding)):
+                    raise _TurnBindingChanged
+        return turn, False
+    except _TurnBindingChanged:
+        return None, True
 
 
 TERMINAL_TURN_STATES = frozenset({"completed", "cancelled", "failed"})
@@ -132,6 +171,26 @@ async def create_turn(
     if existing is not None:
         return existing
 
+    task = None
+    if task_id is not None:
+        with db.no_autoflush:
+            binding = (await db.execute(select(Task.execution_id, Task.input_revision)
+                .where(Task.id == task_id))).first()
+            if binding is not None and binding.execution_id is not None:
+                await db.execute(update(ProjectExecution).where(
+                    ProjectExecution.id == binding.execution_id,
+                ).values(state_revision=ProjectExecution.state_revision,
+                         updated_at=ProjectExecution.updated_at))
+        task = await db.get(Task, task_id, populate_existing=True,
+                            with_for_update=binding is not None and binding.execution_id is not None)
+        if ((binding is not None and (task is None or
+            (task.execution_id, task.input_revision) != tuple(binding)))
+            or (binding is None and task is not None and task.execution_id is not None)):
+            from anygarden.project_executions.service import ExecutionConflict
+
+            raise ExecutionConflict("TURN_EXECUTION_BINDING_CHANGED",
+                                    "Task execution binding changed before its new intent")
+
     agent = await db.get(Agent, agent_id)
     generation = int(agent.generation or 0) if agent is not None else 0
     state = "pending"
@@ -168,6 +227,18 @@ async def create_turn(
     if state == "pending" and not workspace_allowed:
         state = "cancelled"
         reason = workspace_reason or "workspace_authorization_revoked"
+    if task is not None and task.execution_id is not None:
+        turn.execution_id = task.execution_id
+        turn.execution_input_revision = task.input_revision
+    execution_ok, execution_reason, _ = await _execution_gate(db, turn, lock=True)
+    if state == "pending" and not execution_ok:
+        state = "cancelled"
+        reason = execution_reason or "execution_authorization_revoked"
+    if state == "pending" and turn.execution_id is not None:
+        admission = await _execution_admission(db, turn)
+        if not admission.allowed:
+            state = "cancelled"
+            reason = admission.reason_code or "EXECUTION_ADMISSION_DENIED"
     db.add(turn)
     if state == "cancelled":
         await mark_turn_terminal(db, turn, state="cancelled", reason=reason)
@@ -221,8 +292,73 @@ async def _workspace_gate(
     return await validate_turn(db, turn)
 
 
+async def _execution_gate(
+    db: AsyncSession, turn: AgentTurn, *, lock: bool = False,
+    completion_attempt: AgentTurnAttempt | None = None,
+) -> tuple[bool, str | None, dict[str, Any] | None]:
+    from anygarden.project_executions.authorization import validate_execution_turn
+
+    allowed, reason, snapshot = await validate_execution_turn(db, turn, lock=lock)
+    if allowed or completion_attempt is None or reason != "EXECUTION_NOT_ACTIVE":
+        return allowed, reason, snapshot
+    # A finalizing MCP operation commits the accepted result before the CLI
+    # emits its visible acknowledgement. Only that exact producer attempt may
+    # finish a completed execution. Cancellation and a newer input never grant
+    # this exception, and dispatch/native start never pass completion_attempt.
+    accepted = select(TaskResult.id).join(Task, Task.id == TaskResult.task_id).where(
+        TaskResult.execution_id == turn.execution_id,
+        TaskResult.task_id == turn.task_id,
+        TaskResult.input_revision == turn.execution_input_revision,
+        TaskResult.attempt_id == completion_attempt.id,
+        TaskResult.producer_agent_id == turn.agent_id,
+        Task.status == "done",
+        Task.execution_id == turn.execution_id,
+        Task.input_revision == turn.execution_input_revision,
+    ).exists()
+    stmt = update(ProjectExecution).where(
+        ProjectExecution.id == turn.execution_id,
+        ProjectExecution.input_revision == turn.execution_input_revision,
+        ProjectExecution.status == "completed", accepted,
+    ).values(state_revision=ProjectExecution.state_revision).returning(ProjectExecution.id)
+    if await db.scalar(stmt) is not None:
+        return True, None, None
+    return False, reason, None
+
+
+async def _execution_admission(db: AsyncSession, turn: AgentTurn, *,
+                               attempt: AgentTurnAttempt | None = None):
+    """Fence new intents, keeping exact permitted transport replay unchanged.
+
+    Call only after current execution/participant authorization. Completion,
+    publication and historical accounting never use this admission gate.
+    """
+    from anygarden.project_executions.usage import (
+        AdmissionDisposition,
+        admission_disposition,
+        is_permitted_native_invocation,
+    )
+
+    if turn.execution_id is None:
+        return AdmissionDisposition(True)
+    if attempt is not None and await is_permitted_native_invocation(db, turn=turn, attempt=attempt):
+        return AdmissionDisposition(True)
+    execution = await db.get(ProjectExecution, turn.execution_id, populate_existing=True)
+    if execution is None or execution.input_revision != turn.execution_input_revision:
+        return AdmissionDisposition(False, reason_code="EXECUTION_INPUT_SUPERSEDED")
+    admission = await admission_disposition(db, execution=execution, phase="intent")
+    if not admission.allowed and not admission.wait and admission.reason_code in {
+        "EXECUTION_NATIVE_INVOCATION_LIMIT", "EXECUTION_USAGE_LIMIT_REACHED",
+    }:
+        # Denial evidence deliberately survives a surrounding SQL savepoint.
+        # Actual closure occurs after the outer commit/rollback, in a fresh
+        # authorized transaction which rechecks the canonical budget.
+        db.info.setdefault("project_execution_usage_denials", {})[execution.id] = admission.reason_code
+    return admission
+
+
 def _durable_metadata(
-    turn: AgentTurn, attempt: AgentTurnAttempt, base: dict[str, Any] | None
+    turn: AgentTurn, attempt: AgentTurnAttempt, base: dict[str, Any] | None,
+    *, input_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata = dict(base or {})
     metadata.update(
@@ -235,6 +371,21 @@ def _durable_metadata(
             "turn_protocol": 1,
         }
     )
+    # Never trust an old message's execution metadata after an input change.
+    for key in ("execution_id", "input_revision", "execution_input_snapshot"):
+        metadata.pop(key, None)
+    if turn.execution_id is not None:
+        metadata.update(execution_id=turn.execution_id,
+                        input_revision=turn.execution_input_revision,
+                        execution_input_snapshot=input_snapshot)
+        if turn.task_id is not None:
+            # A continuation can use an ingest-only human notice as its
+            # trigger. Only this leased delivery gains the authoritative task
+            # identity; leave the persisted notice and its rich data intact.
+            existing_assignment = metadata.get("task_assignment")
+            assignment = dict(existing_assignment) if isinstance(existing_assignment, dict) else {}
+            assignment.update(task_id=turn.task_id, assignee_pid=turn.target_participant_id)
+            metadata["task_assignment"] = assignment
     if turn.workspace_attachment_id is not None:
         metadata.update(
             {
@@ -251,6 +402,7 @@ async def deliver_pending_outbox(
     *,
     participant_ids: Iterable[str] | None = None,
     limit: int = 100,
+    app: Any = None,
 ) -> int:
     """Deliver currently due outbox rows to matching live subscriptions.
 
@@ -278,6 +430,7 @@ async def deliver_pending_outbox(
     delivered = 0
     for outbox_id in outbox_ids:
         async with session_factory() as db:
+            await begin_write_transaction(db)
             row = await db.get(AgentTurnOutbox, outbox_id)
             if (
                 row is None
@@ -290,6 +443,27 @@ async def deliver_pending_outbox(
             attempt = await db.get(AgentTurnAttempt, row.attempt_id)
             if turn is None or attempt is None or turn.state not in OPEN_TURN_STATES:
                 row.state = "cancelled"
+                await db.commit()
+                continue
+            turn, changed_binding = await _lock_scoped_turn(db, row.turn_id)
+            if changed_binding or turn is None:
+                await db.rollback()
+                continue
+            attempt = await db.scalar(select(AgentTurnAttempt).where(
+                AgentTurnAttempt.id == row.attempt_id,
+                AgentTurnAttempt.turn_id == turn.request_id,
+            ).execution_options(populate_existing=True).with_for_update())
+            if attempt is None or attempt.turn_id != turn.request_id:
+                await db.rollback()
+                continue
+            execution_ok, execution_reason, input_snapshot = await _execution_gate(
+                db, turn, lock=True
+            )
+            if not execution_ok:
+                reason = execution_reason or "execution_authorization_revoked"
+                await mark_turn_terminal(db, turn, state="cancelled", reason=reason,
+                                         attempt=attempt, attempt_reason=reason)
+                row.state, row.last_error = "cancelled", reason
                 await db.commit()
                 continue
             (
@@ -416,6 +590,31 @@ async def deliver_pending_outbox(
             connected = await manager.is_connected(row.participant_id)
             if not connected:
                 continue
+            if turn.execution_id is not None:
+                supports_control = getattr(manager, "participant_turn_control", None)
+                if supports_control is None or not await supports_control(row.participant_id):
+                    reason = "NATIVE_TURN_CONTROL_REQUIRED"
+                    await mark_turn_terminal(db, turn, state="cancelled", reason=reason,
+                                             attempt=attempt, attempt_reason=reason)
+                    row.state, row.last_error = "cancelled", reason
+                    await db.commit()
+                    continue
+                admission = await _execution_admission(db, turn, attempt=attempt)
+                if not admission.allowed:
+                    # A budget wait/denial consumes no lease, native UUID or
+                    # retry. Keep the original pending intent until the
+                    # canonical limit closure or a later allowed dispatch.
+                    row.available_at = now + timedelta(seconds=5)
+                    row.last_error = admission.reason_code or "EXECUTION_ADMISSION_PENDING"
+                    denials = dict(db.info.pop("project_execution_usage_denials", {}))
+                    await db.commit()
+                    if denials and app is not None:
+                        from anygarden.project_executions.limits import (
+                            apply_queued_usage_denials,
+                        )
+
+                        await apply_queued_usage_denials(app, denials=denials)
+                    continue
             subscription_generation = await manager.participant_generation(
                 row.participant_id
             )
@@ -424,12 +623,17 @@ async def deliver_pending_outbox(
                 continue
             metadata = dict(msg.extra_metadata or {})
             if legacy:
+                if turn.execution_id is not None:
+                    row.last_error = "PROJECT_TURN_START_PROTOCOL_REQUIRED"
+                    await db.commit()
+                    continue
                 # Mixed rollout: deliver once using the pre-Phase-4 contract,
                 # accept at most one legacy completion, and never auto-retry it.
                 metadata["request_id"] = turn.request_id
                 turn.protocol_version = 0
             else:
-                metadata = _durable_metadata(turn, attempt, metadata)
+                metadata = _durable_metadata(turn, attempt, metadata,
+                                             input_snapshot=input_snapshot)
             frame = message_to_frame(msg, metadata=metadata)
             participant_id = row.participant_id
             turn_id = row.turn_id
@@ -497,10 +701,14 @@ async def deliver_pending_outbox(
 
         lease_now = _now()
         async with session_factory() as db:
+            await begin_write_transaction(db)
             row2 = await db.get(AgentTurnOutbox, outbox_id)
             turn2 = await db.get(AgentTurn, turn_id)
             attempt2 = await db.get(AgentTurnAttempt, attempt_id)
-            if row2 is None or turn2 is None or attempt2 is None:
+            if (row2 is None or turn2 is None or attempt2 is None
+                or row2.state != "pending"
+                or turn2.state not in OPEN_TURN_STATES
+                or attempt2.state not in ACTIVE_ATTEMPT_STATES):
                 continue
             row2.state = "delivered"
             row2.delivered_at = lease_now
@@ -524,7 +732,7 @@ async def deliver_pending_outbox(
 
 @dataclass(slots=True)
 class CompletionDecision:
-    outcome: Literal["legacy", "accept", "idempotent", "stale"]
+    outcome: Literal["legacy", "accept", "failure", "idempotent", "stale"]
     turn: AgentTurn | None = None
     attempt: AgentTurnAttempt | None = None
     existing_message_id: str | None = None
@@ -566,12 +774,15 @@ async def begin_completion(
     attempt_number: int | None,
     generation: int | None,
     lease_token: str | None,
+    reply_outcome: str | None = None,
 ) -> CompletionDecision:
     """Reserve the one user-visible completion before appending its message."""
 
     if not request_id:
         return CompletionDecision("legacy")
-    turn = await db.get(AgentTurn, request_id)
+    turn, changed_binding = await _lock_scoped_turn(db, request_id)
+    if changed_binding:
+        return CompletionDecision("stale", reason="TURN_EXECUTION_BINDING_CHANGED")
     if turn is None:
         return CompletionDecision("legacy")
     workspace_ok, workspace_reason, workspace_attachment = await _workspace_gate(
@@ -677,6 +888,39 @@ async def begin_completion(
             "idempotent", turn=turn, existing_message_id=turn.accepted_message_id
         )
 
+    execution_ok, execution_reason, _ = await _execution_gate(
+        db, turn, lock=True, completion_attempt=attempt
+    )
+    if not execution_ok:
+        reason = execution_reason or "execution_authorization_revoked"
+        await _audit_stale(db, turn=turn, agent_id=agent_id, reason=reason,
+                           attempt_number=attempt_number, generation=generation)
+        return CompletionDecision("stale", turn=turn, reason=reason)
+
+    if turn.execution_id is not None and reply_outcome in {
+        "failed", "timeout", "retry_exhausted", "rejected",
+    }:
+        # A handler's failure notice is not the accepted result of the task.
+        # Keep its completion CAS available for the next bounded attempt.
+        # Native termination and retry eligibility come from the authenticated
+        # lifecycle receipt, rather than from the text of this notice.
+        if turn.state not in {"pending", "leased", "retrying"}:
+            return CompletionDecision("stale", turn=turn, reason="failure_notice_after_terminal")
+        notice_key = f"turn:{turn.request_id}:attempt:{attempt.attempt_number}:failure-notice"
+        existing = await db.scalar(select(ProjectExecutionEvent).where(
+            ProjectExecutionEvent.event_key == notice_key,
+        ))
+        if existing is not None:
+            return CompletionDecision("idempotent", turn=turn,
+                                      existing_message_id=existing.message_id)
+        db.add(ProjectExecutionEvent(
+            execution_id=turn.execution_id, task_id=turn.task_id,
+            event_key=notice_key, event_type="task_failure_notice",
+            details={"attempt": attempt.attempt_number, "outcome": reply_outcome},
+        ))
+        await db.flush()
+        return CompletionDecision("failure", turn=turn, attempt=attempt)
+
     reserved = await db.execute(
         update(AgentTurn)
         .where(
@@ -715,6 +959,17 @@ async def begin_completion(
         )
     attempt.state = "completing"
     return CompletionDecision("accept", turn=turn, attempt=attempt)
+
+
+async def finish_failure_notice(
+    db: AsyncSession, *, turn: AgentTurn, attempt: AgentTurnAttempt, message_id: str,
+) -> None:
+    event = await db.scalar(select(ProjectExecutionEvent).where(
+        ProjectExecutionEvent.event_key ==
+        f"turn:{turn.request_id}:attempt:{attempt.attempt_number}:failure-notice",
+    ))
+    if event is not None and event.message_id is None:
+        event.message_id = message_id
 
 
 async def finish_completion(
@@ -808,6 +1063,59 @@ async def finish_deferred(
     )
 
 
+async def _native_terminal_receipt(
+    db: AsyncSession, *, turn: AgentTurn, attempt: AgentTurnAttempt, frame: Any,
+) -> tuple[bool, dict | None]:
+    """Store one exact invocation receipt without trusting notice text."""
+    if turn.execution_id is None:
+        return True, None
+    names = ("local_execution_id", "native_process_state", "native_outcome")
+    values = [getattr(frame, name, None) for name in names]
+    if all(value is None for value in values):
+        return True, None
+    local_id, process_state, outcome = values
+    reason_code = getattr(frame, "native_reason_code", None)
+    categories = {
+        "MODEL_CONFIGURATION_INVALID", "AUTHENTICATION_FAILED",
+        "MODEL_TRANSIENT_FAILURE", "MODEL_EXECUTION_FAILED", "PROCESS_OUTCOME_UNKNOWN",
+    }
+    valid_pair = (
+        (outcome == "succeeded" and process_state == "finished")
+        or (outcome == "failed" and process_state in {"finished", "stopped", "not_started"})
+        or (outcome == "cancelled" and process_state in {"stopped", "not_started"})
+        or (outcome == "unknown" and process_state in {
+            "unknown", "stopped", "finished", "not_started",
+        })
+    )
+    if (frame.event not in {"engine_call_finished", "handler_finished"}
+        or not local_id or local_id != attempt.local_execution_id
+        or not valid_pair or reason_code not in categories | {None}
+        or (outcome in {"failed", "unknown"} and reason_code is None)):
+        return False, None
+    details = {
+        "local_execution_id": local_id, "process_state": process_state,
+        "outcome": outcome, "reason_code": reason_code,
+        "retryable": outcome == "failed" and process_state in {
+            "finished", "stopped", "not_started",
+        },
+        "transient": bool(outcome == "failed"
+                          and getattr(frame, "native_transient", False)
+                          and reason_code == "MODEL_TRANSIENT_FAILURE"),
+    }
+    key = f"turn:{turn.request_id}:attempt:{attempt.attempt_number}:native-terminal"
+    existing = await db.scalar(select(ProjectExecutionEvent).where(
+        ProjectExecutionEvent.event_key == key,
+    ))
+    if existing is not None:
+        return existing.details == details, existing.details
+    db.add(ProjectExecutionEvent(
+        execution_id=turn.execution_id, task_id=turn.task_id,
+        event_key=key, event_type="task_native_terminal", details=details,
+    ))
+    await db.flush()
+    return True, details
+
+
 async def record_lifecycle(
     db: AsyncSession,
     *,
@@ -816,7 +1124,9 @@ async def record_lifecycle(
 ) -> bool:
     """Validate and apply a lifecycle frame; return False when fenced."""
 
-    turn = await db.get(AgentTurn, frame.request_id)
+    turn, changed_binding = await _lock_scoped_turn(db, frame.request_id)
+    if changed_binding:
+        return False
     if turn is None:
         return True
     attempt_number = getattr(frame, "turn_attempt", None)
@@ -849,10 +1159,18 @@ async def record_lifecycle(
     workspace_ok, workspace_reason, workspace_attachment = await _workspace_gate(
         db, turn
     )
+    execution_ok, execution_reason, _ = await _execution_gate(
+        db, turn, lock=True,
+        completion_attempt=attempt if frame.event in {
+            "handler_finished", "engine_call_finished",
+        } else None,
+    )
     valid = (
         attempt is not None
         and gate is not None
         and workspace_ok
+        and execution_ok
+        and turn.state not in {"cancelled", "failed"}
         and turn.agent_id == agent_id
         and turn.room_id == frame.room_id
         and (
@@ -871,6 +1189,7 @@ async def record_lifecycle(
             agent_id=agent_id,
             reason=(
                 workspace_reason
+                or execution_reason
                 or (
                     "lifecycle_authorization_revoked"
                     if gate is None
@@ -898,6 +1217,14 @@ async def record_lifecycle(
             )
         return False
     assert attempt is not None
+    receipt_valid, receipt = await _native_terminal_receipt(
+        db, turn=turn, attempt=attempt, frame=frame,
+    )
+    if not receipt_valid:
+        await _audit_stale(db, turn=turn, agent_id=agent_id,
+            reason="native_terminal_receipt_mismatch", attempt_number=attempt_number,
+            generation=generation)
+        return False
     if legacy:
         turn.protocol_version = 0
     now = _now()
@@ -932,7 +1259,40 @@ async def record_lifecycle(
         "queued",
         "retrying",
     }:
-        if turn.state == "completed":
+        if (turn.execution_id is not None and frame.outcome in {
+            "failed", "timeout", "retry_exhausted", "rejected",
+        } and turn.state in {"pending", "leased", "retrying"}):
+            from anygarden.project_executions.recovery import on_turn_recovery
+
+            if receipt is None:
+                receipt_event = await db.scalar(select(ProjectExecutionEvent).where(
+                    ProjectExecutionEvent.event_key ==
+                    f"turn:{turn.request_id}:attempt:{attempt.attempt_number}:native-terminal",
+                ))
+                receipt = receipt_event.details if receipt_event is not None else None
+            reason_code = (receipt or {}).get("reason_code") or "PROCESS_OUTCOME_UNKNOWN"
+            safe = bool(receipt and receipt.get("retryable"))
+            attempt.outcome = frame.outcome
+            attempt.reason = reason_code
+            retry_possible = bool(safe and receipt.get("transient")
+                                  and turn.retry_count < turn.max_retries)
+            admission = await _execution_admission(db, turn) if retry_possible else None
+            if retry_possible and (admission.allowed or admission.wait):
+                # Only the durable server retry owns another engine attempt.
+                # Recovery retains this task/request and the prior receipt.
+                attempt.lease_expires_at = now + timedelta(seconds=5) if admission.wait else now
+                await on_turn_recovery(db, turn=turn, attempt=attempt,
+                    phase="waiting_retry", reason_code=admission.reason_code if admission.wait else reason_code,
+                    next_retry_at=now + timedelta(seconds=min(30, 5 * 2 ** turn.retry_count)))
+            else:
+                recovery_reason = (admission.reason_code if admission is not None else None) or reason_code
+                await mark_turn_terminal(db, turn, state="failed", reason=recovery_reason,
+                    at=now, attempt=attempt, attempt_state="failed",
+                    attempt_outcome=frame.outcome, attempt_reason=reason_code)
+                await on_turn_recovery(db, turn=turn, attempt=attempt,
+                    phase="exhausted" if safe and receipt.get("transient") and not retry_possible else "action_required",
+                    reason_code=recovery_reason)
+        elif turn.state == "completed":
             attempt.state = "completed"
             attempt.ended_at = now
             attempt.outcome = frame.outcome
@@ -974,6 +1334,13 @@ async def record_lifecycle(
             attempt.outcome = frame.outcome
             attempt.reason = f"agent_{frame.outcome}_without_completion"
             attempt.lease_expires_at = now
+        if turn.execution_id is not None and turn.task_id is not None:
+            # The native call can finish successfully while its domain task
+            # remains blocked. Publish the final scoped attempt projection
+            # after commit so clients retire their running recovery state.
+            db.info.setdefault("project_execution_recovery_tasks", set()).add(
+                turn.task_id
+            )
     return True
 
 
@@ -983,10 +1350,13 @@ class RecoveryResult:
     cancelled: int = 0
     failed: int = 0
     drain_agents: set[str] | None = None
+    recovery_task_ids: set[str] | None = None
 
     def __post_init__(self) -> None:
         if self.drain_agents is None:
             self.drain_agents = set()
+        if self.recovery_task_ids is None:
+            self.recovery_task_ids = set()
 
 
 async def recover_stalled_turns(
@@ -994,43 +1364,61 @@ async def recover_stalled_turns(
     manager: Any,
     *,
     now: datetime | None = None,
+    attempt_ids: set[str] | None = None,
+    app: Any = None,
 ) -> RecoveryResult:
-    """Fence expired/dead-generation attempts and redispatch at most once."""
+    """Fence expired/dead-generation attempts and redispatch at most once.
+
+    ``attempt_ids`` scopes recovery to leases fenced by a confirmed shutdown;
+    the periodic recovery worker leaves it unset to scan all agents.
+    """
 
     current = now or _now()
     result = RecoveryResult()
     async with session_factory() as db:
-        ids = list(
-            (
-                await db.scalars(
-                    select(AgentTurnAttempt.id)
-                    .join(Agent, Agent.id == AgentTurnAttempt.agent_id)
-                    .where(
-                        AgentTurnAttempt.state.in_(ACTIVE_ATTEMPT_STATES),
-                        or_(
-                            and_(
-                                AgentTurnAttempt.lease_expires_at.isnot(None),
-                                AgentTurnAttempt.lease_expires_at <= current,
-                            ),
-                            Agent.actual_state == "crashed",
-                            and_(
-                                Agent.restart_deadline_at.isnot(None),
-                                Agent.restart_deadline_at <= current,
-                                AgentTurnAttempt.generation == Agent.generation,
-                            ),
-                        ),
-                    )
-                )
-            ).all()
+        query = (
+            select(AgentTurnAttempt.id)
+            .join(Agent, Agent.id == AgentTurnAttempt.agent_id)
+            .where(
+                AgentTurnAttempt.state.in_(ACTIVE_ATTEMPT_STATES),
+                or_(
+                    and_(
+                        AgentTurnAttempt.lease_expires_at.isnot(None),
+                        AgentTurnAttempt.lease_expires_at <= current,
+                    ),
+                    Agent.actual_state == "crashed",
+                    and_(
+                        Agent.restart_deadline_at.isnot(None),
+                        Agent.restart_deadline_at <= current,
+                        AgentTurnAttempt.generation == Agent.generation,
+                    ),
+                ),
+            )
         )
+        if attempt_ids is not None:
+            query = query.where(AgentTurnAttempt.id.in_(attempt_ids))
+        ids = list((await db.scalars(query)).all())
 
     notices: list[Any] = []
     for attempt_id in ids:
         async with session_factory() as db:
+            await begin_write_transaction(db)
             attempt = await db.get(AgentTurnAttempt, attempt_id)
             if attempt is None or attempt.state not in ACTIVE_ATTEMPT_STATES:
                 continue
-            turn = await db.get(AgentTurn, attempt.turn_id)
+            turn_id = attempt.turn_id
+            turn, changed_binding = await _lock_scoped_turn(db, turn_id)
+            if changed_binding or turn is None:
+                await db.rollback()
+                continue
+            attempt = await db.scalar(select(AgentTurnAttempt).where(
+                AgentTurnAttempt.id == attempt_id,
+                AgentTurnAttempt.turn_id == turn.request_id,
+            ).execution_options(populate_existing=True).with_for_update())
+            if (attempt is None or attempt.turn_id != turn.request_id
+                or attempt.state not in ACTIVE_ATTEMPT_STATES):
+                await db.rollback()
+                continue
             agent = await db.get(Agent, attempt.agent_id) if attempt.agent_id else None
             if turn is None or agent is None or turn.state not in OPEN_TURN_STATES:
                 continue
@@ -1043,6 +1431,66 @@ async def recover_stalled_turns(
                 and attempt.generation == int(agent.generation or 0)
             ):
                 reason = "generation_interrupted"
+            if turn.execution_id is not None:
+                from anygarden.project_executions.recovery import on_turn_recovery
+
+                execution_ok, _, _ = await _execution_gate(
+                    db, turn, lock=True, completion_attempt=attempt,
+                )
+                if execution_ok:
+                    accepted = await db.scalar(select(TaskResult.id).join(
+                        Task, Task.id == TaskResult.task_id,
+                    ).where(
+                        Task.id == turn.task_id, Task.status == "done",
+                        TaskResult.attempt_id == attempt.id,
+                    ).limit(1))
+                    if accepted is not None:
+                        await mark_turn_terminal(db, turn, state="completed",
+                            reason="accepted_result_recovered", at=current,
+                            attempt=attempt, attempt_state="completed")
+                        await db.commit()
+                        continue
+                    receipt_event = await db.scalar(select(ProjectExecutionEvent).where(
+                        ProjectExecutionEvent.event_key ==
+                        f"turn:{turn.request_id}:attempt:{attempt.attempt_number}:native-terminal",
+                    ))
+                    receipt = receipt_event.details if receipt_event is not None else None
+                    safe = bool(receipt and receipt.get("retryable")
+                                and receipt.get("local_execution_id") == attempt.local_execution_id)
+                    # A lost process/lease is not proof that native effects
+                    # stopped. Even a known permanent error needs a user to
+                    # repair its cause; only a safe transient receipt retries.
+                    if attempt.local_execution_id is not None and not (
+                        safe and receipt.get("transient")
+                    ):
+                        code = (receipt or {}).get("reason_code") or "PROCESS_OUTCOME_UNKNOWN"
+                        await mark_turn_terminal(db, turn, state="failed", reason=code,
+                            at=current, attempt=attempt, attempt_state="failed",
+                            attempt_outcome=attempt.outcome or "unknown", attempt_reason=code)
+                        await on_turn_recovery(db, turn=turn, attempt=attempt,
+                            phase="action_required", reason_code=code)
+                        result.recovery_task_ids.update(db.info.pop(
+                            "project_execution_recovery_tasks", set(),
+                        ))
+                        recovery_messages = list(db.info.pop("project_execution_messages", []))
+                        usage_denials = dict(db.info.pop("project_execution_usage_denials", {}))
+                        result.failed += 1
+                        await db.commit()
+                        if recovery_messages and app is not None and manager is not None:
+                            from anygarden.mcp.project_tools import (
+                                broadcast_project_messages,
+                            )
+
+                            await broadcast_project_messages(
+                                db, app=app, messages=recovery_messages,
+                            )
+                        if usage_denials and app is not None:
+                            from anygarden.project_executions.limits import (
+                                apply_queued_usage_denials,
+                            )
+
+                            await apply_queued_usage_denials(app, denials=usage_denials)
+                        continue
             fenced = await db.execute(
                 update(AgentTurnAttempt)
                 .where(
@@ -1052,7 +1500,9 @@ async def recover_stalled_turns(
                 .values(
                     state="interrupted",
                     ended_at=current,
-                    outcome="interrupted",
+                    outcome=attempt.outcome if attempt.outcome in {
+                        "failed", "timeout", "retry_exhausted",
+                    } else "interrupted",
                     reason=reason,
                 )
             )
@@ -1079,7 +1529,26 @@ async def recover_stalled_turns(
                 workspace_reason,
                 workspace_attachment,
             ) = await _workspace_gate(db, turn)
-            gate_ok = gate_ok and workspace_ok
+            execution_ok, execution_reason, _ = await _execution_gate(
+                db, turn, lock=True, completion_attempt=attempt
+            )
+            gate_ok = gate_ok and workspace_ok and execution_ok
+            execution_completed = turn.execution_id is not None and await db.scalar(
+                select(ProjectExecution.id).where(
+                    ProjectExecution.id == turn.execution_id,
+                    ProjectExecution.input_revision == turn.execution_input_revision,
+                    ProjectExecution.status == "completed",
+                )
+            ) is not None
+            retry_admission = None
+            if (gate_ok and not execution_completed and turn.protocol_version != 0
+                and turn.retry_count < turn.max_retries and turn.execution_id is not None):
+                retry_admission = await _execution_admission(db, turn)
+                if not retry_admission.allowed and retry_admission.wait:
+                    # Undo only this proposed recovery fence. Budget waiting
+                    # creates no attempt/outbox and consumes no retry count.
+                    await db.rollback()
+                    continue
             # The attempt was already fenced to "interrupted" above, so only
             # the turn itself transitions here.
             if not gate_ok:
@@ -1087,11 +1556,18 @@ async def recover_stalled_turns(
                     db,
                     turn,
                     state="cancelled",
-                    reason=workspace_reason or "authorization_revoked",
+                    reason=workspace_reason or execution_reason or "authorization_revoked",
                     at=current,
                 )
                 result.cancelled += 1
                 event = "turn_cancelled"
+            elif execution_completed:
+                # The authoritative final report and exact accepted producer
+                # result already exist. Recover the missing acknowledgement
+                # without spawning new work for a completed execution.
+                await mark_turn_terminal(db, turn, state="completed",
+                                         reason="accepted_result_recovered", at=current)
+                event = "turn_completion_recovered"
             elif turn.protocol_version == 0:
                 await mark_turn_terminal(
                     db, turn, state="failed", reason="legacy_interrupted", at=current
@@ -1104,6 +1580,20 @@ async def recover_stalled_turns(
                 )
                 result.failed += 1
                 event = "turn_retry_exhausted"
+                if turn.execution_id is not None:
+                    from anygarden.project_executions.recovery import on_turn_recovery
+
+                    await on_turn_recovery(db, turn=turn, attempt=attempt,
+                        phase="exhausted", reason_code=attempt.reason or "MODEL_EXECUTION_FAILED")
+            elif retry_admission is not None and not retry_admission.allowed:
+                code = retry_admission.reason_code or "EXECUTION_ADMISSION_DENIED"
+                await mark_turn_terminal(db, turn, state="failed", reason=code, at=current)
+                result.failed += 1
+                event = "turn_retry_denied"
+                from anygarden.project_executions.recovery import on_turn_recovery
+
+                await on_turn_recovery(db, turn=turn, attempt=attempt,
+                    phase="action_required", reason_code=code)
             else:
                 next_number = turn.active_attempt + 1
                 next_generation = int(
@@ -1130,6 +1620,8 @@ async def recover_stalled_turns(
                         room_id=turn.room_id,
                         participant_id=turn.target_participant_id,
                         state="pending",
+                        available_at=(current + timedelta(seconds=min(30, 5 * 2 ** turn.retry_count))
+                                      if turn.execution_id is not None else current),
                     )
                 )
                 turn.state = "retrying"
@@ -1138,6 +1630,12 @@ async def recover_stalled_turns(
                 turn.terminal_reason = None
                 result.redispatched += 1
                 event = "turn_redispatched"
+                if turn.execution_id is not None:
+                    from anygarden.project_executions.recovery import on_turn_recovery
+
+                    await on_turn_recovery(db, turn=turn, attempt=next_attempt,
+                        phase="retrying", reason_code=reason,
+                        next_retry_at=current + timedelta(seconds=min(30, 5 * 2 ** (turn.retry_count - 1))))
             turn.updated_at = current
             db.add(
                 ActivityLog(
@@ -1198,11 +1696,30 @@ async def recover_stalled_turns(
                     thread_root_id=turn.thread_root_id,
                 )
                 notices.append(message_to_frame(notice))
+            result.recovery_task_ids.update(db.info.pop(
+                "project_execution_recovery_tasks", set(),
+            ))
+            recovery_messages = list(db.info.pop("project_execution_messages", []))
+            usage_denials = dict(db.info.pop("project_execution_usage_denials", {}))
             await db.commit()
+            if recovery_messages and app is not None and manager is not None:
+                from anygarden.mcp.project_tools import broadcast_project_messages
+
+                await broadcast_project_messages(db, app=app, messages=recovery_messages)
+            if usage_denials and app is not None:
+                from anygarden.project_executions.limits import (
+                    apply_queued_usage_denials,
+                )
+
+                await apply_queued_usage_denials(app, denials=usage_denials)
 
     for frame in notices:
         if manager is not None:
             await manager.broadcast(frame.room_id, frame)
+    if result.recovery_task_ids:
+        from anygarden.project_executions.recovery import fanout_recovery_updates
+
+        await fanout_recovery_updates(session_factory, manager, result.recovery_task_ids)
     return result
 
 
@@ -1210,15 +1727,20 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
     """Cancel open turns whose stop/archive/membership gate was revoked."""
 
     async with session_factory() as db:
-        turns = list(
+        await begin_write_transaction(db)
+        turn_ids = list(
             (
                 await db.scalars(
-                    select(AgentTurn).where(AgentTurn.state.in_(OPEN_TURN_STATES))
+                    select(AgentTurn.request_id).where(AgentTurn.state.in_(OPEN_TURN_STATES))
+                    .order_by(AgentTurn.execution_id.asc().nulls_last(), AgentTurn.request_id)
                 )
             ).all()
         )
         cancelled = 0
-        for turn in turns:
+        for request_id in turn_ids:
+            turn, changed_binding = await _lock_scoped_turn(db, request_id)
+            if changed_binding or turn is None:
+                continue
             gate = (
                 await db.execute(
                     select(Participant.id)
@@ -1239,10 +1761,6 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                 workspace_reason,
                 workspace_attachment,
             ) = await _workspace_gate(db, turn)
-            if gate is not None and workspace_ok:
-                continue
-            now = _now()
-            reason = workspace_reason or "authorization_revoked"
             attempt = (
                 await db.execute(
                     select(AgentTurnAttempt).where(
@@ -1251,6 +1769,13 @@ async def cancel_invalid_turns(session_factory: Any) -> int:
                     )
                 )
             ).scalar_one_or_none()
+            execution_ok, execution_reason, _ = await _execution_gate(
+                db, turn, lock=True, completion_attempt=attempt
+            )
+            if gate is not None and workspace_ok and execution_ok:
+                continue
+            now = _now()
+            reason = workspace_reason or execution_reason or "authorization_revoked"
             # An attempt that already closed keeps its own terminal fields.
             if attempt is not None and attempt.state in {"completed", "cancelled"}:
                 attempt = None

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 
-import { useWebSocket } from './useWebSocket'
+import { useWebSocket, type ChatMessage } from './useWebSocket'
 
 class FakeWebSocket {
   onopen: ((event: Event) => void) | null = null
@@ -185,6 +185,130 @@ describe('useWebSocket reconnect guards', () => {
     })
 
     expect(sockets).toHaveLength(1)
+  })
+})
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+const historyResponse = (messages: ChatMessage[]) => new Response(JSON.stringify(messages), {
+  headers: { 'Content-Type': 'application/json' },
+})
+const chatMessage = (room: string, seq: number, content = room): ChatMessage => ({
+  type: 'message', id: `${room}-${seq}`, room_id: room, participant_id: 'participant',
+  content, seq, created_at: '2026-09-30T09:00:00Z',
+})
+
+describe('useWebSocket room history isolation', () => {
+  it('ignores delayed A history after A → B → A and preserves the current reconnect cursor', async () => {
+    const oldA = deferred<Response>()
+    const newA = deferred<Response>()
+    vi.mocked(fetch)
+      .mockReturnValueOnce(oldA.promise)
+      .mockResolvedValueOnce(historyResponse([chatMessage('B', 4)]))
+      .mockReturnValueOnce(newA.promise)
+    const { result, rerender } = renderHook(({ room }) => useWebSocket(room), { initialProps: { room: 'A' } })
+    rerender({ room: 'B' })
+    await act(async () => { await Promise.resolve() })
+    expect(result.current.messages.map(message => message.room_id)).toEqual(['B'])
+    rerender({ room: 'A' })
+    expect(result.current.messages).toEqual([])
+    await act(async () => { oldA.resolve(historyResponse([chatMessage('A', 90, 'stale A')])) })
+    expect(result.current.messages).toEqual([])
+    await act(async () => { newA.resolve(historyResponse([chatMessage('A', 7, 'current A')])) })
+    expect(result.current.messages.map(message => message.content)).toEqual(['current A'])
+    act(() => { sockets[2].onclose?.(closeEvent(1006)); vi.advanceTimersByTime(1000) })
+    expect(sockets[3].url).toContain('/ws/rooms/A?since_seq=7')
+  })
+
+  it('keeps live messages when the initial history body arrives later', async () => {
+    const body = deferred<ChatMessage[]>()
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: true, status: 200, json: () => body.promise } as Response)
+    const { result } = renderHook(() => useWebSocket('A'))
+    await act(async () => { await Promise.resolve() })
+    receiveFrame(sockets[0], { ...chatMessage('A', 8, 'live result') })
+    await act(async () => { body.resolve([chatMessage('A', 6), chatMessage('A', 7)]) })
+    expect(result.current.messages.map(message => message.seq)).toEqual([6, 7, 8])
+    act(() => { sockets[0].onclose?.(closeEvent(1006)); vi.advanceTimersByTime(1000) })
+    expect(sockets[1].url).toContain('since_seq=8')
+  })
+
+  it('deduplicates live and historical copies while retaining newer live contents', async () => {
+    const history = deferred<Response>()
+    vi.mocked(fetch).mockReturnValueOnce(history.promise)
+    const { result } = renderHook(() => useWebSocket('A'))
+    receiveFrame(sockets[0], { ...chatMessage('A', 3, 'latest live result') })
+    await act(async () => { history.resolve(historyResponse([chatMessage('A', 2), chatMessage('A', 3, 'history copy')])) })
+    expect(result.current.messages.map(message => message.content)).toEqual(['A', 'latest live result'])
+  })
+
+  it.each([401, 403])('ignores a delayed forbidden response from the room that was left (HTTP %s)', async status => {
+    const oldHistory = deferred<Response>()
+    vi.mocked(fetch).mockReturnValueOnce(oldHistory.promise).mockResolvedValueOnce(historyResponse([chatMessage('B', 1)]))
+    const invalid = vi.fn()
+    window.addEventListener('anygarden:auth:invalid', invalid)
+    try {
+      const { result, rerender } = renderHook(({ room }) => useWebSocket(room), { initialProps: { room: 'A' } })
+      rerender({ room: 'B' })
+      await act(async () => { oldHistory.resolve(new Response(null, { status })) })
+      expect(localStorage.getItem('anygarden_token')).toBe('token-one')
+      expect(invalid).not.toHaveBeenCalled()
+      expect(result.current.messages.map(message => message.room_id)).toEqual(['B'])
+      act(() => { sockets[1].onclose?.(closeEvent(1006)); vi.advanceTimersByTime(1000) })
+      expect(sockets[2].url).toContain('/ws/rooms/B?since_seq=1')
+    } finally { window.removeEventListener('anygarden:auth:invalid', invalid) }
+  })
+
+  it('does not apply old history after suspension or an authentication change', async () => {
+    const history = deferred<Response>()
+    vi.mocked(fetch).mockReturnValueOnce(history.promise)
+    const { result, rerender } = renderHook(({ room }: { room: string | null }) => useWebSocket(room), { initialProps: { room: 'A' as string | null } })
+    localStorage.setItem('anygarden_token', 'token-two')
+    await act(async () => { history.resolve(historyResponse([chatMessage('A', 99)])) })
+    expect(result.current.messages).toEqual([])
+    rerender({ room: null })
+    expect(result.current.connected).toBe(false)
+    expect(result.current.messages).toEqual([])
+  })
+
+  it('ignores old socket messages after changing the authenticated session', () => {
+    const { result } = renderHook(() => useWebSocket('A'))
+    localStorage.setItem('anygarden_token', 'token-two')
+    receiveFrame(sockets[0], { ...chatMessage('A', 99, 'old session') })
+    expect(result.current.messages).toEqual([])
+  })
+
+  it('does not route stale handlers or sends into the newly selected room', () => {
+    const { result, rerender } = renderHook(({ room }) => useWebSocket(room), { initialProps: { room: 'A' } })
+    const oldMessage = sockets[0].onmessage
+    const oldOpen = sockets[0].onopen
+    const oldSend = result.current.send
+    const oldTyping = result.current.sendTyping
+    rerender({ room: 'B' })
+    act(() => {
+      oldOpen?.(new Event('open'))
+      oldMessage?.({ data: JSON.stringify(chatMessage('A', 99)) } as MessageEvent)
+      oldSend('old room request')
+      oldTyping(true)
+    })
+    expect(result.current.connected).toBe(false)
+    expect(result.current.messages).toEqual([])
+    expect(sockets[1].send).not.toHaveBeenCalled()
+    act(() => { result.current.send('current room request') })
+    expect(sockets[1].send).toHaveBeenCalledWith(JSON.stringify({ type: 'send', content: 'current room request' }))
+  })
+
+  it('aborts history loading on unmount and ignores its late authentication failure', async () => {
+    const history = deferred<Response>()
+    vi.mocked(fetch).mockReturnValueOnce(history.promise)
+    const { unmount } = renderHook(() => useWebSocket('A'))
+    const signal = vi.mocked(fetch).mock.calls[0][1]?.signal
+    unmount()
+    expect(signal?.aborted).toBe(true)
+    await act(async () => { history.resolve(new Response(null, { status: 401 })) })
+    expect(localStorage.getItem('anygarden_token')).toBe('token-one')
   })
 })
 

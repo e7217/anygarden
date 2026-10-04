@@ -24,7 +24,7 @@ from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, Base, Goal, Participant, Room, Task, User
+from anygarden.db.models import Agent, AgentToken, Base, Goal, Participant, Room, Task, User
 
 
 @pytest_asyncio.fixture()
@@ -78,6 +78,55 @@ async def goals_env() -> AsyncIterator[dict]:
 
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("materialize", ["interesting_only", "full"])
+async def test_completed_run_survives_replay_and_queue_cleanup(goals_env, materialize, monkeypatch):
+    from anygarden.auth.token import generate_token, hash_agent_token
+
+    env = goals_env
+    client, headers = env["client"], _auth(env["token"])
+    created = await client.post(
+        f"/api/v1/agents/{env['agent_id']}/goals", headers=headers,
+        json={"title": "Prepare draft", "spec": "Use confirmed facts only", "trigger_type": "manual",
+              "trigger_config": {}, "materialize": materialize, "report_room_id": env["room_id"]},
+    )
+    assert created.status_code == 201, created.text
+    goal_id = created.json()["id"]
+    monkeypatch.setattr("anygarden.api.v1.goals._manual_run_idempotency_key", lambda goal, now: f"{goal.id}:test-slot")
+    assert (await client.post(f"/api/v1/goals/{goal_id}/run", headers=headers)).status_code == 200
+    agent_token = generate_token()
+    digest, hint = hash_agent_token(agent_token)
+    async with env["factory"]() as db:
+        db.add(AgentToken(agent_id=env["agent_id"], token_hash=digest, lookup_hint=hint))
+        task = (await db.scalars(select(Task).where(Task.goal_id == goal_id))).one()
+        task_id = task.id
+        await db.commit()
+    for status in ("in_progress", "done", "done"):
+        arguments = {"task_id": task_id, "status": status}
+        if status == "done":
+            arguments["result_markdown"] = "Verified draft; no external submission."
+        response = await client.post("/mcp/rpc", headers=_auth(agent_token), json={
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "mark_task_status", "arguments": arguments},
+        })
+        assert not response.json()["result"]["isError"], response.text
+    history_url = f"/api/v1/rooms/{env['room_id']}/tasks?goal_id={goal_id}"
+    history = (await client.get(history_url, headers=headers)).json()
+    assert len(history) == 1
+    assert history[0]["result_markdown"] == "Verified draft; no external submission."
+    assert history[0]["schedule_context"]["goal_id"] == goal_id
+    if materialize == "full":
+        # Clear the ordinary queue, retaining consumed run identity and evidence.
+        cleared = await client.delete(f"/api/v1/agents/{env['agent_id']}/tasks?status=done", headers=headers)
+        assert cleared.json()["deleted_count"] == 1
+    assert (await client.get(f"/api/v1/rooms/{env['room_id']}/tasks", headers=headers)).json() == []
+    # Explicit cleanup is also a visibility change, never a consumed-slot delete.
+    assert (await client.delete(f"/api/v1/tasks/{task_id}", headers=headers)).status_code == 200
+    assert (await client.post(f"/api/v1/goals/{goal_id}/run", headers=headers)).status_code == 200
+    restored = (await client.get(history_url, headers=headers)).json()
+    assert len(restored) == 1 and restored[0]["id"] == task_id and restored[0]["is_silent"]
 
 
 @pytest.mark.asyncio

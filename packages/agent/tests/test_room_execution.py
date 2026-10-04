@@ -374,7 +374,7 @@ async def test_legacy_import_requires_matching_native_selection(
             json.loads(x)["argv"]
             for x in (setup_room / "workspace" / "calls.jsonl").read_text().splitlines()
         ]
-        assert ("resume" in calls[0]) is compatible
+        assert "resume" not in calls[0]  # Unknown-origin legacy history is never imported.
         assert native.read_bytes() == original
     finally:
         await client.close()

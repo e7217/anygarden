@@ -1,7 +1,7 @@
 """Service layer for room-artifact ingestion (#290 Phase B).
 
-Covers ``handle_artifact_produced``: validation, fan-out to every
-room the producing agent participates in, dedup via the
+Covers ``handle_artifact_produced``: validation, project-scoped fan-out,
+dedup via the
 ``(room_id, sha256)`` unique constraint, disk persistence under
 ``settings.artifact_files_dir``, and the list/get/delete helpers.
 """
@@ -11,12 +11,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from cryptography.fernet import Fernet
-from sqlalchemy import select
-
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
@@ -30,6 +28,8 @@ from anygarden.db.models import (
     User,
 )
 from anygarden.rooms import artifacts as artifacts_service
+from cryptography.fernet import Fernet
+from sqlalchemy import select
 
 
 @pytest.fixture()
@@ -86,10 +86,12 @@ def _make_frame(
     filename: str = "snap.png",
     mime: str = "image/png",
     body: bytes = b"\x89PNG\r\n\x1a\n binary",
+    room_id: str | None = None,
 ) -> dict:
     return {
         "type": "room_artifact_produced",
         "agent_id": agent_id,
+        "room_id": room_id,
         "filename": filename,
         "mime": mime,
         "content_b64": base64.b64encode(body).decode("ascii"),
@@ -100,7 +102,47 @@ def _make_frame(
 
 class TestHandleArtifactProduced:
     @pytest.mark.asyncio
-    async def test_fans_out_to_every_room_agent_is_in(self, env) -> None:
+    async def test_rejects_a_machine_spoofing_another_agents_source(self, env) -> None:
+        session_factory, config, room1, room2, agent = env
+        frame = _make_frame(agent_id=agent.id, room_id=room1.id)
+        async with session_factory() as db:
+            assert await artifacts_service.handle_artifact_produced(
+                db, frame, artifact_files_dir=config.artifact_files_dir,
+                expected_machine_id="unrelated-machine",
+            ) == []
+            assert (await db.execute(select(RoomArtifact))).scalars().all() == []
+        assert not config.artifact_files_dir.exists()
+
+        async with session_factory() as db:
+            inserted = await artifacts_service.handle_artifact_produced(
+                db, frame, artifact_files_dir=config.artifact_files_dir,
+                expected_machine_id=agent.placed_on_machine_id,
+            )
+        assert {row.room_id for row in inserted} == {room1.id, room2.id}
+
+    @pytest.mark.asyncio
+    async def test_machine_transport_enforces_producer_and_broadcasts_only_valid_output(self, env) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from anygarden.ws.machine_handler import handle_machine_frame
+
+        session_factory, config, room1, room2, agent = env
+        manager = SimpleNamespace(broadcast=AsyncMock())
+        app = SimpleNamespace(state=SimpleNamespace(
+            config=config, session_factory=session_factory,
+            machine_bus=None, agent_lifecycle=None, connection_manager=manager,
+        ))
+        frame = _make_frame(agent_id=agent.id, room_id=room1.id)
+        await handle_machine_frame(app, "unrelated-machine", frame)
+        manager.broadcast.assert_not_awaited()
+        assert not config.artifact_files_dir.exists()
+
+        await handle_machine_frame(app, agent.placed_on_machine_id, frame)
+        assert {call.args[0] for call in manager.broadcast.await_args_list} == {room1.id, room2.id}
+
+    @pytest.mark.asyncio
+    async def test_legacy_fans_out_within_an_unambiguous_project(self, env) -> None:
         session_factory, config, room1, room2, agent = env
 
         async with session_factory() as db:
@@ -119,6 +161,110 @@ class TestHandleArtifactProduced:
             assert disk.exists()
             assert disk.stat().st_size == row.size_bytes
             assert hashlib.sha256(disk.read_bytes()).hexdigest() == row.sha256
+
+    @pytest.mark.asyncio
+    async def test_source_room_keeps_same_named_artifacts_in_their_project(self, env) -> None:
+        session_factory, config, room1, room2, agent = env
+        async with session_factory() as db:
+            other_project = Project(name="other-project")
+            db.add(other_project)
+            await db.flush()
+            other_room = Room(project_id=other_project.id, name="other-control")
+            db.add(other_room)
+            await db.flush()
+            db.add(Participant(room_id=other_room.id, agent_id=agent.id))
+            await db.commit()
+            other_room_id = other_room.id
+
+        for source_room_id, marker, expected_rooms in (
+            (room1.id, b"CAREER-ONLY-MARKER", {room1.id, room2.id}),
+            (other_room_id, b"GARDEN-ONLY-MARKER", {other_room_id}),
+        ):
+            frame = _make_frame(
+                agent_id=agent.id,
+                room_id=source_room_id,
+                filename="result.md",
+                mime="text/markdown",
+                body=marker,
+            )
+            async with session_factory() as db:
+                inserted = await artifacts_service.handle_artifact_produced(
+                    db, frame, artifact_files_dir=config.artifact_files_dir
+                )
+            assert {row.room_id for row in inserted} == expected_rooms
+            for row in inserted:
+                assert (config.artifact_files_dir / row.storage_path).read_bytes() == marker
+
+            # Reconnect/retry cannot republish the source into another project.
+            async with session_factory() as db:
+                assert await artifacts_service.handle_artifact_produced(
+                    db, frame, artifact_files_dir=config.artifact_files_dir
+                ) == []
+
+        async with session_factory() as db:
+            rows = (await db.execute(select(RoomArtifact))).scalars().all()
+        assert len(rows) == 3
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("other_is_dm", [False, True])
+    async def test_legacy_rejects_ambiguous_project_or_dm_membership(self, env, other_is_dm) -> None:
+        session_factory, config, _, _, agent = env
+        async with session_factory() as db:
+            project = Project(name="other-project")
+            db.add(project)
+            await db.flush()
+            room = Room(project_id=None if other_is_dm else project.id, name="other")
+            db.add(room)
+            await db.flush()
+            db.add(Participant(room_id=room.id, agent_id=agent.id))
+            await db.commit()
+            assert await artifacts_service.handle_artifact_produced(
+                db, _make_frame(agent_id=agent.id), artifact_files_dir=config.artifact_files_dir
+            ) == []
+            assert (await db.execute(select(RoomArtifact))).scalars().all() == []
+        assert not config.artifact_files_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_explicit_dm_does_not_publish_into_other_dms_or_project(self, env) -> None:
+        session_factory, config, _, _, agent = env
+        async with session_factory() as db:
+            dms = [Room(project_id=None, name=f"dm-{index}") for index in range(2)]
+            db.add_all(dms)
+            await db.flush()
+            db.add_all([Participant(room_id=room.id, agent_id=agent.id) for room in dms])
+            await db.commit()
+            inserted = await artifacts_service.handle_artifact_produced(
+                db,
+                _make_frame(agent_id=agent.id, room_id=dms[0].id),
+                artifact_files_dir=config.artifact_files_dir,
+            )
+        assert {row.room_id for row in inserted} == {dms[0].id}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scope", ["non_member", "archived", "missing", "malformed"])
+    async def test_rejects_invalid_explicit_source_before_writing(self, env, scope) -> None:
+        session_factory, config, room1, _, agent = env
+        async with session_factory() as db:
+            source_room_id: object = "not-a-room"
+            if scope == "non_member":
+                room = Room(project_id=room1.project_id, name="non-member")
+                db.add(room)
+                await db.flush()
+                source_room_id = room.id
+            elif scope == "archived":
+                room = await db.get(Room, room1.id)
+                room.archived_at = datetime.now(UTC)
+                source_room_id = room.id
+            elif scope == "malformed":
+                source_room_id = {"room": room1.id}
+            await db.commit()
+            frame = _make_frame(agent_id=agent.id)
+            frame["room_id"] = source_room_id
+            assert await artifacts_service.handle_artifact_produced(
+                db, frame, artifact_files_dir=config.artifact_files_dir
+            ) == []
+            assert (await db.execute(select(RoomArtifact))).scalars().all() == []
+        assert not config.artifact_files_dir.exists()
 
     @pytest.mark.asyncio
     async def test_dedup_on_redelivery(self, env) -> None:

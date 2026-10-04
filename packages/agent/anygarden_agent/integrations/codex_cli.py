@@ -190,7 +190,7 @@ class CodexCliAdapter(EngineAdapter):
         # #526 — restore per-room resume handles persisted by a prior
         # process so a respawned adapter can ``resume`` instead of starting
         # cold. Missing/corrupt store → empty map (fresh start).
-        self._room_thread_ids = load_sessions(Path.cwd())
+        self._room_thread_ids = load_sessions(Path.cwd(), scope_version="room-memory-v1")
 
     async def on_message(self, msg: dict[str, Any]) -> str | None:
         """Forward the message to ``codex exec`` and return the reply."""
@@ -228,13 +228,32 @@ class CodexCliAdapter(EngineAdapter):
         roster_suffix = (
             client.compose_roster_suffix(room_id) if client is not None else ""
         )
+        workflow = ""
+        if client is not None and (
+            getattr(client, "_speaker_strategy", {}).get(room_id) == "orchestrator"
+            and getattr(client, "_orchestrator_agent_id", {}).get(room_id)
+            == getattr(client, "_agent_id", None)
+            and not (isinstance(metadata, dict)
+                     and (metadata.get("task_assignment") or {}).get("execution_id")
+                     and (metadata.get("task_assignment") or {}).get("role") != "orchestration")
+        ):
+            workflow = (
+                "\n\n[프로젝트 운영실 작업]\n"
+                "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
+                "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
+                "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
+                "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
+                "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
+                "미완료 작업을 완료로 보고하지 말고, 모든 필수 결과를 검토한 뒤 "
+                "complete_project_execution으로 최종 결과·산출물·검증 근거·제한사항·다음 행동을 보고하세요."
+            )
         prefix = self._injector.apply(
             self._context_scope(msg),
             # #540 — codex exec has no system-prompt channel, so seed the
             # system prompt (identity + base instructions) into turn content.
             # Unconditional (unlike roster): a solo agent still must know who
             # it is. Injected once per process/room, then sha-suppressed.
-            system_suffix=self._system_prompt or "",
+            system_suffix=(self._system_prompt or "") + workflow,
             memory_suffix=memory_suffix,
             roster_suffix=roster_suffix,
             system_label="[시스템 지침 업데이트]",
@@ -259,7 +278,10 @@ class CodexCliAdapter(EngineAdapter):
             ) from exc
 
     def _context_scope(self, msg):
-        return msg.get("room_id", "_default")
+        from anygarden_agent.memory.scope import memory_session_scope
+
+        room_id = msg.get("room_id", "_default")
+        return room_id, memory_session_scope(self._client, room_id)
 
     async def _call_codex(self, prompt: str, room_id: str) -> str | None:
         """Run one ``codex exec`` turn (resume when a session exists).
@@ -269,7 +291,10 @@ class CodexCliAdapter(EngineAdapter):
         nonzero exit the outcome requires reconciliation; the same input is
         never automatically retried in a fresh session.
         """
-        thread_id = self._room_thread_ids.get(room_id)
+        from anygarden_agent.memory.scope import room_session_key
+
+        session_key = room_session_key(self._client, room_id)
+        thread_id = self._room_thread_ids.get(session_key)
         response, new_thread_id, usage, resume_failed = await self._exec_once(
             prompt, thread_id
         )
@@ -279,10 +304,10 @@ class CodexCliAdapter(EngineAdapter):
             )
 
         if new_thread_id:
-            self._room_thread_ids[room_id] = new_thread_id
+            self._room_thread_ids[session_key] = new_thread_id
         self._last_usage = self._extract_usage(usage, self._model)
         # #526 — persist resume handles so a future respawn can restore them.
-        save_sessions(Path.cwd(), self._room_thread_ids)
+        save_sessions(Path.cwd(), self._room_thread_ids, scope_version="room-memory-v1")
         return response
 
     async def _exec_once(
@@ -493,6 +518,7 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
     supervisor = RoomHandlerSupervisor(
         client=client, engine_name=engine_name, engine_timeout=engine_timeout
     )
+    client._turn_supervisor = supervisor
 
     @client.on_message
     async def _handle(msg: dict[str, Any]) -> None:
@@ -559,6 +585,12 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
                     input_tokens=usage.get("input_tokens"),
                     output_tokens=usage.get("output_tokens"),
                     cost_usd=usage.get("cost_usd"),
+                    usage_metadata=usage.get("usage_metadata"),
+                    local_execution_id=usage.get("local_execution_id"),
+                    native_outcome=usage.get("native_outcome"),
+                    native_process_state=usage.get("native_process_state"),
+                    native_reason_code=usage.get("native_reason_code"),
+                    native_transient=usage.get("native_transient"),
                 )
             finally:
                 typing_active = False
@@ -579,7 +611,7 @@ def register_room_adapter(client, adapter, engine_name, turn_timeout):
             delegation_id=(msg.get("metadata") or {}).get("delegation_id"),
             turn_context={
                 key: value for key, value in (msg.get("metadata") or {}).items()
-                if key in {"turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key"}
+                if key in {"turn_attempt", "turn_generation", "turn_lease", "turn_protocol", "turn_idempotency_key", "execution_id", "input_revision"}
             },
         )
 

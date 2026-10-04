@@ -1,13 +1,58 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { apiFetch } from '@/lib/api'
+import type { ExecutionDisposition, ExecutionOperationAction } from '@/hooks/useProjectExecutions'
 
-// Task shape mirrors `TaskOut` in packages/cluster/anygarden/api/v1/tasks.py.
-// Phase 1 of #302 keeps the schema unchanged; the goal-derived columns
-// (#302 Phase 2 — goal_id, triggered_by, spec, started_at, finished_at,
-// agent_session_id, tokens_used, result_markdown, error, is_interesting)
-// land alongside the migration. Forward-compat optional fields are
-// declared here so upgrade-path UIs read them safely against an older
-// server.
+export interface TaskDependencyResult {
+  task_id: string
+  room_id?: string
+  title: string
+  result_markdown: string | null
+  result_sha256: string | null
+  finished_at?: string | null
+  result_id?: string
+  result_version?: number
+}
+
+export interface TaskScheduleContext {
+  goal_id: string
+  scheduled_for: string | null
+  timezone: string
+  overlap_policy: 'wait'
+  trigger_source: string
+}
+
+export interface TaskBlockerSummary {
+  task_id: string
+  title: string
+  room_id: string
+  room_name: string
+  status: string
+}
+
+// Mirrors TaskOut. Optional execution fields retain compatibility with
+// servers and manual tasks that do not supply execution evidence.
+export interface TaskRecovery {
+  state: 'none' | 'running' | 'retry_wait' | 'retrying' | 'failed' | 'action_required' | 'completed' | 'cancelled' | 'historical'
+  reason_code?: string | null
+  next_action?: 'none' | 'wait_for_retry' | 'check_agent' | 'review_failure' | 'answer_question' | 'review_approval' | 'await_safe_stop' | 'fix_configuration_and_retry' | 'restore_authentication_and_retry' | 'retry_task' | 'review_task_details'
+  can_retry?: boolean
+  request_id?: string | null
+  active_attempt?: number | null
+  attempt_count?: number
+  completed_attempt_count?: number
+  retry_count?: number
+  max_retries?: number
+  next_retry_at?: string | null
+  attempts?: {
+    ordinal: number
+    state: string
+    outcome: string | null
+    reason_code?: string | null
+    started_at?: string | null
+    finished_at?: string | null
+  }[]
+}
+
 export interface Task {
   id: string
   room_id: string
@@ -22,14 +67,38 @@ export interface Task {
   // migration. Older servers omit them; consumers must guard accordingly.
   goal_id?: string | null
   triggered_by?: string | null
+  spec?: string | null
+  result_markdown?: string | null
+  error?: string | null
+  recovery?: TaskRecovery | null
+  dependency_results?: TaskDependencyResult[] | null
+  schedule_context?: TaskScheduleContext | null
+  is_silent?: boolean
+  execution_id?: string | null
+  parent_task_id?: string | null
+  parent_task_title?: string | null
+  input_revision?: number | null
+  delegation_depth?: number
+  role?: string | null
+  result_version?: number
+  room_name?: string | null
+  assignee_display_name?: string | null
+  execution_operating_room_id?: string | null
+  execution_source_message_id?: string | null
+  execution_objective?: string | null
+  execution_status?: string | null
+  execution_input_revision?: number | null
+  execution_operation_action?: ExecutionOperationAction | null
+  execution_error?: string | null
+  is_current?: boolean
+  disposition?: ExecutionDisposition
+  blocked_by?: TaskBlockerSummary[]
 }
 
 export interface UseRoomTasksOptions {
   /** Status filter — passed through as ``?status=`` query param. */
   status?: string | null
-  /** Goal id filter (#302 Phase 2). Currently passes through to the
-   *  server which ignores it pre-migration; once the migration lands,
-   *  the server filters by ``tasks.goal_id``. */
+  /** Goal history includes silent runs that are hidden from the work queue. */
   goalId?: string | null
 }
 
@@ -97,7 +166,8 @@ export function useRoomTasks(
     try {
       const resp = await apiFetch(`/api/v1/rooms/${roomId}/tasks${qs ? '?' + qs : ''}`)
       if (!resp.ok) throw new Error(`Fetch failed (HTTP ${resp.status})`)
-      const tasks = await resp.json() as Task[]
+      const rows = await resp.json() as Task[]
+      const tasks = goalId ? rows : rows.filter(task => !task.is_silent)
       if (accepts()) setSnapshot({ scope, tasks, loading: false, error: null })
     } catch (error) {
       if (accepts()) setSnapshot({ scope, tasks: [], loading: false, error: error instanceof Error ? error.message : String(error) })
@@ -113,11 +183,19 @@ export function useRoomTasks(
   useEffect(() => {
     if (!roomId) return
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent).detail as { task?: { room_id?: string } } | undefined
-      if (detail?.task && (!detail.task.room_id || detail.task.room_id === roomId)) void refresh()
+      const detail = (event as CustomEvent).detail as { task?: { room_id?: string; execution_operating_room_id?: string } } | undefined
+      if (detail?.task && (!detail.task.room_id || detail.task.room_id === roomId || detail.task.execution_operating_room_id === roomId)) void refresh()
     }
     window.addEventListener('anygarden:task:updated', handler)
-    return () => window.removeEventListener('anygarden:task:updated', handler)
+    const executionHandler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { operating_room_id?: string } | undefined
+      if (detail?.operating_room_id === roomId) void refresh()
+    }
+    window.addEventListener('anygarden:execution:updated', executionHandler)
+    return () => {
+      window.removeEventListener('anygarden:task:updated', handler)
+      window.removeEventListener('anygarden:execution:updated', executionHandler)
+    }
   }, [roomId, refresh])
 
   // An action may finish after its room has gone away. Neither the follow-up

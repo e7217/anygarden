@@ -14,7 +14,14 @@ from typing import Any
 from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from anygarden.db.models import Message, Participant, Room, RoomAuthorizationAudit, Task
+from anygarden.db.models import (
+    Message,
+    Participant,
+    Room,
+    RoomAuthorizationAudit,
+    Task,
+    TaskBlocker,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +56,10 @@ def _current_assignee_predicate(participant_id: str | None):
     return Task.assignee_participant_id == participant_id
 
 
+def _no_unresolved_dependencies(task_id: str):
+    return ~exists(select(TaskBlocker.task_id).where(TaskBlocker.task_id == task_id))
+
+
 async def source_thread_root_id(db: AsyncSession, task: Task) -> str | None:
     """Return the canonical root for a source-linked task."""
 
@@ -70,6 +81,33 @@ async def _current_task(db: AsyncSession, task_id: str) -> Task | None:
 
 
 async def claim_task_cas(
+    db: AsyncSession,
+    *,
+    task_id: str,
+    room_id: str,
+    participant_id: str,
+) -> Task:
+    """Claim work; freeze a planned QA target in the same claim savepoint."""
+
+    qa_task = await db.scalar(select(Task.id).where(
+        Task.id == task_id, Task.role == "qa", Task.execution_id.is_not(None),
+    ))
+    if qa_task is not None:
+        from anygarden.project_executions.qa_targets import bind_qa_target_for_claim
+
+        async with db.begin_nested():
+            await bind_qa_target_for_claim(
+                db, task_id=task_id, room_id=room_id, participant_id=participant_id,
+            )
+            return await _claim_open_task_cas(
+                db, task_id=task_id, room_id=room_id, participant_id=participant_id,
+            )
+    return await _claim_open_task_cas(
+        db, task_id=task_id, room_id=room_id, participant_id=participant_id,
+    )
+
+
+async def _claim_open_task_cas(
     db: AsyncSession,
     *,
     task_id: str,
@@ -102,6 +140,7 @@ async def claim_task_cas(
                 )
             ),
             _active_room_predicate(room_id),
+            _no_unresolved_dependencies(task_id),
         )
         .values(
             status="in_progress",
@@ -110,6 +149,8 @@ async def claim_task_cas(
             started_at=now,
             finished_at=None,
             error=None,
+            is_silent=False,
+            goal_completion_applied=False,
         )
         .returning(Task)
     )
@@ -146,6 +187,8 @@ async def transition_task_status_cas(
         values["started_at"] = None
         values["finished_at"] = None
         values["error"] = None
+        values["is_silent"] = False
+        values["goal_completion_applied"] = False
     if target_status in {"done", "failed"}:
         values["finished_at"] = now
 
@@ -168,6 +211,9 @@ async def transition_task_status_cas(
                 ),
             ]
         )
+
+    if target_status in {"in_progress", "done"}:
+        predicates.append(_no_unresolved_dependencies(task.id))
 
     result = await db.execute(
         update(Task).where(*predicates).values(**values).returning(Task)
@@ -306,6 +352,8 @@ async def admin_requeue_task_cas(
             started_at=None,
             finished_at=None,
             error=None,
+            is_silent=False,
+            goal_completion_applied=False,
         )
         .returning(Task)
     )
@@ -414,13 +462,18 @@ async def fail_stale_task_cas(
     task: Task,
     reason: str,
 ) -> Task | None:
-    """Fail a still-current stale task without crossing an archive/CAS race."""
+    """Fail a still-current standalone task without crossing an archive/CAS race.
+
+    Project tasks are fenced by their execution deadline and durable turn
+    leases; they may legitimately wait for other tasks or operating-room input.
+    """
 
     result = await db.execute(
         update(Task)
         .where(
             Task.id == task.id,
             Task.room_id == task.room_id,
+            Task.execution_id.is_(None),
             Task.status == task.status,
             Task.status.in_(("todo", "in_progress")),
             _current_assignee_predicate(task.assignee_participant_id),

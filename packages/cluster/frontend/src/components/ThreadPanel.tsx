@@ -13,6 +13,7 @@ import { useRightSidebarLayout } from '@/hooks/useRightSidebarLayout'
 import RailResizeHandle from '@/components/right-rail/RailResizeHandle'
 
 interface ThreadPanelProps {
+  focusedMessageId?: string | null
   /** The top-level message the thread hangs off. */
   root: ChatMessage
   /** Replies to ``root``, already ordered by seq. */
@@ -44,6 +45,7 @@ interface ThreadPanelProps {
  * through the same path as any other message.
  */
 export default function ThreadPanel({
+  focusedMessageId,
   root,
   replies,
   participants,
@@ -74,8 +76,9 @@ export default function ThreadPanel({
   // Follow new replies. Keyed on count rather than the array so a
   // re-render with identical contents doesn't yank the viewport.
   useEffect(() => {
+    if (focusedMessageId) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [replies.length])
+  }, [replies.length, focusedMessageId])
 
   return (
     <>

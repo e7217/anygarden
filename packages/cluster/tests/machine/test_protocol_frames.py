@@ -491,7 +491,10 @@ class TestMemoryFrames237:
     def test_agent_memory_update_frame_serialises(self):
         from anygarden.machine.protocol.frames import AgentMemoryUpdateFrame
 
-        frame = AgentMemoryUpdateFrame(agent_id="a1", memory_md="hello")
+        frame = AgentMemoryUpdateFrame(
+            agent_id="a1", room_id="799c3ea6-f665-4fd6-9181-6b25b819926a",
+            generation=1, base_revision=0, memory_md="hello",
+        )
         payload = frame.model_dump()
         assert payload["type"] == "agent_memory_update"
         assert payload["agent_id"] == "a1"

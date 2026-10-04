@@ -16,13 +16,21 @@ from anygarden_agent.integrations.codex_cli import (
     CodexCliAdapter,
     register_room_adapter,
 )
-from anygarden_agent.integrations.engine_session_store import load_sessions
 from anygarden_agent.runtime.execution.contracts import SessionScope
+from anygarden_agent.runtime.execution.failure_feedback import terminal_failure_category
 from anygarden_agent.runtime.execution.launch import load_execution_launch
 from anygarden_agent.runtime.execution.manager import LocalExecutionManager
 from anygarden_agent.runtime.execution.progress_stage import (
     ProgressStage,
     stage_for_progress,
+)
+from anygarden_agent.runtime.execution.project_turn import (
+    ProjectTurnError,
+    canonical_uuid,
+    materialize_snapshot,
+    snapshot_digest,
+    turn_identity,
+    validate_snapshot,
 )
 from anygarden_agent.runtime.execution.room import (
     RoomCodexRuntime,
@@ -85,9 +93,13 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._root = Path.cwd().resolve()
         self._turn_metadata = ContextVar("room_execution_metadata", default=None)
         self._usage = ContextVar("room_execution_usage", default=None)
+        self._delivered_turn = ContextVar("delivered_project_turn", default=None)
+        self._local_invocation = ContextVar("delivered_local_invocation", default=None)
+        self._last_project_context: dict[str, tuple] = {}
         self._manager = None
         self._progress_by_room: dict[str, tuple[str, ProgressStage]] = {}
         self._active_execution_by_room: dict[str, str] = {}
+        self._scope_memory_epochs: dict[str, str] = {}
         self._turn_timeout = resolve_turn_timeout(
             "pi" if engine == "pi-cli" else "codex"
         )
@@ -155,9 +167,9 @@ class RoomExecutionAdapter(CodexCliAdapter):
             runtime,
             authorize=self._authorized,
         )
-        self._room_thread_ids = (
-            load_sessions(self._root) if self._engine == "codex-cli" else {}
-        )
+        # Unversioned native handles may contain old agent-wide memory.
+        # Preserve their files, but never import them into scoped sessions.
+        self._room_thread_ids = {}
         self._report_workspace(self._workspace())
 
     def _workspace(self):
@@ -171,11 +183,15 @@ class RoomExecutionAdapter(CodexCliAdapter):
         )
 
     def _authorized(self, scope):
+        from anygarden_agent.memory.scope import memory_session_scope
+
         generation = getattr(self._client, "_generation", None)
         return (
             scope.engine == self._engine
             and scope.agent_id == self._identity()
             and (generation is None or generation == self._launch.generation)
+            and self._scope_memory_epochs.get(scope.key)
+            == memory_session_scope(self._client, scope.channel_id)
         )
 
     def _identity(self):
@@ -185,14 +201,74 @@ class RoomExecutionAdapter(CodexCliAdapter):
         )
 
     def _context_scope(self, msg):
-        return (msg.get("room_id", "_default"), msg.get("root_message_id"))
+        from anygarden_agent.memory.scope import memory_session_scope
+
+        room_id = msg.get("room_id", "_default")
+        return room_id, msg.get("root_message_id"), memory_session_scope(self._client, room_id), self._project_session_scope(msg)
+
+    def _project_session_scope(self, msg):
+        metadata = msg.get("metadata") or {}
+        retry_scope = self._retry_session_scope(msg)
+        if metadata.get("execution_id"):
+            return ("execution-input-v1", metadata["execution_id"], metadata.get("input_revision"), *retry_scope)
+        room_id = msg.get("room_id")
+        if (
+            metadata.get("turn_lease")
+            and getattr(self._client, "_orchestrator_agent_id", {}).get(room_id)
+            == getattr(self._client, "_agent_id", None)
+            and getattr(self._client, "_speaker_strategy", {}).get(room_id) == "orchestrator"
+        ):
+            # The operating source turn is initially unbound. It must not
+            # resume another execution before begin_project_execution binds it.
+            return ("execution-source-v1", metadata.get("request_id"), *retry_scope)
+        if retry_scope:
+            return ("durable-retry-v1", *retry_scope)
+        return None
+
+    @staticmethod
+    def _retry_session_scope(msg):
+        metadata = msg.get("metadata") or {}
+        attempt = metadata.get("turn_attempt")
+        if metadata.get("turn_lease") and type(attempt) is int and attempt >= 2:
+            return metadata.get("request_id"), attempt
+        return ()
 
     async def on_message(self, msg):
         token = self._turn_metadata.set(msg)
         self._usage.set(None)
+        delivery_token = local_token = context_token = None
         try:
+            metadata = msg.get("metadata") or {}
+            identity = turn_identity(msg.get("room_id", "_default"), metadata)
+            context = None
+            if identity is not None:
+                generation = getattr(self._client, "_generation", None)
+                if generation is not None and identity["generation"] != generation:
+                    raise ProjectTurnError("TURN_GENERATION_CHANGED")
+                local_id = self._manager.bind_turn(identity, str(uuid4()))
+                local_token = self._local_invocation.set(local_id)
+                if identity["execution_id"] is not None:
+                    context = materialize_snapshot(self._workspace(), metadata.get("execution_input_snapshot"), identity)
+            delivery_token = self._delivered_turn.set(identity)
+            context_token = self._client._execution_input_context.set(context)
+            project_scope = self._project_session_scope(msg)
+            room_id = msg.get("room_id", "_default")
+            if project_scope is not None:
+                if self._last_project_context.get(room_id) != project_scope:
+                    self._pending_context.pop(room_id, None)
+                self._last_project_context[room_id] = project_scope
             return await super().on_message(msg)
+        except ProjectTurnError as exc:
+            if str(exc) == "TURN_CANCELLED":
+                raise EngineCancelledError() from None
+            raise EngineError(str(exc)) from None
         finally:
+            if context_token is not None:
+                self._client._execution_input_context.reset(context_token)
+            if local_token is not None:
+                self._local_invocation.reset(local_token)
+            if delivery_token is not None:
+                self._delivered_turn.reset(delivery_token)
             self._turn_metadata.reset(token)
 
     def _take_last_usage(self):
@@ -207,22 +283,77 @@ class RoomExecutionAdapter(CodexCliAdapter):
         self._report_workspace(workspace)
         authority = hashlib.sha256(self._client._server_url.encode()).hexdigest()
         tier = self._permission_level or "standard"
-        policy_epoch = int.from_bytes(hashlib.sha256(tier.encode()).digest()[:4], "big")
+        from anygarden_agent.memory.scope import memory_session_scope
+
+        policy_scope = f"{tier}:{memory_session_scope(self._client, room_id)}:{self._project_session_scope(msg)}"
+        policy_epoch = int.from_bytes(hashlib.sha256(policy_scope.encode()).digest()[:4], "big")
+        retry_request_id, retry_attempt = self._retry_session_scope(msg) or (None, None)
         scope = SessionScope(
             execution_node_id=authority,
             agent_id=self._identity(),
             authority_node_id=authority,
             channel_id=room_id,
-            thread_root_id=msg.get("root_message_id"),
+            thread_root_id=(
+                (msg.get("metadata") or {}).get("request_id")
+                if (self._project_session_scope(msg) or (None,))[0] == "execution-source-v1"
+                else msg.get("root_message_id")
+            ),
             workspace_binding_id=str(workspace),
             workspace_epoch=0,
             policy_epoch=policy_epoch,
             engine=self._engine,
             engine_version=self._runtime_version,
+            project_execution_id=(msg.get("metadata") or {}).get("execution_id"),
+            input_revision=(msg.get("metadata") or {}).get("input_revision"),
+            retry_request_id=retry_request_id,
+            retry_attempt=retry_attempt,
         )
         runtime_home = self._root
+        # Authenticate execution tools with this delivered lease, rather than
+        # asking the model to copy secrets or infer a latest open turn.
+        environment = dict(self._environment)
+        metadata = msg.get("metadata") or {}
+        for key, variable in (
+            ("request_id", "ANYGARDEN_TURN_REQUEST_ID"),
+            ("turn_attempt", "ANYGARDEN_TURN_ATTEMPT"),
+            ("turn_generation", "ANYGARDEN_TURN_GENERATION"),
+            ("turn_lease", "ANYGARDEN_TURN_LEASE"),
+        ):
+            value = metadata.get(key)
+            environment[variable] = str(value) if value is not None else ""
+        identity = self._delivered_turn.get()
+        local_execution_id = self._local_invocation.get() or str(uuid4())
+        if identity is not None:
+            if self._manager.turn_cancelled(identity):
+                raise EngineCancelledError()
+            previous = self._manager.turn_receipt(identity)
+            if previous is not None:
+                # A transport replay or handler retry cannot create another
+                # native invocation for this exact durable attempt.
+                if previous.outcome == "succeeded":
+                    turn = self._telemetry(previous, self._model)
+                    self._usage.set({"model": turn.model, "input_tokens": turn.input_tokens,
+                                     "output_tokens": turn.output_tokens, "cost_usd": turn.cost_usd,
+                                     "usage_metadata": turn.usage_metadata,
+                                     **turn.native_proof()})
+                    return previous.text
+                if previous.outcome == "cancelled":
+                    raise EngineCancelledError(self._telemetry(previous, self._model))
+                raise EngineError("TURN_ATTEMPT_ALREADY_EXECUTED", turn=self._telemetry(previous, self._model))
+            snapshot = await self._client.request_turn_start(identity, local_execution_id, metadata["turn_lease"])
+            if identity["execution_id"] is not None:
+                delivered_snapshot = metadata.get("execution_input_snapshot")
+                confirmed_snapshot = validate_snapshot(snapshot, identity)
+                if snapshot_digest(confirmed_snapshot) != snapshot_digest(delivered_snapshot):
+                    raise ProjectTurnError("INPUT_CONTEXT_CHANGED")
+                # Verify persisted frozen files again at the native boundary.
+                materialize_snapshot(workspace, confirmed_snapshot, identity)
+            elif snapshot is not None:
+                raise ProjectTurnError("TURN_BINDING_CHANGED")
+            if self._manager.turn_cancelled(identity):
+                raise EngineCancelledError()
         invocation = RoomInvocation(
-            execution_id=str(uuid4()),
+            execution_id=local_execution_id,
             scope=scope,
             prompt=prompt,
             workspace=workspace,
@@ -230,18 +361,10 @@ class RoomExecutionAdapter(CodexCliAdapter):
             reasoning_effort=self._reasoning_effort,
             permission_level=tier,
             timeout_seconds=self._turn_timeout,
-            environment=self._environment,
+            environment=environment,
         )
         invocation = self._launch.bind(invocation)
-        # Legacy mappings had no endpoint/thread scope. Import once only for
-        # unchanged default-provider root-room sessions; never for direct mode.
-        legacy = self._room_thread_ids.get(room_id)
-        if legacy and not scope.thread_root_id:
-            self._manager.import_legacy_session(
-                invocation.scope,
-                legacy if self._legacy_compatible(legacy, invocation) else None,
-                room_id,
-            )
+        self._scope_memory_epochs[invocation.scope.key] = memory_session_scope(self._client, room_id)
         self._active_execution_by_room[room_id] = invocation.execution_id
         started = False
         try:
@@ -283,6 +406,8 @@ class RoomExecutionAdapter(CodexCliAdapter):
                 "input_tokens": turn.input_tokens,
                 "output_tokens": turn.output_tokens,
                 "cost_usd": turn.cost_usd,
+                "usage_metadata": turn.usage_metadata,
+                **turn.native_proof(),
             }
         )
         if receipt.outcome == "succeeded":
@@ -298,7 +423,7 @@ class RoomExecutionAdapter(CodexCliAdapter):
             # #687 — name the observed vs required CLI version (non-secret)
             # so a version drift is not mistaken for an endpoint failure.
             reason = f"{reason}: {self._runtime.unsupported_detail()}"
-        raise error_cls(reason, turn=turn)
+        raise error_cls(reason, turn=turn, transient=turn.native_transient is True)
 
     def _legacy_compatible(self, handle, invocation):
         from .room_session_upgrade import legacy_codex_session_matches
@@ -331,17 +456,35 @@ class RoomExecutionAdapter(CodexCliAdapter):
     @staticmethod
     def _telemetry(receipt, model):
         usage = receipt.usage or {}
+        reason_code, transient = terminal_failure_category(receipt.outcome, receipt.reason)
         return EngineTurn(
             None,
             model=model,
             input_tokens=usage.get("input_tokens"),
             output_tokens=usage.get("output_tokens"),
+            usage_metadata=usage.get("metadata"),
+            local_execution_id=receipt.execution_id,
+            native_outcome=receipt.outcome,
+            native_process_state=receipt.process_state,
+            native_reason_code=reason_code,
+            native_transient=transient,
         )
 
     async def stop(self):
         if self._manager is not None:
             await self._manager.close()
             self._manager = None
+
+    async def stop_turn(self, packet):
+        """Stop the room's actual manager invocation, never the DM controller."""
+        canonical_uuid(packet["execution_id"])
+        canonical_uuid(packet["room_id"])
+        identity = {key: packet[key] for key in ("room_id", "request_id", "attempt", "generation", "execution_id", "input_revision")}
+        result = await self._manager.stop_turn(identity, packet.get("local_execution_id"))
+        supervisor = getattr(self._client, "_turn_supervisor", None)
+        if supervisor is not None:
+            supervisor.cancel_turn(identity)
+        return result
 
 
 async def integrate_with_room_execution(

@@ -155,6 +155,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1">
         {tasks.map(task => {
           const Icon = STATUS_ICON[task.status] ?? Circle
+          const readOnly = Boolean(task.execution_id) || task.room_id !== roomId
           const assignee = task.assignee_participant_id
             ? participants[task.assignee_participant_id]
             : undefined
@@ -164,7 +165,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               data-testid={`task-row-${task.id}`}
               className="group flex min-h-11 min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 hover:bg-[var(--color-surface-alt)]"
             >
-              <button onClick={() => cycleStatus(task)} title={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} aria-label={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} className="flex h-11 w-11 shrink-0 items-center justify-center md:h-6 md:w-6">
+              <button disabled={readOnly} onClick={() => cycleStatus(task)} title={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} aria-label={t('chat.taskStatus', { status: statusLabel[task.status] ?? task.status })} className="flex h-11 w-11 shrink-0 items-center justify-center md:h-6 md:w-6">
                 <Icon
                   className={`h-4 w-4 ${
                     task.status === 'done'
@@ -181,8 +182,9 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
               </button>
               <span
                 className={`min-w-0 flex-1 truncate text-sm ${
-                  task.status === 'done' || task.status === 'failed'
+                  task.status === 'done'
                     ? 'line-through text-[var(--color-foreground-muted)]'
+                    : task.status === 'failed' ? 'text-[var(--color-danger)]'
                     : 'text-[var(--color-foreground)]'
                 }`}
               >
@@ -192,12 +194,14 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                   to a select on hover. Keeping the picker inline avoids
                   a second modal for what is the most common edit. */}
               <select
+                disabled={readOnly}
                 value={task.assignee_participant_id ?? ''}
                 onChange={e => reassign(task, e.target.value)}
                 className="min-h-11 min-w-0 max-w-[8rem] truncate rounded-[var(--radius-sm)] border-0 bg-transparent text-xs text-[var(--color-foreground-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-focus)] md:min-h-6"
                 aria-label={t('chat.reassign')}
               >
                 <option value="">— {t('chat.unassigned')} —</option>
+                {task.assignee_participant_id && !participants[task.assignee_participant_id] && <option value={task.assignee_participant_id}>{task.assignee_display_name ?? t('chat.unassigned')}</option>}
                 {agentParticipants.length > 0 && (
                   <optgroup label={t('chat.agents')}>
                     {agentParticipants.map(p => (
@@ -222,7 +226,7 @@ export default function TaskPanel({ roomId, participants }: TaskPanelProps) {
                   engine={assignee.engine}
                 />
               ) : null}
-              {!task.source_message_id ? (
+              {!readOnly && !task.source_message_id ? (
                 <button
                   onClick={() => remove(task.id)}
                   className="flex h-11 w-11 shrink-0 items-center justify-center rounded text-[var(--color-destructive)]/70 opacity-100 transition-all hover:bg-[var(--color-destructive)]/10 hover:text-[var(--color-destructive)] md:h-6 md:w-6 md:opacity-0 md:group-hover:opacity-100"

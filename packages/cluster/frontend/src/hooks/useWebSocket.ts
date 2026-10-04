@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { clearAuthSession, getAuthToken } from '@/lib/authStorage';
 import { isAgentStage, peerProgressFrom, type AgentStage, type PeerProgress } from '@/lib/typingStage';
 
@@ -13,14 +13,40 @@ export interface ChatMessage {
   metadata?: Record<string, unknown>;
 }
 
-export function useWebSocket(roomId: string | null) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [connected, setConnected] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
-  const [typingStages, setTypingStages] = useState<Record<string, AgentStage>>({});
-  // #762 — peers answered / asked, for a ``waiting_peers`` stage.
-  const [typingProgress, setTypingProgress] = useState<Record<string, PeerProgress>>({});
+interface RoomScope { roomId: string | null; active: boolean }
+interface RoomState {
+  scope: RoomScope;
+  messages: ChatMessage[];
+  connected: boolean;
+  typingUsers: Set<string>;
+  typingStages: Record<string, AgentStage>;
+  typingProgress: Record<string, PeerProgress>;
+  messageContextError: string | null;
+}
+const emptyRoomState = (scope: RoomScope): RoomState => ({
+  scope, messages: [], connected: false, typingUsers: new Set(), typingStages: {}, typingProgress: {}, messageContextError: null,
+});
+
+export function useWebSocket(roomId: string | null, focusMessageId: string | null = null) {
+  // The scope identifies a visit, including A → B → A, so callbacks from an
+  // earlier visit cannot restore its messages, typing state or reconnect cursor.
+  const scope = useMemo<RoomScope>(() => ({ roomId, active: true }), [roomId]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const isCurrent = useCallback(() => scope.active && currentScope.current === scope, [scope]);
+  const [snapshot, setSnapshot] = useState<RoomState>(() => emptyRoomState(scope));
+  const { messages, connected, typingUsers, typingStages, typingProgress, messageContextError } = snapshot.scope === scope
+    ? snapshot : emptyRoomState(scope);
+  const updateState = useCallback((patch: (previous: RoomState) => Partial<RoomState>) => {
+    if (!isCurrent()) return;
+    setSnapshot(previous => {
+      if (!isCurrent()) return previous;
+      const current = previous.scope === scope ? previous : emptyRoomState(scope);
+      return { ...current, ...patch(current) };
+    });
+  }, [scope, isCurrent]);
   const wsRef = useRef<WebSocket | null>(null);
+  const socketTokenRef = useRef<string | null>(null);
   const seqRef = useRef(0);
   const reconnectRef = useRef(1);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -36,13 +62,11 @@ export function useWebSocket(roomId: string | null) {
   const clearTyping = useCallback(() => {
     Object.values(typingTimers.current).forEach(clearTimeout);
     typingTimers.current = {};
-    setTypingUsers(new Set());
-    setTypingStages({});
-    setTypingProgress({});
-  }, []);
+    updateState(() => ({ typingUsers: new Set(), typingStages: {}, typingProgress: {} }));
+  }, [updateState]);
 
   const connect = useCallback(() => {
-    if (!roomId) return;
+    if (!roomId || !isCurrent()) return;
     const token = getAuthToken();
     if (!token) return;
 
@@ -59,16 +83,19 @@ export function useWebSocket(roomId: string | null) {
     supersededRef.current = false;
     const ws = new WebSocket(url, ['anygarden.v1', `bearer.${token}`]);
     wsRef.current = ws;
+    socketTokenRef.current = token;
+    const isCurrentSocket = () => isCurrent() && wsRef.current === ws && getAuthToken() === token;
 
     ws.onopen = () => {
-      if (wsRef.current !== ws) return;
-      setConnected(true);
+      if (!isCurrentSocket()) return;
+      updateState(() => ({ connected: true }));
       reconnectRef.current = 1;
     };
     ws.onclose = (evt) => {
-      if (wsRef.current !== ws) return;
-      setConnected(false);
+      if (!isCurrentSocket()) return;
+      updateState(() => ({ connected: false }));
       wsRef.current = null;
+      socketTokenRef.current = null;
       clearTyping();
 
       const authRejected = evt.code === 4001 || evt.code === 4003;
@@ -96,18 +123,20 @@ export function useWebSocket(roomId: string | null) {
       const delay = Math.min(reconnectRef.current, 30);
       reconnectRef.current = Math.min(delay * 2, 30);
       reconnectTimerRef.current = setTimeout(() => {
+        if (!isCurrent() || getAuthToken() !== token) return;
         reconnectTimerRef.current = null;
         connect();
       }, delay * 1000);
     };
     ws.onmessage = (evt) => {
-      if (wsRef.current !== ws) return;
+      if (!isCurrentSocket()) return;
       const data = JSON.parse(evt.data);
       if (data.type === 'message') {
+        if (data.room_id !== roomId) return;
         if (data.seq > seqRef.current) seqRef.current = data.seq;
-        setMessages(prev => {
-          if (prev.some(m => m.seq === data.seq)) return prev;
-          return [...prev, data];
+        updateState(previous => {
+          if (previous.messages.some(m => m.seq === data.seq)) return {};
+          return { messages: [...previous.messages, data].sort((a, b) => a.seq - b.seq) };
         });
       } else if (data.type === 'room_membership_changed') {
         // Server pushes this when the user is added to (or removed
@@ -165,6 +194,8 @@ export function useWebSocket(roomId: string | null) {
         window.dispatchEvent(
           new CustomEvent('anygarden:task:updated', { detail: data }),
         );
+      } else if (data.type === 'execution.updated') {
+        window.dispatchEvent(new CustomEvent('anygarden:execution:updated', { detail: data }));
       } else if (data.type === 'room_artifact.added') {
         // #290 — agent dropped a new file in memory/outbox/. The
         // RoomArtifactsDialog (and any future right-rail panel)
@@ -180,36 +211,28 @@ export function useWebSocket(roomId: string | null) {
       } else if (data.type === 'typing') {
         const pid = data.participant_id;
         const forget = () => {
-          setTypingUsers(prev => {
-            const next = new Set(prev); next.delete(pid); return next;
-          });
-          setTypingStages(prev => {
-            const next = { ...prev }; delete next[pid]; return next;
-          });
-          setTypingProgress(prev => {
-            if (!(pid in prev)) return prev;
-            const next = { ...prev }; delete next[pid]; return next;
+          updateState(previous => {
+            const typingUsers = new Set(previous.typingUsers); typingUsers.delete(pid);
+            const typingStages = { ...previous.typingStages }; delete typingStages[pid];
+            const typingProgress = { ...previous.typingProgress }; delete typingProgress[pid];
+            return { typingUsers, typingStages, typingProgress };
           });
         };
         if (data.is_typing) {
-          setTypingUsers(prev => new Set(prev).add(pid));
-          setTypingStages(prev => {
-            const next = { ...prev };
-            if (isAgentStage(data.stage)) next[pid] = data.stage;
-            else delete next[pid];
-            return next;
-          });
           const progress = data.stage === 'waiting_peers' ? peerProgressFrom(data) : null;
-          setTypingProgress(prev => {
-            if (!progress && !(pid in prev)) return prev;
-            const next = { ...prev };
-            if (progress) next[pid] = progress;
-            else delete next[pid];
-            return next;
+          updateState(previous => {
+            const typingStages = { ...previous.typingStages };
+            if (isAgentStage(data.stage)) typingStages[pid] = data.stage;
+            else delete typingStages[pid];
+            const typingProgress = { ...previous.typingProgress };
+            if (progress) typingProgress[pid] = progress;
+            else delete typingProgress[pid];
+            return { typingUsers: new Set(previous.typingUsers).add(pid), typingStages, typingProgress };
           });
           // Reset the expire timer — don't stack multiple timeouts
           if (typingTimers.current[pid]) clearTimeout(typingTimers.current[pid]);
           typingTimers.current[pid] = setTimeout(() => {
+            if (!isCurrentSocket()) return;
             forget();
             delete typingTimers.current[pid];
           }, 5000);
@@ -222,10 +245,11 @@ export function useWebSocket(roomId: string | null) {
         }
       }
     };
-  }, [roomId, clearTyping]);
+  }, [roomId, isCurrent, updateState, clearTyping]);
 
   useEffect(() => {
-    setMessages([]);
+    scope.active = true;
+    updateState(() => ({ messages: [], connected: false }));
     clearTyping();
     seqRef.current = 0;
     suppressReconnectRef.current = false;
@@ -236,14 +260,16 @@ export function useWebSocket(roomId: string | null) {
     if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     connect();
     return () => {
+      scope.active = false;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); wsRef.current = null; }
+      socketTokenRef.current = null;
       clearTyping();
     };
-  }, [roomId, connect, clearTyping]);
+  }, [scope, updateState, connect, clearTyping]);
 
   // Reclaim a superseded room connection when this tab is back in front of
   // the user — the most recently used tab ends up holding the connection.
@@ -265,24 +291,30 @@ export function useWebSocket(roomId: string | null) {
     metadata?: Record<string, unknown>,
     threadRootId?: string,
   ) => {
+    if (!isCurrent() || socketTokenRef.current !== getAuthToken()) return;
     const frame: Record<string, unknown> = { type: 'send', content }
     if (metadata && Object.keys(metadata).length > 0) frame.metadata = metadata
     if (threadRootId) frame.thread_root_id = threadRootId
     wsRef.current?.send(JSON.stringify(frame));
-  }, []);
+  }, [isCurrent]);
 
   const sendTyping = useCallback((isTyping: boolean) => {
+    if (!isCurrent() || socketTokenRef.current !== getAuthToken()) return;
     wsRef.current?.send(JSON.stringify({ type: 'typing', is_typing: isTyping }));
-  }, []);
+  }, [isCurrent]);
 
   // Load history via REST on mount
   useEffect(() => {
     if (!roomId) return;
     const token = getAuthToken();
     if (!token) return;
+    const controller = new AbortController();
+    const accepts = () => isCurrent() && !controller.signal.aborted && getAuthToken() === token;
     fetch(`/api/v1/rooms/${roomId}/messages?since_seq=0&limit=100`, {
       headers: { 'Authorization': `Bearer ${token}` },
+      signal: controller.signal,
     }).then(r => {
+      if (!accepts()) return [];
       if (r.status === 401 || r.status === 403) {
         if (getAuthToken() === token) {
           suppressReconnectRef.current = true;
@@ -303,12 +335,47 @@ export function useWebSocket(roomId: string | null) {
       }
       return r.ok ? r.json() : [];
     }).then(msgs => {
-      if (msgs.length) {
-        setMessages(msgs);
-        seqRef.current = Math.max(...msgs.map((m: ChatMessage) => m.seq));
+      if (accepts() && Array.isArray(msgs) && msgs.length) {
+        const history = (msgs as ChatMessage[]).filter(message => message.room_id === roomId);
+        // History may finish after newer live messages. Preserve the live copy
+        // of each sequence and never move the reconnect cursor backwards.
+        seqRef.current = Math.max(seqRef.current, ...history.map(message => message.seq));
+        updateState(previous => {
+          const bySequence = new Map(history.map(message => [message.seq, message]));
+          previous.messages.forEach(message => bySequence.set(message.seq, message));
+          return { messages: [...bySequence.values()].sort((a, b) => a.seq - b.seq) };
+        });
       }
     }).catch(() => {});
-  }, [roomId]);
+    return () => controller.abort();
+  }, [roomId, isCurrent, updateState]);
 
-  return { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping };
+  useEffect(() => {
+    updateState(() => ({ messageContextError: null }));
+    if (!roomId || !focusMessageId) return;
+    const token = getAuthToken();
+    if (!token) return;
+    const controller = new AbortController();
+    const accepts = () => isCurrent() && !controller.signal.aborted && getAuthToken() === token;
+    fetch(`/api/v1/rooms/${roomId}/messages/${encodeURIComponent(focusMessageId)}/context`, {
+      headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+    }).then(async response => {
+      if (!accepts()) return;
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rows = await response.json() as ChatMessage[];
+      if (!accepts() || !Array.isArray(rows)) return;
+      const context = rows.filter(message => message.room_id === roomId);
+      if (!context.some(message => message.id === focusMessageId)) throw new Error('HTTP 404');
+      updateState(previous => {
+        const bySequence = new Map(context.map(message => [message.seq, message]));
+        previous.messages.forEach(message => bySequence.set(message.seq, message));
+        return { messages: [...bySequence.values()].sort((a, b) => a.seq - b.seq) };
+      });
+    }).catch(error => {
+      if (accepts()) updateState(() => ({ messageContextError: error instanceof Error ? error.message : 'HTTP 500' }));
+    });
+    return () => controller.abort();
+  }, [roomId, focusMessageId, isCurrent, updateState]);
+
+  return { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping, messageContextError };
 }

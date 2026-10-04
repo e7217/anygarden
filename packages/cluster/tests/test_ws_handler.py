@@ -523,6 +523,7 @@ class TestWSEndpoint:
                             {
                                 "type": "shared_file",
                                 "id": "file-1",
+                                "room_id": "forged-other-room",
                                 "name": "spoofed.md",
                                 "storage_name": "../bad",
                                 "sha256": "fake",
@@ -537,6 +538,7 @@ class TestWSEndpoint:
             {
                 "type": "shared_file",
                 "id": "file-1",
+                "room_id": room_id,
                 "name": "spec.md",
                 "storage_name": "spec.md",
                 "sha256": "real-sha",
