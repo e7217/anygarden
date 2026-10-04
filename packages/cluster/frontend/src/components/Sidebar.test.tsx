@@ -23,7 +23,7 @@ vi.mock('@/hooks/useSystemVersion', () => ({
   }),
 }))
 const roomsMockState = vi.hoisted(() => ({
-  projects: [] as Array<{ id: string; name: string }>,
+  projects: [] as Array<{ id: string; name: string; can_delete?: boolean }>,
   rooms: {} as Record<string, Array<{
     id: string
     name: string
@@ -255,6 +255,20 @@ describe('Sidebar — footer admin menu (#699)', () => {
     fireEvent.click(trigger)
     expect(screen.getByRole('button', { name: 'Usage' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('button', { name: /System/ })).toHaveTextContent('update')
+  })
+})
+
+describe('Sidebar — project delete permission (#783)', () => {
+  it('shows the project menu only for projects the caller may delete', () => {
+    roomsMockState.projects = [
+      { id: 'mine', name: 'Mine', can_delete: true },
+      { id: 'shared', name: 'Shared', can_delete: false },
+    ]
+
+    renderSidebar()
+
+    expect(screen.getByTestId('sidebar-project-menu-mine')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-project-menu-shared')).not.toBeInTheDocument()
   })
 })
 
