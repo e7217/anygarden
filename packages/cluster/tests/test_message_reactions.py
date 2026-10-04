@@ -94,6 +94,9 @@ async def test_reaction_requires_membership(react_env):
     env = react_env
     app, config = env["app"], env["config"]
     outsider, outsider_email = str(uuid4()), "o@x.test"
+    async with app.state.session_factory() as db:
+        db.add(User(id=outsider, email=outsider_email, password_hash="x"))
+        await db.commit()
     token = _token(config, outsider, outsider_email)
     url = f"/api/v1/rooms/{env['room']}/messages/{env['message']}/reactions"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
