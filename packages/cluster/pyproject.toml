@@ -140,6 +140,9 @@ anygarden-agent = { workspace = true }
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "req(*ids): requirement IDs this test verifies (see scripts/req_report.py)",
+]
 # #726 — dump every thread's stack when a single test runs past 5 min so a
 # hang in CI names the stuck test instead of going silent.
 faulthandler_timeout = 300

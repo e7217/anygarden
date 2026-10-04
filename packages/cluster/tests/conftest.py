@@ -94,3 +94,15 @@ async def client(app) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+def pytest_collection_modifyitems(config, items):
+    """Record ``@pytest.mark.req`` IDs as a JUnit ``req`` property (#781).
+
+    ``scripts/req_report.py`` reads the property back from the JUnit XML
+    to report each requirement's pass/fail state.
+    """
+    for item in items:
+        ids = sorted({i for m in item.iter_markers("req") for i in m.args})
+        if ids:
+            item.user_properties.append(("req", ",".join(ids)))
