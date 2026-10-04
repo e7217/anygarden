@@ -23,7 +23,7 @@
 - `packages/cluster/anygarden/mcp/project_tools.py`: 에이전트용 실행 도구(`begin_project_execution`, `delegate_project_task`, `request_project_input`, `request_project_approval`, `complete_project_execution` 등)
 - `packages/cluster/anygarden/memory/`와 `machine/room_memory.py`, 에이전트 `memory/scope.py`: 방별 메모리, 리비전 확인 쓰기, `session_epoch` 기반 세션 키
 - `turns/start_service.py`, 에이전트 `runtime/execution/project_turn.py`·`usage.py`: 실행 범위가 붙은 턴 시작과 Codex 누적 사용량 차분
-- DB 모델 3개와 마이그레이션 082–089 (task 의존 결과, run ledger, 프로젝트 실행, 실행 요청, 승인, 방별 메모리, 실행 변경, 네이티브 호출 사용량)
+- DB 모델 3개와 마이그레이션 083–090 (task 의존 결과, run ledger, 프로젝트 실행, 실행 요청, 승인, 방별 메모리, 실행 변경, 네이티브 호출 사용량)
 - 프론트엔드: `InboxPage`, 컨텍스트 레일의 `ProjectExecutionsSection`·`ExecutionRequestsSection`·`ExecutionApprovalsSection`, `MemoryPanel`, 관련 훅·i18n 카탈로그, `e2e/inbox.spec.ts`
 - `DESIGN.md`: 컨텍스트 레일과 인박스의 정보 배치 규칙 추가
 - 설계 문서 6개 (`docs/plans/2026-10-01-*.md`)
@@ -45,3 +45,8 @@
 - 기능 브랜치 `feat/project-room-autonomy`에 보존되어 원격에 push됨. main 머지는 하지 않음.
 - 검증은 수동 QA 실행 기록(2026-10-01)뿐이다: QA-01~15, 17~21 통과(일부 범위 한정), QA-16 부분 통과. 이 커밋에서는 테스트를 실행하지 않았다.
 - 남은 일(#778): `project_executions`와 인박스 API의 백엔드 pytest(QA-03·06·08·13), 종합 시나리오 실행, main 머지.
+
+## Follow-up (2026-10-05)
+
+- main에 #783의 마이그레이션 `082_project_created_by`가 먼저 들어가서, 이 브랜치를 main 위로 rebase하며 기존 082–089를 083–090으로 재번호했다(첫 `down_revision`은 `082_project_created_by`). 커밋 메시지의 "migrations 082-089"는 재번호 전 번호다.
+- rebase 후 cluster 전체: 14 failed, 2754 passed. 같은 14건이 rebase 전 원본 커밋에서도 실패했다(원본은 head 고정 테스트 포함 15건). 이 실패들은 #778의 남은 일이다.
