@@ -1177,6 +1177,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # shares one participant; evicting would make the tabs knock each
         # other off in a reconnect loop.
         exclusive=identity is None or identity.kind == "agent",
+        invite_id=(
+            getattr(identity.claims, "invite_id", None) if is_guest_session else None
+        ),
     )
     logger.info("ws.connected", room_id=room_id, participant_id=participant.id)
 

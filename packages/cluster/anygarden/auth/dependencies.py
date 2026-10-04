@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -18,7 +18,13 @@ from anygarden.auth.jwt import (
 )
 from anygarden.auth.machine_token import verify_machine_token_hash
 from anygarden.auth.token import verify_token_hash
-from anygarden.db.models import AgentToken, MachineToken, Participant
+from anygarden.db.models import (
+    AgentToken,
+    MachineToken,
+    Participant,
+    RoomInviteLink,
+    User,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +95,34 @@ async def get_identity(
                 detail="Invalid or expired token",
             )
         if isinstance(claims, GuestClaims):
+            # #782 — a guest JWT outlives its invite unless we look the
+            # invite up: revoking must cut off sessions already issued.
+            revoked_at = (
+                await db.execute(
+                    select(RoomInviteLink.revoked_at).where(
+                        RoomInviteLink.id == claims.invite_id
+                    )
+                )
+            ).one_or_none()
+            if revoked_at is None or revoked_at[0] is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invite has been revoked",
+                )
             return Identity(kind="guest", id=claims.user_id, claims=claims)
+        # #782 — ``is_admin`` comes from the DB, not the token, so a
+        # removed admin or deleted account stops working immediately
+        # instead of when the 24h JWT expires.
+        is_admin = (
+            await db.execute(select(User.is_admin).where(User.id == claims.user_id))
+        ).scalar_one_or_none()
+        if is_admin is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+            )
+        if is_admin != claims.is_admin:
+            claims = replace(claims, is_admin=is_admin)
         return Identity(kind="user", id=claims.user_id, claims=claims)
 
     # Agent token — O(1) lookup via AgentToken table using lookup_hint

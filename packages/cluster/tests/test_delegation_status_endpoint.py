@@ -25,7 +25,7 @@ from anygarden.app import create_app
 from anygarden.auth.jwt import create_guest_token, create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Base, Participant, Room, User
+from anygarden.db.models import Base, Participant, Room, RoomInviteLink, User
 from anygarden.federation.delegation_models import DelegationMirror
 from anygarden.shared_channels.models import ChannelStream
 
@@ -111,6 +111,15 @@ async def env(tmp_path: Path):
             ),
         }
         db.add_all(rows.values())
+        # #782 — a guest token is honoured only while its invite exists.
+        invite = RoomInviteLink(
+            id=uid(),
+            room_id=room,
+            created_by_user_id=member.id,
+            token_hash="x",
+            lookup_hint="inv_x",
+        )
+        db.add(invite)
 
     app = create_app(config)
     app.state.engine = engine
@@ -123,6 +132,7 @@ async def env(tmp_path: Path):
         "member": member,
         "outsider": outsider,
         "rows": rows,
+        "invite_id": invite.id,
     }
     await engine.dispose()
 
@@ -145,7 +155,7 @@ def guest_auth(client: AsyncClient, env, *, room_id: str) -> None:
     token = create_guest_token(
         user_id=env["member"].id,
         room_id=room_id,
-        invite_id=uid(),
+        invite_id=env["invite_id"],
         display_name="guest",
         secret=env["app"].state.config.jwt_secret,
         expires_at=datetime.now(UTC) + timedelta(minutes=5),

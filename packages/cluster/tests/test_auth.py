@@ -11,6 +11,7 @@ from anygarden.auth.jwt import InvalidToken, UserClaims, create_user_token, veri
 from anygarden.auth.token import generate_token, hash_token, verify_token_hash
 from anygarden.auth.dependencies import Identity, get_identity
 from anygarden.config import AnygardenSettings
+from anygarden.db.models import User
 
 
 _SECRET = "test-secret-key-for-jwt-testing-only"
@@ -95,6 +96,8 @@ class TestAgentToken:
 class TestIdentityParsing:
     @pytest.mark.asyncio
     async def test_identity_from_bearer_header(self, db, config) -> None:
+        db.add(User(id="u10", email="x@y.com", password_hash="x"))
+        await db.commit()
         token = create_user_token("u10", "x@y.com", False, secret=config.jwt_secret)
         identity = await get_identity(
             db,
@@ -106,6 +109,8 @@ class TestIdentityParsing:
 
     @pytest.mark.asyncio
     async def test_identity_from_ws_subprotocol(self, db, config) -> None:
+        db.add(User(id="u11", email="y@z.com", password_hash="x", is_admin=True))
+        await db.commit()
         token = create_user_token("u11", "y@z.com", True, secret=config.jwt_secret)
         identity = await get_identity(
             db,

@@ -14,7 +14,15 @@ from anygarden.app import create_app
 from anygarden.auth.jwt import create_user_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, Base, Participant, Project, Room, User
+from anygarden.db.models import (
+    Agent,
+    Base,
+    Participant,
+    Project,
+    Room,
+    RoomInviteLink,
+    User,
+)
 
 
 # -- Fixtures -----------------------------------------------------------------
@@ -1824,13 +1832,24 @@ class TestRemoveParticipant:
                 display_name="G",
             )
             db.add(guest)
+            await db.flush()
+            # #782 — guest identities are rejected unless their invite
+            # exists and is not revoked.
+            invite = RoomInviteLink(
+                room_id=room.id,
+                created_by_user_id=guest.id,
+                token_hash="x",
+                lookup_hint="inv_x",
+            )
+            db.add(invite)
             await db.commit()
             await db.refresh(guest)
+            await db.refresh(invite)
 
         guest_token = create_guest_token(
             user_id=guest.id,
             room_id=room.id,
-            invite_id="dummy",
+            invite_id=invite.id,
             display_name="G",
             secret=config.jwt_secret,
             expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
