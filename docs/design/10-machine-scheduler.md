@@ -1,5 +1,7 @@
 # 10 · Machine 스케줄링 계층
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > Machine은 1급 스케줄링 리소스다. `anygarden-machine` 데몬이 각 호스트에서 에이전트 subprocess를 관리하며, 서버 스케줄러가 "이 엔진으로 저 에이전트 띄워라"를 선언적으로 명령한다. 이 계층은 §1-§9의 경량 원칙 위에 **추가되는** 계층이지, 대체하지 않는다.
 
 ## 10.0 요약

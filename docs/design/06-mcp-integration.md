@@ -1,5 +1,7 @@
 # 06. MCP 통합 — 외부 도구 영역 (채팅 프로토콜과 완전 분리)
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > **한 줄 요약**: 채팅 서버는 MCP를 **모른다**. 각 에이전트 엔진이 자체 MCP 클라이언트로 외부 도구(GitHub, Jira, Filesystem 등)를 호출하고, 결과를 일반 채팅 메시지로 게시할 뿐이다. 서버의 역할은 `metadata`에 출처 태그를 저장하는 것뿐이다.
 
 이 문서는 이 구현에서 **MCP를 채팅 프로토콜로 쓰지 않는 이유**와 **그럼에도 에이전트 엔진이 MCP를 자유롭게 사용할 수 있는 방법**을 정리한다.

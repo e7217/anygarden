@@ -1,5 +1,7 @@
 # 09 · 기존 에피소드 및 Plan A/B/C와의 관계
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > 이 구현은 **진공 상태에서 나온 것이 아니다**. 9개 탐색 에피소드 → 3개 최종 안(A/B/C) → 3회 피드백 사이클 위에서 "가장 단순한 구체 구현"을 고른 결과다. 이 문서는 그 계보를 명확히 하고, 언제 이 구현이 아닌 다른 것을 선택해야 하는지를 말한다.
 
 ## 9.1 설계 계보
