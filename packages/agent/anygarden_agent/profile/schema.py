@@ -11,7 +11,7 @@ class AgentProfile(BaseModel):
     """Schema for ``~/.anygarden/agents/<name>.yaml``."""
 
     name: str
-    engine: str  # e.g. "claude-code", "codex", "gemini-cli"
+    engine: str  # "codex-cli" or "pi-cli" (see integrations.ENGINES)
     system_prompt: str = "You are a helpful assistant."
     rooms: list[str] = []
     mcp_servers: list[str] = []

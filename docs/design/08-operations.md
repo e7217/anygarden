@@ -1,5 +1,7 @@
 # 08 · 운영: 패키징, CLI, 배포, 테스트
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > 이 문서는 이 구현의 **핵심**이다. 사용자가 명시한 요구사항("Docker 없음 + uvx/바이너리로 쉬운 기동")은 아키텍처가 아니라 **운영·배포 계층**에서 충족된다. 다른 모든 결정이 옳아도 이 문서가 틀리면 사용자가 원하는 UX가 나오지 않는다.
 
 ## 8.1 패키징 개요

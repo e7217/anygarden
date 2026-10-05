@@ -1,5 +1,7 @@
 # 07 · 에러 복구 및 성능 목표
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > 서버는 얇은 메시징 허브이므로 에러 복구 책임의 대부분은 에이전트 엔진이나 네트워크 계층에 분리된다. 서버가 책임지는 것은 **메시지 영속화와 Last-Seq 기반 재연결 복구** 두 가지뿐이다.
 
 ## 7.1 에러 복구의 책임 분리

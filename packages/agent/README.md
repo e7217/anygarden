@@ -43,7 +43,7 @@ anygarden-agent --engine <engine> --name <display_name> --server <ws-url> --room
 
 주요 옵션:
 
-- `--engine` (필수): `anygarden_agent.integrations.ENGINES` 값 중 하나 (`claude-code`, `codex-cli`, `gemini-cli`, `openhands`).
+- `--engine` (필수): `anygarden_agent.integrations.ENGINES` 값 중 하나 (`codex-cli`, `pi-cli`). `claude-code`·`gemini-cli`·`openhands`는 퇴역했으며 지정하면 이전 안내와 함께 실패합니다 ([퇴역 엔진 안내](../../docs/runbook/retired-engines.md)).
 - `--name` (필수): 에이전트 표시명.
 - `--server` (필수): WebSocket 접속 URL. 기본값이 없습니다.
 - `--token`: 인증 토큰. 미지정 시 `ANYGARDEN_TOKEN` 환경변수를 사용합니다.

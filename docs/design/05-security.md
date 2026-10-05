@@ -1,5 +1,7 @@
 # 05. 보안 — JWT + API Token + Room 스코프 권한
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > **한 줄 요약**: 유저는 JWT(HS256, 24시간), 에이전트는 API Token(argon2 해시, Room 스코프), Room별 3단계 역할(observer/member/admin). FastAPI Dependency 체인으로 구현 ~125줄.
 
 Plan A §9의 보안 모델을 **FastAPI Dependency 체인**으로 구체화한다. 구현 포인트는 "복잡한 RBAC를 만들지 않는 것"과 "토큰 탈취 시 영향 범위 최소화"다.

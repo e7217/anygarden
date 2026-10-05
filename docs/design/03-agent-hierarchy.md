@@ -1,5 +1,7 @@
 # 03. 채널 기반 서브에이전트
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > **한 줄 요약**: 서브에이전트는 에이전트 엔진이 spawn하는 프로세스가 아니라, 두 에이전트가 공유하는 **작은 Room**이다. SQLAlchemy `Room.parent_room_id` 컬럼 하나로 구현된다.
 
 Plan A §7과 EP00 §3에서 확정된 이 패턴을 **SQLAlchemy 구현 관점**에서 재정리한다. 서버 코드 변경은 `models.py` ~10줄 + `rooms/service.py` ~30줄 = 총 **~40줄**이다.

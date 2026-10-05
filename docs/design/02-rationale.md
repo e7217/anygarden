@@ -1,5 +1,7 @@
 # 02. 근거 — 왜 이 스택을 골랐는가
 
+> **과거 설계 기록 (2026-05 기준).** 이 문서는 초기 설계 근거를 보존한다. Claude Code·Gemini CLI·OpenHands 엔진과 내장 LLM gateway는 제거됐고, 에이전트 응답은 멘션 기반 정책으로 바뀌는 등 이후 구조가 달라졌다. 현재 실행 구조는 [ADR-008](../decisions/008-two-engine-runtime-contract.md)과 [퇴역 엔진 안내](../runbook/retired-engines.md), 설치·운영은 [README](../../README.md)와 [`docs/runbook/`](../runbook)을 따른다.
+
 > **한 줄 요약**: Python + FastAPI + SQLite + WebSocket + uvx는 "Docker 없음 + 쉬운 기동 + 이종 엔진 지원 + 경량"이라는 4개 요구를 동시에 만족하는 **유일한** 조합이다. Go/gRPC/PG/Docker를 선택하지 않은 이유를 정직하게 기록한다.
 
 Plan A는 "무엇을 만들 것인가"를 정했다. 이 문서는 "어떤 도구로 만들 것인가"의 **근거**를 정리한다. 각 결정은 ADR(Architecture Decision Record) 6개로 최종 요약된다.
