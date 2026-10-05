@@ -75,6 +75,7 @@ class Turn:
     execution_id: str | None
     input_revision: int | None
     frame: dict
+    local_execution_id: str = ""
 
     @property
     def headers(self) -> dict[str, str]:
@@ -131,6 +132,7 @@ class Harness:
             execution_id=meta.get("execution_id"),
             input_revision=meta.get("input_revision"),
             frame=frame,
+            local_execution_id=str(uuid4()),
         )
         async with self.sessions() as db:
             permit = await authorize_native_start(
@@ -143,7 +145,7 @@ class Harness:
                     attempt=turn.attempt,
                     generation=GENERATION,
                     lease=turn.lease,
-                    local_execution_id=str(uuid4()),
+                    local_execution_id=turn.local_execution_id,
                     execution_id=turn.execution_id,
                     input_revision=turn.input_revision,
                 ),
@@ -152,8 +154,21 @@ class Harness:
         assert permit.allowed, permit
         return turn
 
-    async def end_turn(self, turn: Turn) -> None:
-        """End the turn without a reply, as a runtime does after asking/waiting."""
+    async def end_turn(self, turn: Turn, outcome: str = "skipped") -> None:
+        """End the turn without a reply, as a runtime does after asking/waiting.
+
+        ``outcome="failed"`` reports a native failure with the terminal
+        receipt a runtime attaches: the process finished and the model call
+        failed, so the server knows a retry cannot duplicate side effects.
+        """
+        receipt = {}
+        if outcome == "failed":
+            receipt = dict(
+                local_execution_id=turn.local_execution_id,
+                native_process_state="finished",
+                native_outcome="failed",
+                native_reason_code="MODEL_EXECUTION_FAILED",
+            )
         async with self.sessions() as db:
             applied = await record_lifecycle(
                 db,
@@ -165,7 +180,8 @@ class Harness:
                     turn_generation=GENERATION,
                     turn_lease=turn.lease,
                     event="handler_finished",
-                    outcome="skipped",
+                    outcome=outcome,
+                    **receipt,
                 ),
             )
             await db.commit()
@@ -264,8 +280,8 @@ class Harness:
 
 @pytest_asyncio.fixture()
 async def harness(config: AnygardenSettings, tmp_path) -> AsyncIterator[Harness]:
-    config.room_files_dir = str(tmp_path / "room-files")
-    config.artifact_files_dir = str(tmp_path / "artifacts")
+    config.room_files_dir = tmp_path / "room-files"
+    config.artifact_files_dir = tmp_path / "artifacts"
     config.project_action_targets = {
         "mock-portal": {"url": "https://portal.test/submit", "label": "Mock portal",
                         "action_kind": "submission", "supports_idempotency": False},
@@ -279,11 +295,11 @@ async def harness(config: AnygardenSettings, tmp_path) -> AsyncIterator[Harness]
     async with sessions() as db:
         owner = User(email="owner@anygarden.io", password_hash="x")
         outsider = User(email="outsider@anygarden.io", password_hash="x")
-        lead = Agent(name="garden-pm", engine="codex-cli", desired_state="running",
+        lead = Agent(name="garden-pm", engine="codex-cli", desired_state="running", actual_state="running",
                      generation=GENERATION)
-        worker = Agent(name="garden-dev", engine="codex-cli", desired_state="running",
+        worker = Agent(name="garden-dev", engine="codex-cli", desired_state="running", actual_state="running",
                        generation=GENERATION)
-        releaser = Agent(name="garden-release", engine="codex-cli", desired_state="running",
+        releaser = Agent(name="garden-release", engine="codex-cli", desired_state="running", actual_state="running",
                          generation=GENERATION)
         db.add_all([owner, outsider, lead, worker, releaser])
         await db.flush()
@@ -661,3 +677,189 @@ async def test_generic_task_api_refuses_execution_tasks_with_409(harness):
 
     async with harness.sessions() as db:
         assert await db.get(Task, task_id) is not None
+
+
+# -- QA-05 dependencies -------------------------------------------------------
+
+
+@pytest.mark.req("EXE-01", "EXE-14")
+async def test_dependent_task_waits_for_prerequisite_and_receives_its_result(harness):
+    flow = await harness.begin_and_delegate()
+    execution = flow["execution"]
+    prerequisite = flow["delegated"]["task_id"]
+    dependent = await harness.tool(
+        flow["lead_turn"], "delegate_project_task",
+        execution_id=execution["execution_id"],
+        parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="write-changelog", title="Write the changelog entry",
+        spec="Describe the login fix for users.", depends_on=[prerequisite],
+    )
+
+    # The prerequisite's assignee is woken; the dependent one is not while
+    # the prerequisite is open.
+    worker_turn = await harness.deliver("worker")
+    assert not [f for f in harness.sockets["releaser"].frames
+                if f.get("metadata", {}).get("turn_lease")]
+    async with harness.sessions() as db:
+        assert (await db.get(Task, dependent["task_id"])).status != "in_progress"
+
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=prerequisite, status="done",
+        result_markdown="Root cause: emails compared case-sensitively. Fixed in auth/login.py.",
+    )
+
+    # Completing the prerequisite releases the dependent task with its result.
+    releaser_turn = await harness.deliver("releaser")
+    assert releaser_turn.frame["metadata"]["task_assignment"]["task_id"] == dependent["task_id"]
+    async with harness.sessions() as db:
+        task = await db.get(Task, dependent["task_id"])
+    context = task.spec + json.dumps(releaser_turn.frame)
+    assert "emails compared case-sensitively" in context
+
+
+# -- INB-03 artifact access · QA-07/21 result collection ----------------------
+
+
+async def _finish_work(harness: Harness) -> dict:
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    # The lead fixes the required work while planning, before results arrive.
+    await harness.tool(
+        flow["lead_turn"], "seal_project_plan",
+        execution_id=flow["execution"]["execution_id"], required_task_ids=[task_id],
+    )
+    worker_turn = await harness.deliver("worker")
+    published = await harness.tool(
+        worker_turn, "publish_project_artifact", task_id=task_id,
+        filename="fix-report.md", content="# Fix\\nLower-case emails before compare.\\n",
+    )
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=task_id, status="done",
+        result_markdown="Fixed: emails are lower-cased before comparison.",
+    )
+    return {**flow, "worker_turn": worker_turn, "artifact": published["artifacts"][0]}
+
+
+@pytest.mark.req("INB-03")
+async def test_execution_artifact_is_hidden_from_non_members(harness):
+    done = await _finish_work(harness)
+    url = done["artifact"]["url"]
+
+    assert (await harness.client.get(url, headers=harness.user())).status_code == 200
+    denied = await harness.client.get(url, headers=harness.user("outsider"))
+    assert denied.status_code in {403, 404}
+
+
+@pytest.mark.req("EXE-08", "EXE-15")
+async def test_lead_collects_child_result_and_completes_execution(harness):
+    done = await _finish_work(harness)
+    execution_id = done["execution"]["execution_id"]
+
+    # The lead ends its planning turn; the finished child result wakes it
+    # again in the operating room.
+    await harness.end_turn(done["lead_turn"])
+    lead_turn = await harness.deliver("lead")
+    assert "emails are lower-cased" in json.dumps(lead_turn.frame)
+
+    completed = await harness.tool(
+        lead_turn, "complete_project_execution", execution_id=execution_id,
+        summary="Login bug fixed: emails are normalized before comparison.",
+    )
+    assert completed["status"] == "completed"
+
+    # The final report is posted in the operating room.
+    async with harness.sessions() as db:
+        reports = (await db.scalars(select(Message).where(
+            Message.room_id == harness.ids["lead_room"],
+            Message.content.contains("Login bug fixed"),
+        ))).all()
+    assert reports
+
+    # A completed execution accepts no further tool calls, so a repeated
+    # completion cannot rewrite the report.
+    await harness.tool_error(
+        lead_turn, "complete_project_execution", execution_id=execution_id,
+        summary="A different summary",
+    )
+    async with harness.sessions() as db:
+        assert (await db.scalar(select(func.count()).select_from(Message).where(
+            Message.content.contains("A different summary")))) == 0
+
+
+# -- QA-12 failure and retry --------------------------------------------------
+
+
+@pytest.mark.req("EXE-10", "EXE-16")
+async def test_failed_task_turn_can_be_retried_once_by_the_user(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+
+    await harness.end_turn(worker_turn, outcome="failed")
+    async with harness.sessions() as db:
+        failed = await db.get(AgentTurn, worker_turn.request_id)
+    assert failed.state == "failed"
+
+    body = {
+        "operation_id": str(uuid4()),
+        "expected_input_revision": 1,
+        "expected_request_id": worker_turn.request_id,
+        "expected_attempt": worker_turn.attempt,
+    }
+    url = f"/api/v1/execution-tasks/{task_id}/retry"
+    assert (await harness.client.post(url, json=body, headers=harness.user("outsider"))
+            ).status_code in {403, 404}
+    resp = await harness.client.post(url, json=body, headers=harness.user())
+    assert resp.status_code == 200, resp.text
+    # Replaying the same operation is idempotent rather than a second retry.
+    replay = await harness.client.post(url, json=body, headers=harness.user())
+    assert replay.status_code == 200, replay.text
+
+    retried = await harness.deliver("worker")
+    assert (retried.request_id, retried.attempt) != (worker_turn.request_id, worker_turn.attempt)
+    assert retried.frame["metadata"]["task_assignment"]["task_id"] == task_id
+    async with harness.sessions() as db:
+        open_turns = (await db.scalars(select(AgentTurn).where(
+            AgentTurn.task_id == task_id,
+            AgentTurn.state.in_({"pending", "leased", "retrying"}),
+        ))).all()
+    assert len(open_turns) == 1
+
+
+# -- QA-20 limits -------------------------------------------------------------
+
+
+@pytest.mark.req("EXE-17")
+async def test_delegation_limit_stops_further_delegation(harness):
+    flow = await harness.begin_and_delegate(limits={"max_delegations": 1})
+    execution = flow["execution"]
+
+    error = await harness.tool_error(
+        flow["lead_turn"], "delegate_project_task",
+        execution_id=execution["execution_id"],
+        parent_task_id=execution["root_task_id"],
+        target_room_id=harness.ids["releaser_room"],
+        assignee_participant_id=harness.ids["releaser_pid"],
+        delegation_key="second", title="Second task", spec="Over the limit",
+    )
+    assert error
+    async with harness.sessions() as db:
+        count = await db.scalar(select(func.count()).select_from(Task).where(
+            Task.execution_id == execution["execution_id"],
+            Task.id != execution["root_task_id"],
+        ))
+    assert count == 1
+
+
+@pytest.mark.req("EXE-17")
+async def test_unsupported_limits_and_actions_are_refused_at_begin(harness):
+    await harness.user_request("Do something risky")
+    lead_turn = await harness.deliver("lead")
+
+    error = await harness.tool_error(
+        lead_turn, "begin_project_execution", objective="x",
+        allowed_actions=["send_email"],
+    )
+    assert "send_email" in error
