@@ -8,9 +8,6 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
-
 from anygarden.app import create_app
 from anygarden.auth.invite_token import hash_invite_token
 from anygarden.auth.password import hash_password
@@ -18,6 +15,8 @@ from anygarden.auth.routes import LOGIN_FAILURE_LIMIT
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import Base, Participant, Project, Room, RoomInviteLink, User
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 INVITE_TOKEN = "inv_" + "c" * 40
 
