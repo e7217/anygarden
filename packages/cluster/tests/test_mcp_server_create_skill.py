@@ -185,7 +185,18 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # ``add_task_blocker`` / ``clear_task_blocker``. Per-tool tests live
     # in test_mark_task_status.py, test_create_task_tool.py, and
     # test_task_blockers.py. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
+    # #778 added the project execution tools (mcp/project_tools.py).
     assert names == {
+        "begin_project_execution",
+        "delegate_project_task",
+        "seal_project_plan",
+        "get_project_execution",
+        "complete_project_execution",
+        "request_project_input",
+        "publish_project_artifact",
+        "read_project_artifact",
+        "request_project_approval",
+        "execute_approved_project_action",
         "create_skill",
         "update_skill",
         "list_my_skills",

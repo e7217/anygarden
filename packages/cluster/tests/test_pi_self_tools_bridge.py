@@ -34,6 +34,7 @@ from anygarden.skills_library.service import SkillLibraryService
 from anygarden_agent.runtime.execution.pi_self_tools import (
     CONFIG_ENV,
     EXTENSION_PATH,
+    PROJECT_TOOL_NAMES,
     TOKEN_ENV,
     TOOL_NAMES,
     prepare_pi_self_tools,
@@ -195,7 +196,8 @@ async def execute(bridge, index, calls):
     assert child.returncode == 0, stderr.decode()
     assert token.encode() not in stdout + stderr
     result = json.loads(stdout)
-    assert set(result["names"]) == TOOL_NAMES
+    # The server lists the project execution tools too (#778).
+    assert set(result["names"]) == TOOL_NAMES | PROJECT_TOOL_NAMES
     return result["results"]
 
 
