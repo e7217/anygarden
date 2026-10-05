@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
@@ -19,6 +20,50 @@ from anygarden.observability.metrics import invites_used_total
 from anygarden.rooms.authorization import require_active_room
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+# #790 — failed logins allowed per email within the window before 429.
+# In-process, like the invite creation limit: enough for the
+# single-process node; a multi-replica deployment needs a shared store.
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
+
+
+class LoginFailureLimiter:
+    """Sliding-window count of failed logins, keyed by normalized email."""
+
+    def __init__(self) -> None:
+        self._failures: dict[str, list[float]] = {}
+
+    def _recent(self, key: str, now: float) -> list[float]:
+        window_start = now - LOGIN_FAILURE_WINDOW_SECONDS
+        recent = [t for t in self._failures.get(key, []) if t >= window_start]
+        if recent:
+            self._failures[key] = recent
+        else:
+            self._failures.pop(key, None)
+        return recent
+
+    def retry_after(self, key: str) -> int | None:
+        """Seconds until another attempt is allowed, or None if allowed now."""
+        now = time.monotonic()
+        recent = self._recent(key, now)
+        if len(recent) < LOGIN_FAILURE_LIMIT:
+            return None
+        return max(1, int(recent[0] + LOGIN_FAILURE_WINDOW_SECONDS - now) + 1)
+
+    def record_failure(self, key: str) -> None:
+        now = time.monotonic()
+        self._failures[key] = [*self._recent(key, now), now]
+
+    def reset(self, key: str) -> None:
+        self._failures.pop(key, None)
+
+
+def _login_limiter(request: Request) -> LoginFailureLimiter:
+    limiter = getattr(request.app.state, "login_limiter", None)
+    if limiter is None:
+        limiter = request.app.state.login_limiter = LoginFailureLimiter()
+    return limiter
 
 
 # ── Request / Response schemas ───────────────────────────────────────
@@ -74,18 +119,23 @@ async def register(
             detail="Email already registered",
         )
 
-    # First user gets admin privileges
-    count_result = await db.execute(select(func.count()).select_from(User))
-    user_count = count_result.scalar()
-    is_admin = user_count == 0
-
     user = User(
         email=body.email,
         password_hash=hash_password(body.password),
-        is_admin=is_admin,
+        is_admin=False,
     )
     db.add(user)
     await db.flush()
+    # First user gets admin privileges. #790 — decide in the same write
+    # transaction as the insert: counting first let two concurrent
+    # registrations on an empty DB both see zero users.
+    others = select(User.id).where(User.id != user.id)
+    promoted = await db.execute(
+        update(User)
+        .where(User.id == user.id, ~exists(others))
+        .values(is_admin=True)
+    )
+    user.is_admin = promoted.rowcount == 1
 
     config = request.app.state.config
     token = create_user_token(
@@ -110,19 +160,25 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     """Authenticate with email and password."""
-    result = await db.execute(select(User).where(User.email == body.email))
-    user = result.scalar_one_or_none()
-    if user is None:
+    limiter = _login_limiter(request)
+    key = body.email.strip().lower()
+    retry_after = limiter.retry_after(key)
+    if retry_after is not None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed login attempts; retry later",
+            headers={"Retry-After": str(retry_after)},
         )
 
-    if not verify_password(body.password, user.password_hash):
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+    if user is None or not verify_password(body.password, user.password_hash):
+        limiter.record_failure(key)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+    limiter.reset(key)
 
     config = request.app.state.config
     token = create_user_token(
@@ -273,7 +329,21 @@ async def accept_guest_invite(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invite has expired",
         )
-    if invite.max_uses is not None and invite.use_count >= invite.max_uses:
+    # #790 — claim one use atomically: a separate check-then-increment let
+    # concurrent accepts exceed ``max_uses``.
+    claimed = await db.execute(
+        update(RoomInviteLink)
+        .where(
+            RoomInviteLink.id == invite.id,
+            RoomInviteLink.revoked_at.is_(None),
+            or_(
+                RoomInviteLink.max_uses.is_(None),
+                RoomInviteLink.use_count < RoomInviteLink.max_uses,
+            ),
+        )
+        .values(use_count=RoomInviteLink.use_count + 1)
+    )
+    if claimed.rowcount != 1:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invite has no uses remaining",
@@ -305,7 +375,6 @@ async def accept_guest_invite(
     )
     db.add(participant)
 
-    invite.use_count = invite.use_count + 1
 
     # Clamp expiry. A concrete invite expiry caps the JWT; unlimited
     # invites fall back to the default so tokens cannot persist
