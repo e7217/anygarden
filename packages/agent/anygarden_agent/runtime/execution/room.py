@@ -88,8 +88,13 @@ class RoomPiRuntime(PiRuntime):
 
         result.pop(CONFIG_ENV, None)
         if invocation.permission_level != "restricted":
-            if "ANYGARDEN_AGENT_TOKEN" in original:
-                result["ANYGARDEN_AGENT_TOKEN"] = original["ANYGARDEN_AGENT_TOKEN"]
+            for key in (
+                "ANYGARDEN_AGENT_TOKEN", "ANYGARDEN_TURN_REQUEST_ID",
+                "ANYGARDEN_TURN_ATTEMPT", "ANYGARDEN_TURN_GENERATION",
+                "ANYGARDEN_TURN_LEASE",
+            ):
+                if key in original:
+                    result[key] = original[key]
             if self.self_tools_config is not None:
                 result[CONFIG_ENV] = str(self.self_tools_config)
         return result

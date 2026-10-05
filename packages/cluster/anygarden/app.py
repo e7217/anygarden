@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
 
-from anygarden.machine.safefs import secure_chmod
 from fastapi import FastAPI
 from sqlalchemy import select, text
 
@@ -17,16 +16,17 @@ from anygarden.api.v1.agents import router as agents_api_router
 from anygarden.api.v1.budgets import router as budgets_router
 from anygarden.api.v1.engine_endpoints import (
     probe_router as engine_endpoint_probe_router,
+)
+from anygarden.api.v1.engine_endpoints import (
     router as engine_endpoints_router,
 )
-from anygarden.api.v1.pi_auth import router as pi_auth_router
 from anygarden.api.v1.errors import PublicAPIError, public_api_error_handler
 from anygarden.api.v1.goals import router as goals_router
 from anygarden.api.v1.graph import router as graph_router
 from anygarden.api.v1.invites import router as invites_router
-from anygarden.api.v1.usage import router as usage_router
 from anygarden.api.v1.machines import router as machines_api_router
 from anygarden.api.v1.mcp_templates import router as mcp_templates_router
+from anygarden.api.v1.pi_auth import router as pi_auth_router
 from anygarden.api.v1.projects import router as projects_router
 from anygarden.api.v1.saved import router as saved_router
 from anygarden.api.v1.search import router as search_router
@@ -34,12 +34,19 @@ from anygarden.api.v1.skills import router as skills_api_router
 from anygarden.api.v1.system import router as system_router
 from anygarden.api.v1.tasks import router as tasks_router
 from anygarden.api.v1.turns import router as turns_router
+from anygarden.api.v1.usage import router as usage_router
 from anygarden.auth.routes import router as auth_router
 from anygarden.config import AnygardenSettings
-from anygarden.db.engine import build_engine, build_session_factory
+from anygarden.db.engine import (
+    begin_write_transaction,
+    build_engine,
+    build_session_factory,
+)
 from anygarden.db.fts import backfill_message_fts, create_message_fts
 from anygarden.db.models import Base
+from anygarden.machine.safefs import secure_chmod
 from anygarden.mcp import router as mcp_rpc_router
+from anygarden.memory.router import router as room_memory_router
 from anygarden.messages.router import router as messages_router
 from anygarden.observability.logging import configure_logging
 from anygarden.orchestration.rules import (
@@ -48,6 +55,11 @@ from anygarden.orchestration.rules import (
     TypingTracker,
 )
 from anygarden.presence import PresenceService
+from anygarden.project_executions.approval_router import (
+    router as execution_approvals_router,
+)
+from anygarden.project_executions.inbox_router import router as project_inbox_router
+from anygarden.project_executions.router import router as project_executions_router
 from anygarden.rooms.router import router as rooms_router
 from anygarden.routing.router import router as routing_router
 from anygarden.scheduler.lifecycle import AgentLifecycle
@@ -1288,9 +1300,39 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
     import structlog
     from sqlalchemy import func, select
 
-    from anygarden.db.models import Agent, AgentTurn
+    from anygarden.db.models import (
+        Agent,
+        AgentTurn,
+        ProjectExecution,
+        ProjectExecutionEvent,
+        Room,
+        Task,
+    )
+    from anygarden.mcp.project_tools import broadcast_project_messages
+    from anygarden.messages.service import fanout_task_event
     from anygarden.observability.metrics import durable_turns_by_state
     from anygarden.orchestration.peer_fanin import dispatch_peer_ask_groups
+    from anygarden.project_executions.action_executor import expire_executing_actions
+    from anygarden.project_executions.limits import (
+        apply_queued_usage_denials,
+        expire_execution_deadlines,
+        fanout_deadline_tasks,
+        reconcile_native_limit_denials,
+    )
+    from anygarden.project_executions.qa_repairs import (
+        advance_pending_repairs,
+        repair_savepoint,
+    )
+    from anygarden.project_executions.recovery import (
+        fanout_recovery_updates,
+        reconcile_terminal_recoveries,
+    )
+    from anygarden.project_executions.serialization import fanout_execution_update
+    from anygarden.project_executions.service import ExecutionConflict
+    from anygarden.project_executions.stop_service import (
+        deliver_pending_stops,
+        expire_pending_stops,
+    )
     from anygarden.turns.service import (
         cancel_invalid_turns,
         deliver_pending_outbox,
@@ -1313,13 +1355,66 @@ async def _run_turn_recovery(app: FastAPI, interval_seconds: float) -> None:
             machine_bus = getattr(app.state, "machine_bus", None)
             if lifecycle is not None and machine_bus is not None:
                 await revoke_invalid_attachments(factory, machine_bus, lifecycle)
+            async with factory() as db:
+                await begin_write_transaction(db)
+                expired_executions = await expire_execution_deadlines(db)
+                native_limit_updates = set(await reconcile_native_limit_denials(db))
+                terminal_recovery_updates = set(await reconcile_terminal_recoveries(db))
+                repair_executions = list(await db.scalars(
+                    select(ProjectExecution.id)
+                    .join(ProjectExecutionEvent, ProjectExecutionEvent.execution_id == ProjectExecution.id)
+                    .where(
+                        ProjectExecution.status.in_({"planning", "running", "waiting_children"}),
+                        ProjectExecutionEvent.event_type == "qa_repair_assignment",
+                    ).distinct()
+                ))
+                repair_updates = set()
+                for execution_id in repair_executions:
+                    try:
+                        async with repair_savepoint(db):
+                            outcomes = await advance_pending_repairs(db, execution_id=execution_id)
+                            if any(item["phase"] == "started" for item in outcomes):
+                                repair_updates.add(execution_id)
+                    except ExecutionConflict as exc:
+                        log.warning("qa_repair.waiting", execution_id=execution_id, reason_code=exc.code)
+                deadline_messages = list(db.info.pop("project_execution_messages", []))
+                deadline_tasks = set(db.info.pop("project_execution_deadline_tasks", []))
+                repair_tasks = set(db.info.pop("project_execution_recovery_tasks", []))
+                usage_denials = dict(db.info.pop("project_execution_usage_denials", {}))
+                await db.commit()
+                await broadcast_project_messages(db, app=app, messages=deadline_messages)
+                for execution_id in set(expired_executions) | repair_updates | terminal_recovery_updates | native_limit_updates:
+                    await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                await fanout_deadline_tasks(db, manager=manager, task_ids=deadline_tasks)
+                await fanout_recovery_updates(factory, manager, repair_tasks)
+            await apply_queued_usage_denials(app, denials=usage_denials)
             await cancel_invalid_turns(factory)
             if manager is not None:
-                await deliver_pending_outbox(factory, manager)
-            recovered = await recover_stalled_turns(factory, manager)
+                await deliver_pending_stops(factory, manager)
+                await deliver_pending_outbox(factory, manager, app=app)
+            recovered = await recover_stalled_turns(factory, manager, app=app)
             # #762 — wake ask_peer callers whose peers have all answered.
             await dispatch_peer_ask_groups(factory, manager)
             async with factory() as db:
+                await begin_write_transaction(db)
+                from anygarden.db.models import ExecutionStop
+                stop_execution_ids = set(await db.scalars(select(ExecutionStop.execution_id).where(
+                    ExecutionStop.status.in_({"pending", "delivered"}),
+                )))
+                expired_stops = await expire_pending_stops(db)
+                interrupted_actions = await expire_executing_actions(db)
+                approval_messages = list(db.info.pop("project_execution_messages", []))
+                await db.commit()
+                await broadcast_project_messages(db, app=app, messages=approval_messages)
+                if expired_stops:
+                    for execution_id in stop_execution_ids:
+                        await fanout_execution_update(db, manager=manager, execution_id=execution_id)
+                for approval in interrupted_actions:
+                    task = await db.get(Task, approval.task_id)
+                    if task is not None:
+                        room = await db.get(Room, task.room_id)
+                        await fanout_task_event(db, manager=manager, event="updated", task=task,
+                                               room_name=room.name if room else "")
                 pending_agents = set(
                     (
                         await db.scalars(
@@ -1501,6 +1596,7 @@ def create_app(
     app.include_router(messages_router)
     app.include_router(machines_api_router)
     app.include_router(agents_api_router)
+    app.include_router(room_memory_router)
     app.include_router(engine_endpoints_router)
     app.include_router(pi_auth_router)
     app.include_router(engine_endpoint_probe_router)
@@ -1514,6 +1610,9 @@ def create_app(
     app.include_router(saved_router)
     app.include_router(search_router)
     app.include_router(tasks_router)
+    app.include_router(project_executions_router)
+    app.include_router(execution_approvals_router)
+    app.include_router(project_inbox_router)
     app.include_router(turns_router)
     app.include_router(workspaces_router)
     app.include_router(goals_router)

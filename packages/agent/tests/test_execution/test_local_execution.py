@@ -128,7 +128,10 @@ async def test_progress_result_duplicate_and_restart(tmp_path, executable, invoc
         await m.start(invocation)
         receipt, events = await done(m)
         assert receipt.outcome == "succeeded" and receipt.text == "answer"
-        assert receipt.usage == {"input_tokens": 3, "output_tokens": 1}
+        assert receipt.usage["input_tokens"] == 3 and receipt.usage["output_tokens"] == 1
+        assert receipt.usage["cached_input_tokens"] is None
+        assert receipt.usage["metadata"]["status"] == "fresh_measured"
+        assert receipt.usage["metadata"]["baseline_status"] == "fresh"
         assert [e.kind for e in events].count("terminal") == 1
         assert any(e.kind == "progress" for e in events)
         assert "DO-NOT-PUBLISH" not in str(events)

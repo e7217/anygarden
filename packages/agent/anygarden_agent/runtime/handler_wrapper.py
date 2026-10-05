@@ -38,7 +38,6 @@ from typing import Any, Awaitable, Callable, Deque, Optional, Tuple, Union
 
 from anygarden_agent.observability import metrics as _metrics
 
-
 _ERROR_MAX_CHARS = 500
 
 
@@ -163,7 +162,7 @@ class EngineTimeoutError(EngineError):
 class EngineCancelledError(EngineError):
     """An execution was cancelled; the room transport remains alive."""
 
-    def __init__(self, turn: EngineTurn):
+    def __init__(self, turn: EngineTurn | None = None):
         super().__init__("cancelled", turn=turn)
 
 
@@ -209,6 +208,22 @@ class EngineTurn:
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    local_execution_id: Optional[str] = None
+    native_outcome: Optional[str] = None
+    native_process_state: Optional[str] = None
+    native_reason_code: Optional[str] = None
+    native_transient: Optional[bool] = None
+    usage_metadata: dict[str, Any] | None = None
+
+    def native_proof(self) -> dict[str, Any]:
+        """Only persisted receipt identity and closed terminal categories."""
+        return {key: value for key, value in (
+            ("local_execution_id", self.local_execution_id),
+            ("native_outcome", self.native_outcome),
+            ("native_process_state", self.native_process_state),
+            ("native_reason_code", self.native_reason_code),
+            ("native_transient", self.native_transient),
+        ) if value is not None}
 
 
 # A run_engine callback may return the bare reply (legacy) or an
@@ -276,6 +291,26 @@ class RoomHandlerSupervisor:
         # the lock held; both run on the single event loop so no extra
         # synchronisation is needed beyond the room lock for execution.
         self._queues: dict[str, Deque[_QueueItem]] = {}
+        self._engine_tasks: dict[tuple, asyncio.Task] = {}
+        self._cancelled_turns: set[tuple] = set()
+
+    @staticmethod
+    def _turn_key(room_id, request_id, context):
+        context = context or {}
+        return (room_id, request_id, context.get("turn_attempt"), context.get("turn_generation"))
+
+    def cancel_turn(self, identity: dict) -> None:
+        """Cancel one engine child and remove its exact FIFO entries only."""
+        key = (identity["room_id"], identity["request_id"], identity["attempt"], identity["generation"])
+        self._cancelled_turns.add(key)
+        queue = self._queues.get(identity["room_id"])
+        if queue is not None:
+            retained = [item for item in queue if self._turn_key(identity["room_id"], item[0], item[3]) != key]
+            queue.clear()
+            queue.extend(retained)
+        task = self._engine_tasks.get(key)
+        if task is not None and not task.done():
+            task.cancel()
 
     async def dispatch(
         self,
@@ -287,6 +322,9 @@ class RoomHandlerSupervisor:
         turn_context: dict[str, Any] | None = None,
     ) -> None:
         turn_context = dict(turn_context or {})
+        if self._turn_key(room_id, request_id, turn_context) in self._cancelled_turns:
+            await self._lifecycle(room_id, request_id, turn_context, event="handler_finished", outcome="cancelled")
+            return
         lock = self._room_locks.setdefault(room_id, asyncio.Lock())
         if lock.locked():
             # A turn is in flight (or the holder is mid-drain). Defer this
@@ -366,6 +404,9 @@ class RoomHandlerSupervisor:
             return
         while queue:
             req_id, thread_root_id, delegation_id, turn_context, run_engine, enqueued_at = queue.popleft()
+            if self._turn_key(room_id, req_id, turn_context) in self._cancelled_turns:
+                await self._lifecycle(room_id, req_id, turn_context, event="handler_finished", outcome="cancelled")
+                continue
             if (time.monotonic() - enqueued_at) > _QUEUE_ITEM_TTL_SEC:
                 # Stale — skip rather than answer late. Mirror the rejected
                 # shape: a terminal handler_finished + a user notice.
@@ -407,6 +448,10 @@ class RoomHandlerSupervisor:
         delegation_id: str | None = None,
         turn_context: dict[str, Any] | None = None,
     ) -> None:
+        turn_key = self._turn_key(room_id, request_id, turn_context)
+        if turn_key in self._cancelled_turns:
+            await self._lifecycle(room_id, request_id, turn_context, event="handler_finished", outcome="cancelled")
+            return
         started = time.monotonic()
         await self._lifecycle(
             room_id, request_id, turn_context, event="handler_started"
@@ -419,6 +464,9 @@ class RoomHandlerSupervisor:
         # eventual success or ``retry_exhausted`` once attempts run out.
         attempt = 0
         retried = False
+        # The server's Attempt/Outbox state machine owns leased retries.
+        # An optional SDK retry budget only applies to unleased callbacks.
+        leased_turn = bool((turn_context or {}).get("turn_lease"))
         while True:
             engine_started = time.monotonic()
             await self._lifecycle(
@@ -438,29 +486,37 @@ class RoomHandlerSupervisor:
             input_tokens: Optional[int] = None
             output_tokens: Optional[int] = None
             cost_usd: Optional[float] = None
+            usage_metadata: dict[str, Any] | None = None
             transient = False  # #457 — set from a transient EngineError cause
+            native_proof: dict[str, Any] = {}
             # #433 — turn I/O capture is opt-in: only when the adapter returns
             # an EngineTurn (not a bare str) do we surface prompt/completion.
             # Keeps the feature a single predictable toggle rather than
             # half-capturing output for un-migrated adapters.
             io_capture = False
             try:
+                engine_task = asyncio.create_task(run_engine())
+                self._engine_tasks[turn_key] = engine_task
                 raw = await asyncio.wait_for(
-                    run_engine(), timeout=self._timeout
+                    engine_task, timeout=self._timeout
                 )
                 response, prompt = _normalize_engine_result(raw)
                 io_capture = isinstance(raw, EngineTurn)
                 if io_capture:
+                    native_proof = raw.native_proof()
                     # #461 — usage telemetry rides the same EngineTurn opt-in.
                     model = raw.model
                     input_tokens = raw.input_tokens
                     output_tokens = raw.output_tokens
                     cost_usd = raw.cost_usd
+                    usage_metadata = raw.usage_metadata
             except asyncio.TimeoutError:
                 outcome = "timeout"
                 error = f"engine exceeded {self._timeout}s"
             except EngineTimeoutError as exc:
                 if exc.turn is not None:
+                    native_proof = exc.turn.native_proof()
+                    usage_metadata = exc.turn.usage_metadata
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
@@ -471,11 +527,14 @@ class RoomHandlerSupervisor:
             except EngineCancelledError as exc:
                 outcome = "cancelled"
                 if exc.turn is not None:
+                    native_proof = exc.turn.native_proof()
+                    usage_metadata = exc.turn.usage_metadata
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
             except asyncio.CancelledError as exc:
                 turn = getattr(exc, "turn", None)
+                native_proof = turn.native_proof() if turn is not None else {}
                 # User cancellation — never retried/queued. Close the spans
                 # and re-raise immediately.
                 outcome = "cancelled"
@@ -492,6 +551,8 @@ class RoomHandlerSupervisor:
                     input_tokens=turn.input_tokens if turn else None,
                     output_tokens=turn.output_tokens if turn else None,
                     cost_usd=turn.cost_usd if turn else None,
+                    usage_metadata=turn.usage_metadata if turn else None,
+                    **native_proof,
                 )
                 total = int((time.monotonic() - started) * 1000)
                 if delegation_id:
@@ -508,10 +569,17 @@ class RoomHandlerSupervisor:
                     event="handler_finished",
                     outcome=outcome,
                     duration_ms=total,
+                    **native_proof,
                 )
-                raise
+                if turn_key not in self._cancelled_turns:
+                    raise
+                # A server stop ends this engine call while the outer room
+                # drain remains alive for unrelated queued work.
+                return
             except EngineError as exc:
                 if exc.turn is not None:
+                    native_proof = exc.turn.native_proof()
+                    usage_metadata = exc.turn.usage_metadata
                     model, input_tokens, output_tokens, cost_usd = (
                         exc.turn.model, exc.turn.input_tokens, exc.turn.output_tokens, exc.turn.cost_usd
                     )
@@ -523,6 +591,8 @@ class RoomHandlerSupervisor:
             except Exception as exc:  # noqa: BLE001 — best-effort error capture
                 outcome = "failed"
                 error = _truncate(str(exc))
+            finally:
+                self._engine_tasks.pop(turn_key, None)
 
             # #422 — a tracked (user-triggered) turn that produced no text is
             # a silent failure, not a legitimate no-reply. Ambient no-reply
@@ -577,6 +647,8 @@ class RoomHandlerSupervisor:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                usage_metadata=usage_metadata,
+                **native_proof,
             )
 
             # #457 — decide whether to retry this attempt. Retry ONLY when:
@@ -587,7 +659,8 @@ class RoomHandlerSupervisor:
             #  - attempts remain. Default ``_MAX_RETRY_ATTEMPTS == 0`` makes
             #    this branch unreachable, so merge is behaviour-neutral.
             should_retry = (
-                outcome in ("timeout", "failed")
+                not leased_turn
+                and outcome in ("timeout", "failed")
                 and transient
                 and not response
                 and attempt < _MAX_RETRY_ATTEMPTS
@@ -667,6 +740,7 @@ class RoomHandlerSupervisor:
             outcome=outcome,
             duration_ms=total,
             error=error,
+            **native_proof,
         )
 
     async def _lifecycle(self, room_id, request_id, context, **details) -> None:
@@ -698,6 +772,11 @@ def _reply_metadata(
     metadata = dict(context or {})
     if request_id:
         metadata["request_id"] = request_id
+        # A visible failure notice is not a successful durable completion.
+        # The server validates this closed result beside the leased proof.
+        metadata["turn_outcome"] = outcome if outcome in {
+            "ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted",
+        } else "failed"
     if delegation_id:
         metadata.update(delegation_id=delegation_id, delegation_outcome=outcome)
     return metadata or None

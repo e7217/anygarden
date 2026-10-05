@@ -103,7 +103,7 @@ async def test_ok_path_emits_four_lifecycle_events():
     assert engine_fin["duration_ms"] >= 0
     handler_fin = client.lifecycle_events[3]
     assert handler_fin["outcome"] == "ok"
-    assert client.sends == [("r1", "hello", {"request_id": "req-1"})]
+    assert client.sends == [("r1", "hello", {"request_id": "req-1", "turn_outcome": "ok"})]
 
 
 @pytest.mark.asyncio
@@ -126,7 +126,7 @@ async def test_engine_turn_carries_prompt_and_completion():
     assert engine_fin["prompt"] == "augmented input"
     assert engine_fin["completion"] == "the reply"
     assert engine_fin["outcome"] == "ok"
-    assert client.sends == [("r1", "the reply", {"request_id": "req-io"})]
+    assert client.sends == [("r1", "the reply", {"request_id": "req-io", "turn_outcome": "ok"})]
 
 
 @pytest.mark.asyncio
@@ -169,7 +169,7 @@ async def test_bare_str_return_stays_backward_compatible():
     )
     assert engine_fin.get("prompt") is None
     assert engine_fin.get("completion") is None
-    assert client.sends == [("r1", "plain reply", {"request_id": "req-s"})]
+    assert client.sends == [("r1", "plain reply", {"request_id": "req-s", "turn_outcome": "ok"})]
 
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_timeout_path_marks_both_events_and_notifies_user():
         ("handler_finished", "timeout"),
     ]
     assert client.sends and "타임아웃" in client.sends[0][1]
-    assert client.sends[0][2] == {"request_id": "req-t"}
+    assert client.sends[0][2] == {"request_id": "req-t", "turn_outcome": "timeout"}
 
 
 @pytest.mark.asyncio
@@ -213,7 +213,7 @@ async def test_failed_path_marks_failed_and_notifies_user():
     assert engine_fin["error"] == "boom"
     assert len(client.sends) == 1
     assert "생성하지 못했습니다" in client.sends[0][1]
-    assert client.sends[0][2] == {"request_id": "req-f"}
+    assert client.sends[0][2] == {"request_id": "req-f", "turn_outcome": "failed"}
 
 
 @pytest.mark.asyncio
@@ -388,12 +388,12 @@ async def test_over_cap_dispatch_notifies_user():
     assert rejected_events[0]["outcome"] == "rejected"
 
     # The rejected request_id stamps its metadata on the notice send.
-    rejected_sends = [s for s in client.sends if s[2] == {"request_id": "req-over"}]
+    rejected_sends = [s for s in client.sends if s[2] == {"request_id": "req-over", "turn_outcome": "rejected"}]
     assert len(rejected_sends) == 1
     assert "받지 못했습니다" in rejected_sends[0][1]
     # Queued follow-ups did NOT produce a notice while the lock was held.
     queued_sends = [
-        s for s in client.sends if s[2] in ({"request_id": f"req-{n}"} for n in range(2, 5))
+        s for s in client.sends if s[2] in ({"request_id": f"req-{n}", "turn_outcome": "ok"} for n in range(2, 5))
     ]
     assert queued_sends == []
 
@@ -618,9 +618,9 @@ async def test_queued_followups_run_in_order_after_first_completes():
 
     # The first reply, then the two queued follow-ups, in arrival order.
     assert client.sends == [
-        ("r1", "first", {"request_id": "req-1"}),
-        ("r1", "second", {"request_id": "req-2"}),
-        ("r1", "third", {"request_id": "req-3"}),
+        ("r1", "first", {"request_id": "req-1", "turn_outcome": "ok"}),
+        ("r1", "second", {"request_id": "req-2", "turn_outcome": "ok"}),
+        ("r1", "third", {"request_id": "req-3", "turn_outcome": "ok"}),
     ]
     # Each follow-up produced a full ok lifecycle on drain.
     ok_finished = [
@@ -716,7 +716,7 @@ async def test_stale_queued_item_skipped_on_drain(monkeypatch):
     ]
     # queued (on enqueue) + rejected (skipped on drain)
     assert [e["outcome"] for e in stale_finished] == ["queued", "rejected"]
-    stale_sends = [s for s in client.sends if s[2] == {"request_id": "req-stale"}]
+    stale_sends = [s for s in client.sends if s[2] == {"request_id": "req-stale", "turn_outcome": "rejected"}]
     assert len(stale_sends) == 1
     assert "너무 오래되어" in stale_sends[0][1]
 
@@ -785,7 +785,7 @@ async def test_transient_empty_failure_retries_then_succeeds(monkeypatch):
     ]
     # retrying (intermediate signal) then the terminal ok.
     assert handler_outcomes == ["retrying", "ok"]
-    assert client.sends == [("r1", "recovered", {"request_id": "req-1"})]
+    assert client.sends == [("r1", "recovered", {"request_id": "req-1", "turn_outcome": "ok"})]
 
 
 @pytest.mark.asyncio
@@ -951,7 +951,7 @@ async def test_stale_delegation_returns_its_own_rejected_result(monkeypatch):
     await sup.dispatch("room", "r2", stale, delegation_id="d2")
     release.set()
     await running
-    assert client.sends[-1][2] == {"request_id": "r2", "delegation_id": "d2", "delegation_outcome": "rejected"}
+    assert client.sends[-1][2] == {"request_id": "r2", "turn_outcome": "rejected", "delegation_id": "d2", "delegation_outcome": "rejected"}
 
 
 @pytest.mark.asyncio

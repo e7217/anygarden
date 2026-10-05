@@ -82,6 +82,7 @@ class SpawnManifest:
     # doesn't yet exist, preserving the runtime file when it does (the
     # agent may have written between welcome frame and spawn reconcile).
     memory_md: str | None = None
+    room_memories: dict[str, dict] = field(default_factory=dict)
     reasoning_effort: str | None = None
     model: str | None = None
     provider: str | None = None
@@ -136,6 +137,8 @@ class RunningAgent:
     proc: Optional[asyncio.subprocess.Process]
     watch_task: asyncio.Task | None = None
     profile_path: Path | None = None
+    generation: int = 0
+    intentional_stop: bool = False
 
 
 @dataclass
@@ -328,10 +331,11 @@ class Spawner:
         sections.append("## Memory")
         sections.append("")
         sections.append(
-            "You have a long-term memory file at `memory/notes.md` "
-            "(relative to your current working directory). The cluster "
+            "Each room has a separate long-term memory file at "
+            "`memory/rooms/<room_id>/notes.md`, using the current room's "
+            "canonical UUID (relative to your current working directory). The cluster "
             "also injects the "
-            "current contents into your `system_prompt` at session "
+            "current room's contents into your `system_prompt` at session "
             "start, so treat it as a shared notebook between sessions.\n\n"
             "Guidelines:\n"
             "- Append (do not overwrite) observations you want to "
@@ -344,9 +348,23 @@ class Spawner:
             "(`<ephemeral-session/>` in your system prompt), do NOT "
             "write to this file. The user expects the conversation to "
             "leave no trace in long-term memory.\n\n"
-            "The machine syncs this file back to the cluster DB "
+            "Do not read or write another room's notes. Legacy "
+            "`memory/notes.md` and root `MEMORY.md` are preserved archives, "
+            "not automatically shared room memory. Do not use them as "
+            "project context. Only notes.md is synchronized; unsynced "
+            "conflict archives are retained for inspection, not context.\n\n"
+            "The machine syncs each room's file back to the cluster DB "
             "periodically and on shutdown, so writes survive restart "
             "and machine migration."
+        )
+        sections.append(
+            "\nRoom-shared input files are read-only and live at "
+            "`memory/shared/<room_id>/<filename>`. Read only the current "
+            "room's files and the specific source paths provided by a "
+            "delegated task. Other room directories and legacy flat "
+            "`memory/shared/<filename>` files do not belong to the current "
+            "room's input. The cluster replays authoritative scoped files "
+            "after a restart."
         )
 
         # ── Outbox / artifacts (#290) ────────────────────────────
@@ -356,8 +374,10 @@ class Spawner:
         sections.append(
             "When you want to show the user an image, screenshot, "
             "chart, log dump, or other file that won't fit cleanly "
-            "in a chat message, drop the file into `memory/outbox/` "
-            "(relative to your agent directory). The machine watches "
+            "in a chat message, drop the file into "
+            "`memory/outbox/<room_id>/` using the current room's UUID "
+            "from your room context (relative to your agent directory). "
+            "Create that directory if needed. The machine watches "
             "this folder and pushes new files to the room's right-hand "
             "*Artifacts* panel where the user can preview and "
             "download them.\n\n"
@@ -368,9 +388,14 @@ class Spawner:
             "shared-files flow accepts.\n"
             "- Use a descriptive filename — it's what the user sees "
             "in the panel and on download.\n"
-            "- Files surface in *every* room you're a participant of "
-            "at the time you write them; same-content re-writes are "
-            "deduped server-side."
+            "- Files surface in your participating rooms in the source "
+            "room's project. Files from a DM stay in that DM. "
+            "Never select another project's room for the output.\n"
+            "- The old `memory/outbox/<filename>` layout works only "
+            "when your room memberships identify one project (or one "
+            "DM); ambiguous output is rejected. Use the room directory "
+            "for reliable delivery. Same-content re-writes are deduped "
+            "server-side."
         )
 
         # Only add trailing newline if we appended extra sections.
@@ -646,10 +671,21 @@ class Spawner:
         # managed-prune pass while notes.md is refreshed from the
         # cluster's last-known snapshot.
         memory_dir = agent_root / "memory"
+        if memory_dir.is_symlink() or (memory_dir.exists() and not memory_dir.is_dir()):
+            raise ValueError("memory directory is not a safe directory")
         memory_dir.mkdir(parents=True, exist_ok=True)
         secure_chmod(memory_dir, 0o700)
-        notes_path = memory_dir / "notes.md"
-        safe_write_text(notes_path, msg.memory_md or "", mode=0o600)
+        # Preserve legacy notes as an archive. Never copy unknown-origin
+        # global text to rooms or clear saved user data during an upgrade.
+        from anygarden.machine.protocol.frames import RoomMemorySnapshot
+        from anygarden.machine.room_memory import write_room_notes
+
+        for room_id, value in msg.room_memories.items():
+            snapshot = RoomMemorySnapshot.model_validate(value)
+            if (room_id not in msg.rooms or snapshot.room_id != room_id
+                    or snapshot.generation != msg.generation):
+                raise ValueError("room memory does not match spawn scope")
+            write_room_notes(agent_root, room_id, snapshot.memory_md, preserve_current=True)
         # #246 — ``memory/shared/`` is the drop zone for room-shared
         # files pushed by the server. Pre-create it so the daemon's
         # write handler doesn't have to special-case first delivery
@@ -753,13 +789,8 @@ class Spawner:
         # engine config dir via cwd traversal.
 
         # --- Seed root MEMORY.md if absent ------------------------------
-        memory_md = agent_root / "MEMORY.md"
-        if not memory_md.exists() and not memory_md.is_symlink():
-            safe_write_text(
-                memory_md,
-                "# Memory\n\nNo prior context. This is the first session.\n",
-                mode=0o600,
-            )
+        # Existing user/legacy MEMORY.md is preserved. New agents use only
+        # the room-scoped notes convention, never an agent-wide seed.
 
         # --- Codex workspace-write fallback -----------------------------
         #
@@ -798,7 +829,18 @@ class Spawner:
             ws_memory = workspace / "memory"
             ws_memory.mkdir(parents=True, exist_ok=True)
             secure_chmod(ws_memory, 0o700)
-            for name in ("notes.md", "shared", "outbox"):
+            legacy_notes_link = ws_memory / "notes.md"
+            if legacy_notes_link.is_symlink() and os.readlink(legacy_notes_link) == "../../memory/notes.md":
+                legacy_notes_link.unlink()
+            rooms_link = ws_memory / "rooms"
+            if rooms_link.is_symlink():
+                if os.readlink(rooms_link) != "../../memory/rooms":
+                    raise ValueError("workspace room-memory bridge conflicts with a user path")
+            elif rooms_link.exists():
+                raise ValueError("workspace room-memory bridge conflicts with a user path")
+            else:
+                rooms_link.symlink_to("../../memory/rooms")
+            for name in ("shared", "outbox"):
                 slot = ws_memory / name
                 if slot.is_symlink() or slot.exists():
                     self._remove_tree_entry(slot)
@@ -1140,6 +1182,7 @@ class Spawner:
             started_at=started_at,
             proc=proc,
             profile_path=profile_path,
+            generation=msg.generation,
         )
         self._agents[agent_id] = agent
 
@@ -1181,6 +1224,11 @@ class Spawner:
 
     async def _handle_stopped(self, agent_id: str, exit_code: int) -> None:
         """Handle normal agent stop, then delegate to callback."""
+        tracked = self._agents.get(agent_id)
+        if tracked is not None and tracked.intentional_stop:
+            # kill() owns retirement of this exact process. Its watcher must
+            # not report a crash/stop that can clear a replacement reservation.
+            return
         if not self._cleanup(agent_id, expected_watch_task=asyncio.current_task()):
             return
         await self._on_stopped(agent_id, exit_code)
@@ -1189,6 +1237,9 @@ class Spawner:
         self, agent_id: str, exit_code: int, stderr_tail: str
     ) -> None:
         """Handle agent crash, then delegate to callback."""
+        tracked = self._agents.get(agent_id)
+        if tracked is not None and tracked.intentional_stop:
+            return
         # The callback may synchronously start a replacement. Retire the old
         # process first so spawn cannot cancel this watcher or be cleaned up
         # by a trailing cleanup after the replacement has been registered.
@@ -1216,9 +1267,13 @@ class Spawner:
         # ``proc.wait`` drain; ``terminate_tree(agent.pid)`` still reaps
         # the whole group because pgid == pid.
         if proc is not None and proc.returncode is not None:
-            self._cleanup(agent_id)
+            self._cleanup(agent_id, expected_agent=agent)
             return {"success": True, "note": "Process already exited"}
 
+        # Set before the first await, so an intentional SIGTERM cannot race
+        # the watcher into crash recovery. This flag belongs to the process
+        # instance, rather than its reusable agent ID.
+        agent.intentional_stop = True
         log.info("agent_terminate_tree", agent_id=agent_id, pid=agent.pid)
         await asyncio.to_thread(terminate_tree, agent.pid, timeout=KILL_TIMEOUT)
         if proc is not None:
@@ -1243,7 +1298,7 @@ class Spawner:
                 )
         log.info("agent_terminated", agent_id=agent_id)
 
-        self._cleanup(agent_id)
+        self._cleanup(agent_id, expected_agent=agent)
         return {"success": True, "agent_id": agent_id}
 
     def list_running(self) -> list[dict]:
@@ -1275,10 +1330,13 @@ class Spawner:
         return self._agent_dirs_root / agent_id
 
     def _cleanup(
-        self, agent_id: str, *, expected_watch_task: asyncio.Task | None = None
+        self, agent_id: str, *, expected_watch_task: asyncio.Task | None = None,
+        expected_agent: RunningAgent | None = None,
     ) -> bool:
         """Delete temp profile file and remove from internal state."""
         tracked = self._agents.get(agent_id)
+        if expected_agent is not None and tracked is not expected_agent:
+            return False
         if expected_watch_task is not None and (
             tracked is None or tracked.watch_task is not expected_watch_task
         ):
@@ -1397,6 +1455,8 @@ class Spawner:
             engine=engine,
             started_at=float(recorded_started_at),
             proc=None,
+            generation=(runtime["generation"]
+                        if type(runtime.get("generation")) is int else 0),
         )
         self._agents[agent_id] = agent
 
@@ -1426,6 +1486,16 @@ class Spawner:
             while True:
                 await asyncio.sleep(ADOPT_POLL_INTERVAL)
                 if not is_group_alive(pgid):
+                    tracked = self._agents.get(agent_id)
+                    if (tracked is None
+                            or tracked.watch_task is not asyncio.current_task()
+                            or tracked.intentional_stop):
+                        return
+                    if on_stopped != self._handle_stopped and not self._cleanup(
+                        agent_id, expected_agent=tracked,
+                        expected_watch_task=asyncio.current_task(),
+                    ):
+                        return
                     log.info("adopted_agent_exited", agent_id=agent_id, pgid=pgid)
                     await on_stopped(agent_id, 0)
                     return

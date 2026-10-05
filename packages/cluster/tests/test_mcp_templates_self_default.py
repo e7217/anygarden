@@ -49,9 +49,18 @@ class TestAnygardenDefaultEntry:
             agent_token="tok-abc",  # not stored in the rendered config
         )
         assert entry is not None
+        # Turn identity headers are also env-var indirections: project
+        # execution tools verify the calling turn (#778).
         assert entry.config == {
             "url": "http://127.0.0.1:8001/mcp/rpc",
             "bearer_token_env_var": "ANYGARDEN_AGENT_TOKEN",
+            "default_tools_approval_mode": "approve",
+            "env_http_headers": {
+                "X-Anygarden-Turn-Request-Id": "ANYGARDEN_TURN_REQUEST_ID",
+                "X-Anygarden-Turn-Attempt": "ANYGARDEN_TURN_ATTEMPT",
+                "X-Anygarden-Turn-Generation": "ANYGARDEN_TURN_GENERATION",
+                "X-Anygarden-Turn-Lease": "ANYGARDEN_TURN_LEASE",
+            },
         }
         # Defensive: token must NOT leak into the codex config —
         # that's the whole point of the env-var indirection.

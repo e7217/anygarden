@@ -156,9 +156,18 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         await lifecycle.send_sync_batch(machine_id)
 
     elif frame_type == "token_request":
-        agent_ids = data.get("agent_ids", [])
-        grants = await lifecycle.handle_token_request(machine_id, agent_ids)
+        from pydantic import ValidationError
+
+        from anygarden.machine.protocol.frames import TokenRequestFrame
+
+        try:
+            request = TokenRequestFrame.model_validate(data)
+        except ValidationError:
+            return
+        grants = await lifecycle.handle_token_request(machine_id, request.agent_ids)
         for grant in grants:
+            if request.request_id is not None:
+                grant = {**grant, "request_id": request.request_id}
             await machine_bus.send(machine_id, grant)
 
     elif frame_type == "request_replacement":
@@ -205,24 +214,19 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
         )
 
     elif frame_type == "agent_memory_update":
-        # #237 — file → DB sync. Machine observed a change in
-        # ``memory/notes.md`` and shipped the full body. We
-        # overwrite the snapshot so the next spawn's
-        # materialize-from-DB picks up the new content.
-        agent_id = data.get("agent_id", "")
-        memory_md = data.get("memory_md", "")
-        if agent_id:
-            async with session_factory() as db:
-                from sqlalchemy import update
+        from anygarden.memory.service import (
+            apply_machine_memory_update,
+            push_room_memory,
+        )
 
-                from anygarden.db.models import Agent
-
-                await db.execute(
-                    update(Agent)
-                    .where(Agent.id == agent_id)
-                    .values(memory_md=memory_md)
-                )
+        async with session_factory() as db:
+            ack = await apply_machine_memory_update(db, machine_id=machine_id, data=data)
+            if ack["status"] == "accepted":
                 await db.commit()
+                await push_room_memory(
+                    app, db, agent_id=data["agent_id"], room_id=data["room_id"], machine_snapshot=False
+                )
+            await machine_bus.send(machine_id, ack)
 
     elif frame_type == "room_artifact_produced":
         # #290 Phase B — agent dropped a file under
@@ -237,6 +241,7 @@ async def handle_machine_frame(app, machine_id: str, data: dict[str, Any]) -> No
                 db,
                 data,
                 artifact_files_dir=config.artifact_files_dir,
+                expected_machine_id=machine_id,
             )
         connection_manager = getattr(app.state, "connection_manager", None)
         if connection_manager is not None:

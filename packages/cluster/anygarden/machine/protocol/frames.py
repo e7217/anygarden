@@ -7,12 +7,55 @@ older imperative spawn_agent/kill_agent commands.
 from __future__ import annotations
 
 from typing import Literal, Union
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from anygarden.machine.managed_workspace import WorkspaceSnapshot
 
 # ── Server -> Machine frames ──────────────────────────────────────────
+
+
+class RoomMemorySnapshot(BaseModel):
+    room_id: str
+    memory_md: str = Field(max_length=262144)
+    revision: int = Field(ge=0, strict=True)
+    session_epoch: int = Field(ge=0, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    scope_version: Literal["room-memory-v1"] = "room-memory-v1"
+    ephemeral: bool = False
+
+    @field_validator("memory_md")
+    @classmethod
+    def bounded_body(cls, value):
+        if len(value.encode("utf-8")) > 262144:
+            raise ValueError("room memory exceeds 256 KiB")
+        return value
+
+    @field_validator("room_id")
+    @classmethod
+    def canonical_room(cls, value):
+        if str(UUID(value)) != value:
+            raise ValueError("noncanonical room memory scope")
+        return value
+
+
+class AgentMemoryUpdateAckFrame(BaseModel):
+    type: Literal["agent_memory_update_ack"] = "agent_memory_update_ack"
+    agent_id: str
+    room_id: str
+    generation: int = Field(ge=0)
+    base_revision: int = Field(ge=0)
+    status: Literal["accepted", "conflict", "rejected"]
+    code: str | None = None
+    room_memory: RoomMemorySnapshot | None = None
+
+
+class AgentRoomMemorySnapshotFrame(BaseModel):
+    type: Literal["agent_room_memory_snapshot"] = "agent_room_memory_snapshot"
+    agent_id: str
+    generation: int = Field(ge=0)
+    room_memory: RoomMemorySnapshot
 
 
 class SyncDesiredStateFrame(BaseModel):
@@ -49,6 +92,16 @@ class SyncDesiredStateFrame(BaseModel):
     # it into ``<agent_dir>/memory/notes.md``. Default None preserves
     # pre-#237 compatibility — older servers simply omit the field.
     memory_md: str | None = None
+    room_memories: dict[str, RoomMemorySnapshot] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def valid_memory_scopes(self):
+        for room_id, snapshot in self.room_memories.items():
+            if room_id not in self.rooms or snapshot.room_id != room_id:
+                raise ValueError("room memory is not in assigned rooms")
+            if snapshot.generation != self.generation:
+                raise ValueError("room memory generation mismatch")
+        return self
 
     # Per-agent reasoning effort (low/medium/high/etc — engine-dependent)
     reasoning_effort: str | None = None
@@ -131,6 +184,14 @@ class TokenGrantFrame(BaseModel):
     type: Literal["token_grant"] = "token_grant"
     agent_id: str
     agent_token: str
+    request_id: str | None = None
+
+    @field_validator("request_id")
+    @classmethod
+    def canonical_request(cls, value):
+        if value is not None and str(UUID(value)) != value:
+            raise ValueError("noncanonical token request ID")
+        return value
 
 
 class DrainFrame(BaseModel):
@@ -159,7 +220,7 @@ class RotateTokenFrame(BaseModel):
 
 class AgentMemorySharedFileWriteFrame(BaseModel):
     """Server pushes a room-shared file into an agent's
-    ``memory/shared/`` directory (#246).
+    ``memory/shared/<room_id>/`` directory (#246).
 
     Room shared files are copy-distributed to every participating
     agent (see plan §3, decision 1). The server is the source of
@@ -175,6 +236,7 @@ class AgentMemorySharedFileWriteFrame(BaseModel):
 
     type: Literal["agent_memory_shared_file_write"] = "agent_memory_shared_file_write"
     agent_id: str
+    room_id: str | None = None
     storage_name: str
     content: str
     content_sha256: str
@@ -182,7 +244,7 @@ class AgentMemorySharedFileWriteFrame(BaseModel):
 
 class AgentMemorySharedFileDeleteFrame(BaseModel):
     """Server removes a room-shared file from an agent's
-    ``memory/shared/`` directory (#246).
+    ``memory/shared/<room_id>/`` directory (#246).
 
     Sent when a file is deleted from the room or when an agent is
     removed from the room. The handler is a no-op if the file is
@@ -192,6 +254,7 @@ class AgentMemorySharedFileDeleteFrame(BaseModel):
 
     type: Literal["agent_memory_shared_file_delete"] = "agent_memory_shared_file_delete"
     agent_id: str
+    room_id: str | None = None
     storage_name: str
 
 
@@ -276,6 +339,8 @@ class ManagedWorkspaceResultFrame(BaseModel):
 
 
 ServerFrame = Union[
+    AgentMemoryUpdateAckFrame,
+    AgentRoomMemorySnapshotFrame,
     ManagedWorkspaceRequestFrame,
     SyncDesiredStateFrame,
     SyncBatchFrame,
@@ -368,6 +433,14 @@ class TokenRequestFrame(BaseModel):
 
     type: Literal["token_request"] = "token_request"
     agent_ids: list[str] = Field(default_factory=list)
+    request_id: str | None = None
+
+    @field_validator("request_id")
+    @classmethod
+    def canonical_request(cls, value):
+        if value is not None and str(UUID(value)) != value:
+            raise ValueError("noncanonical token request ID")
+        return value
 
 
 class RequestReplacementFrame(BaseModel):
@@ -395,6 +468,9 @@ class AgentMemoryUpdateFrame(BaseModel):
 
     type: Literal["agent_memory_update"] = "agent_memory_update"
     agent_id: str
+    room_id: str
+    generation: int = Field(ge=0)
+    base_revision: int = Field(ge=0)
     memory_md: str
 
 
@@ -404,10 +480,10 @@ class RoomArtifactProducedFrame(BaseModel):
 
     Polling lives next to ``_flush_memory_updates`` in the daemon; the
     sha256 cache short-circuits unchanged files so reconnect / restart
-    storms don't churn the wire. The cluster fans the artifact out to
-    every room the producing agent is currently placed in (decision
-    D8 in the implementation plan — "fan-out + sha256 dedup" for
-    Phase B's first cut).
+    storms don't churn the wire. Files under ``outbox/<room_id>/`` carry
+    that source room. The cluster validates membership and publishes only
+    within that project. Legacy root files omit ``room_id`` and are
+    rejected when the agent serves multiple projects or unrelated DMs.
 
     ``content_b64`` carries the bytes verbatim (binary mime is
     permitted — image/png is the headline use case). The 768 KiB raw
@@ -418,6 +494,7 @@ class RoomArtifactProducedFrame(BaseModel):
 
     type: Literal["room_artifact_produced"] = "room_artifact_produced"
     agent_id: str
+    room_id: str | None = None
     filename: str
     mime: str
     content_b64: str
@@ -519,6 +596,8 @@ MachineFrame = Union[
 # ── Frame parsing ─────────────────────────────────────────────────────
 
 _SERVER_FRAME_MAP: dict[str, type[BaseModel]] = {
+    "agent_memory_update_ack": AgentMemoryUpdateAckFrame,
+    "agent_room_memory_snapshot": AgentRoomMemorySnapshotFrame,
     "managed_workspace_request": ManagedWorkspaceRequestFrame,
     "sync_desired_state": SyncDesiredStateFrame,
     "sync_batch": SyncBatchFrame,

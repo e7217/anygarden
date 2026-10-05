@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 _DEFAULT_DB_DIR = Path.home() / ".anygarden"
 _DEFAULT_DB_URL = f"sqlite+aiosqlite:///{_DEFAULT_DB_DIR / 'anygarden.db'}"
@@ -72,6 +73,39 @@ class AnygardenSettings(BaseSettings):
     # reverse proxy MUST set this explicitly
     # (e.g. ``https://chat.example.com``).
     cluster_external_url: str = ""
+    # Operator-owned destinations for version-bound approved artifact actions.
+    # Agents can select an alias, but cannot supply a URL or HTTP payload.
+    project_action_targets: dict[str, dict] = {}
+
+    @field_validator("project_action_targets")
+    @classmethod
+    def validate_project_action_targets(cls, targets: dict[str, dict]) -> dict[str, dict]:
+        normalized = {}
+        for alias, target in targets.items():
+            if not alias or len(alias) > 160 or not isinstance(target, dict):
+                raise ValueError("Project action targets require a named destination")
+            url = target.get("url")
+            label = target.get("label")
+            kind = target.get("action_kind")
+            if not isinstance(url, str) or not isinstance(label, str) or not label.strip():
+                raise ValueError("Project action target URL and label are required")
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.query or parsed.fragment
+            ):
+                raise ValueError("Project action URL must use HTTP(S), without credentials, query or fragment")
+            if kind not in {"submission", "deployment"}:
+                raise ValueError("Project action kind must be submission or deployment")
+            supports_idempotency = target.get("supports_idempotency", False)
+            if not isinstance(supports_idempotency, bool):
+                raise ValueError("Project action idempotency support must be boolean")  # noqa: TRY004
+            normalized[alias] = {
+                "url": url, "label": label.strip(), "action_kind": kind,
+                "supports_idempotency": supports_idempotency,
+            }
+        return normalized
 
     # #420 — OpenTelemetry tracing. Off by default: until an OTLP
     # endpoint is configured the whole tracing path is a no-op, so the

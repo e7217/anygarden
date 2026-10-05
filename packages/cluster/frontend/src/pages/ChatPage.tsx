@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Sidebar from '@/components/Sidebar'
 import SidebarExpandButton from '@/components/SidebarExpandButton'
 import RoomHeader from '@/components/RoomHeader'
@@ -67,6 +67,9 @@ function LocalChatPage() {
   const { confirm, notify } = useFeedback()
   const { roomId } = useParams<{ roomId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const location = useLocation()
+  const focusMessageId = searchParams.get('message')
   const selectedRoom = roomId ?? null
   const {
     projects,
@@ -78,7 +81,7 @@ function LocalChatPage() {
     markRoomRead,
   } = useRooms()
   const { user } = useAuth()
-  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping } = useWebSocket(selectedRoom)
+  const { messages, connected, typingUsers, typingStages, typingProgress, send, sendTyping, messageContextError } = useWebSocket(selectedRoom, focusMessageId)
   const { participants, refresh: refreshRoomParticipants } = useRoomParticipants(selectedRoom)
   const myParticipantId = user ? Object.values(participants).find(p => p.user_id === user.id)?.id ?? null : null
   // Thread grouping is derived once here so the timeline and the side
@@ -103,9 +106,16 @@ function LocalChatPage() {
   // message they were just reading. The composer's draft is dropped —
   // an explicitly closed thread is a discarded one; a *layout switch*
   // keeps it, which is the case the draft store exists for.
+  const dismissedFocusLocationRef = useRef<string | null>(null)
   const closeThread = useCallback(() => {
     const id = threadRootId
+    dismissedFocusLocationRef.current = location.key
     setThreadRootId(null)
+    if (focusMessageId) {
+      const nextSearch = new URLSearchParams(searchParams)
+      nextSearch.delete('message')
+      navigate({ pathname: location.pathname, search: nextSearch.toString() }, { replace: true })
+    }
     if (!id) return
     clearDraft(threadDraftKey(id))
     // Rendered by ChatArea, so query rather than thread a ref through
@@ -116,7 +126,7 @@ function LocalChatPage() {
       )
       trigger?.focus()
     })
-  }, [threadRootId])
+  }, [threadRootId, focusMessageId, searchParams, navigate, location.pathname, location.key])
 
   // Close the panel when the room changes, and when the open root
   // leaves the loaded window (history is capped, so a long-lived
@@ -128,6 +138,39 @@ function LocalChatPage() {
   useEffect(() => {
     if (threadRootId && !threadRoot) setThreadRootId(null)
   }, [threadRootId, threadRoot])
+  const focusedElementRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    focusedElementRef.current = null
+    return () => {
+      const element = focusedElementRef.current
+      if (!element) return
+      delete element.dataset.messageFocused
+      element.style.removeProperty('outline')
+      element.style.removeProperty('outline-offset')
+    }
+  }, [selectedRoom, focusMessageId, location.key])
+  useEffect(() => {
+    if (!focusMessageId || dismissedFocusLocationRef.current === location.key) return
+    const target = messages.find(message => message.id === focusMessageId && message.room_id === selectedRoom)
+    if (!target) return
+    const rootId = target.parent_message_id ? target.root_message_id ?? target.parent_message_id : null
+    if (rootId && canHostThread(threadIndex, rootId) && threadRootId !== rootId) {
+      setThreadRootId(rootId)
+      return
+    }
+    const frame = requestAnimationFrame(() => {
+      const element = document.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(focusMessageId)}"]`)
+      if (!element || focusedElementRef.current === element) return
+      focusedElementRef.current = element
+      element.dataset.messageFocused = 'true'
+      element.style.outline = '2px solid var(--color-brand-text)'
+      element.style.outlineOffset = '3px'
+      element.tabIndex = -1
+      element.scrollIntoView({ block: 'center', behavior: 'instant' })
+      element.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusMessageId, selectedRoom, messages, threadIndex, threadRootId, threadMode, location.key])
   const [agentDialogOpen, setAgentDialogOpen] = useState(false)
   const [subRoomDialogOpen, setSubRoomDialogOpen] = useState(false)
   const [artifactsOpen, setArtifactsOpen] = useState(false)
@@ -596,8 +639,10 @@ function LocalChatPage() {
             <WorkspaceAttachmentBanner
               attachments={currentRoom.workspace_attachments ?? []}
             />
+            {messageContextError && <p role="alert" className="px-4 py-2 text-sm text-[var(--color-danger)]">{t('tasks.requestFailed', { status: messageContextError.match(/HTTP (\d+)/)?.[1] ?? '500' })}</p>}
             <ChatArea
               messages={messages}
+              focusedMessageId={focusMessageId}
               participants={participants}
               myParticipantId={myParticipantId}
               typingUsers={typingUsers}
@@ -770,6 +815,7 @@ function LocalChatPage() {
           touched here. */}
       {selectedRoom && threadRoot && threadMode === 'panel' ? (
         <ThreadPanel
+          focusedMessageId={focusMessageId}
           root={threadRoot}
           replies={threadIndex.repliesByRoot.get(threadRoot.id) ?? []}
           participants={participants}

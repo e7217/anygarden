@@ -21,8 +21,8 @@ router or risking a cycle.
 
 from __future__ import annotations
 
-# Terminal task statuses — a blocker is "satisfied" once it reaches one of
-# these. Reused by the #459 resolve-wake hook and the cycle/blocker walks.
+# Terminal task statuses. A successful prerequisite requires "done";
+# a failed prerequisite remains unresolved until retried or explicitly cleared.
 TERMINAL_STATUSES: frozenset[str] = frozenset({"done", "failed"})
 
 # Allowed task status values (#266, #319). ``failed`` (#319) joined the

@@ -8,7 +8,7 @@ existing file's bytes and metadata rather than appending a versioned
 copy. See the implementation plan §3, decision 4.
 
 The server is the source of truth for these files: the machine only
-materializes them into ``<agent_root>/memory/shared/`` and never
+materializes them into ``<agent_root>/memory/shared/<room_id>/`` and never
 sync-backs their contents (plan §3, decision 2). So every mutation
 here emits a frame to every agent currently placed in the room, and
 ``backfill_agent`` / ``resync_machine`` handle reconnects by
@@ -244,6 +244,7 @@ async def fan_out_write(
         frame = {
             "type": "agent_memory_shared_file_write",
             "agent_id": agent_id,
+            "room_id": file.room_id,
             "storage_name": file.storage_name,
             "content": content,
             "content_sha256": file.sha256,
@@ -267,6 +268,7 @@ async def fan_out_delete(
         frame = {
             "type": "agent_memory_shared_file_delete",
             "agent_id": agent_id,
+            "room_id": room_id,
             "storage_name": storage_name,
         }
         if await machine_bus.send(machine_id, frame):
@@ -295,6 +297,7 @@ async def backfill_agent(
         frame = {
             "type": "agent_memory_shared_file_write",
             "agent_id": agent_id,
+            "room_id": file.room_id,
             "storage_name": file.storage_name,
             "content": content,
             "content_sha256": file.sha256,

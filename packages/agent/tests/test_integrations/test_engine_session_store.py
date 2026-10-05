@@ -17,6 +17,7 @@ from anygarden_agent.integrations.engine_session_store import (
     load_sessions,
     save_sessions,
 )
+from anygarden_agent.memory.scope import SCOPE_VERSION, room_session_key
 
 
 class TestEngineSessionStore:
@@ -52,14 +53,15 @@ class TestCodexAdapterPersistsSessions:
     async def test_start_restores_persisted_thread_ids(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A prior process persisted a resume handle for this agent cwd.
-        save_sessions(tmp_path, {"room-x": "thread-abc"})
+        # A prior process persisted a fenced resume handle for this agent cwd.
+        scoped_key = room_session_key(None, "room-x")
+        save_sessions(tmp_path, {scoped_key: "thread-abc"}, scope_version=SCOPE_VERSION)
         monkeypatch.chdir(tmp_path)
 
         adapter = CodexCliAdapter(model="gpt-5.5")
         await adapter.start()
         # #526 — the respawned adapter restores the mapping (not a cold start).
-        assert adapter._room_thread_ids == {"room-x": "thread-abc"}
+        assert adapter._room_thread_ids == {scoped_key: "thread-abc"}
 
     @pytest.mark.asyncio
     async def test_turn_persists_thread_id_and_survives_respawn(
@@ -78,8 +80,9 @@ class TestCodexAdapterPersistsSessions:
         await adapter._call_codex("hello", "room-y")
 
         # Persisted to disk under the agent cwd...
-        assert load_sessions(tmp_path) == {"room-y": "thread-new"}
+        scoped_key = room_session_key(None, "room-y")
+        assert load_sessions(tmp_path, scope_version=SCOPE_VERSION) == {scoped_key: "thread-new"}
         # ...and a fresh (respawned) adapter in the same cwd picks it up.
         respawned = CodexCliAdapter(model="gpt-5.5")
         await respawned.start()
-        assert respawned._room_thread_ids == {"room-y": "thread-new"}
+        assert respawned._room_thread_ids == {scoped_key: "thread-new"}

@@ -78,7 +78,7 @@ class TestAssembleUserContent:
 
         assert out == (
             "<referenced-files>\n"
-            "- spec.md: memory/shared/spec.md\n"
+            "- spec.md: memory/shared/r1/spec.md\n"
             "</referenced-files>\n\n"
             "please review this"
         )
@@ -244,6 +244,19 @@ class TestComposeReferencedFilesHint:
             "</referenced-files>"
         )
 
+    def test_scoped_references_preserve_the_authoritative_source_room(self) -> None:
+        out = compose_referenced_files_hint(
+            {"references": [
+                {"type": "shared_file", "name": "career.md", "storage_name": "spec.md", "room_id": "career-room"},
+                {"type": "shared_file", "name": "garden.md", "storage_name": "spec.md", "room_id": "garden-room"},
+                {"type": "shared_file", "name": "unsafe.md", "storage_name": "spec.md", "room_id": "../elsewhere"},
+            ]},
+            room_id="current-room",
+        )
+        assert "memory/shared/career-room/spec.md" in out
+        assert "memory/shared/garden-room/spec.md" in out
+        assert "unsafe.md" not in out
+
 
 _ROSTER = {
     "me": {"id": "me", "display_name": "PM", "kind": "agent"},
@@ -400,7 +413,13 @@ def _stub_client(
     ``compose_session_context_suffix`` calls for the roster block.
     """
     client = MagicMock()
-    client._memory_md = memory_md
+    client._memory_md = None
+    client._generation = None
+    client._room_memory = ({"11111111-1111-1111-1111-111111111111": {
+        "room_id": "11111111-1111-1111-1111-111111111111",
+        "scope_version": "room-memory-v1", "revision": 1, "session_epoch": 0,
+        "generation": 0, "memory_md": memory_md, "ephemeral": ephemeral,
+    }} if memory_md is not None else {})
     client._room_ephemeral = {"r1": ephemeral} if ephemeral else {}
     client.compose_roster_suffix.return_value = roster
     return client
@@ -428,14 +447,14 @@ class TestComposeSessionContextSuffix:
         """An empty roster (agent alone in the room) must not suppress
         the memory block — they are independent signals."""
         client = _stub_client(memory_md="# Personal memory\nfoo")
-        out = compose_session_context_suffix(client, "r1")
+        out = compose_session_context_suffix(client, "11111111-1111-1111-1111-111111111111")
         assert "Personal memory" in out
 
     def test_shared_context_reads_from_agent_root_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent_root = tmp_path / "agent-root"
-        shared = agent_root / "memory" / "shared"
+        shared = agent_root / "memory" / "shared" / "r1"
         shared.mkdir(parents=True)
         (shared / "note.md").write_text("room file content")
         monkeypatch.chdir(agent_root)
@@ -445,6 +464,30 @@ class TestComposeSessionContextSuffix:
 
         assert "note.md" in out
         assert "room file content" in out
+
+    def test_room_switches_and_restart_do_not_inline_another_projects_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent_root = tmp_path / "agent-root"
+        shared = agent_root / "memory" / "shared"
+        for room_id, marker in (("career", "CAREER-ONLY"), ("garden", "GARDEN-ONLY")):
+            (shared / room_id).mkdir(parents=True)
+            (shared / room_id / "input.md").write_text(marker, encoding="utf-8")
+        (shared / "input.md").write_text("AMBIGUOUS-LEGACY", encoding="utf-8")
+        monkeypatch.chdir(agent_root)
+
+        for room_id, marker, excluded in (
+            ("career", "CAREER-ONLY", "GARDEN-ONLY"),
+            ("garden", "GARDEN-ONLY", "CAREER-ONLY"),
+            ("career", "CAREER-ONLY", "GARDEN-ONLY"),
+        ):
+            # Recreate the client to model a process reconnect as well as
+            # switching rooms within one shared agent workspace.
+            out = compose_session_context_suffix(_stub_client(), room_id)
+            assert marker in out
+            assert excluded not in out
+            assert "AMBIGUOUS-LEGACY" not in out
+        assert compose_session_context_suffix(_stub_client(), "missing-room") == ""
 
     def test_roster_is_unconditional(self) -> None:
         """#644 — every agent gets the roster. The per-adapter gates
@@ -462,7 +505,7 @@ class TestComposeSessionContextSuffix:
             memory_md="MEMORY_BLOCK_MARKER",
             roster="ROSTER_BLOCK_MARKER",
         )
-        out = compose_session_context_suffix(client, "r1")
+        out = compose_session_context_suffix(client, "11111111-1111-1111-1111-111111111111")
         assert "MEMORY_BLOCK_MARKER" in out
         assert "ROSTER_BLOCK_MARKER" in out
         assert out.index("MEMORY_BLOCK_MARKER") < out.index("ROSTER_BLOCK_MARKER")

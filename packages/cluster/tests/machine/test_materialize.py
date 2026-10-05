@@ -19,6 +19,8 @@ import pytest
 from anygarden.machine.agent_dir import AgentFilePathError
 from anygarden.machine.spawner import SpawnManifest, Spawner
 
+ROOM_ID = "11111111-1111-1111-1111-111111111111"
+
 
 @pytest.fixture
 def agent_dirs_root(tmp_path: Path) -> Path:
@@ -47,7 +49,10 @@ def _msg(
         engine=engine,
         agent_token="tok",
         profile_yaml="",
-        rooms=["r1"],
+        rooms=[ROOM_ID],
+        room_memories={ROOM_ID: {"room_id": ROOM_ID, "memory_md": "",
+            "revision": 0, "session_epoch": 0, "generation": 0,
+            "scope_version": "room-memory-v1", "ephemeral": False}},
         server_url="ws://localhost",
         agents_md=agents_md,
         files=files or {},
@@ -76,11 +81,11 @@ class TestMaterializeFresh:
         assert (workspace / ".anygarden-codex-workspace").is_file()
         assert (workspace / "AGENTS.md").is_symlink()
         assert os.readlink(workspace / "AGENTS.md") == "../AGENTS.md"
-        assert (workspace / "memory" / "notes.md").is_symlink()
+        assert (workspace / "memory" / "rooms").is_symlink()
         assert (workspace / "skills").is_symlink()
         assert os.readlink(workspace / "skills") == "../skills"
-        assert (workspace / "memory" / "notes.md").resolve() == (
-            agent_root / "memory" / "notes.md"
+        assert (workspace / "memory" / "rooms").resolve() == (
+            agent_root / "memory" / "rooms"
         ).resolve()
 
     def test_creates_writable_skills_directory_without_manifest_skills(
@@ -841,9 +846,9 @@ class TestMemoryMaterialize:
         self, spawner: Spawner, agent_dirs_root: Path
     ) -> None:
         msg = _msg()
-        msg.memory_md = "## User\nPrefers Korean responses."
+        msg.room_memories[ROOM_ID]["memory_md"] = "## User\nPrefers Korean responses."
         agent_root = spawner._materialize_agent_dir(msg)
-        notes = agent_root / "memory" / "notes.md"
+        notes = agent_root / "memory" / "rooms" / ROOM_ID / "notes.md"
         assert notes.is_file()
         assert notes.read_text() == "## User\nPrefers Korean responses."
         assert notes.stat().st_mode & 0o777 == 0o600
@@ -855,9 +860,9 @@ class TestMemoryMaterialize:
         """Fresh agent with ``memory_md=None`` still gets an empty file so
         the agent knows the path exists and can start writing."""
         msg = _msg()
-        msg.memory_md = None
+        msg.room_memories[ROOM_ID]["memory_md"] = ""
         agent_root = spawner._materialize_agent_dir(msg)
-        notes = agent_root / "memory" / "notes.md"
+        notes = agent_root / "memory" / "rooms" / ROOM_ID / "notes.md"
         assert notes.is_file()
         assert notes.read_text() == ""
 
@@ -868,12 +873,12 @@ class TestMemoryMaterialize:
         (which should already reflect the last sync-back) is then
         written. Simulates restart / machine move."""
         msg = _msg()
-        msg.memory_md = "first"
+        msg.room_memories[ROOM_ID]["memory_md"] = "first"
         spawner._materialize_agent_dir(msg)
 
-        msg.memory_md = "second (after sync-back)"
+        msg.room_memories[ROOM_ID]["memory_md"] = "second (after sync-back)"
         agent_root = spawner._materialize_agent_dir(msg)
-        assert (agent_root / "memory" / "notes.md").read_text() == (
+        assert (agent_root / "memory" / "rooms" / ROOM_ID / "notes.md").read_text() == (
             "second (after sync-back)"
         )
 
@@ -884,7 +889,7 @@ class TestMemoryMaterialize:
         of every engine learn where to write long-term memory."""
         agent_root = spawner._materialize_agent_dir(_msg())
         body = (agent_root / "AGENTS.md").read_text()
-        assert "memory/notes.md" in body
+        assert "memory/rooms/<room_id>/notes.md" in body
         # Ephemeral convention is documented too.
         assert "ephemeral" in body.lower()
 

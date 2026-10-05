@@ -438,12 +438,8 @@ class Agent(Base):
     context_window_opt_out: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=sa_text("0")
     )
-    # Issue #237 — per-agent long-term memory scratchpad (markdown).
-    # DB is the "last-known snapshot"; runtime truth lives in the file
-    # ``~/.anygarden/agents/<id>/memory/notes.md`` on the hosting machine.
-    # Spawner materializes this into the file on start; machine flushes
-    # file -> DB on heartbeat and graceful shutdown. See plan §3.2
-    # decision 4 for the bi-directional sync rationale.
+    # Preserved legacy archive. Its room provenance is unknown, so it is
+    # never automatically copied to scoped memory or injected at runtime.
     memory_md: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     # Issue #271 — short public-facing self-introduction surfaced to other
     # participants (LLM roster + mention popover + participant list).
@@ -476,6 +472,34 @@ class Agent(Base):
     files: Mapped[list["AgentFile"]] = relationship(
         "AgentFile", back_populates="agent", cascade="all, delete-orphan"
     )
+
+
+class AgentRoomMemory(Base):
+    """Authoritative memory for exactly one agent and one room."""
+
+    __tablename__ = "agent_room_memories"
+    __table_args__ = (
+        CheckConstraint("revision >= 0", name="ck_agent_room_memory_revision"),
+        CheckConstraint("session_epoch >= 0", name="ck_agent_room_memory_epoch"),
+        Index("ix_agent_room_memories_room", "room_id"),
+    )
+
+    agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True
+    )
+    room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), primary_key=True
+    )
+    memory_md: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=sa_text("''")
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=sa_text("0")
+    )
+    session_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=sa_text("0")
+    )
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class Machine(Base):
@@ -1560,6 +1584,175 @@ class MachineActivityLog(Base):
     details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, default=None)
 
 
+class ProjectExecution(Base):
+    """One project goal run, distinct from a repeating agent Goal definition."""
+
+    __tablename__ = "project_executions"
+    __table_args__ = (
+        UniqueConstraint("source_message_id", name="uq_execution_source_message"),
+        Index("ix_executions_room_status", "operating_room_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    project_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    operating_room_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("rooms.id", ondelete="CASCADE"), nullable=False
+    )
+    lead_agent_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="RESTRICT"), nullable=False
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    source_message_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="RESTRICT"), nullable=False
+    )
+    root_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    goal_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    completion_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    allowed_actions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    limits: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="planning")
+    plan_sealed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    required_task_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    requires_qa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    delegation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    native_invocations_reserved: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    state_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    usage_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    final_report_message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow, onupdate=_utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class ExecutionInputRevision(Base):
+    """Immutable original user constraints and project-scoped input contents."""
+
+    __tablename__ = "execution_input_revisions"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "revision", name="uq_execution_input_revision"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    user_constraints: Mapped[str] = mapped_column(Text, nullable=False)
+    input_files: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    completion_criteria: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    root_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    change_scope: Mapped[str] = mapped_column(String(24), nullable=False, default="all", server_default="all")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+class ExecutionMutation(Base):
+    """A deduplicated user change, settled only after exact stop receipts."""
+
+    __tablename__ = "execution_mutations"
+    __table_args__ = (
+        UniqueConstraint("execution_id", "operation_id", name="uq_execution_mutation_operation"),
+        Index("ix_execution_mutations_phase", "execution_id", "phase"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("project_executions.id", ondelete="CASCADE"))
+    operation_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    request_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    phase: Mapped[str] = mapped_column(String(24), nullable=False, default="awaiting_stop")
+    previous_input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_state_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    source_message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("messages.id", ondelete="SET NULL"))
+    root_task_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tasks.id", ondelete="SET NULL"))
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+
+class ExecutionStop(Base):
+    """Durable exact-attempt stop outbox and process receipt; never a task result."""
+
+    __tablename__ = "execution_stops"
+    __table_args__ = (
+        UniqueConstraint("attempt_id", name="uq_execution_stop_attempt"),
+        Index("ix_execution_stops_delivery", "status", "available_at"),
+        Index("ix_execution_stops_execution", "execution_id", "input_revision"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    mutation_id: Mapped[str] = mapped_column(String(36), ForeignKey("execution_mutations.id", ondelete="CASCADE"))
+    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("project_executions.id", ondelete="CASCADE"))
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_turns.request_id", ondelete="CASCADE"))
+    attempt_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_turn_attempts.id", ondelete="CASCADE"))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    agent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("agents.id", ondelete="SET NULL"))
+    room_id: Mapped[str] = mapped_column(String(36), ForeignKey("rooms.id", ondelete="CASCADE"))
+    participant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("participants.id", ondelete="SET NULL"))
+    local_execution_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    # pending | delivered | confirmed | not_started | already_finished | unknown
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    delivery_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    deadline_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    receipt: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ProjectExecutionEvent(Base):
+    """Transactional event and dedup identity for an automatic continuation."""
+
+    __tablename__ = "project_execution_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_execution_event_key"),
+        Index("ix_execution_events_execution", "execution_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="CASCADE"), nullable=False
+    )
+    task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    event_key: Mapped[str] = mapped_column(String(240), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(48), nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
 class Task(Base):
     """A task associated with a room.
 
@@ -1595,6 +1788,8 @@ class Task(Base):
         UniqueConstraint("idempotency_key", name="uq_tasks_idempotency_key"),
         UniqueConstraint("source_message_id", name="uq_tasks_source_message_id"),
         Index("ix_tasks_source_message_id", "source_message_id"),
+        UniqueConstraint("execution_id", "input_revision", "delegation_key", name="uq_execution_task_delegation"),
+        Index("ix_tasks_execution_parent", "execution_id", "parent_task_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -1608,6 +1803,22 @@ class Task(Base):
         default=None,
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    execution_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="SET NULL"), nullable=True
+    )
+    parent_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    input_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delegation_depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delegation_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    role: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    required_for_execution: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    qa_target_task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    qa_target_result_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), default="todo")
     assignee_participant_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("participants.id", ondelete="SET NULL"), nullable=True
@@ -1660,6 +1871,23 @@ class Task(Base):
     result_markdown: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None
     )
+    dependency_results: Mapped[list[dict] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    """Immutable input snapshots captured when prerequisites succeed.
+    Each snapshot links the originating task, result hash and completion
+    time. Requeueing a dependent keeps its input provenance intact."""
+    schedule_context: Mapped[dict | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
+    """Schedule identity, due instant, timezone and overlap policy at firing."""
+    is_silent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
+    """Hide a silent success from the work queue while retaining its ledger."""
+    goal_completion_applied: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("0")
+    )
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     is_interesting: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     """Used by ``materialize='interesting_only'`` Goals to decide
@@ -1678,6 +1906,37 @@ class Task(Base):
     duplicate fire of the same slot raises IntegrityError. NULL for
     manual / non-goal Tasks (multiple NULLs are allowed under a
     nullable UNIQUE on both SQLite and Postgres)."""
+
+
+class TaskResult(Base):
+    """Versioned execution result, retaining actual input and QA provenance."""
+
+    __tablename__ = "task_results"
+    __table_args__ = (
+        UniqueConstraint("task_id", "version", name="uq_task_result_version"),
+        UniqueConstraint("attempt_id", "task_id", name="uq_task_result_attempt"),
+        Index("ix_task_results_execution", "execution_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    execution_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="CASCADE"), nullable=False
+    )
+    task_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agent_turn_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+    producer_agent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
+    )
+    result_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    result_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    artifacts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    verification: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
 
 
 class TaskBlocker(Base):
@@ -1823,6 +2082,10 @@ class AgentTurn(Base):
     task_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
+    execution_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("project_executions.id", ondelete="SET NULL"), nullable=True
+    )
+    execution_input_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     workspace_attachment_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         ForeignKey("workspace_attachments.id", ondelete="SET NULL"),
@@ -1894,6 +2157,7 @@ class AgentTurnAttempt(Base):
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    local_execution_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     lease_token: Mapped[str] = mapped_column(String(64), nullable=False)
     # pending | leased | started | completed | interrupted | cancelled | stale
     state: Mapped[str] = mapped_column(
@@ -2475,3 +2739,8 @@ class PiNativeCredential(Base):
     encrypted_value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=_utcnow)
+
+
+from anygarden.db import execution_request_models as _execution_request_models  # noqa: E402,F401
+from anygarden.db import execution_approval_models as _execution_approval_models  # noqa: E402,F401
+from anygarden.db import native_invocation_models as _native_invocation_models  # noqa: E402,F401

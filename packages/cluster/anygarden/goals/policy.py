@@ -20,12 +20,12 @@ Key knobs:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import CroniterBadCronError, croniter
-
 
 # Tunables — dataclass-style module constants. Kept here (not in
 # settings) because changing them mid-flight requires server restart
@@ -50,9 +50,18 @@ class InvalidTriggerConfig(ValueError):
     Callers translate this to HTTP 422."""
 
 
-def validate_trigger_config(
-    trigger_type: str, config: dict
-) -> None:
+def trigger_timezone(config: dict) -> ZoneInfo:
+    """Resolve the schedule's IANA timezone, retaining UTC for old goals."""
+    name = config.get("timezone", "UTC")
+    if not isinstance(name, str) or not name.strip():
+        raise InvalidTriggerConfig("timezone must be an IANA timezone name")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise InvalidTriggerConfig(f"invalid timezone: {name!r}") from exc
+
+
+def validate_trigger_config(trigger_type: str, config: dict) -> None:
     """Validate the ``trigger_config`` jsonb against ``trigger_type``.
 
     Raises ``InvalidTriggerConfig`` on any shape mismatch — never
@@ -61,18 +70,15 @@ def validate_trigger_config(
     ("``cron`` must be a 5-field expression"; "``interval_seconds``
     must be at least 60").
     """
+    trigger_timezone(config)
     if trigger_type == "cron":
         cron = config.get("cron")
         if not isinstance(cron, str) or not cron.strip():
-            raise InvalidTriggerConfig(
-                "cron trigger requires {'cron': '<expression>'}"
-            )
+            raise InvalidTriggerConfig("cron trigger requires {'cron': '<expression>'}")
         try:
-            it = croniter(cron, datetime.now(timezone.utc))
+            it = croniter(cron, datetime.now(UTC))
         except (CroniterBadCronError, ValueError) as exc:
-            raise InvalidTriggerConfig(
-                f"invalid cron expression: {exc}"
-            ) from exc
+            raise InvalidTriggerConfig(f"invalid cron expression: {exc}") from exc
         # Reject crons that fire more often than MIN_INTERVAL_SECONDS.
         # Estimate the smallest gap by sampling two consecutive fire
         # times — handles ``*/30 * * * *`` (30m) → ``*/2 * * * *``
@@ -82,8 +88,7 @@ def validate_trigger_config(
         gap = (second - first).total_seconds()
         if gap < MIN_INTERVAL_SECONDS:
             raise InvalidTriggerConfig(
-                f"cron interval {gap:.0f}s is below the "
-                f"{MIN_INTERVAL_SECONDS}s minimum"
+                f"cron interval {gap:.0f}s is below the {MIN_INTERVAL_SECONDS}s minimum"
             )
         return
 
@@ -102,9 +107,7 @@ def validate_trigger_config(
         # frontend to round-trip arbitrary metadata.
         return
 
-    raise InvalidTriggerConfig(
-        f"unknown trigger_type: {trigger_type!r}"
-    )
+    raise InvalidTriggerConfig(f"unknown trigger_type: {trigger_type!r}")
 
 
 def compute_next_run_at(
@@ -117,12 +120,18 @@ def compute_next_run_at(
 
     Returns ``None`` for ``manual`` triggers (no auto-fire). Assumes
     ``validate_trigger_config`` has already accepted the inputs —
-    callers should not pass unvalidated config here. ``after`` must
-    be timezone-aware UTC; mixing naive datetimes silently drifts.
+    callers should not pass unvalidated config here. ``after`` must be
+    timezone-aware. Cron expressions use the configured IANA timezone
+    (UTC by default) and return UTC instants. Intervals represent elapsed
+    seconds, including across daylight-saving changes.
     """
+    if after.tzinfo is None or after.utcoffset() is None:
+        raise InvalidTriggerConfig("after must be timezone-aware")
+    schedule_timezone = trigger_timezone(config)
+    after = after.astimezone(UTC)
     if trigger_type == "cron":
-        it = croniter(config["cron"], after)
-        return it.get_next(datetime)
+        it = croniter(config["cron"], after.astimezone(schedule_timezone))
+        return it.get_next(datetime).astimezone(UTC)
 
     if trigger_type == "interval":
         return after + timedelta(seconds=int(config["interval_seconds"]))
@@ -130,20 +139,18 @@ def compute_next_run_at(
     if trigger_type == "manual":
         return None
 
-    raise InvalidTriggerConfig(
-        f"unknown trigger_type: {trigger_type!r}"
-    )
+    raise InvalidTriggerConfig(f"unknown trigger_type: {trigger_type!r}")
 
 
 class MaterializeDecision(str, Enum):
     """Outcome of ``materialize_decision`` — a tiny state machine.
 
-    ``KEEP`` — Task row stays in the ledger (default for ``full``
-    goals + any failure / interesting result).
-    ``DELETE`` — Task row was created during execution but the
-    completion was a silent success on an ``interesting_only`` goal.
-    The executor removes the row so the silent goal does not pollute
-    Tasks UI. (Phase 2: archival flag instead of hard delete.)
+    ``KEEP`` — Task stays visible (default for ``full`` goals and any
+    failure / interesting result).
+    ``DELETE`` — legacy enum name for hiding a silent success on an
+    ``interesting_only`` goal from ordinary Tasks UI. The executor sets
+    ``Task.is_silent`` while retaining the durable row and its consumed
+    idempotency key. Both decisions preserve the execution ledger.
     """
 
     KEEP = "keep"
@@ -156,7 +163,7 @@ def materialize_decision(
     final_status: Literal["done", "failed"],
     is_interesting: bool,
 ) -> MaterializeDecision:
-    """Compute keep-vs-delete for a finished goal-derived Task.
+    """Compute ordinary-list visibility for a finished goal-derived Task.
 
     Inputs are the goal's ``materialize`` flag, the agent-reported
     final ``status`` (``done`` or ``failed``), and the

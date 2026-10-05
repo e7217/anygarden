@@ -17,6 +17,7 @@ import psutil
 from .contracts import Capabilities, Invocation, RuntimeResult
 from .endpoint import codex_endpoint_arguments, validate_endpoint_invocation
 from .failure_feedback import classify_failure
+from .usage import SOURCE, TOKEN_KEYS, counters
 
 _MEASURED_USAGE: ContextVar[dict | None] = ContextVar("measured_usage", default=None)
 
@@ -236,7 +237,7 @@ class CodexRuntime:
             except OSError:
                 return RuntimeResult("failed", "not_started", "ENGINE_ERROR")
             tree = ProcessTree(proc.pid)
-            measured: dict[str, int] = {}
+            measured: dict = {}
             stream: asyncio.Task | None = None
             result = RuntimeResult("unknown", "unknown", "runtime_error")
             try:
@@ -293,8 +294,17 @@ class CodexRuntime:
                     confirmed = await cleanup_task
                     result = RuntimeResult("cancelled", "stopped", "cancelled")
             if not confirmed:
-                return RuntimeResult("unknown", "unknown", "termination_unconfirmed", usage=dict(measured) or None)
-            return replace(result, usage=dict(measured) or result.usage)
+                result = RuntimeResult("unknown", "unknown", "termination_unconfirmed")
+            return replace(
+                result,
+                # Only the store owns a durable same-handle baseline. Raw
+                # provider totals never masquerade as invocation usage here.
+                usage=None,
+                usage_source=SOURCE,
+                usage_cumulative=measured.get("provider_cumulative"),
+                usage_session_handle=measured.get("observed_session_handle"),
+                usage_terminal=bool(measured.get("terminal_usage")),
+            )
 
     async def _collect(
         self, proc, invocation, session, output, emit, authorized
@@ -330,9 +340,14 @@ class CodexRuntime:
                 handle = event.get("thread_id")
                 if isinstance(handle, str) and 0 < len(handle) <= 256:
                     session = handle
+                    usage["observed_session_handle"] = handle
             elif kind == "turn.completed":
                 completed = True
                 raw = event.get("usage")
+                usage["terminal_usage"] = raw is not None
+                usage["provider_cumulative"] = counters(raw)
+                for key in TOKEN_KEYS:
+                    usage.pop(key, None)
                 if isinstance(raw, dict):
                     usage.update({
                         k: v
@@ -343,6 +358,7 @@ class CodexRuntime:
                     })
             elif kind == "turn.failed":
                 failed = True
+                usage["terminal_usage"] = False
                 failure_count += 1
                 if failure_count == 1:
                     error = event.get("error")
@@ -357,6 +373,8 @@ class CodexRuntime:
                 "item.updated",
                 "item.completed",
             }:
+                if kind == "turn.started":
+                    usage["terminal_usage"] = False
                 item = event.get("item")
                 item_type = item.get("type") if isinstance(item, dict) else None
                 if kind == "item.completed" and item_type == "agent_message":
@@ -400,4 +418,7 @@ class CodexRuntime:
             text = raw.decode(errors="replace").strip() or text
         if not text:
             return RuntimeResult("failed", "stopped", "ENGINE_ERROR")
-        return RuntimeResult("succeeded", "finished", "completed", text, session, usage)
+        return RuntimeResult(
+            "succeeded", "finished", "completed", text, session,
+            {key: usage[key] for key in TOKEN_KEYS if key in usage} or None,
+        )

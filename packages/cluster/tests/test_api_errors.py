@@ -53,6 +53,12 @@ STRING_DETAIL_CASES = (
         "Human task assignment is disabled for this room",
         {},
     ),
+    (
+        "PROJECT_EXECUTION_TASK_MANAGED",
+        409,
+        "Execution tasks must use the project execution workflow",
+        {},
+    ),
 )
 
 

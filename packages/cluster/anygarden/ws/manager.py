@@ -28,6 +28,7 @@ class _Subscription:
     user_id: Optional[str] = None
     generation: Optional[int] = None
     execution_control: bool = False
+    turn_control: bool = False
     socket_epoch: str = field(default_factory=lambda: str(uuid4()))
     # #782 — the invite a guest session was admitted with, so revoking
     # the invite can close the sockets it already let in.
@@ -122,6 +123,7 @@ class ConnectionManager:
         user_id: str | None = None,
         generation: int | None = None,
         execution_control: bool = False,
+        turn_control: bool = False,
         exclusive: bool = True,
         invite_id: str | None = None,
     ) -> None:
@@ -155,6 +157,7 @@ class ConnectionManager:
             user_id=user_id,
             generation=generation,
             execution_control=execution_control,
+            turn_control=turn_control,
             invite_id=invite_id,
         )
         async with self._lock:
@@ -386,6 +389,11 @@ class ConnectionManager:
         async with self._lock:
             subs = self._by_participant.get(participant_id)
             return subs[-1].generation if subs else None
+
+    async def participant_turn_control(self, participant_id: str) -> bool:
+        async with self._lock:
+            subs = self._by_participant.get(participant_id, [])
+            return bool(subs and subs[-1].turn_control)
 
     async def execution_connection(self, participant_id: str, *, websocket=None) -> tuple[int, str] | None:
         """Return the advertised control fence for exactly this live socket."""

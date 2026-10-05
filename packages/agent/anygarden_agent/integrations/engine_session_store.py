@@ -31,7 +31,7 @@ def _store_path(cwd: Path) -> Path:
     return cwd / _STORE_FILENAME
 
 
-def load_sessions(cwd: Path) -> dict[str, str]:
+def load_sessions(cwd: Path, *, scope_version: str | None = None) -> dict[str, str]:
     """Return the persisted ``room_id -> session_handle`` map (empty on any error).
 
     Never raises — a missing, unreadable, or malformed store degrades to an
@@ -39,7 +39,10 @@ def load_sessions(cwd: Path) -> dict[str, str]:
     default.
     """
     try:
-        raw = _store_path(cwd).read_text(encoding="utf-8")
+        path = _store_path(cwd) if scope_version is None else cwd / f".anygarden-engine-sessions.{scope_version}.json"
+        if path.is_symlink():
+            return {}
+        raw = path.read_text(encoding="utf-8")
     except OSError:
         return {}
     try:
@@ -48,6 +51,10 @@ def load_sessions(cwd: Path) -> dict[str, str]:
         return {}
     if not isinstance(data, dict):
         return {}
+    if scope_version is not None:
+        if data.get("scope_version") != scope_version or not isinstance(data.get("sessions"), dict):
+            return {}
+        data = data["sessions"]
     return {
         str(k): v
         for k, v in data.items()
@@ -55,16 +62,20 @@ def load_sessions(cwd: Path) -> dict[str, str]:
     }
 
 
-def save_sessions(cwd: Path, mapping: dict[str, str]) -> None:
+def save_sessions(cwd: Path, mapping: dict[str, str], *, scope_version: str | None = None) -> None:
     """Atomically persist ``mapping`` to the agent cwd. Best-effort (never raises).
 
     Written via a temp file + ``replace`` so a crash mid-write can't leave a
     truncated store that would poison the next load.
     """
-    path = _store_path(cwd)
+    # Do not replace the legacy archive while adopting the new namespace.
+    path = _store_path(cwd) if scope_version is None else cwd / f".anygarden-engine-sessions.{scope_version}.json"
     tmp = path.with_suffix(".json.tmp")
+    if path.is_symlink() or tmp.is_symlink():
+        return
     try:
-        tmp.write_text(json.dumps(mapping), encoding="utf-8")
+        value = mapping if scope_version is None else {"scope_version": scope_version, "sessions": mapping}
+        tmp.write_text(json.dumps(value), encoding="utf-8")
         tmp.replace(path)
     except OSError:
         # Persistence is an optimisation; a failure here must never crash a turn.

@@ -1,8 +1,7 @@
 /**
  * Client helpers for the ``/api/v1/rooms/{id}/artifacts`` endpoints
- * (#290 Phase B). The download path uses the URL directly (so
- * ``<img src=...>`` works) — only list and delete need an explicit
- * fetch wrapper here.
+ * (#290 Phase B). Artifact bytes always use authenticated fetch, followed
+ * by a browser blob URL for previews or downloads.
  */
 
 export interface RoomArtifact {
@@ -63,7 +62,7 @@ export function artifactDownloadUrl(
 export async function fetchArtifactBlobUrl(
   roomId: string,
   artifactId: string,
-): Promise<{ url: string; revoke: () => void }> {
+): Promise<{ url: string; filename?: string; revoke: () => void }> {
   const resp = await fetch(artifactDownloadUrl(roomId, artifactId), {
     method: 'GET',
     headers: authHeaders(),
@@ -73,5 +72,22 @@ export async function fetchArtifactBlobUrl(
   }
   const blob = await resp.blob()
   const url = URL.createObjectURL(blob)
-  return { url, revoke: () => URL.revokeObjectURL(url) }
+  const disposition = resp.headers?.get('Content-Disposition') ?? ''
+  const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  let filename = /filename="([^"]+)"|filename=([^;]+)/i.exec(disposition)?.slice(1).find(Boolean)?.trim()
+  if (encodedName) {
+    try { filename = decodeURIComponent(encodedName) } catch { /* Keep the plain filename. */ }
+  }
+  filename = filename?.split(/[\\/]/).pop()?.replace(/[\x00-\x1f]/g, '')
+  return { url, filename, revoke: () => URL.revokeObjectURL(url) }
+}
+
+/** Start a browser download and release the blob after the browser consumes it. */
+export function startArtifactDownload(download: { url: string; revoke: () => void }, filename: string): void {
+  const anchor = document.createElement('a')
+  anchor.href = download.url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  try { anchor.click() } finally { anchor.remove() }
+  window.setTimeout(download.revoke, 1000)
 }

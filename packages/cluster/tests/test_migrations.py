@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1024,7 +1024,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1064,7 +1064,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
             sync_engine.dispose()
         finally:
             try:
@@ -1098,7 +1098,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "082_project_created_by"
+            assert head == "090_native_invocation_accounting"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1200,7 +1200,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "082_project_created_by"
+                assert version == "090_native_invocation_accounting"
             sync_engine.dispose()
         finally:
             try:
@@ -1693,4 +1693,34 @@ def test_075_preserves_agents_and_usage_across_upgrade_and_downgrade(tmp_path):
             == 1
         )
         assert "engine_credentials" not in inspect(conn).get_table_names()
+    engine.dispose()
+
+
+def test_task_handoff_migrations_preserve_existing_rows(tmp_path):
+    from datetime import datetime, timezone
+    from anygarden.db.models import Agent, Goal, User
+
+    path = str(tmp_path / "task-handoffs.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "081_peer_ask_groups")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.begin() as conn:
+        conn.execute(User.__table__.insert().values(id="u", email="migration@example.test", password_hash="x"))
+        conn.execute(Agent.__table__.insert().values(id="a", name="Test lead", engine="codex"))
+        conn.execute(Goal.__table__.insert().values(
+            id="g", owner_id="u", assignee_agent_id="a", title="Old goal", spec="Facts only",
+            trigger_type="manual", trigger_config={}, materialize="full", status="active",
+            consecutive_failures=2, created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
+        ))
+        conn.execute(text("INSERT INTO rooms (id,name,is_dm,created_at) VALUES ('r','Operations',0,CURRENT_TIMESTAMP)"))
+        conn.execute(text("INSERT INTO tasks (id,room_id,title,status,triggered_by,is_interesting,idempotency_key,created_at) VALUES ('t','r','Legacy run','done','scheduler',0,'consumed-slot',CURRENT_TIMESTAMP)"))
+        conn.execute(text("INSERT INTO tasks (id,room_id,title,status,triggered_by,is_interesting,goal_id,created_at) VALUES ('gt','r','Old goal run','failed','scheduler',0,'g',CURRENT_TIMESTAMP)"))
+    command.upgrade(cfg, "084_task_run_ledger")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT title,status,idempotency_key,dependency_results,schedule_context,is_silent,goal_completion_applied FROM tasks WHERE id='t'")).one() == ("Legacy run", "done", "consumed-slot", None, None, 0, 0)
+        assert conn.execute(text("SELECT goal_completion_applied FROM tasks WHERE id='gt'")).scalar_one() == 1
+        assert conn.execute(text("SELECT consecutive_failures FROM agent_goals WHERE id='g'")).scalar_one() == 2
+    command.downgrade(cfg, "081_peer_ask_groups")
+    with engine.connect() as conn:
+        assert conn.execute(text("SELECT title,status,idempotency_key FROM tasks WHERE id='t'")).one() == ("Legacy run", "done", "consumed-slot")
     engine.dispose()

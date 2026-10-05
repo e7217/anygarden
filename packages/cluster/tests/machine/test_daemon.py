@@ -11,6 +11,7 @@ import pytest
 
 from anygarden.machine.daemon import MachineDaemon, _base_url_from_machine_url
 from anygarden.machine.protocol.frames import (
+    AgentMemoryUpdateAckFrame,
     RegisterFrame,
     ReportActualStateFrame,
     SelfUpdateFrame,
@@ -88,6 +89,16 @@ def _capture_ws(daemon: MachineDaemon) -> list[dict]:
     )
     daemon._ws = mock_ws
     return sent_frames
+
+
+def _token_request_id(daemon: MachineDaemon, agent_id: str) -> str | None:
+    """Echo the actual outgoing request UUID in existing grant fixtures."""
+    if daemon._ws is not None:
+        for call in reversed(daemon._ws.send.call_args_list):
+            frame = json.loads(call.args[0])
+            if frame["type"] == "token_request" and agent_id in frame["agent_ids"]:
+                return frame.get("request_id")
+    return None
 
 
 # ── Registration ──────────────────────────────────────────────────────
@@ -415,6 +426,7 @@ class TestSyncDesiredState:
             grant_data = {
                 "type": "token_grant",
                 "agent_id": "agent-001",
+                "request_id": _token_request_id(daemon, "agent-001"),
                 "agent_token": "tok-abc",
             }
             await daemon._handle(grant_data)
@@ -524,6 +536,7 @@ class TestSyncDesiredState:
             await daemon._handle({
                 "type": "token_grant",
                 "agent_id": "agent-001",
+                "request_id": _token_request_id(daemon, "agent-001"),
                 "agent_token": "tok-xyz",
             })
 
@@ -570,6 +583,7 @@ class TestSyncDesiredState:
             grant_data = {
                 "type": "token_grant",
                 "agent_id": "agent-001",
+                "request_id": _token_request_id(daemon, "agent-001"),
                 "agent_token": "tok-new",
             }
             await daemon._handle(grant_data)
@@ -687,6 +701,7 @@ class TestReconcileSerialization:
             grant = {
                 "type": "token_grant",
                 "agent_id": "agent-race",
+                "request_id": _token_request_id(daemon, "agent-race"),
                 "agent_token": "tok-once",
             }
             await daemon._handle(grant)
@@ -780,6 +795,7 @@ class TestReconcileSerialization:
                 {
                     "type": "token_grant",
                     "agent_id": "agent-broken",
+                    "request_id": _token_request_id(daemon, "agent-broken"),
                     "agent_token": "tok-bad",
                 }
             )
@@ -803,6 +819,7 @@ class TestReconcileSerialization:
         verify by arranging the grant arrival order to match the
         expected progression and confirming both spawns happen.
         """
+        _capture_ws(daemon)
         daemon._spawner.spawn = AsyncMock(
             side_effect=lambda m: MagicMock(
                 success=True, agent_id=m.agent_id, pid=100, error=""
@@ -825,6 +842,7 @@ class TestReconcileSerialization:
                     {
                         "type": "token_grant",
                         "agent_id": aid,
+                        "request_id": _token_request_id(daemon, aid),
                         "agent_token": tok,
                     }
                 )
@@ -851,6 +869,7 @@ class TestSyncBatch:
         sent_frames = _capture_ws(daemon)
 
         # Pretend two agents are running locally
+        _capture_ws(daemon)
         daemon._spawner.list_running = MagicMock(return_value=[
             {"agent_id": "agent-keep", "pid": 100, "engine": "claude-code", "uptime_seconds": 60},
             {"agent_id": "agent-orphan", "pid": 200, "engine": "codex", "uptime_seconds": 30},
@@ -885,6 +904,7 @@ class TestSyncBatch:
             grant_data = {
                 "type": "token_grant",
                 "agent_id": "agent-keep",
+                "request_id": _token_request_id(daemon, "agent-keep"),
                 "agent_token": "tok-keep",
             }
             await daemon._handle(grant_data)
@@ -944,6 +964,7 @@ class TestSyncBatch:
                 {
                     "type": "token_grant",
                     "agent_id": "agent-keep",
+                    "request_id": _token_request_id(daemon, "agent-keep"),
                     "agent_token": "tok-keep",
                 }
             )
@@ -1025,6 +1046,7 @@ class TestTokenGrant:
         grant_data = {
             "type": "token_grant",
             "agent_id": "agent-001",
+            "request_id": _token_request_id(daemon, "agent-001"),
             "agent_token": "tok-123",
         }
         await daemon._handle(grant_data)
@@ -1041,6 +1063,7 @@ class TestTokenGrant:
         grant_data = {
             "type": "token_grant",
             "agent_id": "unknown-agent",
+            "request_id": _token_request_id(daemon, "unknown-agent"),
             "agent_token": "tok-xyz",
         }
         # Should not raise
@@ -1086,6 +1109,7 @@ class TestCrashHandling:
             grant_data = {
                 "type": "token_grant",
                 "agent_id": "agent-crash",
+                "request_id": _token_request_id(daemon, "agent-crash"),
                 "agent_token": "tok-restart",
             }
             await daemon._handle(grant_data)
@@ -1131,6 +1155,7 @@ class TestCrashHandling:
             grant = {
                 "type": "token_grant",
                 "agent_id": "agent-crash",
+                "request_id": _token_request_id(daemon, "agent-crash"),
                 "agent_token": "tok-1",
             }
             await daemon._handle(grant)
@@ -1348,6 +1373,34 @@ class TestMemorySyncBack237:
     ``memory/notes.md`` changes for any running agent.
     """
 
+    @staticmethod
+    def _scoped_notes(daemon, tmp_path, body):
+        room_id = "11111111-1111-1111-1111-111111111111"
+        agent_root = tmp_path / "a1"
+        notes = agent_root / "memory" / "rooms" / room_id / "notes.md"
+        notes.parent.mkdir(parents=True)
+        notes.write_text(body)
+        daemon._manifest_store.save(SyncDesiredStateFrame(
+            agent_id="a1", desired_state="running", generation=1, rooms=[room_id],
+            room_memories={room_id: {"room_id": room_id, "memory_md": "", "revision": 0,
+                "session_epoch": 0, "generation": 1, "scope_version": "room-memory-v1"}},
+        ))
+        daemon._running_generations["a1"] = 1
+        daemon._spawner.list_running = MagicMock(return_value=[
+            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
+        ])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        return notes
+
+    @staticmethod
+    async def _ack(daemon, body):
+        room_id = "11111111-1111-1111-1111-111111111111"
+        await daemon._handle_memory_update_ack(AgentMemoryUpdateAckFrame(
+            agent_id="a1", room_id=room_id, generation=1, base_revision=0, status="accepted",
+            room_memory={"room_id": room_id, "memory_md": body, "revision": 1,
+                "session_epoch": 0, "generation": 1, "scope_version": "room-memory-v1"},
+        ))
+
     async def test_emits_memory_update_on_first_observation(
         self, daemon: MachineDaemon, tmp_path
     ) -> None:
@@ -1355,14 +1408,7 @@ class TestMemorySyncBack237:
         sent = _capture_ws(daemon)
 
         # Lay down a file as if the spawner had materialized it.
-        agent_root = tmp_path / "a1"
-        (agent_root / "memory").mkdir(parents=True)
-        (agent_root / "memory" / "notes.md").write_text("remember this")
-
-        daemon._spawner.list_running = MagicMock(return_value=[
-            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
-        ])
-        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        notes = self._scoped_notes(daemon, tmp_path, 'remember this')
 
         await daemon._report_actual_state()
 
@@ -1379,16 +1425,10 @@ class TestMemorySyncBack237:
         is identical to the last observation."""
         sent = _capture_ws(daemon)
 
-        agent_root = tmp_path / "a1"
-        (agent_root / "memory").mkdir(parents=True)
-        (agent_root / "memory" / "notes.md").write_text("same")
-
-        daemon._spawner.list_running = MagicMock(return_value=[
-            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
-        ])
-        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        notes = self._scoped_notes(daemon, tmp_path, 'same')
 
         await daemon._report_actual_state()
+        await self._ack(daemon, "same")
         first = sum(1 for f in sent if f.get("type") == "agent_memory_update")
         await daemon._report_actual_state()
         second = sum(1 for f in sent if f.get("type") == "agent_memory_update")
@@ -1400,17 +1440,10 @@ class TestMemorySyncBack237:
     ) -> None:
         sent = _capture_ws(daemon)
 
-        agent_root = tmp_path / "a1"
-        notes = agent_root / "memory" / "notes.md"
-        notes.parent.mkdir(parents=True)
-        notes.write_text("v1")
-
-        daemon._spawner.list_running = MagicMock(return_value=[
-            {"agent_id": "a1", "pid": 100, "engine": "codex", "uptime_seconds": 1},
-        ])
-        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        notes = self._scoped_notes(daemon, tmp_path, 'v1')
 
         await daemon._report_actual_state()
+        await self._ack(daemon, "v1")
         notes.write_text("v2 with more content")
         await daemon._report_actual_state()
 
@@ -1450,6 +1483,103 @@ class TestSharedFileHandlers:
     identical payloads — and they never touch ``notes.md``.
     """
 
+    room_id = "00000000-0000-0000-0000-000000000001"
+
+    async def test_same_named_inputs_and_delete_are_isolated_by_room(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        other_room_id = "00000000-0000-0000-0000-000000000002"
+        for room_id, content in ((self.room_id, "CAREER-ONLY"), (other_room_id, "GARDEN-ONLY")):
+            frame = AgentMemorySharedFileWriteFrame(
+                agent_id="a1", room_id=room_id, storage_name="input.md",
+                content=content, content_sha256="ignored",
+            )
+            await daemon._handle_agent_memory_shared_file_write(frame)
+            await daemon._handle_agent_memory_shared_file_write(frame)  # backfill/reconnect
+        shared = agent_root / "memory" / "shared"
+        assert (shared / self.room_id / "input.md").read_text() == "CAREER-ONLY"
+        assert (shared / other_room_id / "input.md").read_text() == "GARDEN-ONLY"
+        assert not (shared / "input.md").exists()
+
+        await daemon._handle_agent_memory_shared_file_delete(
+            AgentMemorySharedFileDeleteFrame(
+                agent_id="a1", room_id=self.room_id, storage_name="input.md",
+            )
+        )
+        assert not (shared / self.room_id / "input.md").exists()
+        assert (shared / other_room_id / "input.md").read_text() == "GARDEN-ONLY"
+
+    @pytest.mark.parametrize("room_count", [0, 1, 2])
+    async def test_legacy_frames_resolve_only_one_persisted_manifest_room(
+        self, daemon: MachineDaemon, tmp_path: Path, room_count: int
+    ) -> None:
+        from anygarden.machine.protocol.frames import AgentMemorySharedFileWriteFrame
+
+        room_ids = [self.room_id, "00000000-0000-0000-0000-000000000002"][:room_count]
+        agent_root = tmp_path / "agent-a"
+        agent_root.mkdir()
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        daemon._manifest_store.save(SyncDesiredStateFrame(
+            agent_id="a1", desired_state="running", generation=1, rooms=room_ids,
+        ))
+        # Reload the manifest store to prove the legacy decision survives a
+        # daemon restart and does not depend on an in-memory room cache.
+        from anygarden.machine.manifest_store import ManifestStore
+
+        daemon._manifest_store = ManifestStore(daemon._manifest_store.agents_root)
+        await daemon._handle_agent_memory_shared_file_write(AgentMemorySharedFileWriteFrame(
+            agent_id="a1", storage_name="input.md", content="legacy", content_sha256="ignored",
+        ))
+        target = agent_root / "memory" / "shared" / self.room_id / "input.md"
+        assert target.exists() is (room_count == 1)
+        assert not (agent_root / "memory" / "shared" / "input.md").exists()
+
+    @pytest.mark.parametrize("unsafe_entry", ["room_symlink", "file_symlink", "bad_room", "bad_filename"])
+    async def test_shared_input_scope_refuses_unsafe_paths(
+        self, daemon: MachineDaemon, tmp_path: Path, unsafe_entry: str
+    ) -> None:
+        from anygarden.machine.protocol.frames import (
+            AgentMemorySharedFileDeleteFrame,
+            AgentMemorySharedFileWriteFrame,
+        )
+
+        agent_root = tmp_path / "agent-a"
+        shared = agent_root / "memory" / "shared"
+        shared.mkdir(parents=True)
+        external = tmp_path / "external"
+        external.mkdir()
+        private = external / "input.md"
+        private.write_text("UNCHANGED")
+        room_id = self.room_id
+        filename = "input.md"
+        if unsafe_entry == "room_symlink":
+            (shared / room_id).symlink_to(external, target_is_directory=True)
+        elif unsafe_entry == "file_symlink":
+            (shared / room_id).mkdir()
+            (shared / room_id / filename).symlink_to(private)
+        elif unsafe_entry == "bad_room":
+            room_id = "../../external"
+        else:
+            filename = "../input.md"
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+
+        await daemon._handle_agent_memory_shared_file_write(AgentMemorySharedFileWriteFrame(
+            agent_id="a1", room_id=room_id, storage_name=filename,
+            content="OVERWRITTEN", content_sha256="ignored",
+        ))
+        await daemon._handle_agent_memory_shared_file_delete(AgentMemorySharedFileDeleteFrame(
+            agent_id="a1", room_id=room_id, storage_name=filename,
+        ))
+        assert private.read_text() == "UNCHANGED"
+
     async def test_write_creates_file(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
@@ -1463,13 +1593,14 @@ class TestSharedFileHandlers:
 
         frame = AgentMemorySharedFileWriteFrame(
             agent_id="a1",
+            room_id=self.room_id,
             storage_name="spec.md",
             content="hello\n",
             content_sha256="irrelevant-tests-compute-their-own",
         )
         await daemon._handle_agent_memory_shared_file_write(frame)
 
-        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        shared_file = agent_root / "memory" / "shared" / self.room_id / "spec.md"
         assert shared_file.read_text() == "hello\n"
 
     async def test_write_skips_when_hash_matches(
@@ -1490,13 +1621,14 @@ class TestSharedFileHandlers:
         sha = hashlib.sha256(content.encode()).hexdigest()
         frame = AgentMemorySharedFileWriteFrame(
             agent_id="a1",
+            room_id=self.room_id,
             storage_name="spec.md",
             content=content,
             content_sha256=sha,
         )
 
         await daemon._handle_agent_memory_shared_file_write(frame)
-        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        shared_file = agent_root / "memory" / "shared" / self.room_id / "spec.md"
         first_mtime = shared_file.stat().st_mtime_ns
 
         # Force a detectable mtime bump if a rewrite actually happens.
@@ -1533,13 +1665,14 @@ class TestSharedFileHandlers:
             await daemon._handle_agent_memory_shared_file_write(
                 AgentMemorySharedFileWriteFrame(
                     agent_id="a1",
+                    room_id=self.room_id,
                     storage_name="spec.md",
                     content=content,
                     content_sha256=sha,
                 )
             )
 
-        shared_file = agent_root / "memory" / "shared" / "spec.md"
+        shared_file = agent_root / "memory" / "shared" / self.room_id / "spec.md"
         assert shared_file.read_text() == second
 
     async def test_delete_removes_file(
@@ -1550,14 +1683,14 @@ class TestSharedFileHandlers:
         )
 
         agent_root = tmp_path / "agent-a"
-        shared_dir = agent_root / "memory" / "shared"
+        shared_dir = agent_root / "memory" / "shared" / self.room_id
         shared_dir.mkdir(parents=True)
         (shared_dir / "spec.md").write_text("x")
         daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
 
         await daemon._handle_agent_memory_shared_file_delete(
             AgentMemorySharedFileDeleteFrame(
-                agent_id="a1", storage_name="spec.md"
+                agent_id="a1", room_id=self.room_id, storage_name="spec.md"
             )
         )
         assert not (shared_dir / "spec.md").exists()
@@ -1576,7 +1709,7 @@ class TestSharedFileHandlers:
         # Must not raise.
         await daemon._handle_agent_memory_shared_file_delete(
             AgentMemorySharedFileDeleteFrame(
-                agent_id="a1", storage_name="nope.md"
+                agent_id="a1", room_id=self.room_id, storage_name="nope.md"
             )
         )
 
@@ -1593,18 +1726,19 @@ class TestSharedFileHandlers:
             {
                 "type": "agent_memory_shared_file_write",
                 "agent_id": "a1",
+                "room_id": self.room_id,
                 "storage_name": "spec.md",
                 "content": "x",
                 "content_sha256": "h",
             }
         )
-        assert (agent_root / "memory" / "shared" / "spec.md").read_text() == "x"
+        assert (agent_root / "memory" / "shared" / self.room_id / "spec.md").read_text() == "x"
 
     async def test_handle_dispatches_shared_delete(
         self, daemon: MachineDaemon, tmp_path: Path
     ) -> None:
         agent_root = tmp_path / "agent-a"
-        shared_dir = agent_root / "memory" / "shared"
+        shared_dir = agent_root / "memory" / "shared" / self.room_id
         shared_dir.mkdir(parents=True)
         (shared_dir / "spec.md").write_text("x")
         daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
@@ -1613,6 +1747,7 @@ class TestSharedFileHandlers:
             {
                 "type": "agent_memory_shared_file_delete",
                 "agent_id": "a1",
+                "room_id": self.room_id,
                 "storage_name": "spec.md",
             }
         )
@@ -1624,6 +1759,66 @@ class TestOutboxArtifactSyncBack290:
     ``memory/outbox/`` and emits ``room_artifact_produced`` frames for
     new / changed files.
     """
+
+    async def test_scoped_outboxes_preserve_room_and_filename_on_redelivery(
+        self, daemon: MachineDaemon, tmp_path: Path
+    ) -> None:
+        from uuid import uuid4
+
+        agent_root = tmp_path / "a1"
+        room_ids = [str(uuid4()), str(uuid4())]
+        for room_id in room_ids:
+            outbox = agent_root / "memory" / "outbox" / room_id
+            outbox.mkdir(parents=True)
+            # Identical names and bytes must still produce one frame per
+            # source; otherwise a shared cache could swallow project B.
+            (outbox / "result.md").write_text("same-content", encoding="utf-8")
+        daemon._spawner.list_running = MagicMock(return_value=[{"agent_id": "a1"}])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        sent = _capture_ws(daemon)
+
+        await daemon._flush_outbox_artifacts()
+        frames = [frame for frame in sent if frame.get("type") == "room_artifact_produced"]
+        assert len(frames) == 2
+        assert {frame["room_id"] for frame in frames} == set(room_ids)
+        assert {frame["filename"] for frame in frames} == {"result.md"}
+        await daemon._flush_outbox_artifacts()
+        assert len(sent) == 2
+        daemon._artifact_last_hash.clear()  # daemon restart re-delivery
+        await daemon._flush_outbox_artifacts()
+        assert [frame["room_id"] for frame in sent[2:]] == [frame["room_id"] for frame in frames]
+
+    @pytest.mark.parametrize("unsafe_entry", ["room_symlink", "file_symlink", "nested", "outbox_symlink"])
+    async def test_scoped_outbox_does_not_traverse_symlinks_or_nested_folders(
+        self, daemon: MachineDaemon, tmp_path: Path, unsafe_entry: str
+    ) -> None:
+        from uuid import uuid4
+
+        agent_root = tmp_path / "a1"
+        outbox = agent_root / "memory" / "outbox"
+        outbox.mkdir(parents=True)
+        external = tmp_path / "external"
+        external.mkdir()
+        (external / "private.md").write_text("outside-output", encoding="utf-8")
+        room_dir = outbox / str(uuid4())
+        if unsafe_entry == "room_symlink":
+            room_dir.symlink_to(external, target_is_directory=True)
+        elif unsafe_entry == "outbox_symlink":
+            outbox.rmdir()
+            outbox.symlink_to(external, target_is_directory=True)
+        else:
+            room_dir.mkdir()
+            if unsafe_entry == "file_symlink":
+                (room_dir / "private.md").symlink_to(external / "private.md")
+            else:
+                (room_dir / "nested").mkdir()
+                (room_dir / "nested" / "private.md").write_text("nested", encoding="utf-8")
+        daemon._spawner.list_running = MagicMock(return_value=[{"agent_id": "a1"}])
+        daemon._spawner.get_agent_root = MagicMock(return_value=agent_root)
+        sent = _capture_ws(daemon)
+
+        await daemon._flush_outbox_artifacts()
+        assert sent == []
 
     async def test_emits_artifact_for_new_outbox_file(
         self, daemon: MachineDaemon, tmp_path: Path

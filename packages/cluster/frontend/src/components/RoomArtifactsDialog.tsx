@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, FileText, Image as ImageIcon, Trash2 } from 'lucide-react'
 import {
   Dialog,
@@ -11,10 +11,10 @@ import { Button } from '@/components/ui/button'
 import { useLocale } from '@/i18n/LocaleProvider'
 import { useFeedback } from '@/components/feedback/FeedbackProvider'
 import {
-  artifactDownloadUrl,
   deleteRoomArtifact,
   fetchArtifactBlobUrl,
   listRoomArtifacts,
+  startArtifactDownload,
   type RoomArtifact,
 } from '@/lib/roomArtifacts'
 
@@ -97,26 +97,35 @@ export default function RoomArtifactsDialog({
 }: RoomArtifactsDialogProps) {
   const { t } = useLocale()
   const { confirm } = useFeedback()
-  const [items, setItems] = useState<RoomArtifact[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const scope = useMemo(() => ({ roomId, open, active: true, request: 0, downloading: false }), [roomId, open])
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const [snapshot, setSnapshot] = useState<{
+    scope: typeof scope; items: RoomArtifact[]; loading: boolean; error: string | null; downloading: boolean
+  }>(() => ({ scope, items: [], loading: Boolean(open && roomId), error: null, downloading: false }))
+  const isCurrent = useCallback(() => Boolean(roomId && open && scope.active && currentScope.current === scope), [roomId, open, scope])
+  const { items, loading, error, downloading } = snapshot.scope === scope && open
+    ? snapshot
+    : { items: [], loading: Boolean(open && roomId), error: null, downloading: false }
 
   const refresh = useCallback(async () => {
-    if (!roomId) return
-    setLoading(true)
-    setError(null)
+    if (!roomId || !isCurrent()) return
+    const request = ++scope.request
+    const accepts = () => isCurrent() && request === scope.request
+    setSnapshot(previous => ({ scope, items: previous.scope === scope ? previous.items : [], loading: true, error: null, downloading: scope.downloading }))
     try {
-      setItems(await listRoomArtifacts(roomId))
+      const items = await listRoomArtifacts(roomId)
+      if (accepts()) setSnapshot({ scope, items, loading: false, error: null, downloading: scope.downloading })
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
+      if (accepts()) setSnapshot(previous => ({ ...previous, loading: false, error: err instanceof Error ? err.message : String(err) }))
     }
-  }, [roomId])
+  }, [roomId, scope, isCurrent])
 
   useEffect(() => {
-    if (open) void refresh()
-  }, [open, refresh])
+    scope.active = true
+    void refresh()
+    return () => { scope.active = false }
+  }, [scope, refresh])
 
   // Re-fetch when the WS layer signals a change in this room.
   useEffect(() => {
@@ -135,13 +144,37 @@ export default function RoomArtifactsDialog({
   }, [open, roomId, refresh])
 
   const handleDelete = async (artifactId: string) => {
-    if (!roomId) return
+    if (!roomId || !isCurrent()) return
     if (!await confirm({ title: t('rooms.removeArtifact'), description: t('rooms.removeArtifactConfirm'), confirmLabel: t('rooms.removeArtifact'), destructive: true })) return
+    if (!isCurrent()) return
     try {
       await deleteRoomArtifact(roomId, artifactId)
-      setItems(prev => prev.filter(i => i.id !== artifactId))
+      if (isCurrent()) {
+        // A list fetched before deletion cannot restore the removed artifact.
+        ++scope.request
+        setSnapshot(previous => ({ ...previous, loading: false, items: previous.items.filter(i => i.id !== artifactId) }))
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      if (isCurrent()) setSnapshot(previous => ({ ...previous, error: err instanceof Error ? err.message : String(err) }))
+    }
+  }
+
+  const handleDownload = async (item: RoomArtifact) => {
+    if (!roomId || !isCurrent() || scope.downloading) return
+    scope.downloading = true
+    setSnapshot(previous => ({ ...previous, downloading: true, error: null }))
+    let download: Awaited<ReturnType<typeof fetchArtifactBlobUrl>> | null = null
+    try {
+      download = await fetchArtifactBlobUrl(roomId, item.id)
+      if (!isCurrent()) return
+      startArtifactDownload(download, item.filename)
+      download = null
+    } catch (err) {
+      if (isCurrent()) setSnapshot(previous => ({ ...previous, error: err instanceof Error ? err.message : String(err) }))
+    } finally {
+      download?.revoke()
+      scope.downloading = false
+      if (isCurrent()) setSnapshot(previous => ({ ...previous, downloading: false }))
     }
   }
 
@@ -172,9 +205,7 @@ export default function RoomArtifactsDialog({
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {items.map(item => {
-              const downloadUrl = artifactDownloadUrl(roomId!, item.id)
-              return (
+            {items.map(item => (
                 <div
                   key={item.id}
                   className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3"
@@ -200,18 +231,26 @@ export default function RoomArtifactsDialog({
                     <p className="text-badge font-normal text-[var(--color-foreground-subtle)]">
                       {formatBytes(item.size_bytes)} · {item.mime}
                     </p>
+                    {item.produced_by_agent_id && (
+                      <p className="mt-1 break-all text-xs text-[var(--color-foreground-muted)]">
+                        {t('rooms.agent')}: {item.produced_by_agent_id}
+                      </p>
+                    )}
+                    <p className="mt-1 truncate font-mono text-xs text-[var(--color-foreground-subtle)]" title={item.sha256}>
+                      SHA-256: {item.sha256.slice(0, 12)}…
+                    </p>
                   </div>
-                  <div className="flex justify-end gap-1">
-                    <a
-                      href={downloadUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex min-h-9 min-w-9 items-center justify-center gap-1 rounded-[var(--radius-xs)] px-2 py-1 text-xs text-[var(--color-foreground-muted)] hover:bg-[var(--color-surface-hover)]"
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={downloading}
+                      onClick={() => void handleDownload(item)}
                       title={t('rooms.download')}
                       aria-label={t('rooms.download')}
                     >
                       <Download className="h-3.5 w-3.5" />
-                    </a>
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
@@ -223,8 +262,7 @@ export default function RoomArtifactsDialog({
                     </Button>
                   </div>
                 </div>
-              )
-            })}
+              ))}
           </div>
         )}
       </DialogContent>

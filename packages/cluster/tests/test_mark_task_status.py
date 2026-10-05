@@ -12,17 +12,26 @@ import secrets
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-
 from anygarden.app import create_app
 from anygarden.auth.token import generate_token, hash_agent_token
 from anygarden.config import AnygardenSettings
 from anygarden.db.engine import build_engine, build_session_factory
-from anygarden.db.models import Agent, AgentToken, Base, Participant, Room, Task, User
+from anygarden.db.models import (
+    Agent,
+    AgentToken,
+    Base,
+    Goal,
+    Participant,
+    Room,
+    Task,
+    User,
+)
 from anygarden.mcp.tools import claim_task, mark_task_status
 from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 
 async def _make_task_assigned_to(
@@ -50,6 +59,34 @@ async def _make_task_assigned_to(
     db.add(task)
     await db.flush()
     return task, agent, p
+
+
+@pytest.mark.asyncio
+async def test_mcp_goal_failure_applies_durable_completion_policy_once(db) -> None:
+    task, agent, _ = await _make_task_assigned_to(db, status="in_progress")
+    owner = (await db.execute(select(User))).scalar_one()
+    goal = Goal(
+        owner_id=owner.id, assignee_agent_id=agent.id,
+        report_room_id=task.room_id, title="Analyze", spec="Use provided input",
+        trigger_type="manual", trigger_config={}, materialize="full",
+        status="active", consecutive_failures=2,
+    )
+    db.add(goal)
+    await db.flush()
+    task.goal_id = goal.id
+    await db.flush()
+
+    args = {"task_id": task.id, "status": "failed"}
+    result = await mark_task_status(db, agent_id=agent.id, arguments=args)
+    assert result["isError"] is False
+    await db.flush()
+    await db.refresh(goal)
+    assert goal.consecutive_failures == 3
+    assert goal.status == "paused"
+    assert task.finished_at is not None
+    assert (await mark_task_status(db, agent_id=agent.id, arguments=args))["isError"] is False
+    await db.refresh(goal)
+    assert goal.consecutive_failures == 3
 
 
 @pytest.mark.asyncio

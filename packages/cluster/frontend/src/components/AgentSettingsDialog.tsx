@@ -30,6 +30,7 @@ import OverviewPanel from '@/components/agent-settings/OverviewPanel'
 import ModelConnectionPanel, { type ConnectionState } from '@/components/agent-settings/ModelConnectionPanel'
 import ManifestPanel from '@/components/agent-settings/ManifestPanel'
 import RoomsPanel from '@/components/agent-settings/RoomsPanel'
+import MemoryPanel from '@/components/agent-settings/MemoryPanel'
 import ActivityPanel from '@/components/agent-settings/ActivityPanel'
 import RecentTurnSummary from '@/components/agent-settings/RecentTurnSummary'
 import TasksPanel from '@/components/agent-settings/TasksPanel'
@@ -134,6 +135,7 @@ const SECTION_TAB: Record<string, SettingsTab> = {
   'model-connection': 'settings',
   manifest: 'settings',
   rooms: 'work',
+  memory: 'work',
   goals: 'work',
   tasks: 'work',
   workspace: 'workspace',
@@ -340,6 +342,10 @@ export default function AgentSettingsDialog({
               <Section id="rooms" title={t('admin.agentSettings.rooms')}>
                 <RoomsPanel agentId={agent?.id ?? null} onChange={onRoomsChange} />
               </Section>
+
+              {agent && <Section id="memory" title={t('agentMemory.title')}>
+                <MemoryPanel key={agent.id} agentId={agent.id} active={open} />
+              </Section>}
 
               {/* Goals (#302) — recurring responsibilities, above Tasks
                   because commitments over time frame what is open now. */}

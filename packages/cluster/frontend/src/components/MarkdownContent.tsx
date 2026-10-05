@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PluggableList } from 'unified'
 import Anser from 'anser'
+import AuthenticatedArtifactLink from '@/components/AuthenticatedArtifactLink'
 import {
   resolveFileReferenceToken,
   type FileReferenceCandidate,
@@ -62,10 +63,10 @@ function isBlockCode(text: string, className: string | undefined): boolean {
 }
 
 const defaultComponents: Components = {
-  a: ({ children, href, ...props }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+  a: ({ children, href, node: _node, ...props }) => (
+    <AuthenticatedArtifactLink href={href} {...props}>
       {children}
-    </a>
+    </AuthenticatedArtifactLink>
   ),
   code: ({ className, children, ...rest }) => {
     const text =

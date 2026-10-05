@@ -27,16 +27,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anygarden.db.models import Goal, Task
 from anygarden.goals.executor import GoalExecutionError, trigger_goal
-from anygarden.goals.policy import compute_next_run_at
+from anygarden.goals.policy import (
+    InvalidTriggerConfig,
+    compute_next_run_at,
+    validate_trigger_config,
+)
 from anygarden.goals.sweeper import sweep_stuck_tasks
+from anygarden.tasks_status import TERMINAL_STATUSES
 
 if TYPE_CHECKING:
     from anygarden.ws.manager import ConnectionManager
@@ -59,7 +67,54 @@ MAX_GOALS_PER_TICK: int = 25
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
+
+
+def _has_open_run():
+    """Include input/dependency waits in the schedule's overlap policy."""
+    return exists().where(
+        Task.goal_id == Goal.id,
+        Task.status.not_in(TERMINAL_STATUSES),
+    )
+
+
+class ScheduledEventError(GoalExecutionError):
+    """A supplied slot is not an authoritative scheduled delivery."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+@dataclass(frozen=True)
+class ScheduledEventClaim:
+    task: Task | None
+    duplicate: bool = False
+    waiting_overlap: bool = False
+
+
+async def _scheduled_slot_task(db, goal_id: str, slot: datetime) -> Task | None:
+    """Validate immutable slot provenance before treating a key as a replay."""
+    task = await db.scalar(select(Task).where(
+        Task.goal_id == goal_id,
+        Task.idempotency_key == f"{goal_id}:{int(slot.timestamp())}",
+    ))
+    if task is None:
+        return None
+    context = task.schedule_context or {}
+    try:
+        recorded = datetime.fromisoformat(context["scheduled_for"])
+        ZoneInfo(context["timezone"])
+    except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+        raise ScheduledEventError("SCHEDULED_SLOT_CONFLICT") from None
+    if (recorded.tzinfo is None or recorded.utcoffset() is None
+        or recorded.astimezone(UTC) != slot.astimezone(UTC)
+        or task.triggered_by != "scheduler"
+        or context.get("goal_id") != goal_id
+        or context.get("trigger_source") != "scheduler"
+        or context.get("overlap_policy") != "wait"):
+        raise ScheduledEventError("SCHEDULED_SLOT_CONFLICT")
+    return task
 
 
 class GoalScheduler:
@@ -77,7 +132,7 @@ class GoalScheduler:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
-        manager: "ConnectionManager | None" = None,
+        manager: ConnectionManager | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._poll_interval = poll_interval_seconds
@@ -95,9 +150,7 @@ class GoalScheduler:
         if self._task is not None and not self._task.done():
             return
         self._stop_event.clear()
-        self._task = asyncio.create_task(
-            self._run(), name="anygarden-goal-scheduler"
-        )
+        self._task = asyncio.create_task(self._run(), name="anygarden-goal-scheduler")
         log.info("goal_scheduler_started", extra={"interval": self._poll_interval})
 
     async def stop(self) -> None:
@@ -107,7 +160,7 @@ class GoalScheduler:
         self._stop_event.set()
         try:
             await asyncio.wait_for(self._task, timeout=5.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("goal_scheduler_stop_timeout")
             self._task.cancel()
         finally:
@@ -138,7 +191,7 @@ class GoalScheduler:
                 await asyncio.wait_for(
                     self._stop_event.wait(), timeout=self._poll_interval
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             else:
                 break
@@ -149,7 +202,7 @@ class GoalScheduler:
 
         For each due goal we:
         1. compute the next slot (``compute_next_run_at``) up front,
-        2. skip it if an in-flight Task (``todo`` / ``in_progress``)
+        2. skip it if a nonterminal Task (including ``blocked``)
            already exists for it — in-flight dedup so a slow run does
            not get a sibling fire,
         3. issue an atomic guarded ``UPDATE ... WHERE next_run_at <=
@@ -171,7 +224,11 @@ class GoalScheduler:
             now = _utcnow()
             stmt = (
                 select(Goal.id)
-                .where(Goal.status == "active", Goal.next_run_at <= now)
+                .where(
+                    Goal.status == "active",
+                    Goal.next_run_at <= now,
+                    ~_has_open_run(),
+                )
                 .order_by(Goal.next_run_at.asc())
                 .limit(MAX_GOALS_PER_TICK)
             )
@@ -182,7 +239,7 @@ class GoalScheduler:
             for goal_id in due_ids:
                 try:
                     await self._claim_and_fire(db, goal_id, now)
-                except GoalExecutionError as exc:
+                except (GoalExecutionError, InvalidTriggerConfig) as exc:
                     # Pause the goal so the loop doesn't retry the
                     # same broken state every tick. The owner will
                     # see the paused state in the UI and re-add the
@@ -193,7 +250,7 @@ class GoalScheduler:
                     )
                     await db.rollback()
                     goal = await db.get(Goal, goal_id)
-                    if goal is not None:
+                    if goal is not None and goal.status == "active":
                         goal.status = "paused"
                         await db.commit()
                 except Exception:  # pragma: no cover — defensive
@@ -204,38 +261,61 @@ class GoalScheduler:
                     await db.rollback()
 
     async def _claim_and_fire(
-        self, db: AsyncSession, goal_id: str, now: datetime
-    ) -> None:
+        self, db: AsyncSession, goal_id: str, now: datetime,
+        *, scheduled_for: datetime | None = None,
+    ) -> ScheduledEventClaim | None:
         """Claim one due goal via CAS and fire it. Commits on success.
 
         No-ops (without raising) if the goal vanished, already has an
         in-flight Task, or the CAS lost the race — the caller's outer
         ``try`` only needs to handle the firing failure modes.
         """
-        goal = await db.get(Goal, goal_id)
+        supplied_slot = scheduled_for is not None
+        if supplied_slot:
+            if scheduled_for.tzinfo is None or scheduled_for.utcoffset() is None:
+                raise ScheduledEventError("SCHEDULED_TIMEZONE_REQUIRED")
+            scheduled_for = scheduled_for.astimezone(UTC)
+            if scheduled_for > now:
+                raise ScheduledEventError("SCHEDULED_SLOT_FUTURE")
+        goal = await db.get(Goal, goal_id, populate_existing=supplied_slot)
+        if supplied_slot:
+            if goal is None:
+                raise ScheduledEventError("GOAL_NOT_FOUND")
+            if goal.trigger_type not in {"cron", "interval"}:
+                raise ScheduledEventError("SCHEDULED_GOAL_REQUIRED")
+            replay = await _scheduled_slot_task(db, goal_id, scheduled_for)
+            if replay is not None:
+                return ScheduledEventClaim(replay, duplicate=True)
+            if goal.status != "active":
+                raise ScheduledEventError("GOAL_NOT_ACTIVE")
+            if goal.next_run_at != scheduled_for:
+                raise ScheduledEventError("SCHEDULED_SLOT_NOT_CURRENT")
         if goal is None or goal.status != "active" or goal.next_run_at is None:
             return
 
-        # In-flight dedup — a goal whose previous fire is still
-        # ``todo`` / ``in_progress`` must not get a sibling. Reuses the
+        # In-flight dedup — a goal whose previous fire is still waiting
+        # or running must not get a sibling. Reuses the
         # ``ix_tasks_goal_created`` index (goal_id leading column).
         in_flight = (
             await db.execute(
                 select(Task.id)
                 .where(
                     Task.goal_id == goal_id,
-                    Task.status.in_(("todo", "in_progress")),
+                    Task.status.not_in(TERMINAL_STATUSES),
                 )
                 .limit(1)
             )
         ).first()
         if in_flight is not None:
             log.debug("goal_skip_in_flight", extra={"goal_id": goal_id})
+            if supplied_slot:
+                return ScheduledEventClaim(None, waiting_overlap=True)
             return
 
         # The slot we are about to consume — captured BEFORE the CAS
         # advance so it keys the idempotency token.
         slot = goal.next_run_at
+        validate_trigger_config(goal.trigger_type, goal.trigger_config)
         next_slot = compute_next_run_at(
             goal.trigger_type, goal.trigger_config, after=now
         )
@@ -247,7 +327,10 @@ class GoalScheduler:
             .where(
                 Goal.id == goal_id,
                 Goal.status == "active",
+                Goal.next_run_at == slot,
                 Goal.next_run_at <= now,
+                Goal.updated_at == goal.updated_at,
+                ~_has_open_run(),
             )
             .values(next_run_at=next_slot, last_run_at=now, claimed_at=now)
             .execution_options(synchronize_session=False)
@@ -257,6 +340,21 @@ class GoalScheduler:
             # row changed under us. Drop the stale in-session UPDATE.
             log.debug("goal_claim_lost", extra={"goal_id": goal_id})
             await db.rollback()
+            if supplied_slot:
+                replay = await _scheduled_slot_task(db, goal_id, scheduled_for)
+                if replay is not None:
+                    return ScheduledEventClaim(replay, duplicate=True)
+                current = await db.get(Goal, goal_id, populate_existing=True)
+                if current is None:
+                    raise ScheduledEventError("GOAL_NOT_FOUND")
+                if current.status != "active":
+                    raise ScheduledEventError("GOAL_NOT_ACTIVE")
+                if current.next_run_at == scheduled_for and await db.scalar(
+                    select(Task.id).where(Task.goal_id == goal_id,
+                        Task.status.not_in(TERMINAL_STATUSES)).limit(1)
+                ):
+                    return ScheduledEventClaim(None, waiting_overlap=True)
+                raise ScheduledEventError("SCHEDULED_SLOT_CHANGED")
             return
 
         # Keep the in-session ORM object consistent with what the Core
@@ -266,14 +364,35 @@ class GoalScheduler:
         goal.claimed_at = now
 
         idempotency_key = f"{goal_id}:{int(slot.timestamp())}"
-        await trigger_goal(
-            db,
-            goal,
-            trigger_source="scheduler",
-            idempotency_key=idempotency_key,
-            manager=self._manager,
-        )
-        await db.commit()
+        # A completed Run-now can already own the slot key. Consume the due
+        # slot without a second Task/assignment; the strict delivery path
+        # rejects that manual provenance before its claim instead.
+        try:
+            task = await db.scalar(select(Task).where(
+                Task.goal_id == goal_id, Task.idempotency_key == idempotency_key,
+            ))
+            duplicate = task is not None
+            if task is None:
+                task = await trigger_goal(
+                    db,
+                    goal,
+                    trigger_source="scheduler",
+                    idempotency_key=idempotency_key,
+                    scheduled_for=slot,
+                    manager=self._manager,
+                )
+            elif supplied_slot:
+                task = await _scheduled_slot_task(db, goal_id, slot)
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            if not supplied_slot:
+                raise
+            task = await _scheduled_slot_task(db, goal_id, slot)
+            if task is None:
+                raise ScheduledEventError("SCHEDULED_SLOT_CONFLICT") from None
+            return ScheduledEventClaim(task, duplicate=True)
+        return ScheduledEventClaim(task, duplicate=duplicate)
 
     async def _sweep(self) -> None:
         """Run one stuck-task sweep in its own short session (#314).
@@ -283,7 +402,5 @@ class GoalScheduler:
         scopes per-task work; we just commit once at the end.
         """
         async with self._session_factory() as db:
-            await sweep_stuck_tasks(
-                db, manager=self._manager, now=_utcnow()
-            )
+            await sweep_stuck_tasks(db, manager=self._manager, now=_utcnow())
             await db.commit()

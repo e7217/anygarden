@@ -54,6 +54,8 @@ async def test_db_to_invocation_preserves_explicit_selection(
                     "type": "token_grant",
                     "agent_id": e["agent_id"],
                     "agent_token": "fixture-agent-token",
+                    # The daemon only accepts grants echoing its request id.
+                    "request_id": data["request_id"],
                 }
             )
 

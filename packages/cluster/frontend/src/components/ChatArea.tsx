@@ -22,6 +22,7 @@ import { useLocale } from '@/i18n/LocaleProvider'
 
 interface ChatAreaProps {
   messages: ChatMessage[]
+  focusedMessageId?: string | null
   participants: Record<string, Participant>
   myParticipantId: string | null
   typingUsers?: Set<string>
@@ -49,6 +50,7 @@ interface ChatAreaProps {
 
 export default function ChatArea({
   messages,
+  focusedMessageId,
   participants,
   myParticipantId,
   typingUsers,
@@ -275,8 +277,9 @@ export default function ChatArea({
     })
 
   useEffect(() => {
+    if (focusedMessageId) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, typingNames.length])
+  }, [messages, typingNames.length, focusedMessageId])
 
   if (messages.length === 0) {
     return (

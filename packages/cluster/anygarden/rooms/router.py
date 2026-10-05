@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -1191,6 +1192,16 @@ async def delete_room(
     )
     room = access.room
 
+    from anygarden.db.native_invocation_models import NativeInvocationAccounting
+
+    if await db.scalar(select(NativeInvocationAccounting.id).where(
+        NativeInvocationAccounting.room_id == room_id,
+    ).limit(1)):
+        raise HTTPException(status_code=409, detail={
+            "code": "NATIVE_INVOCATION_HISTORY_DELETE_FORBIDDEN",
+            "detail": "Recorded invocation history must be retained; archive the room instead of deleting it",
+        })
+
     # Capture the audience BEFORE we delete the participant rows. We
     # need:
     # - participant_ids in the room being deleted, so we can broadcast
@@ -1637,6 +1648,7 @@ def _schedule_shared_files_delete_for_agent(
                     {
                         "type": "agent_memory_shared_file_delete",
                         "agent_id": agent_id,
+                        "room_id": room_id,
                         "storage_name": file.storage_name,
                     },
                 )
@@ -1876,12 +1888,11 @@ async def download_room_artifact(
 
     # ``inline`` lets <img src="..."> work directly from the URL while
     # still suggesting a filename for explicit Save As.
-    safe_name = row.filename.replace('"', "")
     return Response(
         content=body,
         media_type=row.mime,
         headers={
-            "Content-Disposition": f'inline; filename="{safe_name}"',
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(row.filename, safe='')}",
             "Content-Length": str(row.size_bytes),
         },
     )

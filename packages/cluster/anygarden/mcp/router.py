@@ -120,7 +120,9 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
 
     # ── tools/list ──────────────────────────────────────────────
     if method == "tools/list":
-        return _jsonrpc_ok(req_id, {"tools": TOOL_SCHEMAS})
+        from anygarden.mcp.project_tools import PROJECT_TOOL_SCHEMAS
+
+        return _jsonrpc_ok(req_id, {"tools": [*TOOL_SCHEMAS, *PROJECT_TOOL_SCHEMAS]})
 
     # ── tools/call ──────────────────────────────────────────────
     if method == "tools/call":
@@ -135,6 +137,11 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
             return _jsonrpc_error(
                 req_id, -32602, "params.arguments must be an object"
             )
+        from anygarden.mcp.project_tools import PROJECT_TOOL_NAMES, call_project_tool
+
+        if name in PROJECT_TOOL_NAMES:
+            result = await call_project_tool(request, agent_id=agent_id, name=name, arguments=arguments)
+            return _jsonrpc_ok(req_id, result)
         # ``mark_task_status`` (#266) is the first tool that operates
         # on the main DB rather than the skill library, so it owns its
         # own session lifecycle here. The legacy skill tools below
@@ -143,8 +150,19 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
             session_factory = request.app.state.session_factory
             async with session_factory() as db:
                 handler = claim_task if name == "claim_task" else mark_task_status
+                kwargs = {}
+                if name == "mark_task_status" and request.headers.get("x-anygarden-turn-request-id"):
+                    from anygarden.mcp.project_tools import turn_proof
+
+                    try:
+                        kwargs["proof"] = turn_proof(request)
+                    except HTTPException as exc:
+                        return _jsonrpc_ok(req_id, {
+                            "isError": True,
+                            "content": [{"type": "text", "text": str(exc.detail)}],
+                        })
                 tool_result = await handler(
-                    db, agent_id=agent_id, arguments=arguments
+                    db, agent_id=agent_id, arguments=arguments, **kwargs,
                 )
                 if not tool_result.get("isError"):
                     # Snapshot the task and room name BEFORE the
@@ -220,10 +238,24 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                                     break
                             woken_payloads.append((w_task, w_room, w_msg))
 
+                    execution_messages = list(db.info.pop("project_execution_messages", []))
+                    repair_task_ids = set(db.info.pop("project_execution_recovery_tasks", []))
                     await db.commit()
+                    if execution_messages:
+                        from anygarden.mcp.project_tools import (
+                            broadcast_project_messages,
+                        )
+
+                        await broadcast_project_messages(db, request=request, messages=execution_messages)
                     manager = getattr(
                         request.app.state, "connection_manager", None
                     )
+                    if repair_task_ids:
+                        from anygarden.project_executions.recovery import (
+                            fanout_recovery_updates,
+                        )
+
+                        await fanout_recovery_updates(session_factory, manager, repair_task_ids)
                     if task_obj is not None:
                         await _fanout_task_event(
                             db,
@@ -237,14 +269,18 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                     # frame (so the 1차/2차 task views reflect todo again).
                     for w_task, w_room, w_msg in woken_payloads:
                         if manager is not None and w_msg is not None:
-                            from anygarden.messages.serialization import (
-                                message_to_frame as _message_to_frame,
-                            )
+                            if w_task.execution_id:
+                                from anygarden.mcp.project_tools import (
+                                    broadcast_project_messages,
+                                )
 
-                            await manager.broadcast(
-                                w_task.room_id,
-                                _message_to_frame(w_msg),
-                            )
+                                await broadcast_project_messages(db, request=request, messages=[w_msg])
+                            else:
+                                from anygarden.messages.serialization import (
+                                    message_to_frame as _message_to_frame,
+                                )
+
+                                await manager.broadcast(w_task.room_id, _message_to_frame(w_msg))
                         await _fanout_task_event(
                             db,
                             manager=manager,
@@ -261,6 +297,29 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
         if name == "create_task":
             session_factory = request.app.state.session_factory
             async with session_factory() as db:
+                if request.headers.get("x-anygarden-turn-request-id"):
+                    from anygarden.db.models import Task
+                    from anygarden.mcp.project_tools import turn_proof
+                    from anygarden.project_executions.service import (
+                        ExecutionConflict,
+                        authorize_turn,
+                    )
+
+                    try:
+                        turn = await authorize_turn(db, agent_id=agent_id, proof=turn_proof(request))
+                        bound_task = await db.get(Task, turn.task_id) if turn.task_id else None
+                        if bound_task is not None and bound_task.execution_id:
+                            raise HTTPException(409, "Execution turns must delegate with delegate_project_task")
+                    except HTTPException as exc:
+                        return _jsonrpc_ok(req_id, {
+                            "isError": True,
+                            "content": [{"type": "text", "text": str(exc.detail)}],
+                        })
+                    except ExecutionConflict as exc:
+                        return _jsonrpc_ok(req_id, {
+                            "isError": True,
+                            "content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],
+                        })
                 tool_result = await create_task(
                     db, agent_id=agent_id, arguments=arguments
                 )
@@ -421,4 +480,4 @@ def _service(request: Request):
     return service
 
 
-__all__ = ["router", "mcp_rpc"]
+__all__ = ["mcp_rpc", "router"]

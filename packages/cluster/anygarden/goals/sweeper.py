@@ -6,6 +6,10 @@ in-progress past ``TASK_EXECUTION_TIMEOUT_SECONDS``, and flips them to
 ``failed``. Goal-derived tasks are then run through ``apply_completion``
 so the existing ``consecutive_failures`` / auto-pause policy fires.
 
+Project execution tasks use execution deadlines and durable turn lease
+recovery. A root task can remain active while its children run or await
+user input, so this single-task timeout must not fail those tasks.
+
 Invoked from ``GoalScheduler._tick`` once per poll cycle. Runs in its
 own short session so a sweep error can't poison goal triggering or
 vice-versa.
@@ -70,6 +74,7 @@ async def sweep_stuck_tasks(
     # Pickup timeout: assignee attached but never started.
     pickup_stmt = select(Task).join(Room, Task.room_id == Room.id).where(
         Room.archived_at.is_(None),
+        Task.execution_id.is_(None),
         Task.status == "todo",
         Task.assigned_at.is_not(None),
         Task.assigned_at < pickup_threshold,
@@ -79,6 +84,7 @@ async def sweep_stuck_tasks(
     # Execution timeout: started but never finished.
     exec_stmt = select(Task).join(Room, Task.room_id == Room.id).where(
         Room.archived_at.is_(None),
+        Task.execution_id.is_(None),
         Task.status == "in_progress",
         Task.started_at.is_not(None),
         Task.started_at < exec_threshold,

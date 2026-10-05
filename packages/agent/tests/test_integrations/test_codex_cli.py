@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from anygarden_agent.memory.scope import room_session_key
+
 import json
 from pathlib import Path
 
@@ -194,7 +196,7 @@ class TestCallCodexSession:
         monkeypatch.setattr(adapter, "_exec_once", fake_exec_once)
         resp = await adapter._call_codex("hi", "room1")
         assert resp == "reply"
-        assert adapter._room_thread_ids["room1"] == "new-tid"
+        assert adapter._room_thread_ids[room_session_key(adapter._client, "room1")] == "new-tid"
         assert adapter._take_last_usage() == {
             "model": "gpt-6.1-sol",
             "input_tokens": 1,
@@ -205,7 +207,7 @@ class TestCallCodexSession:
     async def test_second_turn_resumes_existing_session(self, monkeypatch) -> None:
         adapter = CodexCliAdapter()
         adapter._codex_path = "/usr/bin/codex"
-        adapter._room_thread_ids["room1"] = "existing-tid"
+        adapter._room_thread_ids[room_session_key(adapter._client, "room1")] = "existing-tid"
         seen: dict[str, str | None] = {}
 
         async def fake_exec_once(prompt, thread_id):
@@ -219,7 +221,7 @@ class TestCallCodexSession:
     async def test_resume_failure_never_retries_fresh(self, monkeypatch) -> None:
         adapter = CodexCliAdapter()
         adapter._codex_path = "/usr/bin/codex"
-        adapter._room_thread_ids["room1"] = "stale"
+        adapter._room_thread_ids[room_session_key(adapter._client, "room1")] = "stale"
         calls: list[str | None] = []
 
         async def fake_exec_once(prompt, thread_id):
@@ -234,7 +236,7 @@ class TestCallCodexSession:
             await adapter._call_codex("hi", "room1")
         assert error.value.transient is False
         assert calls == ["stale"]
-        assert adapter._room_thread_ids["room1"] == "stale"
+        assert adapter._room_thread_ids[room_session_key(adapter._client, "room1")] == "stale"
 
 
 class TestOnMessage:

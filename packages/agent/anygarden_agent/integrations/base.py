@@ -71,7 +71,9 @@ def _xml_escape_text(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
+def compose_referenced_files_hint(
+    metadata: dict[str, Any] | None, room_id: str | None = None
+) -> str:
     """Render a user-turn hint for explicitly referenced shared files.
 
     The shared-file contents are already available through the room's
@@ -104,7 +106,19 @@ def compose_referenced_files_hint(metadata: dict[str, Any] | None) -> str:
         if "/" in storage_name or "\\" in storage_name:
             continue
 
-        path = f"memory/shared/{storage_name}"
+        reference_room_id = ref.get("room_id", room_id)
+        if reference_room_id is not None:
+            if (
+                not isinstance(reference_room_id, str)
+                or reference_room_id in ("", ".", "..")
+                or "/" in reference_room_id
+                or "\\" in reference_room_id
+                or "\x00" in reference_room_id
+            ):
+                continue
+            path = f"memory/shared/{reference_room_id}/{storage_name}"
+        else:
+            path = f"memory/shared/{storage_name}"
         if path in seen:
             continue
         seen.add(path)
@@ -197,6 +211,22 @@ class MessagePolicy(Enum):
     RESPOND = "respond"
     INGEST_ONLY = "ingest_only"
     SKIP = "skip"
+
+
+def is_leased_task_assignment(msg: dict[str, Any], client) -> bool:
+    """Recognize this agent's task delivery from the authenticated server."""
+    metadata = msg.get("metadata") or {}
+    assignment = metadata.get("task_assignment")
+    return (
+        isinstance(assignment, dict)
+        and isinstance(assignment.get("task_id"), str)
+        and assignment.get("assignee_pid") in client._my_participant_ids
+        and isinstance(metadata.get("request_id"), str)
+        and isinstance(metadata.get("turn_lease"), str)
+        and bool(metadata["turn_lease"])
+        and isinstance(metadata.get("turn_attempt"), int)
+        and isinstance(metadata.get("turn_generation"), int)
+    )
 
 
 class EngineAdapter(ABC):
@@ -294,7 +324,17 @@ class EngineAdapter(ABC):
         if prefix:
             parts.append(wrap_as_room_conversation(prefix))
 
-        referenced_files = compose_referenced_files_hint(metadata)
+        client = getattr(self, "_client", None)
+        context_var = getattr(client, "_execution_input_context", None)
+        execution_context = context_var.get() if context_var is not None else None
+        if execution_context is not None and execution_context.get("room_id") == room_id:
+            from anygarden_agent.runtime.execution.project_turn import (
+                compose_frozen_references,
+            )
+
+            referenced_files = compose_frozen_references(execution_context)
+        else:
+            referenced_files = compose_referenced_files_hint(metadata, room_id=room_id)
         if referenced_files:
             parts.append(referenced_files)
 
@@ -392,7 +432,15 @@ def compose_memory_suffix(
     # Both attributes are populated by the welcome frame handler in
     # ``anygarden_agent.client``. Fall back defensively so pre-#237 clients
     # stay source-compatible.
-    memory_md = getattr(client, "_memory_md", None)
+    from anygarden_agent.memory.scope import room_memory_snapshot
+
+    snapshot = (
+        room_memory_snapshot(
+            (getattr(client, "_room_memory", {}) or {}).get(room_id),
+            room_id=room_id, generation=getattr(client, "_generation", None),
+        ) if room_id else None
+    )
+    memory_md = snapshot["memory_md"] if snapshot else None
     room_ephemeral_map = getattr(client, "_room_ephemeral", {}) or {}
     ephemeral = bool(room_ephemeral_map.get(room_id, False)) if room_id else False
 
@@ -407,15 +455,28 @@ def compose_memory_suffix(
         compose_shared_context_block,
     )
 
-    shared_block = compose_shared_context_block(Path.cwd() / "memory" / "shared")
+    context_var = getattr(client, "_execution_input_context", None)
+    execution_context = context_var.get() if context_var is not None else None
+    if execution_context is not None and execution_context.get("room_id") == room_id:
+        from anygarden_agent.runtime.execution.project_turn import (
+            compose_frozen_context,
+        )
+
+        shared_block = compose_frozen_context(execution_context)
+    else:
+        shared_block = (
+            compose_shared_context_block(Path.cwd() / "memory" / "shared", room_id=room_id)
+            if room_id is not None else ""
+        )
 
     # Skip the suffix entirely when nothing would be rendered — keeping
     # pre-#237 / pre-#246 prompts byte-for-byte identical in that case.
-    if not memory_md and not ephemeral and not shared_block:
+    if not snapshot and not ephemeral and not shared_block:
         return ""
 
     memory_block = (
-        compose_memory_block(memory_md, ephemeral) if (memory_md or ephemeral) else ""
+        compose_memory_block(memory_md, ephemeral, room_id=room_id)
+        if (snapshot or ephemeral) else ""
     )
     return memory_block + shared_block
 
@@ -636,6 +697,14 @@ def decide_policy(msg: dict[str, Any], client: ChatClient) -> MessagePolicy:
     content = msg.get("content", "")
     sender = msg.get("participant_id")
     metadata = msg.get("metadata") or {}
+
+    # The server binds an explicit task to this leased invocation. Historical
+    # assignment senders and catch-up/cycle guards must not turn that delivery
+    # into an idle context message. The runtime still validates its lease.
+    if is_leased_task_assignment(msg, client):
+        return MessagePolicy.RESPOND
+    if metadata.get("system_origin") == "project_execution_response" and metadata.get("ingest_only"):
+        return MessagePolicy.INGEST_ONLY
 
     # 1. Self-message — already filtered in _process_frame but
     #    belt-and-suspenders here too.

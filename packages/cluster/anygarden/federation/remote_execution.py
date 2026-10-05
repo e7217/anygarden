@@ -25,10 +25,21 @@ class RemoteScope:
     policy_epoch: int
     engine: str = "codex-cli"
     engine_version: str = "0.154.0"
+    # Mirror of the agent runtime's ``SessionScope`` (contracts.py): the
+    # prepare response carries these fields, and ``key`` must hash the
+    # same way on both sides.
+    project_execution_id: str | None = None
+    input_revision: int | None = None
+    retry_request_id: str | None = None
+    retry_attempt: int | None = None
 
     @property
     def key(self) -> str:
-        return hashlib.sha256(canonical(asdict(self)).encode()).hexdigest()
+        data = asdict(self)
+        if self.retry_request_id is None and self.retry_attempt is None:
+            data.pop("retry_request_id")
+            data.pop("retry_attempt")
+        return hashlib.sha256(canonical(data).encode()).hexdigest()
 
 
 @dataclass(frozen=True)

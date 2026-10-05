@@ -32,6 +32,12 @@ TOOL_NAMES = frozenset(
     }
 )
 MAX_RESPONSE_BYTES = 262_144
+PROJECT_TOOL_NAMES = frozenset({
+    "begin_project_execution", "delegate_project_task", "seal_project_plan",
+    "get_project_execution", "complete_project_execution",
+    "request_project_input", "publish_project_artifact", "read_project_artifact",
+    "request_project_approval", "execute_approved_project_action",
+})
 
 
 class PiSelfToolsError(ValueError):
@@ -76,7 +82,7 @@ def _validate_tools(payload: object) -> list[dict]:
         if (
             not isinstance(tool, dict)
             or not isinstance(tool.get("name"), str)
-            or tool["name"] not in TOOL_NAMES
+            or tool["name"] not in TOOL_NAMES | PROJECT_TOOL_NAMES
         ):
             continue
         name = tool["name"]
@@ -94,7 +100,7 @@ def _validate_tools(payload: object) -> list[dict]:
             "description": tool["description"],
             "inputSchema": schema,
         }
-    if set(selected) != TOOL_NAMES:
+    if not TOOL_NAMES.issubset(selected):
         raise PiSelfToolsError(
             "Pi self tools: the server does not provide all required task and skill tools"
         )

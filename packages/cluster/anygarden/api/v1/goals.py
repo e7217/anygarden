@@ -9,6 +9,7 @@ Surface (all under ``/api/v1``):
 - ``PATCH  /goals/{goal_id}``                 — edit (title/spec/cron/...)
 - ``DELETE /goals/{goal_id}``                 — remove goal
 - ``POST   /goals/{goal_id}/run``             — fire one execution now
+- ``POST   /goals/{goal_id}/scheduled-events`` — deliver one exact due slot
 - ``POST   /goals/{goal_id}/pause``           — flip status='paused'
 - ``POST   /goals/{goal_id}/resume``          — flip status='active' +
                                                  recompute next_run_at
@@ -20,16 +21,17 @@ scheduler isn't constantly catching ``GoalExecutionError``.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime, timezone
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
+from anygarden.auth.jwt import UserClaims
 from anygarden.db.models import Agent, Goal, Participant, Room
 from anygarden.dependencies import get_current_identity, get_db
 from anygarden.goals.executor import GoalExecutionError, trigger_goal
@@ -38,6 +40,7 @@ from anygarden.goals.policy import (
     compute_next_run_at,
     validate_trigger_config,
 )
+from anygarden.goals.scheduler import GoalScheduler, ScheduledEventError
 from anygarden.rooms.authorization import require_active_room
 
 router = APIRouter(tags=["goals"])
@@ -100,6 +103,29 @@ class GoalOut(BaseModel):
     updated_at: str
 
     model_config = {"from_attributes": True}
+
+
+class ScheduledEventIn(BaseModel):
+    scheduled_for: AwareDatetime
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("scheduled_for", mode="before")
+    @classmethod
+    def require_iso_timestamp(cls, value):
+        if not isinstance(value, str):
+            # Pydantic maps ValueError to 422; TypeError escapes its validation.
+            raise ValueError("scheduled_for must be a timezone-aware ISO timestamp")  # noqa: TRY004
+        return datetime.fromisoformat(value)
+
+
+class ScheduledEventOut(BaseModel):
+    goal_id: str
+    scheduled_for: str
+    status: Literal["accepted", "duplicate", "waiting_overlap"]
+    task_id: str | None
+    duplicate: bool
+    schedule_context: dict | None
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -169,8 +195,27 @@ async def _load_goal_owned(
     if goal is None:
         raise HTTPException(status_code=404, detail="goal not found")
     if identity.kind == "user":
-        if goal.owner_id != identity.id and not getattr(identity, "is_admin", False):
+        claims = identity.claims
+        is_admin = (isinstance(claims, UserClaims)
+                    and claims.user_id == identity.id and claims.is_admin is True)
+        if goal.owner_id != identity.id and not is_admin:
             raise HTTPException(status_code=403, detail="forbidden")
+    return goal
+
+
+async def _load_scheduled_goal_owned(
+    db: AsyncSession, goal_id: str, identity: Identity
+) -> Goal:
+    """Require registered owner/admin claims for exact scheduled delivery."""
+    claims = identity.claims
+    if (identity.kind != "user" or not isinstance(claims, UserClaims)
+        or claims.user_id != identity.id):
+        raise HTTPException(status_code=403, detail="Goal owner or admin required")
+    goal = await db.get(Goal, goal_id, populate_existing=True)
+    if goal is None:
+        raise HTTPException(status_code=404, detail="goal not found")
+    if goal.owner_id != identity.id and claims.is_admin is not True:
+        raise HTTPException(status_code=403, detail="forbidden")
     return goal
 
 
@@ -414,6 +459,48 @@ async def manual_run_goal(
         return _to_out(goal)
     await db.refresh(goal)
     return _to_out(goal)
+
+
+@router.post(
+    "/api/v1/goals/{goal_id}/scheduled-events", response_model=ScheduledEventOut
+)
+async def deliver_scheduled_event(
+    goal_id: str,
+    body: ScheduledEventIn,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_current_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Deliver an authoritative due slot, or read its durable consumed Task."""
+    await _load_scheduled_goal_owned(db, goal_id, identity)
+    slot = body.scheduled_for.astimezone(UTC)
+    now = datetime.now(UTC)
+    scheduler = GoalScheduler(
+        request.app.state.session_factory,
+        manager=getattr(request.app.state, "connection_manager", None),
+    )
+    try:
+        claim = await scheduler._claim_and_fire(db, goal_id, now, scheduled_for=slot)
+    except ScheduledEventError as exc:
+        await db.rollback()
+        status = 422 if exc.code in {
+            "SCHEDULED_TIMEZONE_REQUIRED", "SCHEDULED_SLOT_FUTURE",
+        } else 404 if exc.code == "GOAL_NOT_FOUND" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    except (GoalExecutionError, InvalidTriggerConfig):
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="SCHEDULED_GOAL_UNAVAILABLE") from None
+    if claim is None:  # pragma: no cover — strict supplied slots return a decision
+        raise HTTPException(status_code=409, detail="SCHEDULED_SLOT_CHANGED")
+    task = claim.task
+    return ScheduledEventOut(
+        goal_id=goal_id,
+        scheduled_for=slot.isoformat(),
+        status="waiting_overlap" if claim.waiting_overlap else "duplicate" if claim.duplicate else "accepted",
+        task_id=task.id if task else None,
+        duplicate=claim.duplicate,
+        schedule_context=task.schedule_context if task else None,
+    )
 
 
 @router.post("/api/v1/goals/{goal_id}/pause", response_model=GoalOut)

@@ -8,7 +8,7 @@ import math
 from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from .endpoint import DirectEndpoint, validate_endpoint_invocation
 from .pi_auth import NativePiAuth
@@ -26,6 +26,8 @@ FAILURE_CODES = frozenset(
         "AUTH_MISSING",
         "UNKNOWN_PROVIDER",
         "AUTH_CHECK_FAILED",
+        "MODEL_CONFIGURATION_INVALID",
+        "MODEL_TRANSIENT_FAILURE",
     }
 )
 
@@ -81,10 +83,22 @@ class SessionScope:
     policy_epoch: int
     engine: str = "codex-cli"
     engine_version: str = "0.154.0"
+    # Keep full provenance in the scope digest rather than relying on a
+    # truncated numeric policy hash for revision/session separation.
+    project_execution_id: str | None = None
+    input_revision: int | None = None
+    retry_request_id: str | None = None
+    retry_attempt: int | None = None
 
     @property
     def key(self) -> str:
-        return hashlib.sha256(canonical(asdict(self)).encode()).hexdigest()
+        data = asdict(self)
+        if self.retry_request_id is None and self.retry_attempt is None:
+            # Preserve normal same-revision continuation lanes, including
+            # their already committed native handles.
+            data.pop("retry_request_id")
+            data.pop("retry_attempt")
+        return hashlib.sha256(canonical(data).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -146,6 +160,25 @@ class Invocation:
             raise ValueError("incomplete session scope")
         if self.scope.workspace_epoch < 0 or self.scope.policy_epoch < 0:
             raise ValueError("invalid session epoch")
+        if self.scope.project_execution_id is not None:
+            from uuid import UUID
+
+            if (
+                str(UUID(self.scope.project_execution_id)) != self.scope.project_execution_id
+                or type(self.scope.input_revision) is not int
+                or self.scope.input_revision < 1
+            ):
+                raise ValueError("invalid execution input scope")
+        elif self.scope.input_revision is not None:
+            raise ValueError("execution input scope is incomplete")
+        if self.scope.retry_request_id is not None:
+            from uuid import UUID
+
+            if (str(UUID(self.scope.retry_request_id)) != self.scope.retry_request_id
+                or type(self.scope.retry_attempt) is not int or self.scope.retry_attempt < 2):
+                raise ValueError("invalid retry session scope")
+        elif self.scope.retry_attempt is not None:
+            raise ValueError("retry session scope is incomplete")
         if not all(
             isinstance(k, str) and isinstance(v, str)
             for k, v in self.environment.items()
@@ -155,6 +188,9 @@ class Invocation:
     @property
     def fingerprint(self) -> str:
         data = asdict(self)
+        if self.scope.retry_request_id is None and self.scope.retry_attempt is None:
+            data["scope"].pop("retry_request_id")
+            data["scope"].pop("retry_attempt")
         data["workspace"] = str(self.workspace.resolve())
         data["runtime_home"] = str(self.runtime_home.resolve())
         # Store only the digest, not credentials, prompts, paths or instructions.
@@ -180,7 +216,13 @@ class RuntimeResult:
     reason: str
     text: str | None = None
     session_handle: str | None = None
-    usage: dict[str, int] | None = None
+    usage: dict[str, Any] | None = None
+    # Private provider evidence for the store's atomic invocation normalization.
+    # Native handles are hashed before entering receipt/lifecycle metadata.
+    usage_source: str | None = None
+    usage_cumulative: dict[str, int | None] | None = None
+    usage_session_handle: str | None = None
+    usage_terminal: bool = False
 
 
 @dataclass(frozen=True)
@@ -191,7 +233,7 @@ class Receipt:
     outcome: Outcome | None = None
     reason: str | None = None
     text: str | None = None
-    usage: dict[str, int] | None = None
+    usage: dict[str, Any] | None = None
     error_code: str | None = None
 
 
