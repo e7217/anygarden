@@ -52,6 +52,7 @@ async def list_inbox(db: AsyncSession, *, identity: Identity, targets: dict) -> 
     )
     from anygarden.project_executions.recovery import (
         public_reason_code,
+        public_task_error,
         task_recovery_payload,
     )
     from anygarden.project_executions.requests import request_payload
@@ -182,7 +183,7 @@ async def list_inbox(db: AsyncSession, *, identity: Identity, targets: dict) -> 
             "latest_event_id": event.id if event else None,
             "latest_event_type": event.event_type if event else None,
             "recovery": recovery,
-            "task": {"id": task.id, "title": task.title, "status": task.status, "error": public_reason_code(task.error),
+            "task": {"id": task.id, "title": task.title, "status": task.status, "error": public_task_error(task.status, task.error),
                      "recovery": recovery,
                      "result_version": result.version if result else task.result_version,
                      "result_markdown": result.result_markdown if result else None,

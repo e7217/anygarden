@@ -926,3 +926,30 @@ async def test_early_answer_still_resumes_the_task(harness, worker_blocks):
     )
     async with harness.sessions() as db:
         assert (await db.get(Task, task_id)).status == "done"
+# -- F2: a worker's deliberate block is not an unknown failure ----------------
+
+
+@pytest.mark.req("EXE-19")
+async def test_worker_block_is_reported_as_task_blocked(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    execution_id = flow["execution"]["execution_id"]
+    worker_turn = await harness.deliver("worker")
+    await harness.tool(
+        worker_turn, "mark_task_status", task_id=task_id, status="blocked",
+        error="Need the v2.4 change list; none was provided.",
+    )
+
+    tasks = await harness.client.get(
+        f"/api/v1/rooms/{harness.ids['worker_room']}/tasks", headers=harness.user())
+    row = next(t for t in tasks.json() if t["id"] == task_id)
+    detail = await harness.client.get(f"/api/v1/executions/{execution_id}", headers=harness.user())
+    detail_row = next(t for t in detail.json()["tasks"] if t["id"] == task_id)
+    inbox = await harness.client.get("/api/v1/inbox", headers=harness.user())
+    inbox_task = next(i["task"] for i in inbox.json()["items"]
+                      if i.get("task", {}).get("id") == task_id)
+
+    assert row["status"] == "blocked"
+    assert row["error"] == detail_row["error"] == inbox_task["error"] == "TASK_BLOCKED"
+    # The free text never leaks through the public error field.
+    assert "change list" not in json.dumps([row["error"], detail_row["error"], inbox_task["error"]])

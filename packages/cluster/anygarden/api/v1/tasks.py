@@ -200,7 +200,7 @@ async def _to_out(
 
     is_current, task_disposition = disposition(execution, task.input_revision) if execution else (True, "current")
     from anygarden.project_executions.recovery import (
-        public_reason_code,
+        public_task_error,
         task_recovery_payload,
     )
 
@@ -225,7 +225,7 @@ async def _to_out(
         is_interesting=task.is_interesting,
         spec=task.spec,
         result_markdown=task.result_markdown,
-        error=public_reason_code(task.error) if execution else task.error,
+        error=public_task_error(task.status, task.error) if execution else task.error,
         dependency_results=task.dependency_results,
         schedule_context=task.schedule_context,
         is_silent=task.is_silent,

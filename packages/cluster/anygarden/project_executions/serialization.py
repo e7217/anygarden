@@ -73,7 +73,7 @@ async def execution_summary(db, execution: ProjectExecution, *, access=None) -> 
 
 async def enrich_execution_detail(db, detail: dict, *, execution: ProjectExecution, access=None) -> dict:
     from anygarden.project_executions.recovery import (
-        public_reason_code,
+        public_task_error,
         task_recovery_payload,
     )
 
@@ -89,7 +89,7 @@ async def enrich_execution_detail(db, detail: dict, *, execution: ProjectExecuti
             if name == "tasks":
                 task = await db.get(Task, row["id"])
                 row["recovery"] = await task_recovery_payload(db, task, execution=execution, access=access) if task else None
-                row["error"] = public_reason_code(row.get("error"))
+                row["error"] = public_task_error(row.get("status"), row.get("error"))
             if name == "approvals":
                 row["permit_revoked"] = not is_current and row.get("status") in {"pending", "approved", "rejected"}
             rows.append(row)
