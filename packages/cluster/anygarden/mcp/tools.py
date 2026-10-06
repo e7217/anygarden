@@ -601,6 +601,22 @@ async def mark_task_status(
             turn = await execution_service.authorize_turn(db, agent_id=agent_id, proof=proof)
             if turn.task_id != task.id:
                 return _error_result("Execution task does not belong to this turn")
+            # A later turn for the same task and assignee (e.g. the resume
+            # after a user answer or approval) owns the task now. An older
+            # turn still finishing must not overwrite its status.
+            from anygarden.db.models import AgentTurn
+
+            newer = await db.scalar(select(AgentTurn.request_id).where(
+                AgentTurn.task_id == task.id,
+                AgentTurn.target_participant_id == turn.target_participant_id,
+                AgentTurn.request_id != turn.request_id,
+                AgentTurn.created_at > turn.created_at,
+            ).limit(1))
+            if newer is not None:
+                return _error_result(
+                    "TASK_TURN_SUPERSEDED: a newer turn now owns this task; "
+                    "end this turn without changing the task"
+                )
             execution = await db.get(execution_service.ProjectExecution, task.execution_id)
             if execution is None or execution.input_revision != task.input_revision:
                 return _error_result("Execution input revision is no longer current")
