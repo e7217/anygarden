@@ -207,6 +207,23 @@ class Harness:
         assert not result.get("isError"), result["content"]
         return result.get("structuredContent") or result
 
+    async def tool_error_or_ok(self, turn: Turn, name: str, **arguments) -> dict:
+        """Call a tool and return the raw result, whether or not it errored."""
+        resp = await self.client.post(
+            "/mcp/rpc",
+            headers={
+                "Authorization": f"Bearer {self.ids[f'{turn.agent}_token']}",
+                **turn.headers,
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            },
+        )
+        return resp.json()["result"]
+
     async def tool_error(self, turn: Turn, name: str, **arguments) -> str:
         resp = await self.client.post(
             "/mcp/rpc",
@@ -863,3 +880,49 @@ async def test_unsupported_limits_and_actions_are_refused_at_begin(harness):
         allowed_actions=["send_email"],
     )
     assert "send_email" in error
+
+
+# -- F1: an answer that arrives before the asking turn ends -------------------
+
+
+async def _ask_then_answer_early(harness: Harness, *, worker_blocks: bool):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    worker_turn = await harness.deliver("worker")
+    question = await harness.tool(
+        worker_turn, "request_project_input", task_id=task_id,
+        question_key="release-date", question="What is the release date?",
+    )
+    # The user answers while the asking turn is still running.
+    resp = await harness.client.post(
+        f"/api/v1/execution-requests/{question['id']}/answer",
+        json={"answer": "2026-10-20"}, headers=harness.user(),
+    )
+    assert resp.status_code == 200, resp.text
+    if worker_blocks:
+        # Live runtimes may report the waiting task as blocked before ending.
+        stale = await harness.tool_error_or_ok(
+            worker_turn, "mark_task_status", task_id=task_id, status="blocked",
+            error="Waiting for the release date from the user",
+        )
+        # The answer already resumed the task in a newer turn.
+        assert stale.get("isError"), stale
+        assert "TASK_TURN_SUPERSEDED" in stale["content"][0]["text"]
+    await harness.end_turn(worker_turn)
+    return task_id
+
+
+@pytest.mark.req("EXE-18")
+@pytest.mark.parametrize("worker_blocks", [False, True])
+async def test_early_answer_still_resumes_the_task(harness, worker_blocks):
+    task_id = await _ask_then_answer_early(harness, worker_blocks=worker_blocks)
+
+    resumed = await harness.deliver("worker")
+    assert resumed.frame["metadata"]["task_assignment"]["task_id"] == task_id
+    # The resumed turn owns the task and can finish it.
+    await harness.tool(
+        resumed, "mark_task_status", task_id=task_id, status="done",
+        result_markdown="Release notes dated 2026-10-20.",
+    )
+    async with harness.sessions() as db:
+        assert (await db.get(Task, task_id)).status == "done"
