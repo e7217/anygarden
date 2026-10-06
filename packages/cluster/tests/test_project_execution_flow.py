@@ -926,6 +926,8 @@ async def test_early_answer_still_resumes_the_task(harness, worker_blocks):
     )
     async with harness.sessions() as db:
         assert (await db.get(Task, task_id)).status == "done"
+
+
 # -- F2: a worker's deliberate block is not an unknown failure ----------------
 
 
@@ -953,3 +955,34 @@ async def test_worker_block_is_reported_as_task_blocked(harness):
     assert row["error"] == detail_row["error"] == inbox_task["error"] == "TASK_BLOCKED"
     # The free text never leaks through the public error field.
     assert "change list" not in json.dumps([row["error"], detail_row["error"], inbox_task["error"]])
+
+
+# -- F3: a rejected action returns control to the lead ------------------------
+
+
+@pytest.mark.req("EXE-20")
+async def test_rejection_wakes_the_lead_with_the_reason(harness, monkeypatch):
+    portal = _Portal(monkeypatch)
+    ready = await _ready_for_approval(harness)
+    approval = await _request_approval(harness, ready)
+    await harness.end_turn(ready["lead_turn"])
+
+    assert (await _decide(harness, approval["id"], "reject")).status_code == 200
+
+    # Earlier child outcomes (the finished release notes) are delivered to
+    # the lead first, in order; the rejection notice follows.
+    notices = []
+    for _ in range(3):
+        lead_turn = await harness.deliver("lead")
+        notices.append(json.dumps(lead_turn.frame, ensure_ascii=False))
+        if ready["action_task"] in notices[-1]:
+            break
+        await harness.end_turn(lead_turn)
+    assert ready["action_task"] in notices[-1]
+    assert "APPROVAL_REJECTED" in notices[-1]
+
+    tasks = await harness.client.get(
+        f"/api/v1/rooms/{harness.ids['releaser_room']}/tasks", headers=harness.user())
+    action = next(t for t in tasks.json() if t["id"] == ready["action_task"])
+    assert (action["status"], action["error"]) == ("blocked", "APPROVAL_REJECTED")
+    assert portal.requests == []
