@@ -364,7 +364,8 @@ async def decide(db, *, useridentity: Identity, approval_id: str, decision: str,
             f"Target alias: {row.target_alias}\nArtifact: {row.artifact_id} / SHA-256 {row.artifact_sha256}\n"
             "승인된 실행은 execute_approved_project_action 도구로만 수행합니다. 성공 영수증 전에는 완료하지 마세요."
         )
-        task.error = "사용자가 실행 승인을 거절했습니다. 전송하지 않습니다." if decision == "reject" else None
+        # A closed public code: the task view shows the rejection as such.
+        task.error = "APPROVAL_REJECTED" if decision == "reject" else None
         message = await append_message(
             db, row.operating_room_id, access.participant.id if access.participant else None,
             f"실행 승인 {'허용' if decision == 'approve' else '거절'} · {row.task_title}\n\n{row.summary}",
@@ -400,5 +401,12 @@ async def decide(db, *, useridentity: Identity, approval_id: str, decision: str,
             event_key=f"approval:{row.id}:decision", event_type="approval_decided",
             details={"approval_id": row.id, "decision": decision, "action_digest": row.action_digest}, message_id=message.id))
         await db.flush()
+        if decision == "reject":
+            # Without this the blocked action task waits forever and nobody
+            # is woken. Hand the rejection to the lead through the normal
+            # child-outcome path so it can report, re-plan or wind down.
+            from anygarden.project_executions.service import reconcile_execution
+
+            await reconcile_execution(db, task)
     _queue(db, *messages)
     return row
