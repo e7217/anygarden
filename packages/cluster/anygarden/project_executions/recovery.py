@@ -80,6 +80,20 @@ def public_reason_code(value: str | None) -> str | None:
     return _REASON_ALIASES.get(value, "UNKNOWN_FAILURE")
 
 
+def public_task_error(status: str | None, value: str | None) -> str | None:
+    """Public error code for a task, aware of a worker's deliberate block.
+
+    A worker that marks its task ``blocked`` explains why in free text. That
+    text is not a closed code, but it is not an unknown failure either:
+    report it as ``TASK_BLOCKED`` (the explanation stays in the task's
+    messages and result) instead of ``UNKNOWN_FAILURE``.
+    """
+    code = public_reason_code(value)
+    if status == "blocked" and code == "UNKNOWN_FAILURE" and value not in PUBLIC_REASONS:
+        return "TASK_BLOCKED"
+    return code
+
+
 async def _native_terminal(db, turn, attempt):
     event = await db.scalar(select(ProjectExecutionEvent).where(
         ProjectExecutionEvent.execution_id == turn.execution_id,
