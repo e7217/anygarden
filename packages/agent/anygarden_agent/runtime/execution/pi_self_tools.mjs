@@ -2,8 +2,10 @@
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
-const names = new Set(['create_skill', 'update_skill', 'list_my_skills', 'delete_my_skill', 'claim_task', 'claim_current_request', 'request_task_input', 'mark_task_status', 'add_task_blocker', 'clear_task_blocker']);
-const projectNames = new Set(['begin_project_execution', 'delegate_project_task', 'resume_project_task', 'seal_project_plan', 'get_project_execution', 'complete_project_execution', 'request_project_input', 'publish_project_artifact', 'read_project_artifact', 'request_project_approval', 'execute_approved_project_action']);
+// Shared with pi_self_tools.py (#804) so the two sides cannot drift.
+const allowlist = JSON.parse(readFileSync(new URL('./pi_self_tools.json', import.meta.url), 'utf8'));
+const names = new Set(allowlist.required);
+const optionalNames = new Set(allowlist.optional);
 const limit = 262144;
 
 export default function registerAnygardenTools(pi) {
@@ -24,7 +26,7 @@ export default function registerAnygardenTools(pi) {
   }
   const redact = value => String(value).replaceAll(token, '[redacted]').slice(0, 500);
   for (const tool of config.tools) {
-    if (!(names.has(tool.name) || projectNames.has(tool.name)) || typeof tool.description !== 'string' || tool.inputSchema?.type !== 'object') {
+    if (!(names.has(tool.name) || optionalNames.has(tool.name)) || typeof tool.description !== 'string' || tool.inputSchema?.type !== 'object') {
       throw new Error('Anygarden self tools configuration contains an invalid tool.');
     }
     pi.registerTool({

@@ -1,0 +1,28 @@
+{
+  "required": [
+    "add_task_blocker",
+    "claim_current_request",
+    "claim_task",
+    "clear_task_blocker",
+    "create_skill",
+    "delete_my_skill",
+    "list_my_skills",
+    "mark_task_status",
+    "request_task_input",
+    "update_skill"
+  ],
+  "optional": [
+    "ask_peer",
+    "begin_project_execution",
+    "complete_project_execution",
+    "delegate_project_task",
+    "execute_approved_project_action",
+    "get_project_execution",
+    "publish_project_artifact",
+    "read_project_artifact",
+    "request_project_approval",
+    "request_project_input",
+    "resume_project_task",
+    "seal_project_plan"
+  ]
+}

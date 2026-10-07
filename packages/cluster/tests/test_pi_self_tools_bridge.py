@@ -18,9 +18,12 @@ from anygarden.db.engine import build_engine, build_session_factory
 from anygarden.db.models import (
     Agent,
     AgentToken,
+    AgentTurn,
     Base,
     Machine,
     Participant,
+    PeerAskGroup,
+    PeerAskTarget,
     PiNativeCredential,
     Room,
     Task,
@@ -32,11 +35,10 @@ from anygarden.scheduler.lifecycle import AgentLifecycle
 from anygarden.scheduler.machine_bus import MachineBus
 from anygarden.skills_library.service import SkillLibraryService
 from anygarden_agent.runtime.execution.pi_self_tools import (
+    ALLOWED_TOOL_NAMES,
     CONFIG_ENV,
     EXTENSION_PATH,
-    PROJECT_TOOL_NAMES,
     TOKEN_ENV,
-    TOOL_NAMES,
     prepare_pi_self_tools,
 )
 from cryptography.fernet import Fernet
@@ -136,6 +138,7 @@ async def bridge(tmp_path):
         await db.commit()
         ids = [agent.id for agent in agents]
         room_id, worker_pid = room.id, participants[1].id
+        coordinator_pid = participants[0].id
         task_ids = [task.id for task in tasks]
         frames = []
         for agent in agents:
@@ -172,6 +175,7 @@ async def bridge(tmp_path):
             "ids": ids,
             "room_id": room_id,
             "worker_pid": worker_pid,
+            "coordinator_pid": coordinator_pid,
             "task_ids": task_ids,
             "configs": configs,
             "url": url,
@@ -205,8 +209,8 @@ async def execute(bridge, index, calls):
     assert child.returncode == 0, stderr.decode()
     assert token.encode() not in stdout + stderr
     result = json.loads(stdout)
-    # The server lists the project execution tools too (#778).
-    assert set(result["names"]) == TOOL_NAMES | PROJECT_TOOL_NAMES
+    # Every tool the server lists for agents reaches Pi (#778, #804).
+    assert set(result["names"]) == ALLOWED_TOOL_NAMES
     return result["results"]
 
 
@@ -317,3 +321,76 @@ async def test_pi_token_reuse_rollback_and_restricted_no_token(bridge):
             authorization=f"Bearer {fresh['anygarden_mcp_token']}",
         )
         assert identity.id == agent.id
+
+
+@pytest.mark.asyncio
+async def test_pi_agent_asks_a_peer_and_a_hop_two_peer_hands_its_request_back(bridge):
+    """#804 — ``ask_peer`` over the Pi bridge behaves as it does for Codex.
+
+    The coordinator's running turn opens a fan-in group and starts the
+    worker's turn; the worker, called by that question, cannot ask on, so
+    its own ``ask_peer`` lands in its target row as a forwarded request.
+    """
+    room_id = bridge["room_id"]
+    coordinator_pid, worker_pid = bridge["coordinator_pid"], bridge["worker_pid"]
+    async with bridge["factory"]() as db:
+        # Only agents meant to run hold durable turns.
+        for agent_id in bridge["ids"]:
+            (await db.get(Agent, agent_id)).desired_state = "running"
+        db.add(
+            AgentTurn(
+                request_id="coordinator-turn",
+                room_id=room_id,
+                target_participant_id=coordinator_pid,
+                agent_id=bridge["ids"][0],
+                idempotency_key="coordinator-turn",
+                state="leased",
+            )
+        )
+        await db.commit()
+
+    asked = await execute(
+        bridge,
+        0,
+        [
+            {
+                "name": "ask_peer",
+                "args": {
+                    "room_id": room_id,
+                    "asks": [{"participant_id": worker_pid, "question": "Disk?"}],
+                },
+            }
+        ],
+    )
+    assert asked[0]["ok"], asked
+    async with bridge["factory"]() as db:
+        group = (await db.execute(select(PeerAskGroup))).scalar_one()
+        assert group.caller_request_id == "coordinator-turn"
+        target = (await db.execute(select(PeerAskTarget))).scalar_one()
+        assert target.group_id == group.id
+        worker_turn = await db.get(AgentTurn, target.request_id)
+        assert worker_turn.target_participant_id == worker_pid
+        assert worker_turn.state == "pending", worker_turn.state
+
+    forwarded = await execute(
+        bridge,
+        1,
+        [
+            {
+                "name": "ask_peer",
+                "args": {
+                    "room_id": room_id,
+                    "asks": [
+                        {"participant_id": coordinator_pid, "question": "CPU too?"}
+                    ],
+                },
+            }
+        ],
+    )
+    assert forwarded[0]["ok"], forwarded
+    assert forwarded[0]["value"]["details"]["status"] == "forwarded"
+    async with bridge["factory"]() as db:
+        target = (await db.execute(select(PeerAskTarget))).scalar_one()
+        assert target.forwarded_requests == [
+            {"participant_id": coordinator_pid, "question": "CPU too?"}
+        ]
