@@ -68,8 +68,8 @@ async def turn_hop(db: AsyncSession, turn: AgentTurn | None) -> int:
     """How deep a peer call made from *turn* goes (#756).
 
     A call from a turn that a peer's call started is hop 2; any other
-    turn (a person's message, a delegation, a round-robin or handoff
-    nomination, a fan-in wake, or no known turn) calls at hop 1.
+    turn (a person's message, a delegation, a fan-in wake, or no known
+    turn) calls at hop 1.
     """
     if turn is None or turn.trigger_message_id is None:
         return 1

@@ -26,8 +26,6 @@ class _FakeClient:
         self._agent_id = "agent-1"
         self._context_window_opt_out = False
         self._recent_msgs: dict = {}
-        self._speaker_strategy: dict = {}
-        self._orchestrator_agent_id: dict = {}
         self.handler: Any = None
         self.sendLifecycle = AsyncMock()
         self.sendTyping = AsyncMock()

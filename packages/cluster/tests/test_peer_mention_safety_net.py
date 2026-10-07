@@ -321,7 +321,7 @@ class TestRedundantPeerWake:
         sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
 
         with TestClient(app) as client:
-            # @everyone in a mentioned_only room → every agent is woken (#739).
+            # @everyone → every agent is woken (#739).
             _user_send(client, room.id, ws_env["token"], "@everyone 각자 무엇을 할 수 있나")
             msg = _agent_send_and_capture(
                 client, room.id, sender_token,
@@ -359,26 +359,6 @@ class TestRedundantPeerWake:
         assert meta.get("kind") == "peer_query"
         assert meta.get("peer_redundant") is None
         assert "peer_call_undelivered" not in meta
-
-    @pytest.mark.asyncio
-    async def test_non_mentioned_only_room_does_not_mark_woken(self, ws_env) -> None:
-        from anygarden.db.models import Room
-
-        app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
-        sender_token, _sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
-        async with sf() as db:
-            (await db.get(Room, room.id)).speaker_strategy = "round_robin"
-            await db.commit()
-
-        with TestClient(app) as client:
-            _user_send(client, room.id, ws_env["token"], "각자 무엇을 할 수 있나")
-            msg = _agent_send_and_capture(
-                client, room.id, sender_token, f"<@user:{peer_pid}> 차례", "차례",
-            )
-
-        meta = msg.get("metadata") or {}
-        assert meta.get("peer_redundant") is None
-        assert meta.get("peer_depth") == 1
 
     @pytest.mark.asyncio
     async def test_unmentioned_message_wakes_nobody_so_peer_ask_survives(

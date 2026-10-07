@@ -4,7 +4,6 @@ import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
 import RoomQueryResultCard from '@/components/RoomQueryResultCard'
-import HandoffMessageCard from '@/components/HandoffMessageCard'
 import BrailleSpinner from '@/components/BrailleSpinner'
 import { EntityAvatar, type AvatarKind, type EntityKind } from '@/components/EntityAvatar'
 import { apiFetch } from '@/lib/api'
@@ -15,7 +14,6 @@ import {
   parseResult,
   stripRoomQueryPrefix,
 } from '@/lib/room-query'
-import { parseHandoff, stripHandoffToTrailer } from '@/lib/handoff'
 import { parseTaskAssignment, stripTaskMentionPrefix } from '@/lib/taskAssignment'
 import TaskAssignmentCard from '@/components/TaskAssignmentCard'
 import { formatMessageTimestamp } from '@/lib/datetime'
@@ -36,13 +34,6 @@ interface MessageBubbleProps {
    * we render a ``BrailleSpinner`` + "응답 대기 중" badge so the user
    * can tie the banner chip back to the originating message. */
   pendingQueryIds?: Set<string>
-  /** Issue #238 — when this message is an accepted orchestrator
-   * handoff, the ``created_at`` of the target participant's first
-   * subsequent reply (or ``null`` if the target has not yet replied).
-   * Drives the breathing-border state on ``HandoffMessageCard``.
-   * Ignored for non-handoff messages. ``ChatArea`` computes this by
-   * forward-scanning the message stream. */
-  handoffResolvedAt?: string | null
   roomFiles?: RoomSharedFile[]
 }
 
@@ -117,7 +108,6 @@ export default memo(function MessageBubble({
   participants,
   isMine,
   pendingQueryIds,
-  handoffResolvedAt,
   roomFiles = [],
 }: MessageBubbleProps) {
   const [saved, setSaved] = useState(false)
@@ -164,9 +154,6 @@ export default memo(function MessageBubble({
   const resultMeta = useMemo(() => parseResult(message), [message])
   const forwardMeta = useMemo(() => parseForward(message), [message])
   const questionMeta = useMemo(() => parseQuestion(message), [message])
-  // Issue #238 — handoff is checked BEFORE the room_query variants so
-  // an accepted ``[HANDOFF]`` always renders as the breathing card.
-  const handoffMeta = useMemo(() => parseHandoff(message), [message])
   // #266 — synthetic task-assignment messages render as a compact
   // card. Checked first because it is the cheapest predicate and the
   // synthetic payload should never accidentally fall through to the
@@ -272,42 +259,6 @@ export default memo(function MessageBubble({
           title={title || t('chat.untitledTask')}
           assignee={assignee}
         />
-        <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
-          {formatTime(message.created_at)}
-        </span>
-      </div>
-    )
-  }
-
-  // Handoff variant (#238): accepted orchestrator handoff renders as
-  // a full-width breathing-border card. We still surface the sender's
-  // avatar, display name and timestamp — those are the contextual
-  // cues admins need to tie the handoff back to its author. The card
-  // body itself hides the raw ``[HANDOFF] <@user:...>`` protocol.
-  if (handoffMeta) {
-    const targetParticipant = participants[handoffMeta.targetParticipantId]
-    const targetName =
-      targetParticipant?.display_name
-        ?? handoffMeta.targetParticipantId.slice(-6)
-    return (
-      <div className="group flex flex-col items-start">
-        <div className="flex items-center gap-1.5 mb-1 pl-1">
-          {avatar}
-          <span className="text-badge text-[var(--color-foreground-muted)]">
-            {displayName}
-          </span>
-          {bookmarkBtn}
-        </div>
-        <div className="w-full">
-          <HandoffMessageCard
-            handoff={handoffMeta}
-            targetName={targetName}
-            createdAt={message.created_at}
-            resolvedAt={handoffResolvedAt ?? null}
-            resolveUser={resolveUser}
-            resolveRoom={resolveRoom}
-          />
-        </div>
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)] mt-1 pl-1">
           {formatTime(message.created_at)}
         </span>
@@ -445,12 +396,6 @@ export default memo(function MessageBubble({
       ? 'bg-[var(--color-surface)] border border-[var(--color-border)]'
       : 'bg-[var(--color-surface-alt)]'
 
-  // Issue #238 — strip any trailing ``handoff_to: ...`` directive the
-  // worker may have appended to its reply. Render-time only; the wire
-  // body stays intact so server-side consumers are unaffected.
-  const renderedContent = isAgent
-    ? stripHandoffToTrailer(message.content)
-    : message.content
   return (
     <div className="group flex flex-col items-start">
       <div className="flex items-center gap-1.5 mb-1 pl-1">
@@ -468,7 +413,7 @@ export default memo(function MessageBubble({
           uses the tighter user-side ladder. */}
       <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
         <MarkdownContent
-          content={renderedContent}
+          content={message.content}
           resolveUser={resolveUser}
           resolveRoom={resolveRoom}
           fileReferenceCandidates={fileReferenceCandidates}

@@ -114,11 +114,7 @@ async def bridge(tmp_path):
                     revision=1,
                 )
             )
-        room = Room(
-            name="Fixture room",
-            speaker_strategy="orchestrator",
-            orchestrator_agent_id=agents[0].id,
-        )
+        room = Room(name="Fixture room")
         db.add(room)
         await db.flush()
         participants = [
@@ -126,9 +122,21 @@ async def bridge(tmp_path):
             for agent in agents
         ]
         db.add_all(participants)
+        await db.flush()
+        tasks = [
+            Task(
+                room_id=room.id,
+                title=title,
+                status="todo",
+                assignee_participant_id=participants[1].id,
+            )
+            for title in ["First task", "Dependent task"]
+        ]
+        db.add_all(tasks)
         await db.commit()
         ids = [agent.id for agent in agents]
         room_id, worker_pid = room.id, participants[1].id
+        task_ids = [task.id for task in tasks]
         frames = []
         for agent in agents:
             frame = await lifecycle._build_sync_frame(db, agent, [room_id])
@@ -164,6 +172,7 @@ async def bridge(tmp_path):
             "ids": ids,
             "room_id": room_id,
             "worker_pid": worker_pid,
+            "task_ids": task_ids,
             "configs": configs,
             "url": url,
             "jwt_secret": config.jwt_secret,
@@ -202,22 +211,11 @@ async def execute(bridge, index, calls):
 
 
 @pytest.mark.asyncio
-async def test_all_nine_tools_work_with_actual_tokens_and_server_ownership(bridge):
+async def test_all_eight_tools_work_with_actual_tokens_and_server_ownership(bridge):
     created = await execute(
         bridge,
         0,
         [
-            {
-                "name": "create_task",
-                "args": {
-                    "room_id": bridge["room_id"],
-                    "title": title,
-                    "assignee_pid": bridge["worker_pid"],
-                },
-            }
-            for title in ["First task", "Dependent task"]
-        ]
-        + [
             {
                 "name": "create_skill",
                 "args": {
@@ -229,18 +227,12 @@ async def test_all_nine_tools_work_with_actual_tokens_and_server_ownership(bridg
         ],
     )
     assert all(item["ok"] for item in created), created
-    first, dependent = [item["value"]["details"]["task_id"] for item in created[:2]]
-    skill = created[2]["value"]["details"]["id"]
+    first, dependent = bridge["task_ids"]
+    skill = created[0]["value"]["details"]["id"]
     denied = await execute(
         bridge,
         1,
-        [
-            {
-                "name": "create_task",
-                "args": {"room_id": bridge["room_id"], "title": "Not coordinator"},
-            },
-            {"name": "update_skill", "args": {"id": skill, "body": "Not mine"}},
-        ],
+        [{"name": "update_skill", "args": {"id": skill, "body": "Not mine"}}],
     )
     assert all(not item["ok"] for item in denied), denied
     wrong_owner = await execute(

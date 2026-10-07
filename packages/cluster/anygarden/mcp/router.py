@@ -26,7 +26,6 @@ from anygarden.mcp.tools import (
     call_tool,
     claim_task,
     clear_task_blocker,
-    create_task,
     mark_task_status,
 )
 
@@ -195,7 +194,7 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                     # tasks to ``todo`` + injected fresh assignment
                     # mentions. Snapshot them (and their newest mention
                     # message) BEFORE commit so the WS fanout can wake the
-                    # dependents' assignees live, mirroring create_task.
+                    # dependents' assignees live.
                     structured = tool_result.get("structuredContent") or {}
                     woken_ids = structured.get("woken") or []
                     woken_payloads: list[tuple[Any, Any, Any]] = []
@@ -287,116 +286,6 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
                             event="updated",
                             task=w_task,
                             room_name=w_room.name if w_room else "",
-                        )
-            return _jsonrpc_ok(req_id, tool_result)
-
-        # ``create_task`` (#270) — orchestrator-only tool that drops a
-        # task into the main DB and reuses the Phase 1 mention
-        # injection. Same session-lifecycle pattern as
-        # ``mark_task_status`` so the WS fanout can run after commit.
-        if name == "create_task":
-            session_factory = request.app.state.session_factory
-            async with session_factory() as db:
-                if request.headers.get("x-anygarden-turn-request-id"):
-                    from anygarden.db.models import Task
-                    from anygarden.mcp.project_tools import turn_proof
-                    from anygarden.project_executions.service import (
-                        ExecutionConflict,
-                        authorize_turn,
-                    )
-
-                    try:
-                        turn = await authorize_turn(db, agent_id=agent_id, proof=turn_proof(request))
-                        bound_task = await db.get(Task, turn.task_id) if turn.task_id else None
-                        if bound_task is not None and bound_task.execution_id:
-                            raise HTTPException(409, "Execution turns must delegate with delegate_project_task")
-                    except HTTPException as exc:
-                        return _jsonrpc_ok(req_id, {
-                            "isError": True,
-                            "content": [{"type": "text", "text": str(exc.detail)}],
-                        })
-                    except ExecutionConflict as exc:
-                        return _jsonrpc_ok(req_id, {
-                            "isError": True,
-                            "content": [{"type": "text", "text": f"{exc.code}: {exc.detail}"}],
-                        })
-                tool_result = await create_task(
-                    db, agent_id=agent_id, arguments=arguments
-                )
-                if not tool_result.get("isError"):
-                    from sqlalchemy import select as _sa_select
-
-                    from anygarden.db.models import Room as _Room
-                    from anygarden.db.models import Task as _Task
-                    from anygarden.messages.service import (
-                        fanout_task_event as _fanout_task_event,
-                    )
-
-                    structured = tool_result.get("structuredContent") or {}
-                    task_id = structured.get("task_id")
-                    task_obj = None
-                    room_obj = None
-                    if task_id:
-                        task_obj = (
-                            await db.execute(
-                                _sa_select(_Task).where(_Task.id == task_id)
-                            )
-                        ).scalar_one_or_none()
-                        if task_obj is not None:
-                            room_obj = (
-                                await db.execute(
-                                    _sa_select(_Room).where(
-                                        _Room.id == task_obj.room_id
-                                    )
-                                )
-                            ).scalar_one_or_none()
-                    await db.commit()
-                    if task_obj is not None:
-                        manager = getattr(
-                            request.app.state, "connection_manager", None
-                        )
-                        # Broadcast both the synthetic message frame
-                        # (room channel, so the chat stream renders the
-                        # task card) and the task.updated frame (room +
-                        # admin user fanout for the 1차/2차 views).
-                        if task_obj.assignee_participant_id is not None:
-                            from anygarden.db.models import (
-                                Message as _Message,
-                            )
-                            from anygarden.messages.serialization import (
-                                message_to_frame as _message_to_frame,
-                            )
-
-                            # The injection helper persisted exactly
-                            # one mention message during this call;
-                            # pull the latest task_assignment row.
-                            recent_msgs = (
-                                await db.execute(
-                                    _sa_select(_Message)
-                                    .where(_Message.room_id == task_obj.room_id)
-                                    .order_by(_Message.seq.desc())
-                                    .limit(5)
-                                )
-                            ).scalars().all()
-                            for m in recent_msgs:
-                                meta = m.extra_metadata or {}
-                                ta = meta.get("task_assignment")
-                                if (
-                                    ta
-                                    and ta.get("task_id") == task_obj.id
-                                    and manager is not None
-                                ):
-                                    await manager.broadcast(
-                                        task_obj.room_id,
-                                        _message_to_frame(m),
-                                    )
-                                    break
-                        await _fanout_task_event(
-                            db,
-                            manager=manager,
-                            event="created",
-                            task=task_obj,
-                            room_name=room_obj.name if room_obj else "",
                         )
             return _jsonrpc_ok(req_id, tool_result)
 

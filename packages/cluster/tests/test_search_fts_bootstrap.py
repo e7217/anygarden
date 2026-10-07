@@ -78,10 +78,9 @@ class TestFreshBootstrapCreatesFts:
                 conn.execute(
                     text(
                         "INSERT INTO rooms (id, project_id, name, created_at, "
-                        "is_dm, context_window_enabled, speaker_strategy, "
-                        "current_speaker_index, ephemeral, allow_human_assignment) "
+                        "is_dm, context_window_enabled, ephemeral, allow_human_assignment) "
                         "VALUES ('r-1', 'p-1', 'R', '2026-06-22T00:00:00+00:00', "
-                        "0, 0, 'mentioned_only', 0, 0, 0)"
+                        "0, 0, 0, 0)"
                     )
                 )
                 conn.execute(
@@ -141,10 +140,9 @@ class TestSelfHealExistingDb:
                     await conn.execute(
                         text(
                             "INSERT INTO rooms (id, project_id, name, created_at, "
-                            "is_dm, context_window_enabled, speaker_strategy, "
-                            "current_speaker_index, ephemeral, allow_human_assignment) "
+                            "is_dm, context_window_enabled, ephemeral, allow_human_assignment) "
                             "VALUES ('r-1', 'p-1', 'R', '2026-06-22T00:00:00+00:00', "
-                            "0, 0, 'mentioned_only', 0, 0, 0)"
+                            "0, 0, 0, 0)"
                         )
                     )
                     await conn.execute(

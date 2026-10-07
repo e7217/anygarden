@@ -106,11 +106,9 @@ async def _expand_room_mentions(
     is_thread_reply: bool,
 ) -> list[dict[str, Any]]:
     """#739 — same ``@everyone`` / one-agent expansion as the WS path."""
-    strategy = getattr(room, "speaker_strategy", None) or "mentioned_only"
     needs_lookup = any(m.get("type") == "everyone" for m in mentions) or (
         sender_is_human
         and not is_thread_reply
-        and strategy == "mentioned_only"
         and not any(m.get("type") in ("user", "legacy") for m in mentions)
     )
     if not needs_lookup:
@@ -133,7 +131,6 @@ async def _expand_room_mentions(
         sender_pid=sender_pid,
         sender_is_human=sender_is_human,
         is_thread_reply=is_thread_reply,
-        speaker_strategy=strategy,
     )
 
 

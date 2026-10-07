@@ -328,25 +328,9 @@ async def _resolve_sender_participant_id(
     """Pick the participant the synthetic message is recorded against.
 
     Order:
-    1. Room orchestrator's participant (matches the natural "the
-       conductor is dispatching" framing)
-    2. The calling user's participant in this room
-    3. ``None`` — system-origin marker is added in the helper
-
-    See plan §3.2 decision 1 for the rationale.
+    1. The calling user's participant in this room
+    2. ``None`` — system-origin marker is added in the helper
     """
-    if room.orchestrator_agent_id:
-        orc_p = (
-            await db.execute(
-                select(Participant).where(
-                    Participant.room_id == room.id,
-                    Participant.agent_id == room.orchestrator_agent_id,
-                )
-            )
-        ).scalar_one_or_none()
-        if orc_p is not None:
-            return orc_p.id
-
     if identity.kind == "user":
         caller_p = (
             await db.execute(

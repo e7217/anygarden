@@ -37,8 +37,8 @@ interface MessageInputProps {
    * across a panel/inline switch. Omitted = no draft retention. */
   draftKey?: string
   /** #739 — show a quiet reminder under the input while the draft calls
-   * no one. Enabled for ``mentioned_only`` rooms with two or more agents,
-   * where an unmentioned message gets no agent reply. */
+   * no one. Enabled for rooms with two or more agents, where an
+   * unmentioned message gets no agent reply. */
   showMentionHint?: boolean
 }
 

@@ -882,6 +882,20 @@ async def test_unsupported_limits_and_actions_are_refused_at_begin(harness):
     assert "send_email" in error
 
 
+async def test_only_the_rooms_representative_can_begin_an_execution(harness):
+    """#802 — the operating lead is the room's representative agent."""
+    await harness.user_request("Fix the login bug")
+    lead_turn = await harness.deliver("lead")
+    async with harness.sessions() as db:
+        (await db.get(Room, harness.ids["lead_room"])).representative_agent_id = None
+        await db.commit()
+
+    error = await harness.tool_error(
+        lead_turn, "begin_project_execution", objective="Fix the login bug",
+    )
+    assert "configured lead must begin" in error
+
+
 # -- F1: an answer that arrives before the asking turn ends -------------------
 
 

@@ -3,6 +3,16 @@
 
 ## Unreleased
 
+### ⚠ Breaking changes
+
+- Room speaker strategies are gone (#802). `decide_policy` no longer reads a
+  per-room strategy, orchestrator or `next_speaker_participant_id`: an agent
+  answers only when it is mentioned. `[HANDOFF]` is no longer a task-init
+  prefix. The operating-room workflow prompt and execution-source session scope
+  follow the server's `operating_lead` delivery flag instead of the
+  `orchestrator` strategy.
+- The Pi self tools no longer include `create_task`, which the server removed.
+
 ### Changed
 
 - `CodexCliAdapter` falls back to `gpt-6.1-sol` instead of `gpt-6-sol` when no

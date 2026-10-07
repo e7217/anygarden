@@ -211,13 +211,9 @@ class RoomExecutionAdapter(CodexCliAdapter):
         retry_scope = self._retry_session_scope(msg)
         if metadata.get("execution_id"):
             return ("execution-input-v1", metadata["execution_id"], metadata.get("input_revision"), *retry_scope)
-        room_id = msg.get("room_id")
-        if (
-            metadata.get("turn_lease")
-            and getattr(self._client, "_orchestrator_agent_id", {}).get(room_id)
-            == getattr(self._client, "_agent_id", None)
-            and getattr(self._client, "_speaker_strategy", {}).get(room_id) == "orchestrator"
-        ):
+        # #802 — the server marks a leased delivery to an operating room's
+        # lead with ``operating_lead``.
+        if metadata.get("turn_lease") and metadata.get("operating_lead"):
             # The operating source turn is initially unbound. It must not
             # resume another execution before begin_project_execution binds it.
             return ("execution-source-v1", metadata.get("request_id"), *retry_scope)

@@ -12,6 +12,8 @@ TURN_PROOF_METADATA_KEYS = frozenset(
         "turn_idempotency_key",
         "workspace_attachment_id",
         "workspace_attachment_epoch",
+        # #802 — set only on a leased delivery to an operating room's lead.
+        "operating_lead",
     }
 )
 

@@ -41,8 +41,7 @@ async def build_participants_brief(
 ) -> list[ParticipantBrief]:
     """Collect a room's roster (#221).
 
-    Ordered by ``joined_at`` then ``id`` to match
-    ``_compute_round_robin_next``'s stable order.
+    Ordered by ``joined_at`` then ``id`` for a stable order.
 
     ``selectinload`` keeps this to a small fixed number of queries
     regardless of roster size. Orphaned participants (both FK relations
@@ -99,10 +98,10 @@ async def broadcast_roster(
     """Push the room's current roster to every subscriber (#644).
 
     Rides ``RoomSettingsChangedOut`` because that frame already carries
-    "values cached at welcome that can change later" (speaker strategy,
-    ephemeral flag) to exactly this audience. Settings fields are left
+    "values cached at welcome that can change later" (ephemeral flag,
+    context window) to exactly this audience. Settings fields are left
     ``None`` so a roster refresh never resets a receiver's cached
-    dispatch mode.
+    settings.
 
     A ``None`` *manager* (unit tests without a wired connection
     manager) skips the push, matching the convention in

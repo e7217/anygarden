@@ -1543,8 +1543,6 @@ async def create_agent_dm(
         "is_dm": room.is_dm,
         "representative_agent_id": room.representative_agent_id,
         "context_window_enabled": room.context_window_enabled,
-        "speaker_strategy": room.speaker_strategy,
-        "orchestrator_agent_id": room.orchestrator_agent_id,
         "ephemeral": room.ephemeral,
     }
 

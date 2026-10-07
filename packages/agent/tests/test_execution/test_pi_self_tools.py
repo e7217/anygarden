@@ -150,7 +150,7 @@ async def test_incomplete_schemas_and_symlinked_config_directory_are_rejected(tm
 async def test_extension_registers_all_tools_and_maps_errors_and_cancellation(tmp_path):
     config = await prepared(tmp_path)
     calls = [
-        {"name": "create_task", "mock": mode}
+        {"name": "claim_task", "mock": mode}
         for mode in [
             "http",
             "rpc",

@@ -181,10 +181,10 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     assert "result" in data
     names = {t["name"] for t in data["result"]["tools"]}
     # #266 — ``mark_task_status`` joins the original skill-authoring
-    # quartet. #270 added ``create_task``. #459 (Wave 2c) added
-    # ``add_task_blocker`` / ``clear_task_blocker``. Per-tool tests live
-    # in test_mark_task_status.py, test_create_task_tool.py, and
-    # test_task_blockers.py. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
+    # quartet. #459 (Wave 2c) added ``add_task_blocker`` /
+    # ``clear_task_blocker``. Per-tool tests live in
+    # test_mark_task_status.py and test_task_blockers.py. #802 removed the
+    # orchestrator-only ``create_task``. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
     # #778 added the project execution tools (mcp/project_tools.py).
     assert names == {
         "begin_project_execution",
@@ -203,7 +203,6 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "delete_my_skill",
         "claim_task",
         "mark_task_status",
-        "create_task",
         "add_task_blocker",
         "clear_task_blocker",
         "ask_peer",
