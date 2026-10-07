@@ -568,6 +568,17 @@ class ShaTrackedInjector:
         self._memory_sha: dict[str, str] = {}
         self._roster_sha: dict[str, str] = {}
 
+    def forget(self, room_id: str) -> None:
+        """Treat the next :meth:`apply` for ``room_id`` as the first one.
+
+        #805 — the sha record assumes the engine resumes the session that
+        saw the blocks. When no session will be resumed (a failed first
+        turn stores none), the fresh session must get every block again.
+        """
+        self._system_sha.pop(room_id, None)
+        self._memory_sha.pop(room_id, None)
+        self._roster_sha.pop(room_id, None)
+
     def apply(
         self,
         room_id: str,

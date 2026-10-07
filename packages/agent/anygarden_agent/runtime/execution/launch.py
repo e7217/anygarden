@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, field, replace
 
 from anygarden_agent import secrets
 
-from .contracts import Invocation, _valid_provider
+from .contracts import Invocation, SessionScope, _valid_provider
 from .endpoint import (
     CHILD_KEY,
     CONFIG_KEY,
@@ -36,20 +36,15 @@ class ExecutionLaunch:
     _child_environment: dict[str, str] = field(default_factory=dict, repr=False)
     native_auth: NativePiAuth | None = None
 
-    def bind(self, invocation: Invocation) -> Invocation:
-        if invocation.scope.engine != self.engine:
-            raise ValueError("Launch engine differs from invocation engine")
-        environment = dict(invocation.environment)
-        for key in (CHILD_KEY, CONFIG_KEY, INPUT_KEY, PI_CONFIG_KEY, PI_INPUT_KEY):
-            environment.pop(key, None)
-        environment.update(self._child_environment)
+    def bind_scope(self, scope: SessionScope) -> SessionScope:
+        """The session scope :meth:`bind` gives an invocation in *scope*."""
         # Bind both the caller's policy epoch and the server launch generation;
         # descriptor/revision also fences the commit-to-generation-bump interval.
         epoch = int.from_bytes(
             hashlib.sha256(
                 json.dumps(
                     [
-                        invocation.scope.policy_epoch,
+                        scope.policy_epoch,
                         self.generation,
                         self.provider,
                         self.model,
@@ -62,6 +57,15 @@ class ExecutionLaunch:
             ).digest()[:8],
             "big",
         )
+        return replace(scope, policy_epoch=epoch)
+
+    def bind(self, invocation: Invocation) -> Invocation:
+        if invocation.scope.engine != self.engine:
+            raise ValueError("Launch engine differs from invocation engine")
+        environment = dict(invocation.environment)
+        for key in (CHILD_KEY, CONFIG_KEY, INPUT_KEY, PI_CONFIG_KEY, PI_INPUT_KEY):
+            environment.pop(key, None)
+        environment.update(self._child_environment)
         bound = replace(
             invocation,
             provider=self.provider,
@@ -69,7 +73,7 @@ class ExecutionLaunch:
             endpoint=self.endpoint,
             native_auth=self.native_auth,
             environment=environment,
-            scope=replace(invocation.scope, policy_epoch=epoch),
+            scope=self.bind_scope(invocation.scope),
         )
         bound.validate()
         return bound

@@ -15,6 +15,8 @@ import pytest
 
 from anygarden_agent.integrations.base import ShaTrackedInjector
 from anygarden_agent.integrations.codex_cli import CodexCliAdapter
+from anygarden_agent.memory.scope import room_session_key
+from anygarden_agent.runtime.handler_wrapper import EngineError
 
 
 class TestInjectorSystemBlock:
@@ -87,6 +89,8 @@ class TestCodexSystemPromptInjection:
 
         async def fake_call(prompt: str, room_id: str) -> str:
             captured.append(prompt)
+            # Like the real call: a finished turn leaves a resume handle.
+            adapter._room_thread_ids[room_session_key(None, room_id)] = "thread"
             return "ok"
 
         monkeypatch.setattr(adapter, "_call_codex", fake_call)
@@ -104,3 +108,36 @@ class TestCodexSystemPromptInjection:
         )
         assert 'You are "테스트에이전트01".' not in captured[1]
         assert "또 안녕" in captured[1]
+
+    @pytest.mark.asyncio
+    async def test_fresh_session_after_a_failed_turn_gets_system_prompt_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#805 — a failed first turn stores no resume handle, so the next
+        turn starts a fresh codex session that has never seen the prompt."""
+        adapter = CodexCliAdapter(system_prompt="SYSTEM")
+        adapter._client = None
+        adapter._codex_path = "codex"
+        captured: list[str] = []
+
+        async def failing_call(prompt: str, room_id: str) -> str:
+            captured.append(prompt)
+            raise EngineError("model is not supported")
+
+        monkeypatch.setattr(adapter, "_call_codex", failing_call)
+        with pytest.raises(EngineError):
+            await adapter.on_message(
+                {"room_id": "r1", "content": "one", "participant_id": "p-human"}
+            )
+
+        async def fake_call(prompt: str, room_id: str) -> str:
+            captured.append(prompt)
+            adapter._room_thread_ids[room_session_key(None, room_id)] = "thread"
+            return "ok"
+
+        monkeypatch.setattr(adapter, "_call_codex", fake_call)
+        for content in ("two", "three"):
+            await adapter.on_message(
+                {"room_id": "r1", "content": content, "participant_id": "p-human"}
+            )
+        assert ["SYSTEM" in prompt for prompt in captured] == [True, True, False]

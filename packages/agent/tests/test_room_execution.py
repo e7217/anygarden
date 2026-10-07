@@ -65,6 +65,13 @@ assert os.environ.get('ANYGARDEN_AGENT_TOKEN')=='self-mcp-fixture'
 assert os.environ.get('STAGED_PROVIDER_KEY')=='staged-only-fixture'
 prompt=sys.stdin.read()
 with Path('calls.jsonl').open('a') as f:f.write(json.dumps({'argv':args,'prompt':prompt})+'\n')
+# #805 — a definite failure, as an unsupported model reports it.
+if Path('fail-once').exists():
+    Path('fail-once').unlink()
+    if not pi:
+        print(json.dumps({'type':'thread.started','thread_id':'failed-session'}))
+        print(json.dumps({'type':'turn.failed','error':{'message':'model is not supported'}}),flush=True)
+    sys.exit(1)
 def event(value):print(json.dumps(value),flush=True)
 answer='local answer'
 if os.environ.get('TEST_ENDPOINT'):
@@ -300,6 +307,41 @@ async def test_room_resume_restart_and_thread_scope(setup_room, monkeypatch):
         assert "resume" not in calls[0]
         assert calls[1][0:3] == ["exec", "resume", "native-session"]
         assert "resume" not in calls[2]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("engine", ["codex-cli", "pi-cli"])
+async def test_fresh_session_after_failed_first_turn_gets_full_context(
+    setup_room, monkeypatch, engine
+):
+    """#805 — a failed first turn leaves no session to resume.
+
+    The next turn starts a fresh engine session, so it must carry the
+    system prompt again; only a turn that resumes may skip it.
+    """
+    workspace = setup_room / "workspace"
+    client = await client_for(engine, monkeypatch)
+    client._execution_adapter._system_prompt = "SYSTEM-FIXTURE"
+    try:
+        (workspace / "fail-once").touch()
+        for request in ("one", "two", "three"):
+            await client._message_handlers[0](message(request))
+        calls = [
+            json.loads(line)
+            for line in (workspace / "calls.jsonl").read_text().splitlines()
+        ]
+        assert len(calls) == 3
+        resumed = [
+            "native-session" in call["argv"] for call in calls
+        ]
+        assert resumed == [False, False, True]
+        assert ["SYSTEM-FIXTURE" in call["prompt"] for call in calls] == [
+            True,
+            True,
+            False,
+        ]
     finally:
         await client.close()
 

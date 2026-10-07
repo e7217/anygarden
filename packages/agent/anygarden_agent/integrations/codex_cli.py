@@ -299,8 +299,13 @@ class CodexCliAdapter(EngineAdapter):
         workflow = turn_workflow(
             metadata if isinstance(metadata, dict) else None
         )
+        context_scope = self._context_scope(msg)
+        # #805 — the blocks live in the engine session. A turn that starts
+        # a fresh one (e.g. after a failed first turn) needs all of them.
+        if not self._has_resumable_session(msg):
+            self._injector.forget(context_scope)
         prefix = self._injector.apply(
-            self._context_scope(msg),
+            context_scope,
             # #540 — codex exec has no system-prompt channel, so seed the
             # system prompt (identity + base instructions) into turn content.
             # Unconditional (unlike roster): a solo agent still must know who
@@ -334,6 +339,12 @@ class CodexCliAdapter(EngineAdapter):
 
         room_id = msg.get("room_id", "_default")
         return room_id, memory_session_scope(self._client, room_id)
+
+    def _has_resumable_session(self, msg) -> bool:
+        from anygarden_agent.memory.scope import room_session_key
+
+        room_id = msg.get("room_id", "_default")
+        return room_session_key(self._client, room_id) in self._room_thread_ids
 
     async def _call_codex(self, prompt: str, room_id: str) -> str | None:
         """Run one ``codex exec`` turn (resume when a session exists).
