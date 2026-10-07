@@ -50,8 +50,6 @@ function installFetch(
         name: 'general',
         description: 'ops',
         context_window_enabled: true,
-        speaker_strategy: 'mentioned_only',
-        orchestrator_agent_id: null,
         participants: [],
         ...roomPayload,
       }),
@@ -101,6 +99,9 @@ describe('RoomEditDialog – admin context-window toggle (#225)', () => {
     await waitFor(() => {
       expect(toggle).toBeChecked()
     })
+    // #802 — the speaker-strategy picker is gone.
+    expect(screen.queryByTestId('room-edit-speaker-strategy')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('room-edit-orchestrator')).not.toBeInTheDocument()
   })
 
   it('sends context_window_enabled in the admin PATCH body when toggled off', async () => {
@@ -141,8 +142,9 @@ describe('RoomEditDialog – admin context-window toggle (#225)', () => {
       expect(patchCall).toBeDefined()
       const body = JSON.parse((patchCall![1] as RequestInit).body as string)
       expect(body.context_window_enabled).toBe(false)
-      // Admin payload also carries the dispatch-mode fields.
-      expect(body.speaker_strategy).toBe('mentioned_only')
+      // #802 — speaker strategies are gone from the payload.
+      expect(body).not.toHaveProperty('speaker_strategy')
+      expect(body).not.toHaveProperty('orchestrator_agent_id')
     })
   })
 
@@ -183,8 +185,6 @@ describe('RoomEditDialog – admin context-window toggle (#225)', () => {
       const body = JSON.parse((patchCall![1] as RequestInit).body as string)
       // Non-admin payload never includes the admin-only fields.
       expect(body).not.toHaveProperty('context_window_enabled')
-      expect(body).not.toHaveProperty('speaker_strategy')
-      expect(body).not.toHaveProperty('orchestrator_agent_id')
     })
   })
 })

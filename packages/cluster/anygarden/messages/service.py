@@ -184,8 +184,8 @@ async def inject_task_assignment_message(
     ``metadata.task_assignment`` flag (plan §3.1, Step 8).
 
     ``sender_participant_id`` is the participant the message is recorded
-    against. Caller is responsible for picking it: prefer the room's
-    orchestrator participant, else the inviting user's participant. If
+    against. Caller is responsible for picking it, typically the inviting
+    user's participant. If
     neither is available the caller may pass ``None`` — the row is
     persisted with a NULL ``participant_id`` and stamped with
     ``metadata.system_origin = "task_assignment"`` so renderers can
@@ -223,7 +223,7 @@ async def inject_task_assignment_message(
             "inject_task_assignment_message requires task.assignee_participant_id"
         )
     # An assignment is a server instruction, even when the assignee is the
-    # room's orchestrator. Recording it as that agent's own message would
+    # sender. Recording it as that agent's own message would
     # make the SDK discard both the notification and the leased execution.
     if sender_participant_id == assignee_pid:
         sender_participant_id = None

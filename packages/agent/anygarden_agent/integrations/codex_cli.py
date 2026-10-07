@@ -137,6 +137,33 @@ def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
     ]
 
 
+_OPERATING_LEAD_WORKFLOW = (
+    "\n\n[프로젝트 운영실 작업]\n"
+    "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
+    "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
+    "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
+    "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
+    "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
+    "미완료 작업을 완료로 보고하지 말고, 모든 필수 결과를 검토한 뒤 "
+    "complete_project_execution으로 최종 결과·산출물·검증 근거·제한사항·다음 행동을 보고하세요."
+)
+
+
+def operating_lead_workflow(metadata: dict[str, Any] | None) -> str:
+    """Return the operating-room workflow for an operating lead's turn.
+
+    #802 — only a leased delivery to an operating room's lead carries
+    ``operating_lead``; the server derives it, so it cannot be forged. A
+    delegated execution task runs as a worker even on the lead.
+    """
+    if not metadata or not metadata.get("operating_lead"):
+        return ""
+    assignment = metadata.get("task_assignment") or {}
+    if assignment.get("execution_id") and assignment.get("role") != "orchestration":
+        return ""
+    return _OPERATING_LEAD_WORKFLOW
+
+
 class CodexCliAdapter(EngineAdapter):
     """Adapter that calls the host ``codex exec`` CLI via subprocess.
 
@@ -228,25 +255,9 @@ class CodexCliAdapter(EngineAdapter):
         roster_suffix = (
             client.compose_roster_suffix(room_id) if client is not None else ""
         )
-        workflow = ""
-        if client is not None and (
-            getattr(client, "_speaker_strategy", {}).get(room_id) == "orchestrator"
-            and getattr(client, "_orchestrator_agent_id", {}).get(room_id)
-            == getattr(client, "_agent_id", None)
-            and not (isinstance(metadata, dict)
-                     and (metadata.get("task_assignment") or {}).get("execution_id")
-                     and (metadata.get("task_assignment") or {}).get("role") != "orchestration")
-        ):
-            workflow = (
-                "\n\n[프로젝트 운영실 작업]\n"
-                "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
-                "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
-                "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
-                "모든 필수 담당 작업을 만든 뒤 seal_project_plan으로 계획을 확정하고 담당 결과를 기다리세요. "
-                "재개된 실행은 get_project_execution으로 실제 결과를 읽고 필요한 후속 작업을 이어가세요. "
-                "미완료 작업을 완료로 보고하지 말고, 모든 필수 결과를 검토한 뒤 "
-                "complete_project_execution으로 최종 결과·산출물·검증 근거·제한사항·다음 행동을 보고하세요."
-            )
+        workflow = operating_lead_workflow(
+            metadata if isinstance(metadata, dict) else None
+        )
         prefix = self._injector.apply(
             self._context_scope(msg),
             # #540 — codex exec has no system-prompt channel, so seed the

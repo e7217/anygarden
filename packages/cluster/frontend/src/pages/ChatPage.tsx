@@ -325,12 +325,11 @@ function LocalChatPage() {
   )
   const presence = useParticipantPresence(selectedRoom, presenceSeed)
 
-  // #739 — in a ``mentioned_only`` room with two or more agents an
-  // unmentioned message gets no agent reply, so the composer says so.
-  // A one-agent room answers without a mention and needs no hint.
+  // #739 — in a room with two or more agents an unmentioned message
+  // gets no agent reply, so the composer says so. A one-agent room
+  // answers without a mention and needs no hint.
   const showMentionHint =
-    (currentRoom?.speaker_strategy ?? 'mentioned_only') === 'mentioned_only'
-    && Object.values(participants).filter(p => p.kind === 'agent').length >= 2
+    Object.values(participants).filter(p => p.kind === 'agent').length >= 2
 
   const agentParticipants = useMemo(
     () => Object.values(participants)

@@ -22,6 +22,23 @@
 
 ### ⚠ Breaking changes
 
+- Removed the room speaker strategies (#802, migration `091`). Every room now
+  follows the mention-only rule from #739: an unmentioned message wakes no
+  agent, except in a room with exactly one agent. The `round_robin` and
+  `orchestrator` strategies, the server's `[HANDOFF]` handling and fallback
+  nomination, and the speaker-strategy picker in the room edit dialog are
+  gone. `rooms.speaker_strategy`, `orchestrator_agent_id`,
+  `next_speaker_participant_id` and `current_speaker_index` are dropped; the
+  room API and the WebSocket `welcome` / `room_settings_changed` frames no
+  longer carry them, and `PATCH /api/v1/rooms/{id}` ignores them. Rooms that
+  used `round_robin` or `orchestrator` now need mentions.
+- The orchestrator-only `create_task` MCP tool is removed. Project work is
+  delegated with `delegate_project_task`.
+- A project room's operating lead is now only its representative agent.
+  `begin_project_execution` no longer accepts the room's former orchestrator,
+  and the lead's leased delivery carries `operating_lead: true` when the room
+  has subrooms. Upgrade agent runtimes together with the server: an older Pi
+  runtime refuses a server that no longer lists `create_task`.
 - Removed `agents.collaboration_mode` (migration `072`). The column read as a
   control over whether an agent could call its peers, but the peer-mention
   safety net never consulted it — a `solo` agent that emitted a routing token

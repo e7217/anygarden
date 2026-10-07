@@ -1,13 +1,12 @@
 # ruff: noqa: F811
 """#739 — who a human message wakes in each room kind.
 
-In ``mentioned_only`` rooms a root message wakes only the agents it
+A root message wakes only the agents it
 mentions: no mention → no turn, ``@everyone`` → every agent, a single
 mention → that agent, and a room with exactly one agent → that agent even
 without a mention. The server records these calls as ordinary ``user``
 mentions (``via`` marks the expanded ones) so agents and turn creation use
-the explicit-mention path. Round-robin/orchestrator rooms keep their
-dispatcher.
+the explicit-mention path.
 """
 
 from __future__ import annotations
@@ -25,11 +24,10 @@ from anygarden.db.models import Agent, AgentTurn, Participant, Room
 from tests.test_ws_handler import ws_env  # noqa: F401
 
 
-async def _seed_agents(sf, room_id: str, names: list[str], strategy: str) -> list[str]:
-    """Add running agents to the room and set its strategy; return their pids."""
+async def _seed_agents(sf, room_id: str, names: list[str]) -> list[str]:
+    """Add running agents to the room; return their pids."""
     pids: list[str] = []
     async with sf() as db:
-        (await db.get(Room, room_id)).speaker_strategy = strategy
         for name in names:
             agent = Agent(name=name, engine="codex", actual_state="running")
             db.add(agent)
@@ -76,7 +74,7 @@ class TestMentionedOnlyRootMessage:
     @pytest.mark.asyncio
     async def test_unmentioned_message_wakes_nobody(self, ws_env) -> None:
         env = ws_env
-        await _seed_agents(env["session_factory"], env["room"].id, ["A", "B"], "mentioned_only")
+        await _seed_agents(env["session_factory"], env["room"].id, ["A", "B"])
 
         out = _user_send(env["app"], env["room"].id, env["token"], "누가 좀 봐줘")
 
@@ -87,7 +85,7 @@ class TestMentionedOnlyRootMessage:
     async def test_everyone_wakes_every_agent(self, ws_env) -> None:
         env = ws_env
         pids = await _seed_agents(
-            env["session_factory"], env["room"].id, ["A", "B", "C"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["A", "B", "C"]
         )
 
         out = _user_send(env["app"], env["room"].id, env["token"], "@everyone 소개해 줘")
@@ -102,7 +100,7 @@ class TestMentionedOnlyRootMessage:
     async def test_single_mention_wakes_only_that_agent(self, ws_env) -> None:
         env = ws_env
         pa, _pb = await _seed_agents(
-            env["session_factory"], env["room"].id, ["A", "B"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["A", "B"]
         )
 
         out = _user_send(env["app"], env["room"].id, env["token"], f"<@user:{pa}> 부탁해")
@@ -114,7 +112,7 @@ class TestMentionedOnlyRootMessage:
     async def test_legacy_name_mention_wakes_that_agent(self, ws_env) -> None:
         env = ws_env
         pa, _pb = await _seed_agents(
-            env["session_factory"], env["room"].id, ["alpha", "beta"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["alpha", "beta"]
         )
 
         out = _user_send(env["app"], env["room"].id, env["token"], "@Alpha 부탁해")
@@ -126,7 +124,7 @@ class TestMentionedOnlyRootMessage:
     async def test_one_agent_room_needs_no_mention(self, ws_env) -> None:
         env = ws_env
         (pa,) = await _seed_agents(
-            env["session_factory"], env["room"].id, ["solo"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["solo"]
         )
 
         out = _user_send(env["app"], env["room"].id, env["token"], "안녕")
@@ -141,7 +139,7 @@ class TestMentionedOnlyRootMessage:
         self, ws_env
     ) -> None:
         env = ws_env
-        await _seed_agents(env["session_factory"], env["room"].id, ["solo"], "mentioned_only")
+        await _seed_agents(env["session_factory"], env["room"].id, ["solo"])
         human_pid = env["participant"].id
 
         out = _user_send(
@@ -155,7 +153,7 @@ class TestMentionedOnlyRootMessage:
     async def test_everyone_in_thread_reply_wakes_every_agent(self, ws_env) -> None:
         env = ws_env
         pids = await _seed_agents(
-            env["session_factory"], env["room"].id, ["A", "B"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["A", "B"]
         )
         root = _user_send(env["app"], env["room"].id, env["token"], "스레드 시작")
 
@@ -168,36 +166,12 @@ class TestMentionedOnlyRootMessage:
         assert await _turn_targets(env["session_factory"], reply["id"]) == set(pids)
 
 
-class TestOtherStrategiesUnchanged:
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("strategy", ["round_robin", "orchestrator"])
-    async def test_unmentioned_message_keeps_dispatcher_turns(
-        self, ws_env, strategy
-    ) -> None:
-        env = ws_env
-        pids = await _seed_agents(env["session_factory"], env["room"].id, ["A", "B"], strategy)
-
-        out = _user_send(env["app"], env["room"].id, env["token"], "진행해 줘")
-
-        assert "mentions" not in (out.get("metadata") or {})
-        assert await _turn_targets(env["session_factory"], out["id"]) == set(pids)
-
-    @pytest.mark.asyncio
-    async def test_one_agent_round_robin_room_is_not_expanded(self, ws_env) -> None:
-        env = ws_env
-        await _seed_agents(env["session_factory"], env["room"].id, ["solo"], "round_robin")
-
-        out = _user_send(env["app"], env["room"].id, env["token"], "안녕")
-
-        assert "mentions" not in (out.get("metadata") or {})
-
-
 class TestRestPathExpansion:
     @pytest.mark.asyncio
     async def test_rest_send_expands_everyone(self, ws_env) -> None:
         env = ws_env
         pids = await _seed_agents(
-            env["session_factory"], env["room"].id, ["A", "B"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["A", "B"]
         )
         transport = ASGITransport(app=env["app"])
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -215,7 +189,7 @@ class TestRestPathExpansion:
     async def test_rest_send_in_one_agent_room_calls_that_agent(self, ws_env) -> None:
         env = ws_env
         (pa,) = await _seed_agents(
-            env["session_factory"], env["room"].id, ["solo"], "mentioned_only"
+            env["session_factory"], env["room"].id, ["solo"]
         )
         transport = ASGITransport(app=env["app"])
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -234,10 +208,10 @@ class TestRoomQueryRepresentative:
     @pytest.mark.asyncio
     async def test_room_query_wakes_only_the_representative(self, ws_env) -> None:
         """A ``#room`` query is forwarded by the target room's representative,
-        so that agent still gets a turn in a ``mentioned_only`` room."""
+        so that agent still gets a turn."""
         env = ws_env
         sf = env["session_factory"]
-        await _seed_agents(sf, env["room"].id, ["A", "B"], "mentioned_only")
+        await _seed_agents(sf, env["room"].id, ["A", "B"])
         async with sf() as db:
             rep = Agent(name="rep", engine="codex", actual_state="running")
             db.add(rep)

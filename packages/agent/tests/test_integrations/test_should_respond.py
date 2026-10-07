@@ -18,8 +18,6 @@ def _make_client(
     agent_id: str | None = None,
     context_window_opt_out: bool = False,
     recent_msgs: dict | None = None,
-    speaker_strategy: dict | None = None,
-    orchestrator_agent_id: dict | None = None,
 ):
     client = MagicMock()
     client._agent_name = agent_name
@@ -34,19 +32,6 @@ def _make_client(
     # prior history). Tests that exercise the cycle rule pass a dict
     # with pre-populated deques.
     client._recent_msgs = recent_msgs if recent_msgs is not None else {}
-    # #159 Phase B — per-room speaker strategy cache. Empty dict ⇒
-    # every room falls back to 'mentioned_only', which is what every
-    # legacy test in this suite expects.
-    client._speaker_strategy = (
-        speaker_strategy if speaker_strategy is not None else {}
-    )
-    # #159 Phase C — per-room orchestrator pointer. Kept separate from
-    # ``_speaker_strategy`` because a room may be in ``orchestrator``
-    # mode but have no orchestrator set yet (client falls back to
-    # mentioned_only-ish semantics in that case).
-    client._orchestrator_agent_id = (
-        orchestrator_agent_id if orchestrator_agent_id is not None else {}
-    )
     return client
 
 
@@ -728,397 +713,38 @@ class TestCycleDetectionInDecidePolicy:
         assert metrics.decide_policy_cycle_skip_total.value() == 1
 
 
-class TestRoundRobinStrategy:
-    """Issue #159 Phase B — ``round_robin`` dispatches by the server-
-    computed ``next_speaker_participant_id``. Only the single agent
-    whose participant id matches wakes up; everyone else skips,
-    including the human-sender default that ``mentioned_only`` uses.
-    """
+class TestNoSpeakerNomination:
+    """#802 — speaker strategies are gone, so a ``next_speaker`` stamp no
+    longer wakes an agent on its own; only a mention does."""
 
-    def test_my_turn_responds(self):
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
+    def test_next_speaker_stamp_without_mention_does_not_respond(self):
+        client = _make_client(my_pids={"my-pid-123"})
         msg = {
             "participant_id": "human-pid",
             "room_id": "room-a",
-            "content": "team, go",
-            "metadata": {
-                "next_speaker_participant_id": "my-pid-123",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_not_my_turn_skips(self):
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "team, go",
-            "metadata": {
-                "next_speaker_participant_id": "other-pid-456",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.SKIP
-
-    def test_no_next_speaker_metadata_skips(self):
-        """Round-robin strictly requires server to stamp the pointer.
-        Absence ⇒ SKIP (no fallback to 'everyone replies')."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "hi",
-            "metadata": {},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.SKIP
-
-    def test_direct_mention_still_wins(self):
-        """Explicit mention pre-empts round-robin routing (rule 3
-        beats the strategy tail)."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "yo",
-            "metadata": {
-                "mentions": [{"type": "user", "id": "my-pid-123"}],
-                # Someone else is the "next speaker" but we were
-                # explicitly @-mentioned — addressability wins.
-                "next_speaker_participant_id": "other-pid-456",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_task_init_prefix_still_wins(self):
-        """[ROOM_QUERY] / [DELEGATED] pre-empt round-robin (rule 2)."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "[ROOM_QUERY] fetch the status",
-            "metadata": {
-                "next_speaker_participant_id": "other-pid-456",
-                "_nonce": "n1",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-
-class TestOrchestratorStrategy:
-    """Issue #159 Phase C — ``orchestrator`` strategy O1/O2/O3.
-
-    Rules:
-
-    - **O1**: I am this room's orchestrator → RESPOND. The
-      orchestrator agent always sees every turn; it's the one
-      making the next-speaker call via ``handoff_to``.
-    - **O2**: ``metadata.next_speaker_participant_id`` points at me
-      (stamped by the server after the orchestrator's last
-      ``[HANDOFF]``) → RESPOND.
-    - **O3**: otherwise SKIP — even for unaddressed human messages.
-      This is the structural change vs. Phase B's fallthrough: a
-      non-orchestrator worker in an orchestrator room stays silent
-      until handed off to, so the orchestrator genuinely controls
-      turn order instead of every agent racing on every human turn.
-
-    The pre-strategy base rules (self-echo, ``[DELEGATED]`` /
-    ``[ROOM_QUERY]`` / explicit mention, cycle detection) still fire
-    upstream of this dispatcher, so a handoff tool call that lands
-    as ``[HANDOFF] <@user:{pid}> …`` is handled by the mention rule,
-    not the orchestrator branch. O3 only fires when no other rule
-    has already decided."""
-
-    def test_o1_orchestrator_responds_to_unaddressed_human(self):
-        """The orchestrator owns turn selection, so every human turn
-        is actionable for it even without a direct mention."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-alpha",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "hello",
-            "metadata": {},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_o2_next_speaker_match_responds(self):
-        """``metadata.next_speaker_participant_id`` matches one of my
-        participant ids → RESPOND. This is the handoff target path."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "agent-alpha-pid",
-            "room_id": "room-a",
-            "content": "[HANDOFF] <@user:my-pid-123> take it from here",
-            "metadata": {
-                "mentions": [{"type": "user", "id": "my-pid-123"}],
-                "next_speaker_participant_id": "my-pid-123",
-                "_nonce": "n1",
-            },
-        }
-        # Direct mention rule 3 actually fires before O2 in this
-        # specific case — the HANDOFF message mentions the target.
-        # Either way the decision is RESPOND; the test asserts the
-        # target agent does act.
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_o2_next_speaker_match_without_mention(self):
-        """If the server stamps ``next_speaker_participant_id`` on a
-        plain ambient message (no handoff prefix, no mention), the
-        target agent still wakes up under O2. Defends against the
-        case where a future server-side path pushes the pointer
-        without re-sending the full ``[HANDOFF]`` message."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "agent-alpha-pid",
-            "room_id": "room-a",
-            "content": "let's keep moving",
-            "metadata": {
-                "next_speaker_participant_id": "my-pid-123",
-                "_nonce": "n1",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_o3_non_orchestrator_non_target_skips(self):
-        """Unaddressed human message, I'm neither the orchestrator nor
-        the next speaker → SKIP. This is the core behavioural change
-        from Phase B: regular workers stay silent until called."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "hello",
-            "metadata": {},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.SKIP
-
-    def test_o3_next_speaker_points_elsewhere_skips(self):
-        """Server routed the next turn to a peer agent → SKIP."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "agent-alpha-pid",
-            "room_id": "room-a",
-            "content": "[HANDOFF] <@user:other-pid> your turn",
-            "metadata": {
-                "mentions": [{"type": "user", "id": "other-pid"}],
-                "next_speaker_participant_id": "other-pid",
-                "_nonce": "n1",
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.SKIP
-
-    def test_orchestrator_unset_falls_back_to_mentioned_only(self):
-        """Strategy is 'orchestrator' but ``orchestrator_agent_id`` is
-        unset (admin flipped the knob but never picked an agent).
-        Graceful fallback to ``mentioned_only`` semantics: the dispatcher
-        tail does not SKIP, so an unaddressed human message is absorbed
-        as context (#739) and mentions keep working."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-alpha",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": None},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "hello",
-            "metadata": {},
+            "content": "진행해 줘",
+            "metadata": {"next_speaker_participant_id": "my-pid-123"},
         }
         assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
 
-    def test_direct_mention_still_wins(self):
-        """Direct mention is evaluated BEFORE the strategy dispatcher,
-        so an orchestrator room with an explicit ``<@user:me>`` still
-        routes through rule 3 regardless of O1/O2/O3."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
+    def test_ingest_only_stamp_is_not_overridden_by_next_speaker(self):
+        client = _make_client(my_pids={"my-pid-123"})
         msg = {
-            "participant_id": "human-pid",
+            "participant_id": "other-agent-pid",
             "room_id": "room-a",
-            "content": "<@user:my-pid-123> direct question",
+            "content": "ambient",
             "metadata": {
-                "mentions": [{"type": "user", "id": "my-pid-123"}],
-            },
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_delegated_still_wins(self):
-        """``[DELEGATED]`` is also upstream of the strategy dispatcher,
-        so it always RESPONDs regardless of orchestrator routing."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "agent-gamma",
-            "room_id": "room-a",
-            "content": "[DELEGATED] do the thing",
-            "metadata": {"_nonce": "n1"},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-
-class TestStrategyForcedRespondBeatsIngestOnly:
-    """#233 — belt-and-suspenders for the orchestrator-silence bug.
-
-    Rule 5a ("strategy-forced RESPOND") sits between the mention
-    rules and the ``ingest_only`` short-circuit so that an agent the
-    server has explicitly nominated (orchestrator of the room, or
-    ``next_speaker_participant_id`` target) still answers even if
-    some upstream path mis-stamps ``ingest_only=True`` on the frame.
-
-    The server-side fix (#233 in ``ws/handler.py``) already skips
-    the stamp on human sends, so under normal operation these code
-    paths wouldn't collide. These tests guard the reverse direction:
-    if a future regression re-introduces the wrong stamp, the
-    orchestrator must still run.
-    """
-
-    def test_orchestrator_responds_even_with_ingest_only(self):
-        """I am this room's orchestrator and the frame happens to
-        carry ``ingest_only=True``. Rule 5a fires before rule 5, so
-        I still RESPOND."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-alpha",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "status?",
-            "metadata": {"ingest_only": True},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_non_orchestrator_still_ingests(self):
-        """I am NOT the orchestrator; rule 5a does not fire for me,
-        so rule 5 (ingest_only) stands and I absorb the message as
-        context."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-beta",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "status?",
-            "metadata": {"ingest_only": True},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
-
-    def test_round_robin_next_speaker_responds_with_ingest_only(self):
-        """Round-robin target picked by the server. Rule 5a lets the
-        nominated speaker respond regardless of the stamp."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "team, go",
-            "metadata": {
+                "_nonce": "n",
                 "ingest_only": True,
                 "next_speaker_participant_id": "my-pid-123",
             },
         }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
-
-    def test_round_robin_other_speaker_still_ingests(self):
-        """Round-robin pointer targets somebody else — 5a doesn't
-        fire for me, ``ingest_only`` wins."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            speaker_strategy={"room-a": "round_robin"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "team, go",
-            "metadata": {
-                "ingest_only": True,
-                "next_speaker_participant_id": "other-pid-456",
-            },
-        }
         assert decide_policy(msg, client) is MessagePolicy.INGEST_ONLY
-
-    def test_orchestrator_opt_out_still_responds(self):
-        """An agent configured as the orchestrator is logically the
-        opposite of "context-only listener". If ``context_window_opt_out``
-        is also set (a misconfiguration), rule 5a still wins — the
-        orchestrator must run for the room to be usable."""
-        client = _make_client(
-            my_pids={"my-pid-123"},
-            agent_id="agent-alpha",
-            context_window_opt_out=True,
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
-        msg = {
-            "participant_id": "human-pid",
-            "room_id": "room-a",
-            "content": "status?",
-            "metadata": {"ingest_only": True},
-        }
-        assert decide_policy(msg, client) is MessagePolicy.RESPOND
 
 
 class TestThreadReplyPolicy:
-    def test_unmentioned_thread_reply_is_passive_before_strategy(self):
-        client = _make_client(
-            agent_id="agent-alpha",
-            speaker_strategy={"room-a": "orchestrator"},
-            orchestrator_agent_id={"room-a": "agent-alpha"},
-        )
+    def test_unmentioned_thread_reply_is_passive(self):
+        client = _make_client(agent_id="agent-alpha")
         msg = {
             "participant_id": "human-pid",
             "room_id": "room-a",

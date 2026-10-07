@@ -843,8 +843,8 @@ class TestWelcomeAgentId:
 
 class TestWelcomeParticipantsRoster:
     """Issue #221 — welcome must include a roster of the room's
-    participants so orchestrator agents can inject the list into their
-    LLM system prompt and call ``handoff_to`` with valid UUIDs."""
+    participants so agents can inject the list into their LLM system
+    prompt and call ``ask_peer`` with valid participant ids."""
 
     @pytest.mark.asyncio
     async def test_welcome_includes_room_roster(self, ws_env) -> None:
@@ -1419,8 +1419,7 @@ class TestContextWindowBroadcast:
         with ``ingest_only``. The stamp was originally meant for
         agent-to-agent chatter (#148 Part 3), but a missing sender
         check caused human messages to be demoted to passive
-        ingestion, which in turn caused orchestrator rooms to go
-        silent once #225 flipped ``context_window_enabled`` on by
+        ingestion once #225 flipped ``context_window_enabled`` on by
         default. Users always expect their plain messages to be
         actionable regardless of the context-window flag."""
         from starlette.testclient import TestClient
@@ -1593,67 +1592,6 @@ class TestContextWindowBroadcast:
                 meta = msg.get("metadata") or {}
                 # parse_mentions resolves ``@bot`` as a legacy
                 # mention → direct addressing → no stamp.
-                assert "ingest_only" not in meta
-
-    @pytest.mark.asyncio
-    async def test_orchestrator_room_user_send_is_not_stamped(
-        self, ws_env
-    ) -> None:
-        """#233 regression: in an ``orchestrator`` room with
-        ``context_window_enabled=True`` and an orchestrator pinned,
-        a plain user send must reach peer agents WITHOUT
-        ``ingest_only`` so the orchestrator's ``decide_policy`` O1
-        rule can fire instead of short-circuiting on rule 4.
-
-        Mirrors the live room4 reproduction captured in the plan:
-        before the fix every user turn was stamped and every agent
-        silently ingested, leaving the room quiet.
-        """
-        from starlette.testclient import TestClient
-
-        app = ws_env["app"]
-        token = ws_env["token"]
-        room = ws_env["room"]
-        sf = ws_env["session_factory"]
-
-        # Seed an orchestrator agent participant and flip the
-        # room into orchestrator strategy with context-window on.
-        async with sf() as db:
-            agent = Agent(
-                name="alpha-orchestrator",
-                engine="codex",
-                actual_state="running",
-            )
-            db.add(agent)
-            await db.flush()
-            db.add(
-                Participant(
-                    room_id=room.id, agent_id=agent.id, role="member"
-                )
-            )
-
-            r = (
-                await db.execute(select(Room).where(Room.id == room.id))
-            ).scalar_one()
-            r.context_window_enabled = True
-            r.speaker_strategy = "orchestrator"
-            r.orchestrator_agent_id = agent.id
-            await db.commit()
-
-        with TestClient(app) as client:
-            with client.websocket_connect(
-                f"/ws/rooms/{room.id}",
-                subprotocols=["anygarden.v1", f"bearer.{token}"],
-            ) as ws:
-                ws.receive_text()  # welcome
-                ws.send_text(
-                    json.dumps({"type": "send", "content": "분석해줘"})
-                )
-                msg = json.loads(ws.receive_text())
-                assert msg["type"] == "message"
-                meta = msg.get("metadata") or {}
-                # Before #233 this was ``True`` and the orchestrator
-                # fell through to INGEST_ONLY.
                 assert "ingest_only" not in meta
 
     @pytest.mark.asyncio
@@ -1903,19 +1841,18 @@ class TestActivityLogRequestIdCorrelation:
 class TestAgentCausalLink:
     @pytest_asyncio.fixture()
     async def make_room(self, config: AnygardenSettings, tmp_path):
-        """Factory: build an app + room with N agents under a strategy.
+        """Factory: build an app + room with N agents.
 
         Returns handles per test; each call gets its own file-backed DB
-        under ``tmp_path`` (#726). Agents are added in
-        ``agent_names`` order, which is the round-robin rotation order
-        (joined_at, id), so the caller controls who index 0 / 1 are.
+        under ``tmp_path`` (#726). Agents are added in ``agent_names``
+        order.
         """
         from anygarden.auth.token import generate_token, hash_agent_token
         from anygarden.db.models import AgentToken
 
         engines = []
 
-        async def _make(*, strategy: str, agent_names: list[str]):
+        async def _make(*, agent_names: list[str]):
             # One file per call so each room gets its own DB (#726).
             engine = build_engine(_file_db_url(tmp_path))
             sf = build_session_factory(engine)
@@ -1929,12 +1866,7 @@ class TestAgentCausalLink:
                 project = Project(name="cl-proj")
                 db.add(project)
                 await db.flush()
-                room = Room(
-                    project_id=project.id,
-                    name="cl-room",
-                    speaker_strategy=strategy,
-                    current_speaker_index=0,
-                )
+                room = Room(project_id=project.id, name="cl-room")
                 db.add(room)
                 await db.flush()
                 for name in agent_names:
@@ -1997,45 +1929,12 @@ class TestAgentCausalLink:
                 return resp["id"]
 
     @pytest.mark.asyncio
-    async def test_nominated_agent_turn_carries_parent_request_id(
-        self, make_room
-    ) -> None:
-        """round_robin: A's send nominates B → B gets a tracked turn
-        whose ``message_received`` carries ``parent_request_id`` (A's
-        echoed id) and ``trigger_message_id`` (A's message)."""
-        from anygarden.db.models import ActivityLog
-
-        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
-        a_msg_id = self._agent_send(
-            env["app"],
-            env["tokens"]["A"],
-            env["room_id"],
-            "over to you",
-            metadata={"request_id": "rid-A"},
-        )
-
-        async with env["sf"]() as db:
-            rows = (await db.execute(
-                select(ActivityLog).where(
-                    ActivityLog.event_type == "message_received",
-                )
-            )).scalars().all()
-            assert len(rows) == 1, "only the nominated agent gets a turn"
-            row = rows[0]
-            assert row.agent_id == env["agents"]["B"]
-            assert row.request_id and row.request_id != "rid-A"
-            assert row.room_id == env["room_id"]
-            assert row.details["parent_request_id"] == "rid-A"
-            assert row.details["trigger_message_id"] == a_msg_id
-            assert row.details["room_id"] == env["room_id"]
-
-    @pytest.mark.asyncio
     async def test_no_next_speaker_mints_no_turn(self, make_room) -> None:
-        """mentioned_only with no mention → no nomination → no fan-out
+        """No mention → no nomination → no fan-out
         (phantom orphan count stays 0)."""
         from anygarden.db.models import ActivityLog
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         self._agent_send(
             env["app"],
             env["tokens"]["A"],
@@ -2058,12 +1957,12 @@ class TestAgentCausalLink:
         """An agent must not be able to forge ``next_speaker_participant_id``
         in its outbound metadata to spuriously mint/trigger a peer's
         turn. The fan-out keys off the server-set nomination, not the
-        inbound (agent-mutable) metadata — so a mentioned_only room with
-        no dispatcher nomination mints nothing even when the sender
+        inbound (agent-mutable) metadata — so a room with no directed
+        delegation mints nothing even when the sender
         supplies a real peer participant id."""
         from anygarden.db.models import ActivityLog
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         self._agent_send(
             env["app"],
             env["tokens"]["A"],
@@ -2083,36 +1982,9 @@ class TestAgentCausalLink:
             assert rows == [], "forged next_speaker must not mint a turn"
 
     @pytest.mark.asyncio
-    async def test_self_nomination_mints_no_turn(self, make_room) -> None:
-        """round_robin with a single agent nominates the sender itself
-        (index wraps to 0). The self-handoff guard must skip it so a
-        turn never causally links to its own author."""
-        from anygarden.db.models import ActivityLog
-
-        env = await make_room(strategy="round_robin", agent_names=["solo"])
-        self._agent_send(
-            env["app"],
-            env["tokens"]["solo"],
-            env["room_id"],
-            "thinking out loud",
-            metadata={"request_id": "rid-A"},
-        )
-        async with env["sf"]() as db:
-            rows = (await db.execute(
-                select(ActivityLog).where(
-                    ActivityLog.event_type == "message_received",
-                )
-            )).scalars().all()
-            assert rows == []
-
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "strategy", ["mentioned_only", "round_robin", "orchestrator"]
-    )
     @pytest.mark.parametrize("target_role", ["member", "admin", "owner"])
     async def test_directed_delegation_creates_only_target_child_turn(
-        self, make_room, strategy, target_role
+        self, make_room, target_role
     ) -> None:
         from uuid import uuid4
 
@@ -2124,10 +1996,8 @@ class TestAgentCausalLink:
             Message,
         )
 
-        env = await make_room(strategy=strategy, agent_names=["A", "B", "C"])
+        env = await make_room(agent_names=["A", "B", "C"])
         async with env["sf"]() as db:
-            room = await db.get(Room, env["room_id"])
-            room.orchestrator_agent_id = env["agents"]["A"]
             target = await db.get(Participant, env["parts"]["C"])
             target.role = target_role
             await db.commit()
@@ -2174,12 +2044,8 @@ class TestAgentCausalLink:
             ).one()
             assert event.request_id == turn.request_id
             assert event.details["parent_request_id"] == "parent-request"
-            assert (
-                await db.get(Room, env["room_id"])
-            ).next_speaker_participant_id == env["parts"]["C"]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("strategy", ["round_robin", "orchestrator"])
     @pytest.mark.parametrize(
         "invalid_case",
         [
@@ -2199,19 +2065,18 @@ class TestAgentCausalLink:
         ],
     )
     async def test_invalid_directed_delegation_never_falls_back(
-        self, make_room, config, strategy, invalid_case
+        self, make_room, config, invalid_case
     ) -> None:
         from uuid import uuid4
 
         from anygarden.db.models import AgentTurn, Message
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy=strategy, agent_names=["A", "B", "C"])
+        env = await make_room(agent_names=["A", "B", "C"])
         token = env["tokens"]["A"]
         target_pid = env["parts"]["C"]
         async with env["sf"]() as db:
             room = await db.get(Room, env["room_id"])
-            room.orchestrator_agent_id = env["agents"]["A"]
             target = await db.get(Participant, target_pid)
             if invalid_case == "observer":
                 target.role = "observer"
@@ -2255,7 +2120,7 @@ class TestAgentCausalLink:
         elif invalid_case == "mismatched_mention":
             content = f"[DELEGATED] <@user:{env['parts']['B']}> review"
         elif invalid_case == "bad_prefix":
-            content = f"[HANDOFF] <@user:{target_pid}> review"
+            content = f"[REVIEW] <@user:{target_pid}> review"
         elif invalid_case == "empty_task":
             content = f"[DELEGATED] <@user:{target_pid}>  "
         with (
@@ -2274,9 +2139,6 @@ class TestAgentCausalLink:
         async with env["sf"]() as db:
             assert (await db.scalars(select(AgentTurn))).all() == []
             assert (await db.scalars(select(Message))).all() == []
-            assert (
-                await db.get(Room, env["room_id"])
-            ).next_speaker_participant_id is None
 
     @pytest.mark.asyncio
     async def test_directed_thread_delegation_does_not_fan_out_task_mentions(
@@ -2287,7 +2149,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        env = await make_room(agent_names=["A", "B", "C"])
         async with env["sf"]() as db:
             root = await append_message(
                 db, room_id=env["room_id"], participant_id=None, content="root"
@@ -2328,7 +2190,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, AgentTurnOutbox
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        env = await make_room(agent_names=["A", "B", "C"])
         delegation_id = str(uuid4())
         with TestClient(env["app"]) as client:
 
@@ -2419,7 +2281,7 @@ class TestAgentCausalLink:
         from anygarden.turns.service import deliver_pending_outbox
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "C"])
+        env = await make_room(agent_names=["A", "C"])
         async with env["sf"]() as db:
             await append_message(
                 db, room_id=env["room_id"], participant_id=None, content="baseline"
@@ -2469,7 +2331,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, AgentTurnAttempt
         from anygarden.orchestration.rules import PeerHandoffBudget
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B", "C"])
+        env = await make_room(agent_names=["A", "B", "C"])
         env["app"].state.peer_handoff_budget = PeerHandoffBudget()
         for target_name in ("B", "C"):
             self._agent_send(
@@ -2500,7 +2362,7 @@ class TestAgentCausalLink:
 
         from anygarden.db.models import AgentTurn
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         self._agent_send(
             env["app"],
             env["tokens"]["A"],
@@ -2513,29 +2375,25 @@ class TestAgentCausalLink:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "strategy", ["mentioned_only", "round_robin", "orchestrator"]
-    )
-    @pytest.mark.parametrize(
         "outcome",
         ["ok", "failed", "timeout", "cancelled", "rejected", "retry_exhausted"],
     )
     @pytest.mark.parametrize("in_thread", [False, True])
     async def test_terminal_delegation_result_never_wakes_another_agent(
-        self, make_room, strategy, outcome, in_thread
+        self, make_room, outcome, in_thread
     ) -> None:
         from uuid import uuid4
 
         from anygarden.db.models import AgentTurn, Message
         from anygarden.orchestration.rules import PeerHandoffBudget
 
-        env = await make_room(strategy=strategy, agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         budget = PeerHandoffBudget()
         env["app"].state.peer_handoff_budget = budget
         remaining_before = budget.remaining(env["room_id"])
         root_id = None
         async with env["sf"]() as db:
             room = await db.get(Room, env["room_id"])
-            room.orchestrator_agent_id = env["agents"]["A"]
             if in_thread:
                 root = await append_message(
                     db, room_id=room.id, participant_id=None, content="root"
@@ -2543,14 +2401,6 @@ class TestAgentCausalLink:
                 root_id = root.id
             await db.commit()
         content = f"Result mentions <@user:{env['parts']['B']}> for context only"
-        if strategy == "orchestrator" and not in_thread:
-            # Exercise both the explicit handoff and unaddressed moderator
-            # fallback, which must also remain idle for terminal results.
-            content = (
-                f"[HANDOFF] <@user:{env['parts']['B']}> result"
-                if outcome == "ok"
-                else "Delegated work finished"
-            )
         message_id = self._agent_send(
             env["app"],
             env["tokens"]["A"],
@@ -2564,9 +2414,6 @@ class TestAgentCausalLink:
             assert (await db.scalars(select(AgentTurn))).all() == []
             message = await db.get(Message, message_id)
             assert message.extra_metadata["delegation_outcome"] == outcome
-            assert (
-                await db.get(Room, env["room_id"])
-            ).next_speaker_participant_id is None
 
     @pytest.mark.asyncio
     async def test_terminal_delegation_result_completes_its_leased_parent(
@@ -2577,7 +2424,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, AgentTurnAttempt, Message
         from anygarden.turns.service import create_turn
 
-        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         async with env["sf"]() as db:
             trigger = await append_message(
                 db, room_id=env["room_id"], participant_id=None, content="parent task"
@@ -2619,32 +2466,6 @@ class TestAgentCausalLink:
                 "delegation_outcome"
             ] == "ok"
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "metadata",
-        [
-            {"delegation_outcome": "ok"},
-            {"delegation_id": "", "delegation_outcome": "ok"},
-            {"delegation_id": "correlation", "delegation_outcome": "pending"},
-        ],
-    )
-    async def test_nonterminal_delegation_metadata_preserves_rotation(
-        self, make_room, metadata
-    ) -> None:
-        from anygarden.db.models import AgentTurn
-
-        env = await make_room(strategy="round_robin", agent_names=["A", "B"])
-        self._agent_send(
-            env["app"],
-            env["tokens"]["A"],
-            env["room_id"],
-            "ordinary reply",
-            metadata=metadata,
-        )
-        async with env["sf"]() as db:
-            turn = (await db.scalars(select(AgentTurn))).one()
-            assert turn.target_participant_id == env["parts"]["B"]
-
     @staticmethod
     async def _human_sender(env, config):
         async with env["sf"]() as db:
@@ -2684,7 +2505,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, Message
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         token = (
             await self._human_sender(env, config)
             if sender_kind == "user"
@@ -2752,7 +2573,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, Message
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         token = (
             await self._human_sender(env, config)
             if sender_kind == "user"
@@ -2813,7 +2634,7 @@ class TestAgentCausalLink:
         from anygarden.db.models import AgentTurn, Message
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         token = await self._human_sender(env, config)
         async with env["sf"]() as db:
             (await db.get(Participant, env["parts"]["B"])).role = target_role
@@ -2871,7 +2692,7 @@ class TestAgentCausalLink:
     ) -> None:
         from anygarden.db.models import Message
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         proof = self._forged_invocation_metadata(env["parts"]["B"])
         proof.pop("delegation_outcome")
         message_id = self._agent_send(
@@ -2895,7 +2716,7 @@ class TestAgentCausalLink:
         otherwise B's reply tries to complete A's turn and is dropped."""
         from starlette.testclient import TestClient
 
-        env = await make_room(strategy="mentioned_only", agent_names=["A", "B"])
+        env = await make_room(agent_names=["A", "B"])
         room_url = f"/ws/rooms/{env['room_id']}"
         with (
             TestClient(env["app"]) as client,

@@ -60,22 +60,14 @@ def _is_task_init_content(content: str) -> bool:
     rounds therefore drives the counter past ``max_agent_turns`` and
     later replies are dropped.
 
-    The three recognised task-init prefixes are:
+    The two recognised task-init prefixes are:
 
     - ``[ROOM_QUERY]`` — the representative agent forwards a room
       query to another room. Each forward is an independent task.
     - ``[DELEGATED]``  — a user/agent delegates a subtask to another
       agent. Each delegation is an independent task.
-    - ``[HANDOFF]`` (#159 Phase C) — the orchestrator passes turn
-      control to another participant with a ``[HANDOFF]`` message.
-      The receiving agent treats this as a fresh task so the
-      per-room agent-turn counter doesn't age out mid-collaboration.
     """
-    return (
-        content.startswith("[ROOM_QUERY]")
-        or content.startswith("[DELEGATED]")
-        or content.startswith("[HANDOFF]")
-    )
+    return content.startswith(("[ROOM_QUERY]", "[DELEGATED]"))
 
 
 # Issue #445 Wave 0 — terminal WS close code. The server uses 4040 to
@@ -255,14 +247,6 @@ class ChatClient:
         # A non-self, non-nonce (human) message resets the streak.
         self._consecutive_task_init: dict[str, int] = {}
         self.max_task_init_resets: int = 5
-
-        # Issue #159 Phase A — room-scoped speaker strategy caches.
-        # The server sets these on every welcome frame so the SDK can
-        # dispatch in ``decide_policy``. Defaults preserve the legacy
-        # behaviour for rooms that predate the schema.
-        self._speaker_strategy: dict[str, str] = {}
-        self._orchestrator_agent_id: dict[str, str | None] = {}
-        self._next_speaker_participant_id: dict[str, str | None] = {}
 
         # Issue #221 — per-room participant roster stamped by the
         # server on every welcome. ``room_id -> {participant_id: brief}``
@@ -630,8 +614,7 @@ class ChatClient:
         tool (#737), or the explicit ``<@user:PARTICIPANT_ID>`` fallback
         in the usage paragraph below).
 
-        Self is excluded — an orchestrator handing off to itself would
-        be a no-op cycle. Returns an empty string when the roster
+        Self is excluded — calling itself would be a no-op cycle. Returns an empty string when the roster
         cache is absent (pre-#221 server),
         letting the caller skip the ``system_prompt`` rewrite entirely.
 
@@ -1047,18 +1030,6 @@ class ChatClient:
             # A missing/empty reconnect snapshot clears this room's cache;
             # legacy top-level memory_md has no attributable room.
             self._cache_room_memory(room_id, data.get("room_memory"), replace=True)
-            # Issue #159 Phase A — cache the room's speaker-strategy
-            # fields so ``decide_policy`` can dispatch on them. Default
-            # 'mentioned_only' keeps pre-#159 rooms on the legacy path.
-            self._speaker_strategy[room_id] = data.get(
-                "speaker_strategy", "mentioned_only"
-            )
-            self._orchestrator_agent_id[room_id] = data.get(
-                "orchestrator_agent_id"
-            )
-            self._next_speaker_participant_id[room_id] = data.get(
-                "next_speaker_participant_id"
-            )
             # Issue #221 — stash the participants roster the server
             # stamped on this welcome. Absent on pre-#221 servers; the
             # helper caches an empty dict so adapter iteration stays
@@ -1083,12 +1054,6 @@ class ChatClient:
             # prefer the frame's value so cross-room routing stays
             # honest if that ever happens.
             target_room = data.get("room_id") or room_id
-            new_strategy = data.get("speaker_strategy")
-            if new_strategy is not None:
-                self._speaker_strategy[target_room] = new_strategy
-            new_orc = data.get("orchestrator_agent_id")
-            if new_orc is not None:
-                self._orchestrator_agent_id[target_room] = new_orc
             # #237 — ephemeral toggle arrives over the same frame. We
             # only touch the cache when the server sent a non-None
             # value so a rename-only PATCH doesn't wipe the stored flag.
@@ -1108,8 +1073,6 @@ class ChatClient:
             logger.info(
                 "ws.room_settings_changed",
                 room_id=target_room,
-                speaker_strategy=new_strategy,
-                orchestrator_agent_id=new_orc,
                 context_window_enabled=data.get("context_window_enabled"),
                 ephemeral=new_ephemeral,
                 participants=(

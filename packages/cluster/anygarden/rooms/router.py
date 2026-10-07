@@ -140,15 +140,6 @@ class RoomOut(BaseModel):
     # wires the broadcast-side logic. #225 flipped the default to True
     # (migration 028); the PATCH field is admin-only.
     context_window_enabled: bool = True
-    # #159 Phase A — room-scoped speaker strategy. ``mentioned_only``
-    # (default) is the pre-#159 behaviour; ``round_robin`` rotates
-    # across agents; ``orchestrator`` delegates next-speaker choice to
-    # ``orchestrator_agent_id`` via ``[HANDOFF]`` messages. The
-    # orchestrator pointer is a separate column from
-    # ``representative_agent_id`` so cross-room and in-room roles stay
-    # legible (decisions §3.2 A).
-    speaker_strategy: str = "mentioned_only"
-    orchestrator_agent_id: Optional[str] = None
     # #237 — when True the WS welcome frame carries ``ephemeral=True``
     # so the agent's system_prompt gets a "do not write to memory/notes.md"
     # directive. Trust-model signal, not a hard FS guard (see plan §3.2).
@@ -382,8 +373,6 @@ async def list_rooms(
                 sort_order=sort_order,
                 has_updates=has_updates.get(r.id, False),
                 context_window_enabled=r.context_window_enabled,
-                speaker_strategy=r.speaker_strategy,
-                orchestrator_agent_id=r.orchestrator_agent_id,
                 ephemeral=r.ephemeral,
                 visibility=r.visibility,
                 archived_at=r.archived_at,
@@ -591,8 +580,6 @@ async def get_room(
         is_dm=room.is_dm,
         representative_agent_id=room.representative_agent_id,
         context_window_enabled=room.context_window_enabled,
-        speaker_strategy=room.speaker_strategy,
-        orchestrator_agent_id=room.orchestrator_agent_id,
         ephemeral=room.ephemeral,
         visibility=room.visibility,
         archived_at=room.archived_at,
@@ -914,22 +901,9 @@ class RoomUpdate(BaseModel):
     # ``None`` means "don't touch" so a partial PATCH cannot accidentally
     # reset the ambient-sharing flag. Room settings require a room admin.
     context_window_enabled: bool | None = None
-    # #159 Phase C — room-scoped speaker strategy. ``None`` means "don't
-    # touch" following the context_window pattern above.
-    speaker_strategy: str | None = None
-    orchestrator_agent_id: str | None = None
     # #237 — ephemeral toggle. ``None`` means "don't touch" following the
     # context_window pattern above.
     ephemeral: bool | None = None
-
-
-# Strategy names accepted by the dispatcher in
-# ``anygarden_agent.integrations.base.decide_policy``. The ``bidding``
-# and ``llm_judge`` values listed in plan-159 §1 are intentionally
-# excluded here — they're future work with uncertain cost profiles.
-_VALID_SPEAKER_STRATEGIES: frozenset[str] = frozenset(
-    {"mentioned_only", "round_robin", "orchestrator"}
-)
 
 
 async def _archive_descendants(
@@ -1054,58 +1028,25 @@ async def update_room(
     )
     room = access.room
 
-    if body.speaker_strategy is not None:
-        if body.speaker_strategy not in _VALID_SPEAKER_STRATEGIES:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Unknown speaker_strategy — expected one of "
-                    + ", ".join(sorted(_VALID_SPEAKER_STRATEGIES))
-                ),
-            )
-
-    # Validate orchestrator agent membership up front — matches the
-    # ``set_representative`` contract so an admin can't point
-    # ``orchestrator_agent_id`` at an agent that isn't actually in
-    # the room. A ``None`` payload clears the pointer (strategy can
-    # fall back to mentioned_only behaviour downstream).
-    if body.orchestrator_agent_id is not None:
-        stmt = select(Participant).where(
-            Participant.room_id == room_id,
-            Participant.agent_id == body.orchestrator_agent_id,
-        )
-        part = (await db.execute(stmt)).scalar_one_or_none()
-        if part is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Agent is not a participant of this room",
-            )
-
     if body.name is not None:
         room.name = body.name
     if body.description is not None:
         room.description = body.description
     if body.context_window_enabled is not None:
         room.context_window_enabled = body.context_window_enabled
-    if body.speaker_strategy is not None:
-        room.speaker_strategy = body.speaker_strategy
-    if body.orchestrator_agent_id is not None:
-        room.orchestrator_agent_id = body.orchestrator_agent_id
     if body.ephemeral is not None:
         room.ephemeral = body.ephemeral
     await db.commit()
     await db.refresh(room)
 
     # Issue #221 — broadcast settings changes to subscribed clients so
-    # connected agents refresh their cached dispatch mode without a
+    # connected agents refresh their cached settings without a
     # reconnect. ``None`` fields mean "not touched by this PATCH" so a
     # rename-only edit doesn't reset other caches on the receiving end.
     # Skipped entirely for rename-only PATCHes to keep the wire quiet
     # when no cached state depends on the change.
     settings_touched = (
-        body.speaker_strategy is not None
-        or body.orchestrator_agent_id is not None
-        or body.context_window_enabled is not None
+        body.context_window_enabled is not None
         or body.ephemeral is not None
     )
     if settings_touched:
@@ -1115,8 +1056,6 @@ async def update_room(
 
             frame = RoomSettingsChangedOut(
                 room_id=room_id,
-                speaker_strategy=body.speaker_strategy,
-                orchestrator_agent_id=body.orchestrator_agent_id,
                 context_window_enabled=body.context_window_enabled,
                 ephemeral=body.ephemeral,
             )

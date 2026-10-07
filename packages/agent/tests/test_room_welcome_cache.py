@@ -1,4 +1,5 @@
-"""Unit tests for client-side speaker-strategy cache (#159 Phase A)."""
+"""Unit tests for the client-side per-room caches fed by ``welcome`` and
+``room_settings_changed`` (#221, #237, #644)."""
 
 from __future__ import annotations
 
@@ -7,107 +8,10 @@ import pytest
 from anygarden_agent.client import ChatClient
 
 
-class TestSpeakerStrategyCache:
-    """Welcome frames populate per-room strategy caches; defaults
-    preserve the pre-#159 behaviour when the server hasn't sent the
-    new fields."""
-
-    def _make_client(self) -> ChatClient:
-        return ChatClient("ws://x", token="t")
-
-    def test_initial_caches_are_empty(self) -> None:
-        client = self._make_client()
-        assert client._speaker_strategy == {}
-        assert client._orchestrator_agent_id == {}
-        assert client._next_speaker_participant_id == {}
-
-    @pytest.mark.asyncio
-    async def test_welcome_populates_defaults_without_new_fields(self) -> None:
-        """Older servers omit the #159 fields — defaults apply."""
-        client = self._make_client()
-        await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-            },
-        )
-        assert client._speaker_strategy["room-a"] == "mentioned_only"
-        assert client._orchestrator_agent_id["room-a"] is None
-        assert client._next_speaker_participant_id["room-a"] is None
-
-    @pytest.mark.asyncio
-    async def test_welcome_propagates_explicit_fields(self) -> None:
-        client = self._make_client()
-        await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "orchestrator",
-                "orchestrator_agent_id": "agent-ABC",
-                "next_speaker_participant_id": "part-XYZ",
-            },
-        )
-        assert client._speaker_strategy["room-a"] == "orchestrator"
-        assert client._orchestrator_agent_id["room-a"] == "agent-ABC"
-        assert client._next_speaker_participant_id["room-a"] == "part-XYZ"
-
-    @pytest.mark.asyncio
-    async def test_per_room_isolation(self) -> None:
-        """Two rooms can hold distinct strategies."""
-        client = self._make_client()
-        await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "round_robin",
-            },
-        )
-        await client._process_frame(
-            "room-b",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "orchestrator",
-                "orchestrator_agent_id": "agent-B",
-            },
-        )
-        assert client._speaker_strategy["room-a"] == "round_robin"
-        assert client._speaker_strategy["room-b"] == "orchestrator"
-        assert client._orchestrator_agent_id["room-a"] is None
-        assert client._orchestrator_agent_id["room-b"] == "agent-B"
-
-    @pytest.mark.asyncio
-    async def test_welcome_refreshes_cache(self) -> None:
-        """A second welcome overwrites the cached values (admin toggle + respawn)."""
-        client = self._make_client()
-        await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "orchestrator",
-                "next_speaker_participant_id": "part-OLD",
-            },
-        )
-        await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "orchestrator",
-                "next_speaker_participant_id": "part-NEW",
-            },
-        )
-        assert client._next_speaker_participant_id["room-a"] == "part-NEW"
-
-
 class TestParticipantsRosterCache:
-    """Issue #221 — welcome stamps a participants roster so the
-    orchestrator adapter can inject valid UUIDs into its ``handoff_to``
-    LLM prompt instead of guessing display names."""
+    """Issue #221 — welcome stamps a participants roster so the adapter
+    can inject valid participant ids into its LLM prompt instead of
+    guessing display names."""
 
     def _make_client(self) -> ChatClient:
         return ChatClient("ws://x", token="t")
@@ -150,66 +54,41 @@ class TestParticipantsRosterCache:
 
 
 class TestRoomSettingsChangedFrame:
-    """Issue #221 — ``room_settings_changed`` refreshes cached dispatch
-    fields on the fly so admin PATCHes propagate without a
-    reconnection. Before this frame existed, the settings lived only
-    in ``welcome`` so a mid-session change silently left connected
-    agents on the old strategy."""
+    """Issue #221 — ``room_settings_changed`` refreshes cached settings so
+    admin PATCHes propagate without a reconnection."""
 
     def _make_client(self) -> ChatClient:
         return ChatClient("ws://x", token="t")
 
     @pytest.mark.asyncio
-    async def test_frame_updates_speaker_strategy(self) -> None:
+    async def test_frame_updates_ephemeral(self) -> None:
         client = self._make_client()
-        # Seed caches from the initial welcome.
         await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "mentioned_only",
-            },
+            "room-a", {"type": "welcome", "participant_id": "p1", "ephemeral": False}
         )
         await client._process_frame(
             "room-a",
-            {
-                "type": "room_settings_changed",
-                "room_id": "room-a",
-                "speaker_strategy": "orchestrator",
-                "orchestrator_agent_id": "A1",
-            },
+            {"type": "room_settings_changed", "room_id": "room-a", "ephemeral": True},
         )
-        assert client._speaker_strategy["room-a"] == "orchestrator"
-        assert client._orchestrator_agent_id["room-a"] == "A1"
+        assert client._room_ephemeral["room-a"] is True
 
     @pytest.mark.asyncio
     async def test_frame_with_none_fields_preserves_cache(self) -> None:
-        """``None`` means "not touched by this PATCH" — only non-None
-        fields overwrite cached values. Mirrors the server's partial
-        update semantics."""
+        """``None`` means "not touched by this PATCH"."""
         client = self._make_client()
         await client._process_frame(
-            "room-a",
-            {
-                "type": "welcome",
-                "participant_id": "p1",
-                "speaker_strategy": "orchestrator",
-                "orchestrator_agent_id": "A1",
-            },
+            "room-a", {"type": "welcome", "participant_id": "p1", "ephemeral": True}
         )
         await client._process_frame(
             "room-a",
             {
                 "type": "room_settings_changed",
                 "room_id": "room-a",
-                "speaker_strategy": None,
-                "orchestrator_agent_id": "A2",
+                "ephemeral": None,
+                "context_window_enabled": False,
             },
         )
-        # speaker_strategy untouched; only orchestrator_agent_id rolls forward.
-        assert client._speaker_strategy["room-a"] == "orchestrator"
-        assert client._orchestrator_agent_id["room-a"] == "A2"
+        assert client._room_ephemeral["room-a"] is True
 
 
 class TestRosterRefreshFrame:
@@ -233,7 +112,6 @@ class TestRosterRefreshFrame:
             {
                 "type": "welcome",
                 "participant_id": "p-self",
-                "speaker_strategy": "orchestrator",
                 "participants": [
                     {"id": "p-self", "display_name": "me", "kind": "agent"},
                     {
@@ -317,11 +195,11 @@ class TestRosterRefreshFrame:
             {
                 "type": "room_settings_changed",
                 "room_id": "room-a",
-                "speaker_strategy": "mentioned_only",
+                "ephemeral": True,
             },
         )
         assert set(client._participants_by_room["room-a"]) == {"p-self", "p-old"}
-        assert client._speaker_strategy["room-a"] == "mentioned_only"
+        assert client._room_ephemeral["room-a"] is True
 
     @pytest.mark.asyncio
     async def test_malformed_entries_are_skipped(self) -> None:

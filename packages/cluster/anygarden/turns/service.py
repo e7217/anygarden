@@ -356,11 +356,32 @@ async def _execution_admission(db: AsyncSession, turn: AgentTurn, *,
     return admission
 
 
+async def _is_operating_lead(db: AsyncSession, turn: AgentTurn) -> bool:
+    """#802 — the turn's agent leads a room that has active subrooms.
+
+    The room's representative is filled with its first agent automatically,
+    so being the representative alone does not make a room an operating
+    room; delegating to subrooms needs subrooms to exist.
+    """
+    room = await db.get(Room, turn.room_id)
+    if room is None or room.is_dm or room.representative_agent_id != turn.agent_id:
+        return False
+    subroom = await db.scalar(
+        select(Room.id)
+        .where(Room.parent_room_id == room.id, Room.archived_at.is_(None))
+        .limit(1)
+    )
+    return subroom is not None
+
+
 def _durable_metadata(
     turn: AgentTurn, attempt: AgentTurnAttempt, base: dict[str, Any] | None,
-    *, input_snapshot: dict[str, Any] | None = None,
+    *, input_snapshot: dict[str, Any] | None = None, operating_lead: bool = False,
 ) -> dict[str, Any]:
     metadata = dict(base or {})
+    metadata.pop("operating_lead", None)
+    if operating_lead:
+        metadata["operating_lead"] = True
     metadata.update(
         {
             "request_id": turn.request_id,
@@ -632,8 +653,10 @@ async def deliver_pending_outbox(
                 metadata["request_id"] = turn.request_id
                 turn.protocol_version = 0
             else:
-                metadata = _durable_metadata(turn, attempt, metadata,
-                                             input_snapshot=input_snapshot)
+                metadata = _durable_metadata(
+                    turn, attempt, metadata, input_snapshot=input_snapshot,
+                    operating_lead=await _is_operating_lead(db, turn),
+                )
             frame = message_to_frame(msg, metadata=metadata)
             participant_id = row.participant_id
             turn_id = row.turn_id

@@ -114,7 +114,7 @@ def _env_int(name: str, default: int) -> int:
 
 # ── #457 Wave 2b tunables ────────────────────────────────────────────
 # Bounded per-room follow-up queue. Small cap + conservative TTL keeps a
-# burst of quick follow-ups (DM rapid-fire, [HANDOFF]) flowing without
+# burst of quick follow-ups (DM rapid-fire) flowing without
 # unbounded memory growth or stale (late) replies. Over-cap still drops
 # with the legacy ``rejected`` notice.
 _MAX_QUEUE_DEPTH = _env_int("ANYGARDEN_ROOM_QUEUE_DEPTH", 3)

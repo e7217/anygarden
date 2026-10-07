@@ -1086,15 +1086,10 @@ class TestRepresentativeAgent:
             assert resp.status_code == 400
 
 
-class TestRoomSpeakerStrategy:
-    """Tests for the #159 Phase C speaker-strategy admin controls.
-
-    The PATCH endpoint accepts ``speaker_strategy`` and
-    ``orchestrator_agent_id`` but these fields are **admin-only** —
-    non-admin members can still rename a room but not flip the
-    dispatch mode. The rest of the PATCH surface (``name``,
-    ``description``, ``context_window_enabled``) stays open to every
-    member, matching the pre-#159 contract.
+class TestRoomSettingsPatch:
+    """Room settings PATCH: admin gate and the ``room_settings_changed``
+    broadcast. #802 removed the speaker strategies, so a room no longer
+    reports or accepts ``speaker_strategy`` / ``orchestrator_agent_id``.
     """
 
     @pytest_asyncio.fixture()
@@ -1147,8 +1142,8 @@ class TestRoomSpeakerStrategy:
         await engine.dispose()
 
     @pytest.mark.asyncio
-    async def test_default_is_mentioned_only(self, rep_env) -> None:
-        """A freshly created room reports ``mentioned_only`` on GET."""
+    async def test_room_has_no_speaker_strategy(self, rep_env) -> None:
+        """#802 — the room payload no longer carries strategy fields."""
         app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1158,109 +1153,8 @@ class TestRoomSpeakerStrategy:
             )
             assert resp.status_code == 200
             body = resp.json()
-            assert body["speaker_strategy"] == "mentioned_only"
-            assert body["orchestrator_agent_id"] is None
-
-    @pytest.mark.asyncio
-    async def test_admin_sets_round_robin(self, rep_env) -> None:
-        """Admin can flip strategy to ``round_robin`` and it persists."""
-        app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={"speaker_strategy": "round_robin"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 200
-            assert resp.json()["speaker_strategy"] == "round_robin"
-            resp2 = await client.get(
-                f"/api/v1/rooms/{room.id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp2.json()["speaker_strategy"] == "round_robin"
-
-    @pytest.mark.asyncio
-    async def test_admin_sets_orchestrator_with_agent(self, rep_env) -> None:
-        """Admin can promote a participating agent to orchestrator."""
-        app, room, agent, token = (
-            rep_env["app"], rep_env["room"], rep_env["agent"], rep_env["token"]
-        )
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={
-                    "speaker_strategy": "orchestrator",
-                    "orchestrator_agent_id": agent.id,
-                },
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 200
-            body = resp.json()
-            assert body["speaker_strategy"] == "orchestrator"
-            assert body["orchestrator_agent_id"] == agent.id
-
-    @pytest.mark.asyncio
-    async def test_orchestrator_agent_must_be_participant(self, rep_env) -> None:
-        """Promoting a non-participant agent returns 400, same as the
-        representative-agent gate."""
-        app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={"orchestrator_agent_id": "nonexistent-agent"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_unknown_strategy_rejected(self, rep_env) -> None:
-        """Strategy names outside the known set return 400."""
-        app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={"speaker_strategy": "bidding"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_non_admin_cannot_change_strategy(self, room_env) -> None:
-        """A non-admin member can rename the room but not touch
-        ``speaker_strategy`` — matches the DESIGN.md admin-only
-        contract for dispatch-mode changes."""
-        app, room, token = room_env["app"], room_env["room"], room_env["token"]
-        await _set_participant_role(
-            app, room_env["participant"].id, "member"
-        )
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={"speaker_strategy": "round_robin"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 403
-
-    @pytest.mark.asyncio
-    async def test_non_admin_cannot_change_orchestrator(self, room_env) -> None:
-        """Same gate applies to ``orchestrator_agent_id``."""
-        app, room, token = room_env["app"], room_env["room"], room_env["token"]
-        await _set_participant_role(
-            app, room_env["participant"].id, "member"
-        )
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.patch(
-                f"/api/v1/rooms/{room.id}",
-                json={"orchestrator_agent_id": "some-id"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 403
+            assert "speaker_strategy" not in body
+            assert "orchestrator_agent_id" not in body
 
     @pytest.mark.asyncio
     async def test_non_admin_cannot_rename(self, room_env) -> None:
@@ -1280,22 +1174,13 @@ class TestRoomSpeakerStrategy:
 
     @pytest.mark.asyncio
     async def test_patch_broadcasts_room_settings_changed(self, rep_env) -> None:
-        """Issue #221 — admin PATCH on speaker_strategy /
-        orchestrator_agent_id / context_window_enabled must broadcast a
-        ``room_settings_changed`` frame so online agents refresh their
-        cached dispatch mode without a full reconnect. Before this
-        frame was wired, the settings lived only in the welcome frame,
-        so a mid-session change silently left connected agents on the
-        old strategy until they reconnected."""
+        """Issue #221 — admin PATCH on context_window_enabled / ephemeral
+        must broadcast a ``room_settings_changed`` frame so online agents
+        refresh their cached settings without a full reconnect."""
         from anygarden.ws.manager import ConnectionManager
         from anygarden.ws.protocol import RoomSettingsChangedOut
 
-        app, room, agent, token = (
-            rep_env["app"],
-            rep_env["room"],
-            rep_env["agent"],
-            rep_env["token"],
-        )
+        app, room, token = rep_env["app"], rep_env["room"], rep_env["token"]
         # rep_env doesn't run lifespan so connection_manager is absent.
         # Install a real one and spy on ``broadcast`` to verify both
         # the call and the frame payload.
@@ -1315,10 +1200,7 @@ class TestRoomSpeakerStrategy:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.patch(
                 f"/api/v1/rooms/{room.id}",
-                json={
-                    "speaker_strategy": "orchestrator",
-                    "orchestrator_agent_id": agent.id,
-                },
+                json={"ephemeral": True},
                 headers={"Authorization": f"Bearer {token}"},
             )
             assert resp.status_code == 200
@@ -1329,8 +1211,7 @@ class TestRoomSpeakerStrategy:
         assert len(settings_frames) == 1
         f = settings_frames[0]
         assert f.room_id == room.id
-        assert f.speaker_strategy == "orchestrator"
-        assert f.orchestrator_agent_id == agent.id
+        assert f.ephemeral is True
         # ``None`` on fields not touched by the PATCH — matches the
         # "partial update" semantics the agent SDK expects.
         assert f.context_window_enabled is None
@@ -1372,7 +1253,7 @@ class TestRoomContextWindow:
     """Tests for the #148 per-room ``context_window_enabled`` flag.
 
     #225 flipped the server default to True and promoted the PATCH
-    field to admin-only (alongside ``speaker_strategy``). These
+    field to admin-only. These
     tests exercise both the default and the admin gate. Non-admin
     rename PATCHes must keep working — the gate is scoped to the
     admin-only fields, not the whole endpoint.
@@ -1382,7 +1263,7 @@ class TestRoomContextWindow:
     async def admin_env(self, config: AnygardenSettings):
         """Admin user + room. Mirrors the shape of the ``rep_env``
         fixture above so the admin-only PATCH tests use the same
-        pattern as the speaker-strategy suite."""
+        pattern as the settings PATCH suite."""
         engine = build_engine(config.db_url)
         session_factory = build_session_factory(engine)
 

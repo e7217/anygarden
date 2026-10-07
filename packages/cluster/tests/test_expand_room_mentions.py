@@ -1,7 +1,7 @@
 """Unit tests for ``expand_room_mentions`` (#739).
 
 The server rewrites ``@everyone`` and the implicit call in a one-agent
-``mentioned_only`` room into ordinary ``user`` mentions so every later
+room into ordinary ``user`` mentions so every later
 routing step (agent rule 3/5, turn creation, #719, the peer safety net)
 reuses the explicit-mention path.
 """
@@ -19,7 +19,6 @@ def _expand(mentions, **overrides):
         "sender_pid": "human",
         "sender_is_human": True,
         "is_thread_reply": False,
-        "speaker_strategy": "mentioned_only",
     }
     kwargs.update(overrides)
     return expand_room_mentions(mentions, **kwargs)
@@ -49,10 +48,8 @@ def test_everyone_skips_already_mentioned_pids():
     ]
 
 
-def test_everyone_applies_regardless_of_strategy_and_thread():
-    result = _expand(
-        [{"type": "everyone"}], speaker_strategy="round_robin", is_thread_reply=True
-    )
+def test_everyone_applies_in_threads():
+    result = _expand([{"type": "everyone"}], is_thread_reply=True)
     assert [m["id"] for m in result] == AGENTS
 
 
@@ -92,11 +89,6 @@ def test_sole_agent_requires_human_sender():
 
 def test_sole_agent_not_applied_to_thread_replies():
     assert _expand([], agent_pids=["pa"], is_thread_reply=True) == []
-
-
-def test_sole_agent_only_in_mentioned_only_rooms():
-    for strategy in ("round_robin", "orchestrator"):
-        assert _expand([], agent_pids=["pa"], speaker_strategy=strategy) == []
 
 
 def test_input_is_not_mutated():

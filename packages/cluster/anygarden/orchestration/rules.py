@@ -154,7 +154,6 @@ def expand_room_mentions(
     sender_pid: str | None,
     sender_is_human: bool,
     is_thread_reply: bool,
-    speaker_strategy: str,
 ) -> list[dict[str, Any]]:
     """Rewrite room-level calls into ordinary user mentions (#739).
 
@@ -166,9 +165,9 @@ def expand_room_mentions(
 
     1. ``{"type": "everyone"}`` is replaced by every agent participant
        except the sender (``via: "everyone"``), skipping pids that are
-       already mentioned. Applies in every speaker strategy and in threads.
-    2. Otherwise, a human root message in a ``mentioned_only`` room with
-       no ``user``/``legacy`` mention, in a room with exactly one agent,
+       already mentioned. Applies in threads too.
+    2. Otherwise, a human root message with no ``user``/``legacy``
+       mention, in a room with exactly one agent,
        calls that agent (``via: "sole_agent"``) — a 1:1 room needs no
        mention.
     3. Anything else is returned unchanged.
@@ -192,7 +191,6 @@ def expand_room_mentions(
     if (
         sender_is_human
         and not is_thread_reply
-        and speaker_strategy == "mentioned_only"
         and len(agent_pids) == 1
         and not any(m.get("type") in ("user", "legacy") for m in mentions)
     ):

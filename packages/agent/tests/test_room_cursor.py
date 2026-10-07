@@ -86,8 +86,6 @@ def _make_client():
     client._agent_id = None
     client._context_window_opt_out = False
     client._recent_msgs = {}
-    client._speaker_strategy = {}
-    client._orchestrator_agent_id = {}
     return client
 
 

@@ -405,19 +405,6 @@ class WelcomeOut(BaseModel):
     # the agent returns ``SKIP`` instead of ``INGEST_ONLY``. Default
     # False so user/guest welcome frames stay unchanged.
     context_window_opt_out: bool = False
-    # Issue #159 Phase A — room-scoped speaker strategy. Agents cache
-    # these from the welcome and dispatch in ``decide_policy``. Defaults
-    # preserve the legacy behaviour for rooms that haven't opted in.
-    # - ``speaker_strategy``: 'mentioned_only' (default) | 'round_robin'
-    #   | 'orchestrator'. Phase B/C wire the non-default branches.
-    # - ``orchestrator_agent_id``: agent that issues handoffs under the
-    #   ``orchestrator`` strategy. Distinct from ``representative_agent_id``
-    #   (cross-room query role) — same Agent may hold both.
-    # - ``next_speaker_participant_id``: orchestrator's latest handoff
-    #   target; read by the agent to decide whether to RESPOND.
-    speaker_strategy: str = "mentioned_only"
-    orchestrator_agent_id: Optional[str] = None
-    next_speaker_participant_id: Optional[str] = None
     # Issue #221 — room participants roster, stamped at welcome time.
     # Agents render this list into their LLM prompt so the model can
     # pass a valid ``participant_id`` (UUID) to the ``ask_peer`` tool
@@ -458,16 +445,13 @@ class RoomSettingsChangedOut(BaseModel):
     cached-at-welcome fields is updated. Fields left ``None`` mean
     "not part of this change" so a rename-only PATCH doesn't
     accidentally reset other settings in client caches. Agents read
-    this to refresh their per-room ``speaker_strategy`` /
-    ``orchestrator_agent_id`` / ``context_window_opt_out`` without
+    this to refresh their per-room settings and roster without
     requiring a reconnection — before #221 those values were only
     delivered in the initial ``welcome`` frame.
     """
 
     type: Literal["room_settings_changed"] = "room_settings_changed"
     room_id: str
-    speaker_strategy: Optional[str] = None
-    orchestrator_agent_id: Optional[str] = None
     context_window_enabled: Optional[bool] = None
     # #237 — ephemeral mode toggle. None means "not part of this PATCH"
     # so other setting fields aren't implicitly reset on receivers.

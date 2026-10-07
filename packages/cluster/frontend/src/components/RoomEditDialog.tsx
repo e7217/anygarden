@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -21,34 +21,6 @@ interface Props {
   onSaved?: () => void
 }
 
-// Strategy options exposed to the admin UI. Must stay in sync with
-// the server-side validator in ``anygarden/rooms/router.py`` —
-// bidding / llm_judge are deliberately absent (plan-159 §1).
-const STRATEGY_OPTIONS = [
-  {
-    value: 'mentioned_only',
-    labelKey: 'rooms.mentionedOnly',
-    hintKey: 'rooms.mentionedOnlyHint',
-  },
-  {
-    value: 'round_robin',
-    labelKey: 'rooms.roundRobin',
-    hintKey: 'rooms.roundRobinHint',
-  },
-  {
-    value: 'orchestrator',
-    labelKey: 'rooms.orchestrator',
-    hintKey: 'rooms.orchestratorHint',
-  },
-] as const
-
-interface ParticipantLite {
-  id: string
-  agent_id: string | null
-  kind: string
-  display_name: string
-}
-
 interface PerAgentStat {
   participant_id: string
   /** Null for human participants; the API reports them separately. */
@@ -63,8 +35,8 @@ interface PerAgentStat {
  *
  * Renders the 1h / 24h per-agent token breakdown sourced from
  * ``GET /api/v1/rooms/:id/token-stats`` (admin-only). Useful for
- * spotting orchestrator rooms where one worker is burning the
- * token budget disproportionately.
+ * spotting a room where one agent is burning the token budget
+ * disproportionately.
  *
  * Usage rows use semantic surfaces and text tokens so they remain readable
  * in both themes. Raw numbers stay neutral rather than using an action color.
@@ -172,12 +144,6 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
   // reach the admin-only field even if the load() callback hasn't
   // populated state yet.
   const [contextWindowEnabled, setContextWindowEnabled] = useState(true)
-  // #159 Phase C — admin-only dispatch-mode controls. Non-admin
-  // users still see the rest of the dialog but these fields stay
-  // read-only (and the PATCH payload omits them).
-  const [speakerStrategy, setSpeakerStrategy] = useState<string>('mentioned_only')
-  const [orchestratorAgentId, setOrchestratorAgentId] = useState<string | null>(null)
-  const [agentParticipants, setAgentParticipants] = useState<ParticipantLite[]>([])
   // #159 Phase D — per-agent token stats (admin-only). ``null``
   // until loaded or when the endpoint declines the caller. Stored
   // separately from the base GET so the two requests can race
@@ -189,11 +155,9 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // #221 — transient success flash shown between ``Save`` and the
-  // dialog close. The server now broadcasts ``room_settings_changed``
-  // on admin PATCH so already-connected agents refresh their cached
-  // dispatch mode without a reconnect; the banner tells the admin
-  // that a subsequent message in the room will actually use the new
-  // strategy rather than the old one.
+  // dialog close. The server broadcasts ``room_settings_changed`` on
+  // admin PATCH so already-connected agents refresh their cached
+  // settings without a reconnect.
   const [successFlash, setSuccessFlash] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -205,19 +169,6 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
       setName(data.name ?? '')
       setDescription(data.description ?? '')
       setContextWindowEnabled(Boolean(data.context_window_enabled))
-      setSpeakerStrategy(data.speaker_strategy ?? 'mentioned_only')
-      setOrchestratorAgentId(data.orchestrator_agent_id ?? null)
-      const parts = Array.isArray(data.participants) ? data.participants : []
-      setAgentParticipants(
-        parts
-          .filter((p: ParticipantLite) => p.kind === 'agent' && p.agent_id)
-          .map((p: ParticipantLite) => ({
-            id: p.id,
-            agent_id: p.agent_id,
-            kind: p.kind,
-            display_name: p.display_name || '',
-          })),
-      )
       setError(null)
     } catch { /* ignore */ }
   }, [roomId])
@@ -258,15 +209,13 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
         name: name.trim(),
         description: description.trim() || null,
       }
-      // Only admins can send the dispatch-mode + context-window
-      // fields (#159 Phase C, #225). The server rejects non-admin
+      // Only admins can send the context-window field (#225). The
+      // server rejects non-admin
       // payloads with 403, but gating at the client too keeps the
       // request body clean and avoids surfacing a 403 on a rename
       // that happens to include ``context_window_enabled`` from
       // local state.
       if (isAdmin) {
-        payload.speaker_strategy = speakerStrategy
-        payload.orchestrator_agent_id = orchestratorAgentId
         payload.context_window_enabled = contextWindowEnabled
       }
       const resp = await apiFetch(`/api/v1/rooms/${roomId}`, {
@@ -290,14 +239,6 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
     }
     setSaving(false)
   }
-
-  const strategyHint = useMemo(
-    () => {
-      const key = STRATEGY_OPTIONS.find(o => o.value === speakerStrategy)?.hintKey
-      return key ? t(key) : ''
-    },
-    [speakerStrategy, t],
-  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -328,12 +269,9 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
               onChange={e => setDescription(e.target.value)}
             />
           </div>
-          {/* #159 Phase C + #225 — admin-only room controls. The
-              context-window toggle leads the block because it's the
-              simplest switch; the speaker-strategy picker follows.
-              Both fields live on the admin surface: flipping either
-              silently changes who replies / how many tokens burn for
-              every turn. */}
+          {/* #225 — admin-only room controls: flipping the context
+              window silently changes how many tokens burn for every
+              turn. */}
           {isAdmin && (
             <div className="space-y-4 border-t border-[var(--color-border)] pt-4">
               {/* #148 + #225 — ambient context window toggle. Replaces
@@ -363,55 +301,6 @@ export default function RoomEditDialog({ roomId, open, onOpenChange, onSaved }: 
                     </span>
                   </span>
                 </label>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="room-edit-speaker-strategy">
-                  {t('rooms.speakerStrategy')}
-                </Label>
-                <select
-                  id="room-edit-speaker-strategy"
-                  data-testid="room-edit-speaker-strategy"
-                  value={speakerStrategy}
-                  onChange={e => setSpeakerStrategy(e.target.value)}
-                  className="flex h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1"
-                >
-                  {STRATEGY_OPTIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>
-                      {t(opt.labelKey)}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-caption text-[var(--color-foreground-muted)]">
-                  {strategyHint}
-                </p>
-
-                {speakerStrategy === 'orchestrator' && (
-                  <div className="space-y-1.5 pt-2">
-                    <Label htmlFor="room-edit-orchestrator">{t('rooms.orchestrator')}</Label>
-                    <select
-                      id="room-edit-orchestrator"
-                      data-testid="room-edit-orchestrator"
-                      value={orchestratorAgentId ?? ''}
-                      onChange={e =>
-                        setOrchestratorAgentId(e.target.value || null)
-                      }
-                      className="flex h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-focus)] focus:ring-offset-1"
-                    >
-                      <option value="">{t('rooms.notSelected')}</option>
-                      {agentParticipants.map(p => (
-                        <option key={p.id} value={p.agent_id ?? ''}>
-                          {p.display_name || p.agent_id}
-                        </option>
-                      ))}
-                    </select>
-                    {agentParticipants.length === 0 && (
-                      <p className="text-caption text-[var(--color-foreground-muted)]">
-                        {t('rooms.noOrchestratorAgents')}
-                      </p>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
           )}

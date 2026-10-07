@@ -340,11 +340,7 @@ async def begin_execution(
     if (
         room.project_id is None
         or room.is_dm
-        or agent_id
-        not in {
-            room.orchestrator_agent_id,
-            room.representative_agent_id,
-        }
+        or agent_id != room.representative_agent_id
     ):
         _reject(
             "OPERATING_LEAD_REQUIRED",

@@ -10,7 +10,6 @@ from uuid import UUID, uuid4
 import structlog
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, select
-from sqlalchemy import update as sa_update
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,7 +64,6 @@ from anygarden.rooms.authorization import (
 )
 from anygarden.rooms.membership import ensure_agent_in_room
 from anygarden.rooms.roster import build_participants_brief
-from anygarden.tasks_status import TERMINAL_STATUSES
 from anygarden.ws.manager import ConnectionManager
 from anygarden.ws.protocol import (
     ErrorOut,
@@ -548,9 +546,7 @@ def _is_ambient_candidate(
     0. Sender is an agent (#233). Human and guest messages are
        never ambient — users always expect their input to be
        actionable. The stamp was originally designed to dampen
-       agent-to-agent chatter, and missing this gate caused
-       orchestrator rooms to go silent once #225 flipped
-       ``context_window_enabled`` on by default.
+       agent-to-agent chatter.
     1. No user / legacy mention already parsed into metadata.
        ``parse_mentions`` runs upstream, so seeing an addressable
        mention means "someone is being targeted" — not ambient.
@@ -570,11 +566,7 @@ def _is_ambient_candidate(
     """
     if not sender_is_agent:
         return False
-    if (
-        content.startswith("[DELEGATED]")
-        or content.startswith("[ROOM_QUERY]")
-        or content.startswith("[HANDOFF]")
-    ):
+    if content.startswith(("[DELEGATED]", "[ROOM_QUERY]")):
         return False
     if metadata.get("room_query"):
         return False
@@ -656,269 +648,6 @@ async def _directed_delegation_target(
     if target is None:
         raise invalid
     return target
-
-
-async def _apply_orchestrator_handoff(
-    db: AsyncSession,
-    *,
-    room_id: str,
-    content: str,
-    metadata: dict[str, Any],
-    orchestrator_agent_id: str | None,
-    sender_agent_id: str | None,
-) -> str | None:
-    """Parse a ``[HANDOFF]`` message and flip the room's next-speaker
-    pointer (#159 Phase C).
-
-    Returns the new ``next_speaker_participant_id`` when the handoff
-    was accepted, or ``None`` when it was ignored.
-
-    Acceptance rules (every one must hold):
-
-    1. ``content`` starts with ``[HANDOFF]``. Other prefixes short-
-       circuit immediately — this helper is a no-op on ordinary
-       messages so the caller can always invoke it.
-    2. The sender is this room's orchestrator. Workers can't hijack
-       turn order even if they emit the prefix.
-    3. The message carries a ``type: user`` mention in its metadata
-       whose ``id`` is an existing participant of this room.
-
-    On success the helper:
-
-    - Updates ``Room.next_speaker_participant_id`` in the same DB
-      transaction as the message persist (caller owns the commit).
-    - Mutates ``metadata`` in place to add
-      ``next_speaker_participant_id``. The broadcast carries this
-      stamp so agent-side ``decide_policy``'s O2 rule fires on the
-      target.
-
-    Structural mirror of ``_compute_round_robin_next`` — both are
-    strategy-specific hooks that the main SendFrame pipeline
-    delegates to, so each strategy owns its next-speaker logic in
-    one place.
-    """
-    if not content.startswith("[HANDOFF]"):
-        return None
-    if not orchestrator_agent_id:
-        return None
-    if sender_agent_id != orchestrator_agent_id:
-        return None
-
-    # Pull the first ``type=user`` mention as the target. We trust
-    # the server's ``parse_mentions`` output here because it's
-    # already been run upstream of this helper in the SendFrame
-    # path (see ``ws/handler.py`` where ``metadata["mentions"]`` is
-    # populated).
-    mentions = metadata.get("mentions") or []
-    target_pid: str | None = None
-    for m in mentions:
-        if isinstance(m, dict) and m.get("type") == "user":
-            candidate = m.get("id")
-            if isinstance(candidate, str) and candidate:
-                target_pid = candidate
-                break
-    if target_pid is None:
-        return None
-
-    # Confirm the target is actually a participant of this room.
-    # Catches LLM hallucinations before they poison the pointer.
-    participant_id = (
-        await db.execute(
-            select(Participant.id)
-            .where(Participant.room_id == room_id)
-            .where(Participant.id == target_pid)
-        )
-    ).scalar_one_or_none()
-    if participant_id is None:
-        return None
-
-    await db.execute(
-        sa_update(Room)
-        .where(Room.id == room_id)
-        .values(next_speaker_participant_id=target_pid)
-    )
-    metadata["next_speaker_participant_id"] = target_pid
-    return target_pid
-
-
-async def _apply_orchestrator_fallback_nominate(
-    db: AsyncSession,
-    *,
-    room_id: str,
-    content: str,
-    metadata: dict[str, Any],
-    orchestrator_agent_id: str | None,
-    sender_agent_id: str | None,
-    current_speaker_index: int,
-) -> tuple[int, str] | None:
-    """Server-side safety net for ``orchestrator`` strategy rooms when
-    the moderator LLM emits a message *without* a valid handoff
-    (no ``[HANDOFF]`` prefix that ``_apply_orchestrator_handoff``
-    accepts, and no addressable mention parsed into metadata).
-
-    Returns ``(new_index, next_speaker_participant_id)`` when a
-    fallback nomination was applied, or ``None`` when no action was
-    taken.
-
-    Background: docs/research/2026-05-12-multi-agent-turn-taking-
-    mediator-failure.md documents an LLM failure pattern where the
-    orchestrator nails the first handoff but omits the mention token
-    from the second onward (instruction-following decay + format-task
-    interference). Without this fallback, the room silently stalls —
-    every participant sees the message as ``ingest_only`` and no one
-    is triggered to reply. The fallback rotates to the next non-
-    orchestrator participant so the conversation keeps moving.
-
-    Acceptance rules (every one must hold):
-
-    1. The room has a valid ``orchestrator_agent_id``.
-    2. The sender is the orchestrator agent. Worker messages don't
-       trigger the safety net — they're routed via mention parsing.
-    3. ``content`` does not start with ``[종료]``. The orchestrator's
-       explicit termination marker is respected; no nominate is made
-       so the room comes to rest. Other prefixes like ``[HANDOFF]``,
-       ``[DELEGATED]``, ``[ROOM_QUERY]`` are handled upstream — if
-       they succeed they stamp ``next_speaker_participant_id`` which
-       rule 4 below short-circuits on, and if they fail the room
-       genuinely needs the fallback.
-    4. ``metadata.next_speaker_participant_id`` is not already set.
-       A successful ``_apply_orchestrator_handoff`` upstream stamps
-       this; we never override an explicit nomination.
-    5. ``metadata.mentions`` contains no ``type=user`` or
-       ``type=legacy`` entry. An addressable mention means the
-       moderator did address someone and the agent-side rule 3 will
-       route normally — no fallback needed.
-    6. No non-terminal task in this room is assigned to a
-       participant other than the orchestrator. Such a task already
-       woke its assignee through the synthetic ``[TASK]`` mention,
-       so the room is working, not stalled; nominating on top of it
-       wakes an agent nobody asked for. The pickup timeout fails an
-       unclaimed task, so this cannot disarm the net indefinitely.
-
-    On success the helper:
-
-    - Updates ``Room.current_speaker_index`` and
-      ``next_speaker_participant_id`` in the caller's DB transaction.
-    - Mutates ``metadata`` in place to add
-      ``next_speaker_participant_id``. The broadcast carries this
-      stamp so agent-side ``decide_policy`` rule 4a (O2) wakes the
-      nominated participant.
-
-    Round-robin pool excludes the orchestrator itself — the moderator
-    role is "distribute speaking turns", and nominating yourself
-    would loop on the same failure. If the pool is empty (only the
-    orchestrator is present, or no agent participants beyond the
-    orchestrator), the helper returns ``None`` and the message just
-    flows as ingest_only.
-    """
-    if not orchestrator_agent_id:
-        return None
-    if sender_agent_id != orchestrator_agent_id:
-        return None
-    # Explicit termination — respect the orchestrator's wrap-up.
-    if content.startswith("[종료]"):
-        return None
-    # Upstream handoff already nominated — never override.
-    if metadata.get("next_speaker_participant_id"):
-        return None
-    # Addressable mention exists — mention routing will handle it.
-    mentions = metadata.get("mentions") or []
-    for m in mentions:
-        if isinstance(m, dict) and m.get("type") in ("user", "legacy"):
-            return None
-
-    # An open task assignment already woke its assignee (the synthetic
-    # ``[TASK]`` mention), so the room is working rather than stalled and
-    # the safety net must stay quiet — otherwise the orchestrator's
-    # "delegated it, standing by" status message drags an extra agent in.
-    # Bounded by the pickup timeout, which fails a task nobody claims, so
-    # a forgotten row cannot disarm the net forever.
-    orchestrator_participants = select(Participant.id).where(
-        Participant.room_id == room_id,
-        Participant.agent_id == orchestrator_agent_id,
-    )
-    open_task = (
-        await db.execute(
-            select(Task.id)
-            .where(Task.room_id == room_id)
-            .where(Task.status.not_in(TERMINAL_STATUSES))
-            .where(Task.assignee_participant_id.is_not(None))
-            .where(Task.assignee_participant_id.not_in(orchestrator_participants))
-            .limit(1)
-        )
-    ).first()
-    if open_task is not None:
-        return None
-
-    # Round-robin among non-orchestrator agent participants. Stable
-    # order mirrors ``_compute_round_robin_next`` (joined_at, id) so
-    # the rotation matches user expectations from the standard
-    # round_robin strategy.
-    rows = (
-        await db.execute(
-            select(Participant.id, Participant.agent_id)
-            .where(Participant.room_id == room_id)
-            .where(Participant.agent_id.isnot(None))
-            .where(Participant.agent_id != orchestrator_agent_id)
-            .order_by(Participant.joined_at.asc(), Participant.id.asc())
-        )
-    ).all()
-    if not rows:
-        return None
-
-    new_index = (current_speaker_index + 1) % len(rows)
-    next_pid: str = rows[new_index][0]
-
-    await db.execute(
-        sa_update(Room)
-        .where(Room.id == room_id)
-        .values(
-            current_speaker_index=new_index,
-            next_speaker_participant_id=next_pid,
-        )
-    )
-    metadata["next_speaker_participant_id"] = next_pid
-    return new_index, next_pid
-
-
-async def _compute_round_robin_next(
-    db: AsyncSession,
-    *,
-    room_id: str,
-    current_index: int,
-    sender_is_human: bool,
-) -> tuple[int, str] | None:
-    """Return ``(new_index, next_speaker_participant_id)`` for the
-    round_robin strategy, or ``None`` if the room has no agents yet.
-
-    Rules (Issue #159 Phase B):
-
-    - Agent participants are ordered by ``joined_at`` then ``id`` for
-      a stable rotation across connects.
-    - Human messages reset rotation to index 0 — right after a user
-      speaks we want *some* agent to respond immediately, not whoever
-      the cursor happened to point at.
-    - Agent messages advance one step (modulo the agent count).
-    """
-    agent_participant_ids: list[str] = (
-        (
-            await db.execute(
-                select(Participant.id)
-                .where(Participant.room_id == room_id)
-                .where(Participant.agent_id.isnot(None))
-                .order_by(Participant.joined_at.asc(), Participant.id.asc())
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not agent_participant_ids:
-        return None
-    if sender_is_human:
-        new_index = 0
-    else:
-        new_index = (current_index + 1) % len(agent_participant_ids)
-    return new_index, agent_participant_ids[new_index]
 
 
 def _extract_since_seq(query_string: str | None) -> int:
@@ -1038,13 +767,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
     # Exact connection-room memory; the legacy global archive never enters
     # a welcome, including empty/missing scoped memory.
     agent_room_memory: dict | None = None
-    # Issue #159 Phase A — speaker strategy fields cached from the
-    # Room row so the SDK can dispatch in ``decide_policy``. Defaults
-    # here reproduce the pre-#159 behaviour for welcome flows that
-    # skip the room lookup (guests, tests).
-    speaker_strategy = "mentioned_only"
-    orchestrator_agent_id: str | None = None
-    next_speaker_participant_id: str | None = None
     if identity and identity.kind == "agent":
         from anygarden.shared_channels.models import ChannelStream
 
@@ -1087,35 +809,18 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         connected_room_ids.add(room_id)  # about to subscribe
         pending_rooms = sorted(set(pid_to_room.values()) - connected_room_ids)
 
-    # Issue #159 Phase A — propagate the room's speaker-strategy
-    # fields in every welcome frame so both agents and UIs know how
-    # the room dispatches turns. Separate session so any failure
-    # stays out of the opt-out read path above.
-    # Issue #221 — collect the participant roster here too so
-    # orchestrator agents can inject it into their LLM system prompt
-    # (see ``claude_code.py``). Same session as the Room row to keep
-    # welcome to a single round-trip pair.
+    # Issue #221 — collect the participant roster so agents can
+    # inject it into their LLM system prompt. Same session as the Room
+    # row to keep welcome to a single round-trip pair.
     participants_brief: list[ParticipantBrief] = []
     # Issue #237 — ephemeral flag from the Room row.
     room_ephemeral = False
     async with session_factory() as db:
-        row = (
-            await db.execute(
-                select(
-                    Room.speaker_strategy,
-                    Room.orchestrator_agent_id,
-                    Room.next_speaker_participant_id,
-                    Room.ephemeral,
-                ).where(Room.id == room_id)
-            )
-        ).first()
-        if row is not None:
+        room_ephemeral = bool(
             (
-                speaker_strategy,
-                orchestrator_agent_id,
-                next_speaker_participant_id,
-                room_ephemeral,
-            ) = row
+                await db.execute(select(Room.ephemeral).where(Room.id == room_id))
+            ).scalar_one_or_none()
+        )
         participants_brief = await build_participants_brief(db, room_id=room_id)
         room_last_seq = (
             await db.execute(
@@ -1132,9 +837,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
         # forwarding to the representative agent only.
         agent_id=identity.id if identity and identity.kind == "agent" else None,
         context_window_opt_out=agent_opt_out,
-        speaker_strategy=speaker_strategy,
-        orchestrator_agent_id=orchestrator_agent_id,
-        next_speaker_participant_id=next_speaker_participant_id,
         participants=participants_brief,
         ephemeral=bool(room_ephemeral),
         room_memory=agent_room_memory,
@@ -1532,7 +1234,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                             continue
 
                 # #739 — ``@everyone`` and the implicit call in a one-agent
-                # ``mentioned_only`` room become ordinary user mentions here,
+                # room become ordinary user mentions here,
                 # before the peer safety net below, so an agent's
                 # ``@everyone`` is still subject to depth/budget and every
                 # later step reuses the explicit-mention path.
@@ -1547,13 +1249,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     )
                 ):
                     async with session_factory() as expand_db:
-                        expand_strategy = (
-                            await expand_db.execute(
-                                select(Room.speaker_strategy).where(
-                                    Room.id == room_id
-                                )
-                            )
-                        ).scalar_one_or_none() or "mentioned_only"
                         expand_agent_pids = list(
                             (
                                 await expand_db.execute(
@@ -1574,7 +1269,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         sender_pid=participant.id,
                         sender_is_human=sender_is_human_for_expand,
                         is_thread_reply=frame_in.thread_root_id is not None,
-                        speaker_strategy=expand_strategy,
                     )
 
                 metadata = dict(frame_in.metadata) if frame_in.metadata else {}
@@ -2095,31 +1789,19 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # as their own turn (#719).
                         metadata = strip_turn_proof(metadata, correlate_reply=True)
 
-                    room_row = (
-                        await db.execute(
-                            select(
-                                Room.context_window_enabled,
-                                Room.speaker_strategy,
-                                Room.current_speaker_index,
-                                Room.orchestrator_agent_id,
-                            ).where(Room.id == room_id)
-                        )
-                    ).first()
-                    context_window_enabled = bool(room_row[0]) if room_row else False
-                    speaker_strategy = (
-                        room_row[1] if room_row else "mentioned_only"
-                    )
-                    current_speaker_index = int(room_row[2]) if room_row else 0
-                    orchestrator_agent_id = (
-                        room_row[3] if room_row else None
+                    context_window_enabled = bool(
+                        (
+                            await db.execute(
+                                select(Room.context_window_enabled).where(
+                                    Room.id == room_id
+                                )
+                            )
+                        ).scalar_one_or_none()
                     )
 
                     # #233 — only stamp agent-to-agent chatter. Human
                     # sends always reach peers as actionable even when
-                    # ``context_window_enabled`` is on; without this
-                    # guard orchestrator rooms short-circuit to
-                    # ``INGEST_ONLY`` before rule 5a in
-                    # ``decide_policy`` can let the orchestrator reply.
+                    # ``context_window_enabled`` is on.
                     sender_is_agent = (
                         identity is not None and identity.kind == "agent"
                     )
@@ -2136,11 +1818,9 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         metadata["ingest_only"] = True
 
                     # #431 — the server-authoritative next speaker for
-                    # THIS send. Captured from the dispatcher helpers'
-                    # return values (not read back from ``metadata``,
-                    # which an agent sender can forge, nor from
-                    # ``Room.next_speaker_participant_id``, which persists
-                    # a stale value across sends). Drives the agent→agent
+                    # THIS send: the directed delegation target. Captured
+                    # here rather than read back from ``metadata``, which
+                    # an agent sender can forge. Drives the agent→agent
                     # causal fan-out below.
                     nominated_pid = (
                         directed_target_pid
@@ -2149,123 +1829,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     )
                     if nominated_pid is not None:
                         metadata["next_speaker_participant_id"] = directed_target_pid
-                        await db.execute(
-                            sa_update(Room)
-                            .where(Room.id == room_id)
-                            .values(next_speaker_participant_id=directed_target_pid)
-                        )
-
-                    # Issue #159 Phase B — round_robin dispatcher.
-                    # Server picks the next speaker; agents just check
-                    # whether they match. Human senders reset rotation
-                    # to the first agent so the next turn responds
-                    # immediately, rather than wherever the cursor
-                    # happened to stop before. See
-                    # ``_compute_round_robin_next`` for the details.
-                    if (
-                        directed_target_pid is None
-                        and not is_execution_reply
-                        and not is_delegation_result
-                        and not is_thread_reply
-                        and speaker_strategy == "round_robin"
-                    ):
-                        sender_is_human = (
-                            identity is not None and identity.kind == "user"
-                        )
-                        next_info = await _compute_round_robin_next(
-                            db,
-                            room_id=room_id,
-                            current_index=current_speaker_index,
-                            sender_is_human=sender_is_human,
-                        )
-                        if next_info is not None:
-                            new_index, next_pid = next_info
-                            nominated_pid = next_pid
-                            metadata["next_speaker_participant_id"] = next_pid
-                            await db.execute(
-                                sa_update(Room)
-                                .where(Room.id == room_id)
-                                .values(
-                                    current_speaker_index=new_index,
-                                    next_speaker_participant_id=next_pid,
-                                )
-                            )
-
-                    # Issue #159 Phase C — orchestrator handoff.
-                    # When the orchestrator emits a ``[HANDOFF]``
-                    # message, flip ``Room.next_speaker_participant_id``
-                    # and stamp the outgoing metadata so the target
-                    # agent wakes up under ``decide_policy`` rule O2.
-                    # Non-orchestrator senders and messages that don't
-                    # parse cleanly are silently ignored — see
-                    # ``_apply_orchestrator_handoff`` for the trust
-                    # rules. Runs regardless of the strategy so a room
-                    # that was just flipped back to ``mentioned_only``
-                    # still processes in-flight handoffs consistently.
-                    sender_agent_id = (
-                        identity.id
-                        if identity is not None and identity.kind == "agent"
-                        else None
-                    )
-                    handoff_pid = None
-                    if (
-                        directed_target_pid is None
-                        and not is_execution_reply
-                        and not is_delegation_result
-                        and not is_thread_reply
-                    ):
-                        handoff_pid = await _apply_orchestrator_handoff(
-                            db,
-                            room_id=room_id,
-                            content=frame_in.content,
-                            metadata=metadata,
-                            orchestrator_agent_id=orchestrator_agent_id,
-                            sender_agent_id=sender_agent_id,
-                        )
-                    if handoff_pid is not None:
-                        nominated_pid = handoff_pid
-
-                    # Orchestrator fallback nominate — when the
-                    # moderator emits a non-terminal message without
-                    # a valid handoff or addressable mention, the
-                    # server rotates to the next non-orchestrator
-                    # participant via round-robin so the room never
-                    # silently stalls on LLM instruction-following
-                    # decay. See
-                    # ``_apply_orchestrator_fallback_nominate`` and
-                    # docs/research/2026-05-12-multi-agent-turn-
-                    # taking-mediator-failure.md for the failure
-                    # mode this defends against (V1-V5 PoC observed
-                    # the orchestrator omit the mention token from
-                    # the second handoff onward in 5/5 trials, even
-                    # with persona reinforcement).
-                    if (
-                        directed_target_pid is None
-                        and not is_execution_reply
-                        and not is_delegation_result
-                        and not is_thread_reply
-                        and speaker_strategy == "orchestrator"
-                    ):
-                        fallback_info = (
-                            await _apply_orchestrator_fallback_nominate(
-                                db,
-                                room_id=room_id,
-                                content=frame_in.content,
-                                metadata=metadata,
-                                orchestrator_agent_id=orchestrator_agent_id,
-                                sender_agent_id=sender_agent_id,
-                                current_speaker_index=current_speaker_index,
-                            )
-                        )
-                        if fallback_info is not None:
-                            new_index, next_pid = fallback_info
-                            nominated_pid = next_pid
-                            logger.warning(
-                                "orchestrator_fallback_nominate",
-                                room_id=room_id,
-                                next_participant_id=next_pid,
-                                new_index=new_index,
-                            )
 
                     # #313 — auto-route response detection. If this
                     # message carries the rep agent's reply to an
@@ -2407,9 +1970,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # (root span is still open until handler_finished).
                         if tracing is not None and echoed_rid:
                             tracing.note_response_sent(echoed_rid, msg.id)
-                        # #431 — A→B causal link. If the dispatcher
-                        # nominated a NEXT speaker (handoff / round-robin /
-                        # fallback) that is *another* agent, mint a tracked
+                        # #431 — A→B causal link. If a directed delegation
+                        # nominated a NEXT speaker that is *another* agent, mint a tracked
                         # turn for that one agent so the trace shows A's
                         # reply waking B. Only the nominated agent gets a
                         # request_id — no fan-out to the whole room — so
@@ -2418,9 +1980,8 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         # server-set value captured above, NOT read back
                         # from ``metadata`` (an agent could forge that to
                         # spuriously trigger/track a peer). A self-
-                        # nomination (single-agent round_robin wraps to the
-                        # sender) is skipped: a turn must not causally link
-                        # to its own author.
+                        # nomination is skipped: a turn must not causally
+                        # link to its own author.
                         if is_delegation_result or is_execution_reply:
                             # Result subscribers consume control replies;
                             # they never start an engine invocation. Minting
@@ -2501,12 +2062,11 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 )
                             )).all()
                         )
-                        # #739 — in ``mentioned_only`` rooms a root message
-                        # wakes only the agents it mentions. ``@everyone`` and
+                        # #739 — a root message wakes only the agents it
+                        # mentions. ``@everyone`` and
                         # the one-agent room were already expanded into user
                         # mentions above, so an unaddressed message wakes
-                        # nobody (agents ingest it as context). Round-robin
-                        # and orchestrator rooms keep their dispatcher.
+                        # nobody (agents ingest it as context).
                         # Task-init prefixes keep their eager room-wide
                         # behaviour and a ``#room`` query still wakes the
                         # representative that forwards it, as in the
@@ -2519,7 +2079,6 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                         )
                         if (
                             not is_thread_reply
-                            and speaker_strategy == "mentioned_only"
                             and not frame_in.content.startswith(
                                 ("[DELEGATED]", "[ROOM_QUERY]")
                             )

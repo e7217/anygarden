@@ -130,7 +130,7 @@ class TestTurnHop:
 
     @pytest.mark.asyncio
     async def test_agent_message_without_a_call_is_hop_one(self, db) -> None:
-        """Round-robin / handoff nominations wake an agent without calling it."""
+        """An agent message that calls no one does not deepen the hop."""
         ids = await _seed(db)
         await _retrigger(db, ids, author_pid=ids["peer_p"], metadata=None)
         assert await turn_hop(db, await db.get(AgentTurn, "turn-1")) == 1

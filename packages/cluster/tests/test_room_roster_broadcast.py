@@ -175,8 +175,8 @@ class TestMembershipBroadcast:
         # the frame carries a full snapshot, not a delta.
         assert names == {"seated-bot", "spare-bot"}
         # Settings fields stay None: this frame is roster-only, and the
-        # receiver must not reset its cached strategy because of it.
-        assert frame.speaker_strategy is None
+        # receiver must not reset its cached settings because of it.
+        assert frame.context_window_enabled is None
         assert frame.ephemeral is None
 
     @pytest.mark.asyncio

@@ -197,6 +197,38 @@ async def test_turn_attempt_outbox_are_atomic_and_delivery_leases(turn_env) -> N
         assert outbox is not None and outbox.state == "delivered"
 
 
+async def _make_operating_room(env, *, representative: bool, subroom: bool) -> None:
+    async with env["factory"]() as db:
+        room = await db.get(Room, env["room"])
+        room.representative_agent_id = env["agent"] if representative else None
+        if subroom:
+            db.add(Room(project_id=room.project_id, name="sub", parent_room_id=room.id))
+        await db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("representative", "subroom", "expected"),
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+async def test_operating_lead_is_stamped_only_for_the_operating_rooms_representative(
+    turn_env, representative, subroom, expected
+) -> None:
+    """#802 — the lead of a room with subrooms gets ``operating_lead`` on
+    its leased delivery; nobody else does."""
+    await _make_operating_room(turn_env, representative=representative, subroom=subroom)
+    _, _, manager = await _create_and_deliver(turn_env)
+    metadata = manager.frames[0].metadata
+    assert metadata.get("operating_lead", False) is expected
+
+
+def test_operating_lead_is_reserved_turn_proof() -> None:
+    """A sender cannot forge ``operating_lead`` into a broadcast."""
+    from anygarden.messages.metadata import strip_turn_proof
+
+    assert "operating_lead" not in strip_turn_proof({"operating_lead": True, "x": 1})
+
+
 @pytest.mark.asyncio
 async def test_failed_older_outbox_fences_later_room_turn(turn_env) -> None:
     async with turn_env["factory"]() as db:
