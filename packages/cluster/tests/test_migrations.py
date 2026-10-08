@@ -45,7 +45,7 @@ class TestMigrations:
                 version = result.scalar_one()
                 # We expect the latest revision; this test will need to be
                 # updated when a new revision is added, which is the point.
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
 
                 # Every expected table exists
                 result = conn.execute(
@@ -484,7 +484,7 @@ class TestMigrations:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
                 # The cost_usd column added by 047 remains through head.
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
                 # Seed a real row so the downgrade is verified against
                 # actual data, not an empty table (task #98 review).
                 conn.execute(
@@ -572,7 +572,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
             engine.dispose()
 
             # Downgrade to 047: ``agent_turn_tasks`` (added by 048) is gone
@@ -619,7 +619,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
             engine.dispose()
 
             # Downgrade one step (049 → 048): the column is gone and the
@@ -742,7 +742,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
             engine.dispose()
 
             command.downgrade(cfg, "059")
@@ -923,7 +923,7 @@ class TestMigrations:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
                 agent_columns = {
                     row[1] for row in conn.execute(text("PRAGMA table_info(agents)"))
                 }
@@ -1024,7 +1024,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
                 schema = conn.execute(
                     text(
                         "SELECT sql FROM sqlite_master "
@@ -1064,7 +1064,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
             sync_engine.dispose()
         finally:
             try:
@@ -1098,7 +1098,7 @@ class TestEnsureSchemaReady:
                 await engine.dispose()
 
             head = _discover_head_revision()
-            assert head == "091_drop_room_speaker_strategy"
+            assert head == "092_task_input_requests"
 
             # A brand new connection must observe both the application
             # tables AND the alembic_version row — proving they landed
@@ -1200,7 +1200,7 @@ class TestEnsureSchemaReady:
                 version = conn.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                assert version == "091_drop_room_speaker_strategy"
+                assert version == "092_task_input_requests"
             sync_engine.dispose()
         finally:
             try:
@@ -1746,4 +1746,21 @@ def test_091_drops_speaker_strategy_and_keeps_rooms(tmp_path):
     command.downgrade(cfg, "090_native_invocation_accounting")
     with engine.connect() as conn:
         assert conn.execute(text("SELECT speaker_strategy, current_speaker_index FROM rooms WHERE id='r'")).one() == ("mentioned_only", 0)
+    engine.dispose()
+
+
+def test_092_adds_task_input_requests_and_downgrades(tmp_path) -> None:
+    path = str(tmp_path / "task-input.db")
+    cfg = _alembic_config(path)
+    command.upgrade(cfg, "092_task_input_requests")
+    engine = create_engine(f"sqlite:///{path}")
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(task_input_requests)"))}
+        assert {"task_id", "room_id", "question_key", "status", "answer_message_id",
+                "resume_message_id", "turn_request_id"} <= columns
+    command.downgrade(cfg, "091_drop_room_speaker_strategy")
+    with engine.connect() as conn:
+        assert conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE name='task_input_requests'"
+        )).first() is None
     engine.dispose()

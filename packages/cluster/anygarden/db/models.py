@@ -2699,3 +2699,4 @@ class PiNativeCredential(Base):
 from anygarden.db import execution_request_models as _execution_request_models  # noqa: E402,F401
 from anygarden.db import execution_approval_models as _execution_approval_models  # noqa: E402,F401
 from anygarden.db import native_invocation_models as _native_invocation_models  # noqa: E402,F401
+from anygarden.db import task_input_request_models as _task_input_request_models  # noqa: E402,F401

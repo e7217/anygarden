@@ -13,6 +13,14 @@
   `orchestrator` strategy.
 - The Pi self tools no longer include `create_task`, which the server removed.
 
+### Added
+
+- Outside project work, the turn prompt carries a task rule (#806): claim the
+  request with `claim_current_request` before running tools, changing files or
+  investigating, report with `mark_task_status`, and ask a blocking question
+  with `request_task_input`. The Pi self tools include both new tools. Upgrade
+  the cluster first; an older server does not know them.
+
 ### Changed
 
 - `CodexCliAdapter` falls back to `gpt-6.1-sol` instead of `gpt-6-sol` when no

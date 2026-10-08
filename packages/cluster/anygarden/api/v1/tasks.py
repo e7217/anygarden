@@ -288,20 +288,6 @@ async def _raise_fresh_claim_conflict(
     raise HTTPException(status_code=409, detail=detail) from exc
 
 
-def _is_system_source(message: Message) -> bool:
-    metadata = message.extra_metadata or {}
-    if metadata.get("system_origin") is not None:
-        return True
-    denied_keys = {
-        "task_assignment",
-        "room_query",
-        "room_query_result",
-        "room_query_forward",
-        "routing_request_id",
-    }
-    return any(key in metadata for key in denied_keys)
-
-
 async def _validate_assignee_in_room(
     db: AsyncSession, room_id: str, participant_id: str
 ) -> Participant:
@@ -490,7 +476,9 @@ async def create_message_task(
             code="TASK_SOURCE_MESSAGE_NOT_FOUND",
             message="Message not found",
         )
-    if _is_system_source(source):
+    from anygarden.general_tasks import is_system_source
+
+    if is_system_source(source):
         raise HTTPException(
             status_code=400,
             detail={

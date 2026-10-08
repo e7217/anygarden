@@ -164,6 +164,36 @@ def operating_lead_workflow(metadata: dict[str, Any] | None) -> str:
     return _OPERATING_LEAD_WORKFLOW
 
 
+_GENERAL_TASK_RULE = (
+    "\n\n[작업 추적]\n"
+    "도구를 실행하거나, 파일·코드를 바꾸거나, 조사가 필요한 요청이면 작업을 시작하기 전에 "
+    "claim_current_request를 호출해 지금 답하는 요청을 내 task로 만드세요. "
+    "질문에 답하거나 대화만 하는 경우에는 호출하지 마세요. "
+    "작업이 끝나면 mark_task_status로 결과를 보고하세요. "
+    "진행에 꼭 필요한 사실이 없으면 request_task_input으로 한 번에 하나만 질문하고, "
+    "완료로 표시하지 말고 턴을 끝내세요. 사용자의 답이 오면 같은 task로 다시 깨어납니다."
+)
+
+
+def general_task_rule(metadata: dict[str, Any] | None) -> str:
+    """Return the #806 task-claim rule for a turn outside project work.
+
+    An operating lead delegates with project executions, and a project
+    execution task already has its own workflow, so neither gets the rule.
+    """
+    if metadata is None or metadata.get("operating_lead"):
+        return ""
+    assignment = metadata.get("task_assignment") or {}
+    if assignment.get("execution_id"):
+        return ""
+    return _GENERAL_TASK_RULE
+
+
+def turn_workflow(metadata: dict[str, Any] | None) -> str:
+    """The workflow block for this turn: operating room or general tasks."""
+    return operating_lead_workflow(metadata) or general_task_rule(metadata)
+
+
 class CodexCliAdapter(EngineAdapter):
     """Adapter that calls the host ``codex exec`` CLI via subprocess.
 
@@ -255,7 +285,7 @@ class CodexCliAdapter(EngineAdapter):
         roster_suffix = (
             client.compose_roster_suffix(room_id) if client is not None else ""
         )
-        workflow = operating_lead_workflow(
+        workflow = turn_workflow(
             metadata if isinstance(metadata, dict) else None
         )
         prefix = self._injector.apply(

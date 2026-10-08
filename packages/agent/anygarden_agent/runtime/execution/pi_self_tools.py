@@ -25,6 +25,8 @@ TOOL_NAMES = frozenset(
         "list_my_skills",
         "delete_my_skill",
         "claim_task",
+        "claim_current_request",
+        "request_task_input",
         "mark_task_status",
         "add_task_blocker",
         "clear_task_blocker",

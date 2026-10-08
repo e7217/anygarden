@@ -186,6 +186,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
     # test_mark_task_status.py and test_task_blockers.py. #802 removed the
     # orchestrator-only ``create_task``. #737 added ``ask_peer`` (test_mcp_ask_peer.py).
     # #778 added the project execution tools (mcp/project_tools.py).
+    # #806 added ``claim_current_request`` / ``request_task_input``
+    # (test_general_tasks.py).
     assert names == {
         "begin_project_execution",
         "delegate_project_task",
@@ -202,6 +204,8 @@ async def test_tools_list_returns_expected_tools(mcp_env):
         "list_my_skills",
         "delete_my_skill",
         "claim_task",
+        "claim_current_request",
+        "request_task_input",
         "mark_task_status",
         "add_task_blocker",
         "clear_task_blocker",

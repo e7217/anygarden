@@ -97,6 +97,28 @@ _UNAVAIL_NOTICE_SEEN: set[tuple[str, str]] = set()
 _UNAVAIL_NOTICE_SEEN_CAP = 2048
 
 
+async def _publish_thread_answer(
+    session_factory, manager, room_id: str, thread_answer, *, app,
+) -> None:
+    """#806 — show the resume notice and deliver the resumed task turn.
+
+    The resumed agent receives its leased turn, not the notice frame.
+    """
+    from anygarden.messages.serialization import message_to_frame
+    from anygarden.turns.service import deliver_pending_outbox
+
+    target = thread_answer.requester_participant_id
+    for message in thread_answer.messages:
+        frame = message_to_frame(message)
+        await manager.broadcast_tailored(
+            room_id, lambda pid, frame=frame: None if pid == target else frame,
+        )
+    if await manager.is_connected(target):
+        await deliver_pending_outbox(
+            session_factory, manager, participant_ids=[target], app=app,
+        )
+
+
 async def _notify_unavailable_responders(
     session_factory,
     manager: "ConnectionManager",
@@ -1928,6 +1950,7 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     # ``response_sent`` so the full lifecycle chain
                     # resolves under one identifier.
                     request_id_by_participant: dict[str, str] = {}
+                    thread_answer = None
                     mentioned_participant_ids = {
                         str(mention["id"])
                         for mention in mentions
@@ -2107,6 +2130,21 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                                 or pid in named_pids
                                 or (room_query_rep is not None and aid == room_query_rep)
                             ]
+                        # #806 — the first human reply in a task's source
+                        # thread answers its pending question. The answer
+                        # resumes that task's agent itself, so a mention of
+                        # it in the same reply must not start a second turn.
+                        if identity.kind == "user" and is_thread_reply:
+                            from anygarden.general_tasks import answer_from_thread
+
+                            thread_answer = await answer_from_thread(
+                                db, reply=msg, user_id=identity.id,
+                            )
+                            if thread_answer is not None:
+                                agent_parts = [
+                                    (pid, aid) for pid, aid in agent_parts
+                                    if pid != thread_answer.requester_participant_id
+                                ]
                         # #719 — remember which agents this user turn wakes so
                         # a peer mention cannot wake them a second time. This
                         # mirrors the agent-side ``decide_policy``: explicit
@@ -2184,6 +2222,16 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
 
                     await db.commit()
                     base_metadata = msg.extra_metadata
+                    if thread_answer is not None:
+                        from anygarden.messages.service import fanout_task_event
+
+                        answered_task = await db.get(Task, thread_answer.request.task_id)
+                        answered_room = await db.get(Room, room_id)
+                        if answered_task is not None:
+                            await fanout_task_event(
+                                db, manager=manager, event="claimed", task=answered_task,
+                                room_name=answered_room.name if answered_room else "",
+                            )
 
                 if (
                     identity is not None
@@ -2213,6 +2261,10 @@ async def ws_room(websocket: WebSocket, room_id: str) -> None:
                     return message_to_frame(msg, metadata=base_metadata)
 
                 await manager.broadcast_tailored(room_id, _make_out)
+                if thread_answer is not None:
+                    await _publish_thread_answer(
+                        session_factory, manager, room_id, thread_answer, app=websocket.app,
+                    )
                 if request_id_by_participant:
                     from anygarden.turns.service import deliver_pending_outbox
 
