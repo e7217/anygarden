@@ -185,6 +185,37 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "claim_current_request",
+        "description": (
+            "Turn the request you are answering into a task you own, already "
+            "in_progress. Call it before you start work that goes beyond "
+            "replying: running tools, changing files or code, or "
+            "investigating. Do not call it to answer a question or chat. "
+            "Calling it again returns the same task. Report the result with "
+            "mark_task_status when you finish."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "request_task_input",
+        "description": (
+            "Ask the user for a fact your claimed task cannot proceed "
+            "without. The question is posted in the request's thread and the "
+            "task waits; the user's next reply there resumes the same task "
+            "and wakes you with the answer. Use a stable question_key, ask "
+            "one question at a time, then end your turn without marking the "
+            "task done."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question_key": {"type": "string", "minLength": 1, "maxLength": 160},
+                "question": {"type": "string", "minLength": 1, "maxLength": 20000},
+            },
+            "required": ["question_key", "question"],
+        },
+    },
+    {
         "name": "ask_peer",
         "description": (
             "Ask other agents in this room to answer questions. Use this "
@@ -506,6 +537,83 @@ async def claim_task(
     )
 
 
+async def claim_current_request(
+    db: AsyncSession, *, agent_id: str, proof: Any,
+) -> dict[str, Any]:
+    """Promote the turn's trigger message into a task the agent owns (#806)."""
+
+    from anygarden.general_tasks import GeneralTaskConflict, promote_turn_request
+    from anygarden.project_executions.service import ExecutionConflict
+
+    try:
+        task, created = await promote_turn_request(db, agent_id=agent_id, proof=proof)
+    except (GeneralTaskConflict, ExecutionConflict) as exc:
+        return _error_result(str(exc) if isinstance(exc, GeneralTaskConflict)
+                             else f"{exc.code}: {exc.detail}")
+    return _ok_result(
+        f"task {task.id} {'created' if created else 'already'} in_progress for this request",
+        structured={
+            "task_id": task.id,
+            "room_id": task.room_id,
+            "status": task.status,
+            "title": task.title,
+            "created": created,
+            "event": "created" if created else "updated",
+        },
+    )
+
+
+async def request_task_input(
+    db: AsyncSession, *, agent_id: str, arguments: dict[str, Any], proof: Any,
+) -> tuple[dict[str, Any], list[Any]]:
+    """Block the turn's task on a question asked in its thread (#806)."""
+
+    from anygarden.general_tasks import GeneralTaskConflict, request_input
+    from anygarden.project_executions.service import ExecutionConflict
+
+    try:
+        request, messages = await request_input(
+            db, agent_id=agent_id, proof=proof,
+            question_key=arguments.get("question_key"),
+            question=arguments.get("question"),
+        )
+    except (GeneralTaskConflict, ExecutionConflict) as exc:
+        return _error_result(str(exc) if isinstance(exc, GeneralTaskConflict)
+                             else f"{exc.code}: {exc.detail}"), []
+    return _ok_result(
+        "question posted; the task waits for the user's reply. End this turn "
+        "without marking the task done.",
+        structured={
+            "request_id": request.id,
+            "task_id": request.task_id,
+            "status": request.status,
+            "event": "updated",
+        },
+    ), messages
+
+
+async def _superseded_general_turn(
+    db: AsyncSession, *, task: Task, agent_id: str, proof: Any,
+) -> bool:
+    """A newer turn owns this general task; the proof's turn must not change it.
+
+    Only a turn bound to the task is checked. Lease validity stays with the
+    turn itself, so a tool call without a proof keeps its old behavior.
+    """
+
+    from anygarden.db.models import AgentTurn
+    from anygarden.general_tasks import newer_turn_for_task
+
+    if proof is None:
+        return False
+    turn = await db.scalar(select(AgentTurn).where(
+        AgentTurn.request_id == proof.request_id, AgentTurn.agent_id == agent_id,
+    ))
+    if turn is None or turn.task_id != task.id:
+        return False
+    return await newer_turn_for_task(db, task_id=task.id, turn=turn) is not None
+
+
 async def mark_task_status(
     db: AsyncSession,
     *,
@@ -557,15 +665,9 @@ async def mark_task_status(
             # A later turn for the same task and assignee (e.g. the resume
             # after a user answer or approval) owns the task now. An older
             # turn still finishing must not overwrite its status.
-            from anygarden.db.models import AgentTurn
+            from anygarden.general_tasks import newer_turn_for_task
 
-            newer = await db.scalar(select(AgentTurn.request_id).where(
-                AgentTurn.task_id == task.id,
-                AgentTurn.target_participant_id == turn.target_participant_id,
-                AgentTurn.request_id != turn.request_id,
-                AgentTurn.created_at > turn.created_at,
-            ).limit(1))
-            if newer is not None:
+            if await newer_turn_for_task(db, task_id=task.id, turn=turn) is not None:
                 return _error_result(
                     "TASK_TURN_SUPERSEDED: a newer turn now owns this task; "
                     "end this turn without changing the task"
@@ -586,6 +688,11 @@ async def mark_task_status(
                 )
         except (HTTPException, ValueError) as exc:
             return _error_result(str(exc.detail) if isinstance(exc, HTTPException) else str(exc))
+    elif await _superseded_general_turn(db, task=task, agent_id=agent_id, proof=proof):
+        return _error_result(
+            "TASK_TURN_SUPERSEDED: a newer turn now owns this task; "
+            "end this turn without changing the task"
+        )
     from anygarden.task_service import (
         TaskMutationConflict,
         claim_task_cas,

@@ -3,6 +3,24 @@
 
 ## Unreleased
 
+### Added
+
+- An agent can turn the request it is answering into a task (#806). The new
+  MCP tool `claim_current_request` takes no arguments: the server reads the
+  delivered turn's lease, promotes the top-level human message that started
+  the turn into a task assigned to the agent, already `in_progress`, and binds
+  it to the turn. It does not wake the agent again, and calling it again
+  returns the same task. Operating-room leads and project execution turns are
+  refused.
+- `request_task_input` asks the user a question about that task (migration
+  `092`, table `task_input_requests`). The question is posted in the request's
+  thread and the task becomes `blocked`. The first human reply in that thread
+  answers it: the task is claimed again and the same agent wakes with the
+  answer. A mention of that agent in the reply does not start a second turn.
+- `mark_task_status` refuses a status change from a turn when a newer turn
+  of the same agent owns the task, for general tasks as well as project
+  execution tasks (`TASK_TURN_SUPERSEDED`).
+
 ### Changed
 
 - The codex-cli model catalog offers `gpt-6.1-sol`, which codex now lists as

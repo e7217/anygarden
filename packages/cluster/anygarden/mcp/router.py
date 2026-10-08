@@ -24,9 +24,11 @@ from anygarden.mcp.tools import (
     add_task_blocker,
     ask_peer,
     call_tool,
+    claim_current_request,
     claim_task,
     clear_task_blocker,
     mark_task_status,
+    request_task_input,
 )
 
 router = APIRouter(prefix="/mcp", tags=["mcp"])
@@ -141,6 +143,13 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
         if name in PROJECT_TOOL_NAMES:
             result = await call_project_tool(request, agent_id=agent_id, name=name, arguments=arguments)
             return _jsonrpc_ok(req_id, result)
+        # #806 — general-room tasks. Both tools act on the delivered turn
+        # alone, so they need its lease proof and take no ids from the model.
+        if name in {"claim_current_request", "request_task_input"}:
+            return _jsonrpc_ok(
+                req_id,
+                await _call_general_task_tool(request, agent_id=agent_id, name=name, arguments=arguments),
+            )
         # ``mark_task_status`` (#266) is the first tool that operates
         # on the main DB rather than the skill library, so it owns its
         # own session lifecycle here. The legacy skill tools below
@@ -357,6 +366,46 @@ async def mcp_rpc(request: Request) -> dict[str, Any] | Response:
         return _jsonrpc_ok(req_id, tool_result)
 
     return _jsonrpc_error(req_id, -32601, f"method not found: {method}")
+
+
+async def _call_general_task_tool(
+    request: Request, *, agent_id: str, name: str, arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a #806 general-task tool in its own session and publish the result."""
+
+    from anygarden.db.models import Room, Task
+    from anygarden.mcp.project_tools import broadcast_project_messages, turn_proof
+    from anygarden.messages.service import fanout_task_event
+
+    try:
+        proof = turn_proof(request)
+    except HTTPException as exc:
+        return {"isError": True, "content": [{"type": "text", "text": str(exc.detail)}]}
+    async with request.app.state.session_factory() as db:
+        if name == "claim_current_request":
+            result = await claim_current_request(db, agent_id=agent_id, proof=proof)
+            messages: list = []
+        else:
+            result, messages = await request_task_input(
+                db, agent_id=agent_id, arguments=arguments, proof=proof,
+            )
+        if result.get("isError"):
+            await db.rollback()
+            return result
+        structured = result["structuredContent"]
+        await db.commit()
+        await broadcast_project_messages(db, request=request, messages=messages)
+        task = await db.get(Task, structured["task_id"])
+        room = await db.get(Room, task.room_id) if task is not None else None
+        if task is not None:
+            await fanout_task_event(
+                db,
+                manager=getattr(request.app.state, "connection_manager", None),
+                event=structured["event"],
+                task=task,
+                room_name=room.name if room is not None else "",
+            )
+    return result
 
 
 def _service(request: Request):
