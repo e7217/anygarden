@@ -78,7 +78,7 @@ uv run python -m benchmarks.runner annotate benchmarks/results/<file>.json GT-03
 | GT-01 | solo | 도구가 필요한 요청이 작업으로 승격되고 에이전트가 스스로 종결 상태를 보고한다 |
 | GT-02 | solo | 단순 질답은 작업을 만들지 않는다 |
 | GT-03 | solo | 질문 → 스레드 답변 → 같은 작업이 한 번만 재개된다 |
-| DL-01, DL-02 | solo, team | 같은 요청을 혼자와 팀으로 처리해 산출물의 필수 사실·금지 사실을 비교한다 (향상폭·허위 완료) |
+| DL-01, DL-02, DL-03 | solo, team | 같은 요청을 혼자와 팀으로 처리해 산출물의 필수 사실·금지 사실을 비교한다 (향상폭·허위 완료) |
 
 프로토콜 시나리오(`QA-*`, `GT-*`)는 `runner/scenarios.py`의 코드다. 산출물 시나리오(`DL-*`)는 `suite.json`의 데이터다.
 

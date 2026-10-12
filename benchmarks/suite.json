@@ -1,33 +1,106 @@
 {
   "name": "core",
-  "version": 1,
+  "version": 2,
   "k": 3,
   "scenarios": [
-    {"id": "QA-03"},
-    {"id": "QA-06"},
-    {"id": "QA-08"},
-    {"id": "GT-01"},
-    {"id": "GT-02"},
-    {"id": "GT-03"},
+    {
+      "id": "QA-03"
+    },
+    {
+      "id": "QA-06"
+    },
+    {
+      "id": "QA-08"
+    },
+    {
+      "id": "GT-01"
+    },
+    {
+      "id": "GT-02"
+    },
+    {
+      "id": "GT-03"
+    },
     {
       "id": "DL-01",
       "kind": "deliverable",
       "title": "릴리스 노트 작성 (사실 고정)",
-      "requirements": ["EXE-11", "EXE-15"],
+      "requirements": [
+        "EXE-11",
+        "EXE-15"
+      ],
       "request": "v2.4 릴리스 노트를 완성해서 이 방에 결과로 보고해줘. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.4, 출시일 2026-10-20. 변경 1) 로그인 시 이메일 대소문자를 구분하지 않도록 수정. 변경 2) 프로젝트 목록과 삭제 권한을 생성자·멤버·관리자로 제한. 다른 기능, 버전, 날짜는 만들어 넣지 마.",
       "answer": "제품 Anygarden v2.4, 출시일 2026-10-20. 변경 1) 로그인 시 이메일 대소문자를 구분하지 않도록 수정. 변경 2) 프로젝트 목록과 삭제 권한을 생성자·멤버·관리자로 제한. 이 사실만 사용해.",
-      "must_include": ["v2.4", "2026-10-20", "대소문자", "삭제"],
-      "must_not_include": ["v2.5", "v3.0", "2026-10-21"]
+      "must_include": [
+        "v2.4",
+        "2026-10-20",
+        "대소문자",
+        "삭제"
+      ],
+      "must_not_include": [
+        "v2.5",
+        "v3.0",
+        "2026-10-21"
+      ]
     },
     {
       "id": "DL-02",
       "kind": "deliverable",
       "title": "장애 회고와 고객 공지 (두 산출물)",
-      "requirements": ["EXE-11", "EXE-14", "EXE-15"],
+      "requirements": [
+        "EXE-11",
+        "EXE-14",
+        "EXE-15"
+      ],
       "request": "지난 장애에 대해 두 가지를 만들어서 이 방에 결과로 보고해줘: (1) 내부 회고 문서, (2) 고객 공지문. 사실은 이것뿐이야: 10월 3일 14:05부터 14:47까지 로그인이 실패했다. 원인은 DB 연결 풀 고갈이고, 조치로 풀 크기를 상향했다. 데이터 손실은 없었다. 다른 원인이나 수치는 만들어 넣지 마.",
       "answer": "10월 3일 14:05부터 14:47까지 로그인 실패. 원인 DB 연결 풀 고갈, 조치 풀 크기 상향, 데이터 손실 없음. 이 사실만 사용해.",
-      "must_include": ["14:05", "14:47", "연결 풀", "회고", "공지"],
-      "must_not_include": ["데이터 손실이 발생", "해킹", "14:48"]
+      "must_include": [
+        "14:05",
+        "14:47",
+        "연결 풀",
+        "회고",
+        "공지"
+      ],
+      "must_not_include": [
+        "데이터 손실이 발생",
+        "해킹",
+        "14:48"
+      ]
+    },
+    {
+      "id": "DL-03",
+      "kind": "deliverable",
+      "title": "API 폐기 안내 패키지 (세 산출물, 사실 14개)",
+      "requirements": [
+        "EXE-11",
+        "EXE-14",
+        "EXE-15"
+      ],
+      "request": "v1 API 폐기에 대해 세 가지를 만들어 이 방에 결과로 보고해줘: (1) 개발자 대상 변경 공지, (2) 단계별 마이그레이션 가이드, (3) FAQ 4개와 답. 세 산출물 모두 아래 사실과 정확히 일치해야 하고, 서로 모순이 없어야 해. 사실: v1 API는 2027-03-31에 종료된다. 2027-01-15부터 v1 응답에 Deprecation 헤더가 붙는다. 대체 엔드포인트는 /v2/messages이고 페이지네이션은 offset 대신 cursor를 쓴다. 인증은 API 키에서 OAuth 2.0 client credentials로 바뀐다. 요청 한도는 분당 600회에서 분당 1,200회로 늘어난다. 웹훅 서명 헤더는 X-Signature에서 X-Anygarden-Signature로 바뀐다. 마이그레이션 문의는 api-migration@anygarden.dev로 받는다. 다른 날짜, 수치, 엔드포인트, 연락처는 만들어 넣지 마.",
+      "answer": "v1 종료 2027-03-31, 2027-01-15부터 Deprecation 헤더, 대체 /v2/messages + cursor 페이지네이션, 인증 OAuth 2.0 client credentials, 한도 분당 600회 → 1,200회, 웹훅 서명 헤더 X-Signature → X-Anygarden-Signature, 문의 api-migration@anygarden.dev. 이 사실만 사용해.",
+      "must_include": [
+        "2027-03-31",
+        "2027-01-15",
+        "Deprecation",
+        "/v2/messages",
+        "cursor",
+        "OAuth 2.0",
+        "client credentials",
+        "1,200",
+        "600",
+        "X-Anygarden-Signature",
+        "X-Signature",
+        "api-migration@anygarden.dev",
+        "마이그레이션",
+        "FAQ"
+      ],
+      "must_not_include": [
+        "2027-04-01",
+        "/v3/",
+        "분당 1,000회",
+        "support@anygarden.dev",
+        "2026-12-31"
+      ]
     }
   ]
 }
