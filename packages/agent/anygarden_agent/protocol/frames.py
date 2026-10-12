@@ -82,6 +82,22 @@ class TurnStopOut(BaseModel):
     reason: str = Field(min_length=1, max_length=128)
 
 
+class TurnCancelOut(BaseModel):
+    """ENG-09 — the server cancelled a general (non-execution) turn.
+
+    Stop the exact attempt's in-flight engine call. No receipt is sent; the
+    server already made the turn terminal.
+    """
+    model_config = {"extra": "forbid"}
+    type: Literal["turn_cancel"] = "turn_cancel"
+    agent_id: str
+    room_id: str
+    request_id: str = Field(min_length=1, max_length=128)
+    attempt: int = Field(ge=1, strict=True)
+    generation: int = Field(ge=0, strict=True)
+    reason: str = Field(min_length=1, max_length=128)
+
+
 class TurnStopResultFrame(BaseModel):
     """Process receipt only; contains neither leases nor native session handles."""
     model_config = {"extra": "forbid"}
@@ -328,5 +344,5 @@ class ErrorOut(BaseModel):
 
 OutgoingFrame = (
     MessageOut | RoomCreatedOut | JoinRoomOut | TypingOut | WelcomeOut | ErrorOut
-    | TurnStartPermitOut | TurnStopOut
+    | TurnStartPermitOut | TurnStopOut | TurnCancelOut
 )

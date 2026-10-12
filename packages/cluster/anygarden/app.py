@@ -1107,6 +1107,13 @@ async def _startup_server(app: FastAPI) -> None:
     if hasattr(app.state.goal_scheduler, "start"):
         app.state.goal_scheduler.start()
 
+    # SYS-06 — periodic PyPI update check filling the ``/updates`` cache.
+    # ``ANYGARDEN_UPDATE_CHECK_INTERVAL_HOURS=0`` disables it (air-gapped
+    # installs, tests); a pre-set ``app.state.update_check_task`` is kept.
+    from anygarden.system.update_checker import start_update_check
+
+    start_update_check(app)
+
 
 async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
     # Shutdown: cancel background crons and wait for them to actually
@@ -1119,6 +1126,7 @@ async def _shutdown_server(app: FastAPI, engine_provided: bool) -> None:
         "turn_recovery_task",
         "span_reaper_task",
         "delegation_sweeper_task",
+        "update_check_task",
     ):
         task: asyncio.Task | None = getattr(app.state, attr, None)
         if task is not None and not task.done():

@@ -154,6 +154,7 @@ export default function TopologyPage() {
       agent: 0,
       room: 0,
       project: 0,
+      peer: 0,
     }
     if (!data) {
       return {

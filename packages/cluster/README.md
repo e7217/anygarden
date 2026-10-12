@@ -99,3 +99,7 @@ at the repo root for the full list. Highlights:
 - `ANYGARDEN_DEV=1` enables dev-mode conveniences (ephemeral MCP key
   fallback when persistence fails). Production must leave this
   unset so misconfigurations fail loudly at boot.
+- `ANYGARDEN_UPDATE_CHECK_INTERVAL_HOURS` — how often the server checks
+  PyPI for a newer `anygarden` release in the background (default `24`;
+  first check ~60s after startup). Set `0` to disable the outbound call
+  entirely, e.g. for air-gapped installs.

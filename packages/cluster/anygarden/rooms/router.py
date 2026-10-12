@@ -764,7 +764,7 @@ async def remove_participant(
             capability=Capability.ROOM_ROLE_MANAGE,
         )
 
-    # 3. Self-removal guard — direct this to the (future) leave flow.
+    # 3. Self-removal guard — direct this to the leave flow (ROOM-05).
     if (
         identity.kind == "user"
         and target.user_id is not None
@@ -774,7 +774,13 @@ async def remove_participant(
         and target.agent_id is not None
         and target.agent_id == identity.id
     ):
-        raise HTTPException(status_code=400, detail="Use leave-room instead")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Use leave-room instead: "
+                f"POST /api/v1/rooms/{room_id}/leave"
+            ),
+        )
 
     # 4. Last-admin guard. Prevent orphaning a room by checking
     #    whether removing this row would leave zero admin/owner
@@ -895,6 +901,130 @@ async def remove_participant(
     #     snapshot so the next turn's prompt is accurate.
     await broadcast_roster(manager, db, room_id=room_id)
 
+    return None
+
+
+@router.post("/{room_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_room(
+    room_id: str,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove the caller's own participant row from a room (ROOM-05).
+
+    - Users and room-bound guests may leave. Agents may not: their seats
+      are managed by room admins (``DELETE .../participants/{id}``) so an
+      agent can't drop out of work it was assigned to.
+    - DM rooms cannot be left (409). A DM is the user's 1:1 channel with
+      one agent, created alongside the agent and deleted with it; leaving
+      would leave an ownerless room nobody can see or administer.
+    - The last admin/owner cannot leave (409) — the same invariant as
+      ``remove_participant`` — so a room is never orphaned. Promote
+      someone else first.
+    - Per-user room state (read cursor, sidebar pin/order) lives on the
+      participant row and goes with it. Open tasks are released like on
+      removal, the caller's room sockets are closed, and the remaining
+      members get the ``removed`` membership frame plus a roster refresh.
+    """
+    if identity.kind == "agent":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agents cannot leave rooms; a room admin removes them",
+        )
+
+    from anygarden.rooms.authorization import resolve_access
+
+    access = await resolve_access(db, room_id=room_id, identity=identity)
+    if access.participant is None:
+        # A global admin can resolve rooms they're not seated in.
+        raise HTTPException(status_code=404, detail="Not a participant of this room")
+    if access.room.is_dm:
+        raise HTTPException(
+            status_code=409,
+            detail="DM rooms cannot be left; delete the DM instead",
+        )
+
+    own_rows = list(
+        (
+            await db.execute(
+                select(Participant).where(
+                    Participant.room_id == room_id,
+                    Participant.user_id == identity.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    own_ids = {row.id for row in own_rows}
+    if any(row.role in ("admin", "owner") for row in own_rows):
+        admins = (
+            (
+                await db.execute(
+                    select(Participant.id).where(
+                        Participant.room_id == room_id,
+                        Participant.role.in_(("admin", "owner")),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not any(pid not in own_ids for pid in admins):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove the last admin/owner of the room",
+            )
+
+    other_pids = (
+        (
+            await db.execute(
+                select(Participant.id).where(
+                    Participant.room_id == room_id,
+                    Participant.id.not_in(own_ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    from anygarden.task_service import release_participant_tasks
+
+    for pid in own_ids:
+        await release_participant_tasks(db, room_id=room_id, participant_id=pid)
+    await db.execute(delete(Participant).where(Participant.id.in_(own_ids)))
+    await db.commit()
+
+    # Same post-removal fence as ``remove_participant``: attachments that
+    # depended on this membership stop being valid.
+    workspace_lifecycle = getattr(request.app.state, "agent_lifecycle", None)
+    machine_bus = getattr(request.app.state, "machine_bus", None)
+    if workspace_lifecycle is not None and machine_bus is not None:
+        from anygarden.workspaces.lifecycle import revoke_invalid_attachments
+
+        await revoke_invalid_attachments(
+            request.app.state.session_factory,
+            machine_bus,
+            workspace_lifecycle,
+        )
+
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is not None:
+        from anygarden.ws.protocol import RoomMembershipChangedOut
+
+        for pid in own_ids:
+            await manager.revoke_participant(pid, reason="Left the room")
+        frame = RoomMembershipChangedOut(
+            action="removed",
+            room_id=room_id,
+            user_id=identity.id,
+        )
+        for pid in other_pids:
+            await manager.send_to(pid, frame)
+
+    await broadcast_roster(manager, db, room_id=room_id)
     return None
 
 

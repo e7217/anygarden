@@ -227,3 +227,100 @@ async def resume_agent(
         agent_id=agent_id,
         incidents_resolved=len(open_incidents),
     )
+
+
+# ── Admin overview (USE-07) ─────────────────────────────────────────────
+
+
+class PolicyUsageOut(BaseModel):
+    """Observed tokens for one policy's scope within its current window."""
+
+    policy_id: str
+    observed_tokens: int
+    window_start: datetime
+
+
+class IncidentOut(BaseModel):
+    id: str
+    policy_id: str
+    scope_type: str
+    scope_id: Optional[str]
+    threshold_type: str
+    status: str
+    observed_tokens: int
+    window_start: datetime
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PausedAgentOut(BaseModel):
+    agent_id: str
+    name: str
+
+
+class OverviewOut(BaseModel):
+    usage: list[PolicyUsageOut]
+    incidents: list[IncidentOut]
+    paused_agents: list[PausedAgentOut]
+
+
+@router.get("/overview", response_model=OverviewOut)
+async def budgets_overview(
+    identity: Identity = Depends(get_admin_identity),  # noqa: ARG001
+    db: AsyncSession = Depends(get_db),
+) -> OverviewOut:
+    """Read model for the admin budget screen (USE-07).
+
+    - ``usage`` — observed tokens per policy for its current window,
+      computed fresh from the ledger (not the hot-path TTL cache) so the
+      screen reflects what the gate will see.
+    - ``incidents`` — open breaches, newest first.
+    - ``paused_agents`` — agents actively stopped by a budget breach
+      (``pause_reason == 'budget'``); each can be resumed via
+      ``POST /agents/{agent_id}/resume``.
+    """
+    from anygarden.budgets.ledger import _window_start, compute_observed_tokens
+
+    now = datetime.now(timezone.utc)
+    policies = (await db.execute(select(TokenBudgetPolicy))).scalars().all()
+    usage: list[PolicyUsageOut] = []
+    for policy in policies:
+        window_start = _window_start(policy.window_kind, now=now)
+        observed = await compute_observed_tokens(
+            db,
+            scope_type=policy.scope_type,
+            scope_id=policy.scope_id,
+            window_start=window_start,
+        )
+        usage.append(
+            PolicyUsageOut(
+                policy_id=policy.id,
+                observed_tokens=observed,
+                window_start=window_start,
+            )
+        )
+
+    incidents = (
+        await db.execute(
+            select(TokenBudgetIncident)
+            .where(TokenBudgetIncident.status == "open")
+            .order_by(TokenBudgetIncident.created_at.desc())
+        )
+    ).scalars().all()
+
+    paused = (
+        await db.execute(
+            select(Agent.id, Agent.name)
+            .where(Agent.pause_reason == "budget")
+            .order_by(Agent.name)
+        )
+    ).all()
+
+    return OverviewOut(
+        usage=usage,
+        incidents=[IncidentOut.model_validate(row) for row in incidents],
+        paused_agents=[
+            PausedAgentOut(agent_id=agent_id, name=name) for agent_id, name in paused
+        ],
+    )

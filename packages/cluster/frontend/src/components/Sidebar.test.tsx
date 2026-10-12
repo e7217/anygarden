@@ -194,9 +194,10 @@ describe('Sidebar — footer admin menu (#699)', () => {
     renderSidebar()
     expect(screen.queryByRole('button', { name: 'Admin settings' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Machines' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Budgets' })).not.toBeInTheDocument()
   })
 
-  it('shows all seven links only after opening the admin settings menu', () => {
+  it('shows all eight links only after opening the admin settings menu', () => {
     authMockState.isAdmin = true
     renderSidebar()
     const trigger = screen.getByRole('button', { name: 'Admin settings' })
@@ -206,7 +207,7 @@ describe('Sidebar — footer admin menu (#699)', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(trigger).toHaveAttribute('aria-controls')
     expect(screen.getByRole('group', { name: 'Admin navigation' })).toBeInTheDocument()
-    for (const name of ['Machines', 'System', 'Skills', 'MCP Servers', 'Usage']) {
+    for (const name of ['Machines', 'System', 'Skills', 'MCP Servers', 'Usage', 'Budgets']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
     expect(screen.getByRole('button', {

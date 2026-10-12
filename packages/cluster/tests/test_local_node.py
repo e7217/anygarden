@@ -1039,3 +1039,102 @@ async def test_maintenance_gives_up_after_consecutive_failures(tmp_path, monkeyp
     assert backend.failed is True
     assert shutdown == [True]
     owner.release(clean=True)
+
+
+@pytest.mark.req("NODE-09")
+async def test_node_stops_running_agents_and_shuts_down_without_lock_contention(
+    tmp_path, monkeypatch
+):
+    """#772: on a file DB, stopping running agents and then shutting the node
+    down cleans every agent up; a lock error never ends the node early."""
+    from sqlalchemy import select
+
+    from anygarden.db.models import Machine
+
+    engine = build_engine(f"sqlite+aiosqlite:///{tmp_path / 'node.db'}")
+    factory = build_session_factory(engine)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    owner = NodeOwner(tmp_path / "node")
+    owner.acquire()
+    bus = MachineBus()
+    lifecycle = AgentLifecycle(db_factory=factory, machine_bus=bus)
+    shutdown = []
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            config=node_config(tmp_path / "node"),
+            session_factory=factory,
+            machine_bus=bus,
+            agent_lifecycle=lifecycle,
+            node_shutdown_callback=lambda: shutdown.append(True),
+        )
+    )
+    backend = LocalExecutionBackend(app, owner)
+    spawner = backend.daemon._spawner
+    spawned, killed = [], []
+
+    async def fake_spawn(manifest):
+        spawned.append(manifest.agent_id)
+        spawner._agents[manifest.agent_id] = RunningAgent(
+            agent_id=manifest.agent_id, pid=99999999, engine="echo",
+            started_at=1.0, proc=None,
+        )
+        return SpawnResult(success=True, agent_id=manifest.agent_id, pid=99999999)
+
+    async def fake_kill(agent_id):
+        killed.append(agent_id)
+        spawner._agents.pop(agent_id, None)
+        return {"success": True}
+
+    monkeypatch.setattr(spawner, "spawn", fake_spawn)
+    monkeypatch.setattr(spawner, "kill", fake_kill)
+    monkeypatch.setattr(
+        "anygarden.machine.daemon.connect",
+        lambda *a, **kw: pytest.fail("daemon network connect"),
+    )
+    async with factory() as db:
+        user = User(email="admin@test.local", password_hash="x", is_admin=True)
+        project = Project(name="local")
+        db.add_all([user, project])
+        await db.flush()
+        room = Room(project_id=project.id, name="local")
+        agents = [Agent(name=f"fake-{n}", engine="echo") for n in range(3)]
+        db.add_all([room, *agents])
+        await db.flush()
+        db.add_all(
+            Participant(room_id=room.id, agent_id=a.id, role="member") for a in agents
+        )
+        agent_ids = [a.id for a in agents]
+        await db.commit()
+    closed = False
+    try:
+        await backend.start()
+        await asyncio.gather(*(lifecycle.request_start(a) for a in agent_ids))
+        for _ in range(200):
+            if len(spawned) == 3 and not backend.daemon._spawn_tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert sorted(spawned) == sorted(agent_ids)
+
+        # Stop two running agents at once while the node keeps writing state.
+        await asyncio.gather(*(lifecycle.request_stop(a) for a in agent_ids[:2]))
+        await asyncio.wait_for(backend.queue.join(), 5)
+        assert sorted(killed) == sorted(agent_ids[:2])
+        assert backend.failed is False and shutdown == []
+
+        # Shutting the node down cleans up the agent still running.
+        await asyncio.wait_for(backend.close(), 10)
+        closed = True
+        assert sorted(killed) == sorted(agent_ids)
+        assert not spawner.list_running()
+        assert backend.failed is False and shutdown == []
+        async with factory() as db:
+            machine = await db.get(Machine, owner.identity["machine_id"])
+            assert machine.status == "offline"
+            stopped = await db.scalars(select(Agent).where(Agent.id.in_(agent_ids[:2])))
+            assert {a.desired_state for a in stopped} == {"stopped"}
+    finally:
+        if not closed:
+            await backend.close()
+        owner.release(clean=True)
+        await engine.dispose()

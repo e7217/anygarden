@@ -141,6 +141,12 @@ class AnygardenSettings(BaseSettings):
     # Per-field character cap so a multi-MB prompt can't bloat a span.
     otel_llm_capture_max_chars: int = 8000
 
+    # SYS-06 — background PyPI update check. Refreshes the same cache the
+    # admin "check for updates" button writes, first ~60s after startup and
+    # then every N hours. ``0`` (or negative) disables it, so no outbound
+    # call is ever made — required for air-gapped installs.
+    update_check_interval_hours: float = 24.0
+
     model_config = SettingsConfigDict(env_prefix="ANYGARDEN_")
 
     def reachable_host(self) -> str:

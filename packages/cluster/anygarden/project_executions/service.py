@@ -1634,6 +1634,13 @@ async def reconcile_execution(
                 await db.refresh(execution)
                 await db.refresh(task)
                 await db.refresh(result)
+    # A worker's deliberate block carries free text in task.error; the lead
+    # sees only the closed public code (EXE-19/EXE-21), never the raw text.
+    reported_error = task.error
+    if task.status == "blocked":
+        from anygarden.project_executions.recovery import public_task_error
+
+        reported_error = public_task_error(task.status, task.error)
     event_key = (
         f"turn:{failure_details['request_id']}:attempt:{failure_details['attempt']}:recovery-report"
         if failure_details else
@@ -1649,7 +1656,7 @@ async def reconcile_execution(
             "status": task.status,
             "result_id": result.id if result and not failure_details else None,
             "result_version": task.result_version,
-            "error": failure_details["reason_code"] if failure_details else task.error,
+            "error": failure_details["reason_code"] if failure_details else reported_error,
             **({"recovery": failure_details,
                 "prior_accepted_result_id": result.id if result else None} if failure_details else {}),
         },
@@ -1725,8 +1732,13 @@ async def reconcile_execution(
         )
         if result.verification:
             text += f"QA verification: {result.verification}\n"
-    if task.error and not failure_details:
-        text += f"Unresolved reason: {task.error}\n"
+    if reported_error and not failure_details:
+        text += f"Unresolved reason: {reported_error}\n"
+        if reported_error == "TASK_BLOCKED":
+            text += (
+                "The assignee stopped this task and explained why in its own thread. "
+                "Decide once: re-delegate the work, ask the user for what is missing, or stop.\n"
+            )
     if repair is not None:
         text += f"Automatic QA repair state: {repair}\n"
         if repair["phase"] != "not_started":

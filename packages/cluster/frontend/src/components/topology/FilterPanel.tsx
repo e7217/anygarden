@@ -10,6 +10,7 @@ const kindKeys: Record<NodeKind, MessageKey> = {
   agent: 'topology.kindAgent',
   room: 'topology.kindRoom',
   project: 'topology.kindProject',
+  peer: 'topology.kindPeer',
 }
 
 export interface FilterState {
@@ -26,6 +27,7 @@ export const DEFAULT_FILTER: FilterState = {
     agent: true,
     room: true,
     project: false,
+    peer: true,
   },
   engines: null,
   actualStates: null,
@@ -53,7 +55,7 @@ export default function FilterPanel({
   knownStates,
 }: Props) {
   const { t } = useLocale()
-  const kindList = useMemo<NodeKind[]>(() => ['user', 'machine', 'agent', 'room'], [])
+  const kindList = useMemo<NodeKind[]>(() => ['user', 'machine', 'agent', 'room', 'peer'], [])
 
   return (
     <aside

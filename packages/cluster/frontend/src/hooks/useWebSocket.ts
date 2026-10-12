@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { clearAuthSession, getAuthToken } from '@/lib/authStorage';
 import { isAgentStage, peerProgressFrom, type AgentStage, type PeerProgress } from '@/lib/typingStage';
+import { applyMessageUpdate, MESSAGE_UPDATED_EVENT } from '@/lib/messageEdits';
 
 export interface ChatMessage {
   type: string; id: string; room_id: string;
@@ -138,6 +139,11 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
           if (previous.messages.some(m => m.seq === data.seq)) return {};
           return { messages: [...previous.messages, data].sort((a, b) => a.seq - b.seq) };
         });
+      } else if (data.type === 'message_updated') {
+        // MSG-08 — an existing row was edited or soft-deleted in place
+        // (same id and seq), so replace it rather than append.
+        if (data.room_id !== roomId) return;
+        updateState(previous => ({ messages: applyMessageUpdate(previous.messages, data) }));
       } else if (data.type === 'room_membership_changed') {
         // Server pushes this when the user is added to (or removed
         // from) any room — see ws/protocol.py::RoomMembershipChangedOut.
@@ -270,6 +276,19 @@ export function useWebSocket(roomId: string | null, focusMessageId: string | nul
       clearTyping();
     };
   }, [scope, updateState, connect, clearTyping]);
+
+  // MSG-08 — the tab that made an edit/delete publishes the REST response
+  // here, so it updates even before (or without) its own WS echo.
+  useEffect(() => {
+    if (!roomId) return;
+    const onUpdated = (event: Event) => {
+      const updated = (event as CustomEvent<ChatMessage>).detail;
+      if (!updated || updated.room_id !== roomId) return;
+      updateState(previous => ({ messages: applyMessageUpdate(previous.messages, updated) }));
+    };
+    window.addEventListener(MESSAGE_UPDATED_EVENT, onUpdated);
+    return () => window.removeEventListener(MESSAGE_UPDATED_EVENT, onUpdated);
+  }, [roomId, updateState]);
 
   // Reclaim a superseded room connection when this tab is back in front of
   // the user — the most recently used tab ends up holding the connection.

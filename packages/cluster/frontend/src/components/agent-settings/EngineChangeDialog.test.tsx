@@ -28,7 +28,7 @@ function setup(currentEngine: string, onSubmit = vi.fn().mockResolvedValue(undef
 }
 
 describe('EngineChangeDialog (#769)', () => {
-  it('offers only the other engines and submits codex with its default model', async () => {
+  it('offers only the other engines and submits codex with its default model [AGT-08]', async () => {
     const onSubmit = setup('pi-cli')
     const engine = screen.getByTestId('engine-change-engine') as HTMLSelectElement
     expect([...engine.options].map(o => o.value)).toEqual(['codex-cli'])
@@ -38,7 +38,7 @@ describe('EngineChangeDialog (#769)', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ engine: 'codex-cli', provider: null, model: null }))
   })
 
-  it('asks Pi for provider and model before it can submit', async () => {
+  it('asks Pi for provider and model before it can submit [AGT-08]', async () => {
     const onSubmit = setup('codex-cli')
     const submit = screen.getByTestId('engine-change-submit')
     expect(submit).toBeDisabled()

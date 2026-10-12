@@ -15,6 +15,7 @@ const NODE_SIZE: Record<NodeKind, { width: number; height: number }> = {
   agent: { width: 140, height: 44 },
   room: { width: 160, height: 32 },
   project: { width: 320, height: 160 },
+  peer: { width: 152, height: 56 },
 }
 
 // Hierarchical rank so dagre produces a predictable top-down layout.
@@ -24,6 +25,7 @@ const RANK_BY_KIND: Record<NodeKind, number> = {
   machine: 1,
   agent: 2,
   room: 3,
+  peer: 2, // FED-09: federation peers sit beside agents, above rooms
   project: 99, // special: rendered as a container, no dagre ranking
 }
 

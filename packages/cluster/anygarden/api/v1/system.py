@@ -4,14 +4,14 @@
 - ``GET /updates``  — cached update status (admin); never calls out.
 - ``POST /check-updates`` — refresh the cache from PyPI (admin).
 
-The read/write split keeps "manual now, automatic later" cheap: the UI
-only ever reads ``/updates`` (the cache), so a future background poller
-can fill the same cache via the same service with no endpoint change.
+The read/write split keeps the UI simple: it only ever reads ``/updates``
+(the cache). The SYS-06 background check (``system.update_checker``) fills
+the same cache through the same ``check_and_store`` routine.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -19,13 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
 from anygarden.dependencies import forbid_guest, get_admin_identity, get_db
-from anygarden.system import version_service, version_store
+from anygarden.system import update_checker, version_service, version_store
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
-# Packages the update check tracks. #754 — the machine daemon ships inside
-# ``anygarden``, so one package covers both the server and the daemons.
-_CHECK_PACKAGES = ["anygarden"]
+# Packages the update check tracks (shared with the SYS-06 background check).
+_CHECK_PACKAGES = update_checker.CHECK_PACKAGES
 
 
 class ServerVersion(BaseModel):
@@ -96,15 +95,6 @@ async def check_updates(
     db: AsyncSession = Depends(get_db),
 ) -> list[PackageUpdate]:
     """Query PyPI for each tracked package, refresh the cache, and return it."""
-    now = datetime.now(timezone.utc)
-    for package in _CHECK_PACKAGES:
-        latest = await version_service.fetch_pypi_latest(package)
-        await version_store.upsert(
-            db,
-            package=package,
-            latest_version=latest,
-            checked_at=now,
-            error=None if latest is not None else "unreachable",
-        )
+    await update_checker.check_and_store(db)
     await db.commit()
     return await _read_updates(db)

@@ -12,6 +12,7 @@ import type { MessageKey } from '@/i18n/messages'
 const kindKeys: Record<NodeKind, MessageKey> = {
   user: 'topology.kindUser', machine: 'topology.kindMachine',
   agent: 'topology.kindAgent', room: 'topology.kindRoom', project: 'topology.kindProject',
+  peer: 'topology.kindPeer',
 }
 
 interface Props {
@@ -108,6 +109,8 @@ function DetailBody({ selected, isAdmin }: { selected: GraphNode; isAdmin: boole
       return <UserDetail selected={selected} />
     case 'project':
       return <ProjectDetail selected={selected} />
+    case 'peer':
+      return <PeerDetail selected={selected} />
     default:
       return null
   }
@@ -228,6 +231,31 @@ function ProjectDetail({ selected }: { selected: GraphNode }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <Field label={t('topology.name')} value={selected.label} />
       <Field label={t('topology.description')} value={d.description as string} />
+    </div>
+  )
+}
+
+const PEER_STATE_KEYS: Record<string, MessageKey> = {
+  active: 'topology.peerStateActive',
+  pending: 'topology.peerStatePending',
+  revoked: 'topology.peerStateRevoked',
+}
+
+function PeerDetail({ selected }: { selected: GraphNode }) {
+  const { t } = useLocale()
+  const d = selected.data as Record<string, unknown>
+  const state = typeof d.state === 'string' ? d.state : ''
+  const stateKey = PEER_STATE_KEYS[state]
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <Field label={t('topology.peerNodeId')} value={(d.node_id as string) ?? selected.label} />
+      <Field
+        label={t('topology.trustState')}
+        value={<Badge variant="secondary">{stateKey ? t(stateKey) : state || t('common.unknown')}</Badge>}
+      />
+      <Field label={t('topology.certificateEpoch')} value={d.certificate_epoch as number} />
+      <Field label={t('topology.sharedChannels')} value={d.channel_count as number} />
+      <Field label={t('topology.stateChangedAt')} value={d.state_changed_at as string} />
     </div>
   )
 }

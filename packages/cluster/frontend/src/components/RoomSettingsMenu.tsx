@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Activity, FolderOpen, FolderPlus, Image as ImageIcon, Link2, MoreHorizontal, PanelRight, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
+import { Activity, FolderOpen, FolderPlus, Image as ImageIcon, Link2, LogOut, MoreHorizontal, PanelRight, OctagonX, Search, Settings, Trash2, UserPlus } from 'lucide-react'
 import { useLocale } from '@/i18n/LocaleProvider'
 
 /**
@@ -44,6 +44,9 @@ export interface RoomSettingsMenuProps {
    *  admin-only too. */
   onShowRoomActivity?: () => void
   onStopAllAgents?: () => void
+  /** ROOM-05 — leave the room yourself. Caller omits it for DMs and
+   *  when the viewer has no participant row; the caller confirms. */
+  onLeaveRoom?: () => void
   onDeleteRoom?: () => void
 }
 
@@ -59,6 +62,7 @@ export default function RoomSettingsMenu({
   onShowArtifacts,
   onShowRoomActivity,
   onStopAllAgents,
+  onLeaveRoom,
   onDeleteRoom,
 }: RoomSettingsMenuProps) {
   const { t } = useLocale()
@@ -160,6 +164,7 @@ export default function RoomSettingsMenu({
   if (
     safeActions.length === 0 &&
     !onStopAllAgents &&
+    !onLeaveRoom &&
     !onDeleteRoom
   )
     return null
@@ -211,7 +216,7 @@ export default function RoomSettingsMenu({
                 </button>
               </li>
             ))}
-            {(onStopAllAgents || onDeleteRoom) && safeActions.length > 0 && (
+            {(onStopAllAgents || onLeaveRoom || onDeleteRoom) && safeActions.length > 0 && (
               <li
                 aria-hidden="true"
                 className="my-1 border-t border-[var(--color-border)]"
@@ -231,6 +236,19 @@ export default function RoomSettingsMenu({
                 >
                   <OctagonX className="h-4 w-4" />
                   <span>{t('chat.stopAllAgents')}</span>
+                </button>
+              </li>
+            )}
+            {onLeaveRoom && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => handleSelect(onLeaveRoom)}
+                  data-testid="room-menu-leave"
+                  className="flex min-h-[var(--control-height)] w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10 cursor-pointer"
+                >
+                  <LogOut className="h-4 w-4" aria-hidden="true" />
+                  <span>{t('chat.leaveRoom')}</span>
                 </button>
               </li>
             )}

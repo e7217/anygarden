@@ -370,7 +370,7 @@ describe('OverviewPanel engine change (#769)', () => {
     expect(screen.queryByTestId('overview-change-engine')).not.toBeInTheDocument()
   })
 
-  it('opens the dialog and submits the change for this agent', async () => {
+  it('opens the dialog and submits the change for this agent [AGT-08]', async () => {
     const changeAgentEngine = vi.fn().mockResolvedValue(makeAgent({ engine: 'codex-cli' }))
     renderWith({ changeAgentEngine, availableEngines: ['codex-cli', 'pi-cli'] })
     fireEvent.click(screen.getByTestId('overview-change-engine'))

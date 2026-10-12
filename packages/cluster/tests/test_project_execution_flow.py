@@ -1042,6 +1042,48 @@ async def test_rejection_wakes_the_lead_with_the_reason(harness, monkeypatch):
     assert portal.requests == []
 
 
+# -- EXE-21: a worker's deliberate block returns control to the lead ----------
+
+
+@pytest.mark.req("EXE-21")
+async def test_worker_block_wakes_the_lead_once_with_the_public_reason(harness):
+    flow = await harness.begin_and_delegate()
+    task_id = flow["delegated"]["task_id"]
+    await harness.end_turn(flow["lead_turn"])
+    worker_turn = await harness.deliver("worker")
+    raw = "Need the v2.4 change list; none was provided."
+    await harness.tool(worker_turn, "mark_task_status", task_id=task_id,
+                       status="blocked", error=raw)
+
+    # The lead is woken with the closed public reason, never the free text.
+    lead_turn = await harness.deliver("lead")
+    notice = json.dumps(lead_turn.frame, ensure_ascii=False)
+    assert task_id in notice
+    assert "TASK_BLOCKED" in notice
+    assert "change list" not in notice
+    await harness.end_turn(lead_turn)
+
+    # The same block delivered again wakes nobody a second time.
+    await harness.tool_error_or_ok(worker_turn, "mark_task_status", task_id=task_id,
+                                   status="blocked", error=raw)
+    before = len(harness.sockets["lead"].frames)
+    await deliver_pending_outbox(harness.sessions, harness.manager, app=harness.app)
+    assert not [f for f in harness.sockets["lead"].frames[before:]
+                if f.get("metadata", {}).get("turn_lease")]
+    async with harness.sessions() as db:
+        notices = (await db.scalars(select(Message).where(
+            Message.room_id == harness.ids["lead_room"],
+            Message.content.contains(f"delegated task {task_id}")))).all()
+    assert len(notices) == 1
+    assert "change list" not in notices[0].content
+
+    # The user still sees the blocked task in the inbox.
+    inbox = await harness.client.get("/api/v1/inbox", headers=harness.user())
+    inbox_task = next(i["task"] for i in inbox.json()["items"]
+                      if i.get("task", {}).get("id") == task_id)
+    assert inbox_task["error"] == "TASK_BLOCKED"
+
+
 # -- EXE-08 redelivered completion · EXE-10 automatic recovery ----------------
 
 

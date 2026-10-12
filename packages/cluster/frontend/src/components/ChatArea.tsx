@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import MessageBubble from '@/components/MessageBubble'
 import RoomQueryBanner from '@/components/RoomQueryBanner'
 import BrailleSpinner from '@/components/BrailleSpinner'
+import TurnCancelControl from '@/components/TurnCancelControl'
 import { MessageSquare } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
@@ -44,6 +45,9 @@ interface ChatAreaProps {
    *  renders the thread as a sibling column instead. Kept as a render
    *  prop so ChatArea doesn't need the composer's dependencies. */
   renderInlineThread?: (root: ChatMessage) => ReactNode
+  /** ENG-09 — show a stop control beside working agents. Off for guests,
+   *  whom the cancel endpoint rejects. */
+  canCancelTurns?: boolean
 }
 
 export default function ChatArea({
@@ -58,6 +62,7 @@ export default function ChatArea({
   activeThreadRootId,
   onOpenThread,
   renderInlineThread,
+  canCancelTurns = true,
 }: ChatAreaProps) {
   const { t } = useLocale()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -216,6 +221,9 @@ export default function ChatArea({
       return `${name} · ${stageLabel(t, stage, typingProgress[pid])}`
     })
 
+  const typingAgentIds = (canCancelTurns ? Array.from(typingUsers ?? []) : [])
+    .filter(pid => pid !== myParticipantId && participants[pid]?.kind === 'agent')
+
   useEffect(() => {
     if (focusedMessageId) return
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -285,8 +293,20 @@ export default function ChatArea({
               <span className="text-badge text-[var(--color-foreground-muted)] mb-1 pl-1">
                 {typingNames.join(', ')}
               </span>
-              <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-[var(--color-surface)] border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
-                <BrailleSpinner />
+              <div className="flex max-w-full items-center gap-2">
+                <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] bg-[var(--color-surface)] border border-[var(--color-border)] px-4 py-2.5 sm:max-w-[75%] md:max-w-[70%]">
+                  <BrailleSpinner />
+                </div>
+                {/* ENG-09 — stop control per working agent; renders only
+                    while that agent has an open general-room turn. */}
+                {typingAgentIds.map(pid => (
+                  <TurnCancelControl
+                    key={pid}
+                    roomId={currentRoomId}
+                    participantId={pid}
+                    agentName={participants[pid]?.display_name ?? pid.slice(0, 8)}
+                  />
+                ))}
               </div>
             </div>
           )}

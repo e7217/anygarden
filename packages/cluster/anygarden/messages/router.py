@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Optional
 from uuid import uuid4
 
@@ -70,17 +70,20 @@ class ReactionCreate(BaseModel):
     emoji: str = Field(min_length=1, max_length=32)
 
 
-def _reaction_frame(message_id: str, participant_id: str, emoji: str, action: str):
+def _reaction_frame(
+    room_id: str, message_id: str, participant_id: str, emoji: str, action: str
+):
     """Receipt event, deliberately NOT a message frame: reaction events are
     structurally excluded from agent wake paths (D-1 attention norm)."""
-    return {
-        "type": "reaction",
-        "room_id": None,
-        "message_id": message_id,
-        "participant_id": participant_id,
-        "emoji": emoji,
-        "action": action,
-    }
+    from anygarden.ws.protocol import ReactionOut
+
+    return ReactionOut(
+        room_id=room_id,
+        message_id=message_id,
+        participant_id=participant_id,
+        emoji=emoji,
+        action=action,
+    )
 
 
 async def _read_access(
@@ -321,7 +324,7 @@ async def add_reaction(
     if manager is not None:
         await manager.broadcast(
             room_id,
-            _reaction_frame(message_id, participant_id, body.emoji, "added"),
+            _reaction_frame(room_id, message_id, participant_id, body.emoji, "added"),
         )
     return {
         "message_id": message_id,
@@ -358,8 +361,181 @@ async def remove_reaction(
         if manager is not None:
             await manager.broadcast(
                 room_id,
-                _reaction_frame(message_id, participant_id, emoji, "removed"),
+                _reaction_frame(room_id, message_id, participant_id, emoji, "removed"),
             )
+
+
+class MessageEdit(BaseModel):
+    content: str = Field(min_length=1)
+
+
+# MSG-08 — metadata that marks a row as server-originated or structured
+# (task/execution system records, interactions, room-query cards,
+# delegation control). Such rows are records of what happened, not a
+# person's words, so even their nominal author cannot rewrite them.
+_STRUCTURED_METADATA_KEYS = frozenset(
+    {
+        "system_origin",
+        "ingest_only",
+        "interaction",
+        "interaction_resolution",
+        "task_assignment",
+        "room_query",
+        "room_query_forward",
+        "room_query_result",
+        "delegation_target_participant_id",
+        "delegation_outcome",
+    }
+)
+
+
+def _utc_iso_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+async def _own_human_message(
+    db: AsyncSession, *, room_id: str, message_id: str, identity: Identity
+) -> MessageRow:
+    """Load *message_id* for an author-only change (MSG-08).
+
+    Only a human author (user or guest) may change their own plain message.
+    The check is against the row's sender Participant, not the caller's
+    current participant, so a global admin or a second membership row never
+    grants authority over somebody else's words.
+    """
+    # Same SQLite writer discipline as ``_write_message``.
+    if db.in_transaction():
+        await db.commit()
+    await begin_write_transaction(db)
+    await require_capability(
+        db,
+        room_id=room_id,
+        identity=identity,
+        capability=Capability.MESSAGE_SEND,
+    )
+    if identity.kind not in {"user", "guest"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only human authors can change their messages",
+        )
+    message = await db.scalar(
+        select(MessageRow).where(
+            MessageRow.room_id == room_id, MessageRow.id == message_id
+        )
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Message not found in this room")
+    author = (
+        await db.get(Participant, message.participant_id)
+        if message.participant_id is not None
+        else None
+    )
+    if (
+        author is None
+        or author.agent_id is not None
+        or author.user_id != identity.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the author can change this message",
+        )
+    metadata = message.extra_metadata or {}
+    if any(key in metadata for key in _STRUCTURED_METADATA_KEYS):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="System and structured messages cannot be changed",
+        )
+    if metadata.get("deleted_at"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Message was deleted",
+        )
+    return message
+
+
+async def _broadcast_message_updated(request: Request, message: MessageRow) -> None:
+    """Tell room subscribers the row changed in place. Never a ``message``
+    frame: those are the agent wake path, and an edit must not start turns."""
+    from anygarden.ws.protocol import MessageUpdatedOut
+
+    manager = getattr(request.app.state, "connection_manager", None)
+    if manager is None:
+        return
+    frame = message_to_frame(message)
+    await manager.broadcast(
+        message.room_id,
+        MessageUpdatedOut(**frame.model_dump(exclude={"type"})),
+    )
+
+
+@router.patch("/{room_id}/messages/{message_id}", response_model=MessageOut)
+async def edit_message(
+    room_id: str,
+    message_id: str,
+    body: MessageEdit,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_current_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Author-only in-place edit (MSG-08).
+
+    The row keeps its id and seq; ``metadata.edited_at`` records the change.
+    Mentions stored at send time are left as-is: they describe who was
+    already notified, and an edit never re-derives or re-dispatches routing.
+    """
+    if not body.content.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Message content cannot be empty",
+        )
+    message = await _own_human_message(
+        db, room_id=room_id, message_id=message_id, identity=identity
+    )
+    if message.content == body.content:
+        await db.commit()
+        return message
+    message.content = body.content
+    # Reassign (not mutate) so SQLAlchemy persists the JSON column.
+    message.extra_metadata = {
+        **(message.extra_metadata or {}),
+        "edited_at": _utc_iso_now(),
+    }
+    await db.commit()
+    await db.refresh(message)
+    await _broadcast_message_updated(request, message)
+    return message
+
+
+@router.delete("/{room_id}/messages/{message_id}", response_model=MessageOut)
+async def delete_message(
+    room_id: str,
+    message_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(get_current_identity)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Author-only soft delete (MSG-08).
+
+    The row stays as a tombstone so room seq, thread replies, and reconnect
+    cursors remain continuous: content is cleared (which also empties the
+    FTS entry via its update trigger), shared-file references are dropped,
+    and ``metadata.deleted_at`` marks the placeholder.
+    """
+    message = await _own_human_message(
+        db, room_id=room_id, message_id=message_id, identity=identity
+    )
+    metadata = {
+        key: value
+        for key, value in (message.extra_metadata or {}).items()
+        if key != "references"
+    }
+    metadata["deleted_at"] = _utc_iso_now()
+    message.content = ""
+    message.extra_metadata = metadata
+    await db.commit()
+    await db.refresh(message)
+    await _broadcast_message_updated(request, message)
+    return message
 
 
 @router.get("/{room_id}/messages", response_model=list[MessageOut])

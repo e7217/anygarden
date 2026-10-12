@@ -2,7 +2,12 @@
 // Contract tests for the version / update-status hooks (#546).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, renderHook, waitFor, act } from '@testing-library/react'
-import { useSystemVersion, useUpdateStatus, type PackageUpdate } from './useSystemVersion'
+import {
+  UPDATE_POLL_MS,
+  useSystemVersion,
+  useUpdateStatus,
+  type PackageUpdate,
+} from './useSystemVersion'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -77,5 +82,46 @@ describe('useUpdateStatus', () => {
       '/api/v1/system/check-updates',
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+
+  it('[SYS-06] re-reads the cache periodically so a background-detected update appears without a click', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([])) // mount: cache still empty
+        .mockResolvedValue(jsonResponse([UPDATE])) // later: background check filled it
+
+      const { result } = renderHook(() => useUpdateStatus(true))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(result.current.updates).toEqual([])
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UPDATE_POLL_MS)
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(fetchMock).toHaveBeenLastCalledWith('/api/v1/system/updates', expect.anything())
+      expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/system/check-updates', expect.anything())
+      expect(result.current.updates[0]?.update_available).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('[SYS-06] does not poll when disabled (non-admin)', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi.spyOn(globalThis, 'fetch')
+      renderHook(() => useUpdateStatus(false))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UPDATE_POLL_MS * 2)
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

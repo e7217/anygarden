@@ -38,7 +38,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ROOM-02 | 프로젝트를 삭제하면 하위 룸·참여자·메시지·파일·초대가 제거되고 DM은 남는다 | pytest |
 | ROOM-03 | 서브룸은 생성 시 부모 룸의 참여자를 가진다 | pytest |
 | ROOM-04 | 룸을 보관하면 열린 WS가 닫히고 하위 룸도 보관된다 | pytest |
-| ROOM-05 | 마지막 admin/owner 제거는 409. 사용자는 스스로 룸을 나갈 수 있다 | pytest, gap |
+| ROOM-05 | 마지막 admin/owner 제거는 409. 사용자는 스스로 룸을 나갈 수 있다 | pytest, vitest |
 | ROOM-06 | 같은 사용자를 두 번 추가해도 Participant 행은 하나다 | pytest |
 | ROOM-07 | 룸에 없는 에이전트를 대표로 지정하면 400 | pytest |
 | ROOM-08 | 한도 초과 파일 업로드는 거부되고 게스트는 403 | pytest |
@@ -55,7 +55,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | MSG-05 | 답글에 답글을 달거나 다른 룸의 루트를 쓰면 400/404 | pytest, e2e |
 | MSG-06 | 검색은 호출자(게스트 포함)가 접근할 수 없는 룸의 메시지를 반환하지 않는다 | pytest |
 | MSG-07 | 같은 인터랙션에 두 번째 응답은 거부된다 | pytest |
-| MSG-08 | 사용자는 자신이 보낸 메시지를 수정·삭제할 수 있다 | gap |
+| MSG-08 | 사용자는 자신이 보낸 메시지를 수정·삭제할 수 있다 | pytest, vitest |
 
 ## 에이전트 관리 (AGT)
 
@@ -68,7 +68,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | AGT-05 | admin이 아니면 권한 수준을 바꿀 수 없고, 허용 값 밖은 422 | pytest |
 | AGT-06 | 호출 이력이 있으면 삭제는 409. 아니면 중지·토큰 캐시 삭제·DM 삭제까지 수행 | pytest |
 | AGT-07 | 경로 탈출을 시도하는 파일 쓰기는 400 | pytest |
-| AGT-08 | admin은 설정을 유지한 채 에이전트의 엔진을 바꿀 수 있다 | gap |
+| AGT-08 | admin은 설정을 유지한 채 에이전트의 엔진을 바꿀 수 있다 | pytest, vitest |
 | AGT-09 | 쿼터가 소진된 에이전트는 라우팅에서 빠지고 룸에 사유가 표시된다 | pytest |
 
 ## 엔진 실행 (ENG)
@@ -83,7 +83,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | ENG-06 | 룸 세션은 respawn 후 재개되고, 세션이 없으면 새 턴으로 대체된다 | pytest |
 | ENG-07 | Pi는 관리형 고정 버전으로만 실행된다 (`ANYGARDEN_PI_USE_PATH=1` 제외) | pytest |
 | ENG-08 | 같은 룸에서 에이전트당 동시에 실행되는 턴은 1개다 | pytest |
-| ENG-09 | 사용자는 일반 룸에서 진행 중인 턴을 취소할 수 있다 | gap |
+| ENG-09 | 사용자는 일반 룸에서 진행 중인 턴을 취소할 수 있다 | pytest, vitest |
 
 ## 에이전트 협업 (COL)
 
@@ -123,6 +123,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | EXE-18 | 질문 턴이 끝나기 전에 답이 와도 재개 턴이 작업을 이어받는다. 옛 턴의 상태 변경은 `TASK_TURN_SUPERSEDED`로 거부된다 | pytest |
 | EXE-19 | 담당자가 사유를 적어 막은 태스크는 공개 오류 `TASK_BLOCKED`로 보이고 원문은 노출되지 않는다 | pytest |
 | EXE-20 | 외부 동작 승인을 거절하면 오류는 `APPROVAL_REJECTED`, 총괄이 사유와 함께 깨어난다(기본 동작, 제품 결정 대기) | pytest |
+| EXE-21 | 담당자가 사유를 적어 태스크를 막으면 총괄이 공개 사유(`TASK_BLOCKED`)와 함께 한 번 깨어나 재위임·질문·중단을 결정한다 | pytest |
 
 ## 인박스·알림 (INB)
 
@@ -159,7 +160,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | NODE-06 | 에이전트 종료는 프로세스 그룹 전체를 종료한다 | pytest |
 | NODE-07 | drain된 머신에는 새 배치가 일어나지 않는다 | pytest |
 | NODE-08 | 회수된 머신 토큰으로는 연결할 수 없다 | pytest |
-| NODE-09 | 노드를 종료하면 실행 중 에이전트가 잠금 경합 없이 정리된다 | pytest, gap |
+| NODE-09 | 노드를 종료하면 실행 중 에이전트가 잠금 경합 없이 정리된다 | pytest |
 
 ## 페더레이션 (FED)
 
@@ -173,7 +174,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | FED-06 | 자격증명 파일 없이 `--peer-port`를 쓰면 기동이 실패한다 | pytest |
 | FED-07 | 제출 재시도는 `request_id` 단위로 멱등이다 | pytest |
 | FED-08 | 운영자가 CLI로 peer 자격증명을 만들 수 있다 | pytest |
-| FED-09 | 토폴로지에 연합 peer가 표시된다 | gap |
+| FED-09 | 토폴로지에 연합 peer가 표시된다 | pytest, vitest |
 
 ## 사용량·예산 (USE)
 
@@ -185,7 +186,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | USE-04 | status ≥400 행은 예산 토큰 합계에 포함되지 않는다 | pytest |
 | USE-05 | 에이전트 정책의 hard-stop을 넘으면 에이전트가 정지되고 incident가 생긴다 | pytest |
 | USE-06 | 예산 hard-stop은 일반 룸 호출도 막는다 | pytest |
-| USE-07 | admin은 화면에서 예산 정책을 관리할 수 있다 | gap |
+| USE-07 | admin은 화면에서 예산 정책을 관리할 수 있다 | pytest, vitest, e2e |
 
 ## 관리·시스템 (SYS)
 
@@ -196,7 +197,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | SYS-03 | `/healthz`는 DB 장애일 때만 503이다 | pytest |
 | SYS-04 | 모든 en 키에 ko 번역이 있다 | build |
 | SYS-05 | 테마 선택은 유지되고 탭 간에 동기화된다 | vitest |
-| SYS-06 | 새 버전은 백그라운드에서 자동 감지된다 | gap |
+| SYS-06 | 새 버전은 백그라운드에서 자동 감지된다 | pytest, vitest |
 
 ## 관리형 워크스페이스 (WS)
 

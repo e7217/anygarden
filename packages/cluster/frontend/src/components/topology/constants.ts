@@ -54,6 +54,14 @@ export function machineStatusColor(status: string | undefined): string {
   return STATUS_OFFLINE
 }
 
+/** Federation peer trust state → status dot color (FED-09). */
+export function peerStateColor(state: string | undefined): string {
+  if (state === 'active') return STATUS_ONLINE
+  if (state === 'pending') return STATUS_DRAIN
+  if (state === 'revoked') return 'var(--color-danger)'
+  return STATUS_OFFLINE
+}
+
 /** Edge kind → React Flow edge style */
 export interface EdgeStyle {
   stroke: string
@@ -91,6 +99,13 @@ export function edgeStyleFor(
         strokeWidth: 1,
         strokeDasharray: '4 4',
         type: 'straight',
+      }
+    case 'federates':
+      return {
+        stroke: ACCENT,
+        strokeWidth: 1.5,
+        strokeDasharray: '6 3',
+        type: 'smoothstep',
       }
     case 'parent_of':
       return {

@@ -118,6 +118,7 @@ async def _states(factory, agent_ids):
         return {a.id: (a.desired_state, a.actual_state) for a in rows}
 
 
+@pytest.mark.req("NODE-09")
 @pytest.mark.asyncio
 async def test_stop_agents_stops_every_running_agent(stop_env) -> None:
     resp = await stop_env["client"].post(

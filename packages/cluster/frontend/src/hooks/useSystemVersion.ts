@@ -36,10 +36,18 @@ export interface PackageUpdate {
 }
 
 /**
+ * How often an open tab re-reads the cached ``/updates`` (SYS-06). The
+ * server's background check refreshes that cache (default daily), so a
+ * modest poll is enough for a long-lived tab to notice a new release.
+ */
+export const UPDATE_POLL_MS = 30 * 60 * 1000
+
+/**
  * Admin-only update status (#546). Reads the cached ``/updates`` (no
- * outbound call) on mount; ``refresh`` triggers a live PyPI check via
- * ``/check-updates``. ``enabled`` gates the initial load so non-admin
- * callers never hit the admin endpoint.
+ * outbound call) on mount and every ``UPDATE_POLL_MS`` (SYS-06 — the
+ * server fills the cache in the background); ``refresh`` triggers a live
+ * PyPI check via ``/check-updates``. ``enabled`` gates loading so
+ * non-admin callers never hit the admin endpoint.
  */
 export function useUpdateStatus(enabled: boolean) {
   const [updates, setUpdates] = useState<PackageUpdate[]>([])
@@ -73,7 +81,10 @@ export function useUpdateStatus(enabled: boolean) {
   }, [])
 
   useEffect(() => {
-    if (enabled) load()
+    if (!enabled) return
+    load()
+    const timer = setInterval(load, UPDATE_POLL_MS)
+    return () => clearInterval(timer)
   }, [enabled, load])
 
   return { updates, loading, error, refresh }

@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from anygarden.auth.dependencies import Identity
-from anygarden.db.models import AgentTurn, AgentTurnAttempt
-from anygarden.dependencies import get_admin_identity, get_db
+from anygarden.db.models import AgentTurn, AgentTurnAttempt, Task
+from anygarden.dependencies import get_admin_identity, get_current_identity, get_db
+from anygarden.rooms.authorization import Capability, require_capability
 
 router = APIRouter(prefix="/api/v1/turns", tags=["turns"])
 
@@ -118,4 +119,93 @@ async def turn_summary(
                 "failed",
             )
         }
+    }
+
+
+class OpenTurnOut(BaseModel):
+    request_id: str
+    room_id: str
+    agent_id: str | None
+    participant_id: str | None
+    state: str
+    created_at: str
+
+
+@router.get("/open", response_model=list[OpenTurnOut])
+async def list_open_room_turns(
+    room_id: str,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> list[OpenTurnOut]:
+    """ENG-09 — open general (non-execution) turns a room member may cancel."""
+    from anygarden.turns.service import OPEN_TURN_STATES
+
+    await require_capability(db, room_id=room_id, identity=identity, capability=Capability.ROOM_READ)
+    rows = (await db.scalars(
+        select(AgentTurn)
+        .outerjoin(Task, Task.id == AgentTurn.task_id)
+        .where(
+            AgentTurn.room_id == room_id,
+            AgentTurn.state.in_(OPEN_TURN_STATES),
+            AgentTurn.execution_id.is_(None),
+            Task.execution_id.is_(None),
+        )
+        .order_by(AgentTurn.created_at)
+        .limit(100)
+    )).all()
+    return [
+        OpenTurnOut(
+            request_id=turn.request_id, room_id=turn.room_id, agent_id=turn.agent_id,
+            participant_id=turn.target_participant_id, state=turn.state,
+            created_at=turn.created_at.isoformat(),
+        )
+        for turn in rows
+    ]
+
+
+@router.post("/{request_id}/cancel")
+async def cancel_turn(
+    request_id: str,
+    request: Request,
+    identity: Identity = Depends(get_current_identity),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """ENG-09 — cancel an open turn in a general room.
+
+    Requires message-send rights in the turn's room. Execution-bound turns
+    are rejected with ``TURN_BOUND_TO_EXECUTION``; use
+    ``POST /api/v1/executions/{id}/cancel`` for those. Re-cancelling a
+    cancelled turn is a no-op; a completed/failed turn is a 409.
+    """
+    from anygarden.turns.cancel import (
+        TurnCancelError,
+        cancel_general_turn,
+        load_turn,
+        notify_turn_cancelled,
+    )
+
+    if identity.kind != "user":
+        raise HTTPException(403, detail={"code": "TURN_CANCEL_USER_ONLY",
+                                         "detail": "Only room members can cancel a turn"})
+    try:
+        turn = await load_turn(db, request_id)
+        await require_capability(db, room_id=turn.room_id, identity=identity,
+                                 capability=Capability.MESSAGE_SEND)
+        result = await cancel_general_turn(db, request_id, actor_user_id=identity.id)
+    except TurnCancelError as exc:
+        await db.rollback()
+        raise HTTPException(exc.status, detail={"code": exc.code, "detail": exc.detail}) from exc
+    await db.commit()
+    stop_sent = False
+    if result.changed:
+        stop_sent = await notify_turn_cancelled(
+            getattr(request.app.state, "connection_manager", None), result.turn, result.stop_target,
+        )
+    return {
+        "request_id": result.turn.request_id,
+        "room_id": result.turn.room_id,
+        "state": result.turn.state,
+        "terminal_reason": result.turn.terminal_reason,
+        "changed": result.changed,
+        "stop_sent": stop_sent,
     }

@@ -1,5 +1,5 @@
 import { useState, useCallback, memo, useMemo } from 'react'
-import { BellOff, Bookmark, BookmarkCheck, CornerDownRight, Paperclip } from 'lucide-react'
+import { BellOff, Bookmark, BookmarkCheck, CornerDownRight, Paperclip, Pencil, Trash2 } from 'lucide-react'
 import type { ChatMessage } from '@/hooks/useWebSocket'
 import type { Participant } from '@/pages/ChatPage'
 import MarkdownContent from '@/components/MarkdownContent'
@@ -24,6 +24,16 @@ import {
 } from '@/lib/fileReferences'
 import type { RoomSharedFile } from '@/lib/roomFiles'
 import { extractUndeliveredCalls } from '@/lib/undeliveredCalls'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
+import { useFeedback } from '@/components/feedback/FeedbackProvider'
+import {
+  canChangeMessage,
+  deleteMessage,
+  editMessage,
+  isDeletedMessage,
+  isEditedMessage,
+} from '@/lib/messageEdits'
 
 interface MessageBubbleProps {
   message: ChatMessage
@@ -140,6 +150,16 @@ export default memo(function MessageBubble({
   const isAgent = participant?.kind === 'agent'
   const isOrphan = message.participant_id == null || participant == null
 
+  // MSG-08 — author edit / soft delete. The server is the authority; these
+  // flags only decide which actions to offer and how to render the row.
+  const { confirm, notify } = useFeedback()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [changeBusy, setChangeBusy] = useState(false)
+  const isDeleted = isDeletedMessage(message)
+  const isEdited = isEditedMessage(message)
+  const canChange = canChangeMessage(message, { isMine, isAgent })
+
   // #512 — today's messages show the time only; older messages are
   // prefixed with their date. Formatting lives in ``lib/datetime`` so
   // it is unit-tested independently of this component.
@@ -196,10 +216,12 @@ export default memo(function MessageBubble({
     }
   }
 
-  const bookmarkBtn = (
+  const actionBtnClass = "inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+
+  const bookmarkBtn = isDeleted ? null : (
     <button
       onClick={toggleSave}
-      className="inline-flex size-[var(--control-icon-size)] shrink-0 items-center justify-center rounded opacity-100 transition-opacity hover:bg-[var(--color-surface-hover)] focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-[var(--color-brand-focus)] md:pointer-fine:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+      className={actionBtnClass}
       title={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
       aria-label={saved ? t('chat.removeBookmark') : t('chat.bookmark')}
     >
@@ -208,6 +230,123 @@ export default memo(function MessageBubble({
         : <Bookmark className="h-3.5 w-3.5 text-[var(--color-foreground-subtle)]" />}
     </button>
   )
+
+  const startEdit = () => {
+    setDraft(message.content)
+    setEditing(true)
+  }
+  const cancelEdit = () => {
+    setEditing(false)
+    setDraft('')
+  }
+  const saveEdit = async () => {
+    if (changeBusy || !draft.trim()) return
+    if (draft === message.content) {
+      cancelEdit()
+      return
+    }
+    setChangeBusy(true)
+    try {
+      await editMessage(message.room_id, message.id, draft)
+      cancelEdit()
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' })
+    } finally {
+      setChangeBusy(false)
+    }
+  }
+  const removeMessage = async () => {
+    if (changeBusy) return
+    const accepted = await confirm({
+      title: t('chat.deleteMessageTitle'),
+      description: t('chat.deleteMessageDescription'),
+      confirmLabel: t('chat.deleteMessageConfirm'),
+      destructive: true,
+    })
+    if (!accepted) return
+    setChangeBusy(true)
+    try {
+      await deleteMessage(message.room_id, message.id)
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : t('common.error'), tone: 'error' })
+    } finally {
+      setChangeBusy(false)
+    }
+  }
+
+  const changeActions = canChange && !editing ? (
+    <>
+      <button
+        type="button"
+        onClick={startEdit}
+        disabled={changeBusy}
+        className={actionBtnClass}
+        title={t('chat.editMessage')}
+        aria-label={t('chat.editMessage')}
+      >
+        <Pencil className="h-3.5 w-3.5 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={removeMessage}
+        disabled={changeBusy}
+        className={actionBtnClass}
+        title={t('chat.deleteMessage')}
+        aria-label={t('chat.deleteMessage')}
+      >
+        <Trash2 className="h-3.5 w-3.5 text-[var(--color-foreground-subtle)]" aria-hidden="true" />
+      </button>
+    </>
+  ) : null
+
+  const editor = (
+    <div className="flex w-full flex-col gap-2">
+      <Textarea
+        aria-label={t('chat.editMessage')}
+        value={draft}
+        autoFocus
+        disabled={changeBusy}
+        onChange={event => setDraft(event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            cancelEdit()
+          } else if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault()
+            void saveEdit()
+          }
+        }}
+        className="min-h-20"
+      />
+      <div className="flex items-center justify-end gap-2">
+        <span className="mr-auto hidden text-caption text-[var(--color-foreground-subtle)] md:inline">
+          {t('chat.editMessageHint')}
+        </span>
+        <Button type="button" size="sm" variant="outline" onClick={cancelEdit} disabled={changeBusy}>
+          {t('common.cancel')}
+        </Button>
+        <Button type="button" size="sm" onClick={() => void saveEdit()} disabled={changeBusy || !draft.trim()}>
+          {t('common.save')}
+        </Button>
+      </div>
+    </div>
+  )
+
+  const deletedPlaceholder = (
+    <p className="text-caption italic text-[var(--color-foreground-muted)]">
+      {t('chat.messageDeleted')}
+    </p>
+  )
+
+  const editedMarker = isEdited ? (
+    <span
+      className="text-badge font-normal text-[var(--color-foreground-subtle)]"
+      title={t('chat.messageEditedTitle', { time: formatTime(String(message.metadata?.edited_at)) })}
+    >
+      {t('chat.messageEdited')}
+    </span>
+  ) : null
 
   // Avatar kind derivation — participants can be agents, anonymous
   // guests, or regular users. Orphan rows (participant FK cleared
@@ -366,21 +505,33 @@ export default memo(function MessageBubble({
     return (
       <div className="group flex flex-col items-end">
         <div className="flex items-center gap-1.5 mb-1 pr-1">
+          {changeActions}
           {bookmarkBtn}
           <span className="text-badge text-[var(--color-foreground-muted)]">{t('chat.me')}</span>
           {avatar}
         </div>
-        <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-tr-[var(--radius-xs)] bg-[var(--color-brand-tint-bg)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%]">
-          <MarkdownContent
-            content={message.content}
-            resolveUser={resolveUser}
-            resolveRoom={resolveRoom}
-            fileReferenceCandidates={fileReferenceCandidates}
-          />
-          <MessageReferences metadata={message.metadata} align="end" />
+        <div
+          className={`max-w-[85%] rounded-[var(--radius-lg)] rounded-tr-[var(--radius-xs)] px-3 py-2 sm:max-w-[75%] md:max-w-[70%] ${
+            isDeleted
+              ? 'border border-dashed border-[var(--color-border)] bg-transparent'
+              : 'bg-[var(--color-brand-tint-bg)]'
+          } ${editing ? 'w-full' : ''}`}
+        >
+          {isDeleted ? deletedPlaceholder : editing ? editor : (
+            <>
+              <MarkdownContent
+                content={message.content}
+                resolveUser={resolveUser}
+                resolveRoom={resolveRoom}
+                fileReferenceCandidates={fileReferenceCandidates}
+              />
+              <MessageReferences metadata={message.metadata} align="end" />
+            </>
+          )}
         </div>
         <div className="mt-1 pr-1 flex items-center gap-2 justify-end">
           {pendingBadge}
+          {editedMarker}
           <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
             {formatTime(message.created_at)}
           </span>
@@ -411,18 +562,23 @@ export default memo(function MessageBubble({
           step wider (info-container role): full width below sm,
           progressively tighter at sm/md/lg. Non-agent (orphan/guest)
           uses the tighter user-side ladder. */}
-      <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${bubbleClass}`}>
-        <MarkdownContent
-          content={message.content}
-          resolveUser={resolveUser}
-          resolveRoom={resolveRoom}
-          fileReferenceCandidates={fileReferenceCandidates}
-        />
-        <MessageReferences metadata={message.metadata} />
-        <UndeliveredCalls metadata={message.metadata} resolveUser={resolveUser} />
+      <div className={`rounded-[var(--radius-lg)] rounded-tl-[var(--radius-xs)] px-3 py-2 ${isAgent ? 'max-w-full sm:max-w-[90%] md:max-w-[85%] lg:max-w-[80%]' : 'max-w-[85%] sm:max-w-[75%] md:max-w-[70%]'} ${isDeleted ? 'border border-dashed border-[var(--color-border)] bg-transparent' : bubbleClass}`}>
+        {isDeleted ? deletedPlaceholder : (
+          <>
+            <MarkdownContent
+              content={message.content}
+              resolveUser={resolveUser}
+              resolveRoom={resolveRoom}
+              fileReferenceCandidates={fileReferenceCandidates}
+            />
+            <MessageReferences metadata={message.metadata} />
+            <UndeliveredCalls metadata={message.metadata} resolveUser={resolveUser} />
+          </>
+        )}
       </div>
       <div className="mt-1 pl-1 flex items-center gap-2">
         {pendingBadge}
+        {editedMarker}
         <span className="text-badge font-normal text-[var(--color-foreground-subtle)]">
           {formatTime(message.created_at)}
         </span>

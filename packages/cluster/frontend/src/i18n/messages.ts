@@ -9,7 +9,8 @@ import { workflowsEn, workflowsKo } from './catalogs/workflows'
 import { inboxEn, inboxKo } from './catalogs/inbox'
 import { projectExecutionsEn, projectExecutionsKo } from './catalogs/projectExecutions'
 import { taskRecoveryEn, taskRecoveryKo } from './catalogs/taskRecovery'
+import { budgetsEn, budgetsKo } from './catalogs/budgets'
 
-export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn } as const
+export const en = { ...agentSetupEn, ...coreEn, ...chatEn, ...adminEn, ...guestEn, ...federationEn, ...roomsEn, ...workflowsEn, ...inboxEn, ...projectExecutionsEn, ...taskRecoveryEn, ...budgetsEn } as const
 export type MessageKey = keyof typeof en
-export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo }
+export const ko: Record<MessageKey, string> = { ...agentSetupKo, ...coreKo, ...chatKo, ...adminKo, ...guestKo, ...federationKo, ...roomsKo, ...workflowsKo, ...inboxKo, ...projectExecutionsKo, ...taskRecoveryKo, ...budgetsKo }

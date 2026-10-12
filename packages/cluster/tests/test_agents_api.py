@@ -2289,6 +2289,7 @@ class TestAgentEngineChange:
             headers={"Authorization": f"Bearer {token or env['token']}"},
         )
 
+    @pytest.mark.req("AGT-08")
     @pytest.mark.asyncio
     async def test_pi_to_codex_resets_engine_specific_settings(self, agents_env, pi_agent_id):
         env = agents_env
@@ -2309,6 +2310,44 @@ class TestAgentEngineChange:
             assert log.details["from"] == "pi-cli" and log.details["to"] == "codex-cli"
         env["lifecycle"].bump_generation.assert_awaited_once_with(pi_agent_id)
 
+    @pytest.mark.req("AGT-08")
+    @pytest.mark.asyncio
+    async def test_engine_change_keeps_identity_rooms_and_instructions(
+        self, agents_env, pi_agent_id
+    ):
+        """The switch keeps everything that is not tied to the old engine."""
+        env = agents_env
+        env["lifecycle"].bump_generation = AsyncMock()
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, pi_agent_id)
+            agent.agents_md = "# Switcher\nAlways answer in Korean."
+            room = Room(name="kept-room")
+            db.add(room)
+            await db.flush()
+            db.add_all([
+                Participant(room_id=room.id, agent_id=pi_agent_id),
+                AgentFile(agent_id=pi_agent_id, path="skills/notes/SKILL.md", content="keep me"),
+            ])
+            room_id = room.id
+            await db.commit()
+
+        response = await self._change(env, pi_agent_id, {"engine": "codex-cli"})
+        assert response.status_code == 200, response.text
+        assert (response.json()["id"], response.json()["name"]) == (pi_agent_id, "switcher")
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, pi_agent_id)
+            assert agent.engine == "codex-cli"
+            assert agent.agents_md == "# Switcher\nAlways answer in Korean."
+            assert agent.placed_on_machine_id == env["machine"].id
+            rooms = (await db.scalars(select(Participant.room_id).where(
+                Participant.agent_id == pi_agent_id))).all()
+            assert rooms == [room_id]
+            files = (await db.scalars(select(AgentFile).where(
+                AgentFile.agent_id == pi_agent_id))).all()
+            assert [(f.path, f.content) for f in files] == [("skills/notes/SKILL.md", "keep me")]
+            assert (await db.scalars(select(Agent))).all() == [agent]
+
+    @pytest.mark.req("AGT-08")
     @pytest.mark.asyncio
     async def test_codex_to_pi_requires_provider(self, agents_env, pi_agent_id):
         env = agents_env
@@ -2379,6 +2418,7 @@ class TestAgentEngineChange:
         response = await self._change(env, pi_agent_id, {"engine": "codex-cli"})
         assert response.status_code == 200, response.text
 
+    @pytest.mark.req("AGT-08")
     @pytest.mark.asyncio
     async def test_requires_admin(self, agents_env, pi_agent_id):
         env = agents_env

@@ -23,6 +23,7 @@ from anygarden_agent.protocol.frames import (
     LifecycleFrame,
     SendFrame,
     TurnStartFrame,
+    TurnCancelOut,
     TurnStartPermitOut,
     TurnStopOut,
     TurnStopResultFrame,
@@ -815,6 +816,8 @@ class ChatClient:
                 task = asyncio.create_task(self._handle_turn_stop(room_id, frame))
                 self._turn_stop_tasks[frame.stop_id] = task
                 task.add_done_callback(lambda done, key=frame.stop_id: self._turn_stop_tasks.pop(key, None) if self._turn_stop_tasks.get(key) is done else None)
+        elif msg_type == "turn_cancel":
+            self._handle_turn_cancel(room_id, data)
         elif msg_type == "execution_control":
             await self._handle_execution_control(room_id, data)
         elif msg_type == "message":
@@ -1128,6 +1131,25 @@ class ChatClient:
             return frame.input_snapshot
         finally:
             self._turn_start_waiters.pop(key, None)
+
+    def _handle_turn_cancel(self, room_id: str, data: dict[str, Any]) -> None:
+        """ENG-09 — stop a user-cancelled general turn's exact attempt.
+
+        The server already made the turn terminal, so no receipt is sent;
+        the supervisor cancels the engine child (or skips it if queued).
+        """
+        try:
+            frame = TurnCancelOut.model_validate(data)
+        except ValueError:
+            return
+        if (frame.room_id != room_id or frame.agent_id != self._agent_id
+                or frame.generation != self._generation):
+            return
+        supervisor = getattr(self, "_turn_supervisor", None)
+        if supervisor is None:
+            return
+        supervisor.cancel_turn({"room_id": room_id, "request_id": frame.request_id,
+                                "attempt": frame.attempt, "generation": frame.generation})
 
     async def _handle_turn_stop(self, room_id: str, frame: TurnStopOut) -> None:
         result = {"status": "unknown", "process_state": "unknown", "outcome": "unknown",
