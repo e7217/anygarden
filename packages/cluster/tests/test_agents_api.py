@@ -2253,3 +2253,136 @@ class TestAgentInitialSetup:
         assert response.status_code == 422
         async with env["factory"]() as db:
             assert (await db.scalars(select(Agent))).all() == []
+
+
+class TestAgentEngineChange:
+    """#769 — switch an existing agent's engine in place."""
+
+    @pytest_asyncio.fixture
+    async def pi_agent_id(self, agents_env) -> str:
+        env = agents_env
+        async with env["factory"]() as db:
+            machine = await db.get(Machine, env["machine"].id)
+            machine.control_capabilities = ["pi_native_auth_v1", "direct_endpoint_v1"]
+            db.add_all([
+                MachineEngine(machine_id=machine.id, engine="pi-cli"),
+                MachineEngine(machine_id=machine.id, engine="codex-cli"),
+            ])
+            agent = Agent(
+                name="switcher", engine="pi-cli", provider="anthropic",
+                model="claude-x", reasoning_effort="high",
+                base_url="http://llm.local/v1", api_protocol="chat-completions",
+                credential_ref="cred-1", placed_on_machine_id=machine.id,
+                desired_state="running", actual_state="running",
+            )
+            db.add(agent)
+            await db.commit()
+            return agent.id
+
+    async def _change(self, env, agent_id, body, token=None):
+        return await env["client"].put(
+            f"/api/v1/agents/{agent_id}/engine",
+            json=body,
+            headers={"Authorization": f"Bearer {token or env['token']}"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_pi_to_codex_resets_engine_specific_settings(self, agents_env, pi_agent_id):
+        env = agents_env
+        env["lifecycle"].bump_generation = AsyncMock()
+        response = await self._change(env, pi_agent_id, {"engine": "codex-cli"})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["engine"] == "codex-cli"
+        assert body["provider"] is None and body["model"] is None
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, pi_agent_id)
+            assert agent.reasoning_effort is None
+            assert (agent.base_url, agent.api_protocol, agent.credential_ref) == (None, None, None)
+            log = (await db.scalars(select(ActivityLog).where(
+                ActivityLog.agent_id == pi_agent_id,
+                ActivityLog.event_type == "agent_engine_changed",
+            ))).one()
+            assert log.details["from"] == "pi-cli" and log.details["to"] == "codex-cli"
+        env["lifecycle"].bump_generation.assert_awaited_once_with(pi_agent_id)
+
+    @pytest.mark.asyncio
+    async def test_codex_to_pi_requires_provider(self, agents_env, pi_agent_id):
+        env = agents_env
+        env["lifecycle"].bump_generation = AsyncMock()
+        assert (await self._change(env, pi_agent_id, {"engine": "codex-cli"})).status_code == 200
+        response = await self._change(env, pi_agent_id, {"engine": "pi-cli"})
+        assert response.status_code == 422
+        response = await self._change(
+            env, pi_agent_id, {"engine": "pi-cli", "provider": "openai", "model": "gpt-x"}
+        )
+        assert response.status_code == 200, response.text
+        assert (response.json()["engine"], response.json()["provider"], response.json()["model"]) == (
+            "pi-cli", "openai", "gpt-x",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body,expected",
+        [
+            ({"engine": "pi-cli", "provider": "anthropic"}, 422),  # same engine
+            ({"engine": "claude-code"}, 422),  # removed engine
+            ({"engine": "unknown-engine"}, 422),
+            ({"engine": "codex-cli", "provider": "openai"}, 422),  # codex has no provider
+        ],
+    )
+    async def test_invalid_target_rejected_without_changes(self, agents_env, pi_agent_id, body, expected):
+        env = agents_env
+        response = await self._change(env, pi_agent_id, body)
+        assert response.status_code == expected, response.text
+        async with env["factory"]() as db:
+            assert (await db.get(Agent, pi_agent_id)).engine == "pi-cli"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("problem", ["engine", "capability"])
+    async def test_placed_machine_must_support_target(self, agents_env, pi_agent_id, problem):
+        env = agents_env
+        async with env["factory"]() as db:
+            if problem == "engine":
+                row = (await db.scalars(select(MachineEngine).where(
+                    MachineEngine.machine_id == env["machine"].id,
+                    MachineEngine.engine == "codex-cli",
+                ))).one()
+                await db.delete(row)
+                agent = await db.get(Agent, pi_agent_id)
+                agent.engine, agent.provider = "pi-cli", "anthropic"
+                target = {"engine": "codex-cli"}
+            else:
+                agent = await db.get(Agent, pi_agent_id)
+                agent.engine, agent.provider = "codex-cli", None
+                machine = await db.get(Machine, env["machine"].id)
+                machine.control_capabilities = []
+                target = {"engine": "pi-cli", "provider": "openai"}
+            await db.commit()
+        before = "pi-cli" if problem == "engine" else "codex-cli"
+        response = await self._change(env, pi_agent_id, target)
+        assert response.status_code == 409, response.text
+        async with env["factory"]() as db:
+            assert (await db.get(Agent, pi_agent_id)).engine == before
+
+    @pytest.mark.asyncio
+    async def test_removed_engine_agent_can_migrate(self, agents_env, pi_agent_id):
+        env = agents_env
+        env["lifecycle"].bump_generation = AsyncMock()
+        async with env["factory"]() as db:
+            agent = await db.get(Agent, pi_agent_id)
+            agent.engine, agent.provider = "claude-code", None
+            await db.commit()
+        response = await self._change(env, pi_agent_id, {"engine": "codex-cli"})
+        assert response.status_code == 200, response.text
+
+    @pytest.mark.asyncio
+    async def test_requires_admin(self, agents_env, pi_agent_id):
+        env = agents_env
+        response = await self._change(env, pi_agent_id, {"engine": "codex-cli"}, token=env["regular_token"])
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unknown_agent_404(self, agents_env):
+        response = await self._change(agents_env, "missing", {"engine": "codex-cli"})
+        assert response.status_code == 404

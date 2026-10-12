@@ -976,6 +976,8 @@ function AgentDMListAdmin({
     fetchAttachedSkills,
     fetchSkillPreview,
     fetchEngineCatalog,
+    changeAgentEngine,
+    availableEngines,
   } = useAgents()
   const { fetchAgentDMs, createAgentDM } = useRooms()
   const { user } = useAuth()
@@ -1357,6 +1359,8 @@ function AgentDMListAdmin({
         fetchAttachedSkills={fetchAttachedSkills}
         fetchSkillPreview={fetchSkillPreview}
         fetchEngineCatalog={fetchEngineCatalog}
+        changeAgentEngine={changeAgentEngine}
+        availableEngines={availableEngines.map(e => e.engine)}
         onRoomsChange={() => { fetchAgentDMs() }}
         onDelete={
           settingsAgent

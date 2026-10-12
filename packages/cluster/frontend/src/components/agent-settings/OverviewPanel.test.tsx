@@ -349,3 +349,32 @@ describe('OverviewPanel', () => {
     })
   })
 })
+
+describe('OverviewPanel engine change (#769)', () => {
+  function renderWith(props: Partial<React.ComponentProps<typeof OverviewPanel>>) {
+    render(
+      <OverviewPanel
+        agent={makeAgent({ engine: 'pi-cli' })}
+        updateAgent={vi.fn()}
+        fetchEngineCatalog={async () => null}
+        {...props}
+      />,
+    )
+  }
+
+  it('hides the change button without a handler or another engine', () => {
+    renderWith({ availableEngines: ['codex-cli', 'pi-cli'] })
+    expect(screen.queryByTestId('overview-change-engine')).not.toBeInTheDocument()
+    cleanup()
+    renderWith({ changeAgentEngine: vi.fn(), availableEngines: ['pi-cli'] })
+    expect(screen.queryByTestId('overview-change-engine')).not.toBeInTheDocument()
+  })
+
+  it('opens the dialog and submits the change for this agent', async () => {
+    const changeAgentEngine = vi.fn().mockResolvedValue(makeAgent({ engine: 'codex-cli' }))
+    renderWith({ changeAgentEngine, availableEngines: ['codex-cli', 'pi-cli'] })
+    fireEvent.click(screen.getByTestId('overview-change-engine'))
+    fireEvent.click(await screen.findByTestId('engine-change-submit'))
+    await waitFor(() => expect(changeAgentEngine).toHaveBeenCalledWith('agent_abc123', { engine: 'codex-cli', provider: null, model: null }))
+  })
+})
