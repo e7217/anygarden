@@ -499,6 +499,56 @@ class TestFanIn:
         assert wake_turn.thread_root_id == root["id"]
 
 
+async def _bind_open_turn_to_task(sf, room, participant_id: str, status: str) -> str:
+    """Make the caller's current turn a task turn (an execution worker or a
+    promoted general task asking a peer mid-task)."""
+    from anygarden.db.models import Task
+
+    turn = await _open_turn(sf, participant_id)
+    async with sf() as db:
+        task = Task(room_id=room.id, title="write the notes", status=status,
+                    assignee_participant_id=participant_id)
+        db.add(task)
+        await db.flush()
+        (await db.get(AgentTurn, turn.request_id)).task_id = task.id
+        await db.commit()
+        return task.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.req("COL-06")
+@pytest.mark.parametrize(("status", "inherits"), [("in_progress", True), ("done", False)])
+async def test_wake_turn_keeps_the_callers_open_task(ws_env, status, inherits) -> None:
+    """A task turn that asks a peer must resume on the same task, or the
+    resumed turn cannot report the task done and it stays in_progress
+    forever (benchmark DL-03 team, 2026-10-12). A task already finished
+    while waiting is not re-bound."""
+    app, sf, room = ws_env["app"], ws_env["session_factory"], ws_env["room"]
+    sender_token, sender_pid, peer_pid = await _seed_sender_and_peer(sf, room)
+    peer_token = await _add_token(sf, peer_pid)
+    with TestClient(app) as client:
+        trigger = _user_send(client, room.id, ws_env["token"], f"<@user:{sender_pid}> 문서 작성")
+        task_id = await _bind_open_turn_to_task(sf, room, sender_pid, "in_progress")
+        _ask_peer(client, sender_token, room.id, [(peer_pid, "검토해 줘")])
+        caller_proof = await _proof(sf, sender_pid)
+        _agent_send(client, room.id, sender_token, "초안 완료", caller_proof)
+        await _wait_turn_state(sf, caller_proof["request_id"], "completed")
+        if status != "in_progress":
+            from anygarden.db.models import Task
+
+            async with sf() as db:
+                (await db.get(Task, task_id)).status = status
+                await db.commit()
+        _agent_send(client, room.id, peer_token, "검토 끝",
+                    await _proof(sf, peer_pid), thread_root_id=trigger["id"])
+        assert await dispatch_peer_ask_groups(sf, app.state.connection_manager) == 1
+
+    group = await _group(sf)
+    async with sf() as db:
+        wake_turn = await db.get(AgentTurn, group.wake_request_id)
+    assert wake_turn.task_id == (task_id if inherits else None)
+
+
 class _FakeManager:
     def __init__(self) -> None:
         self.frames: list = []

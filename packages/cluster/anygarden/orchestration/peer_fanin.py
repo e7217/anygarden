@@ -325,6 +325,25 @@ def render_results(
     return "\n".join(lines)
 
 
+async def _open_caller_task(db: AsyncSession, group: PeerAskGroup) -> str | None:
+    """The task the caller was working on when it asked, if still open.
+
+    The wake turn continues that work, so it must stay bound to the task:
+    an unbound turn cannot report the task done and the task would sit
+    in_progress forever.
+    """
+    from anygarden.db.models import Task
+    from anygarden.tasks_status import TERMINAL_STATUSES
+
+    caller_turn = await db.get(AgentTurn, group.caller_request_id)
+    if caller_turn is None or caller_turn.task_id is None:
+        return None
+    task = await db.get(Task, caller_turn.task_id)
+    if task is None or task.status in TERMINAL_STATUSES:
+        return None
+    return task.id
+
+
 async def _wake(db: AsyncSession, group: PeerAskGroup) -> Message | None:
     """Post the hidden result message and start the caller's next turn."""
     from anygarden.messages.service import append_message
@@ -390,6 +409,7 @@ async def _wake(db: AsyncSession, group: PeerAskGroup) -> Message | None:
         agent_id=agent_id,
         trigger_message_id=msg.id,
         thread_root_id=msg.root_message_id,
+        task_id=await _open_caller_task(db, group),
         request_id=rid,
     )
     group.wake_request_id = rid

@@ -246,3 +246,24 @@ def test_report_snapshot_takes_each_scenario_from_its_newest_result(tmp_path):
 
     assert "| DL-01 | solo | pass | 1/1 |" in out and "`bbbbbbb`" in out
     assert "| QA-03 | team | pass | 1/1 |" in out and "`aaaaaaa`" in out
+
+
+async def test_api_retries_reads_but_never_writes_on_a_dropped_connection():
+    import httpx
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.method)
+        if len([c for c in calls if c == request.method]) == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(200, json={"ok": True})
+
+    api = Api("http://test", "t", httpx.MockTransport(handler))
+    try:
+        assert await api("/x") == {"ok": True}
+        with pytest.raises(httpx.RemoteProtocolError):
+            await api("/x", "POST", {})
+    finally:
+        await api.close()
+    assert calls == ["GET", "GET", "POST"]

@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 
 POLL_SECONDS = 5
+GET_RETRIES = 3
 
 
 class ApiError(RuntimeError):
@@ -40,7 +41,18 @@ class Api:
     async def __call__(
         self, path: str, method: str = "GET", body: Any = None, params: dict | None = None
     ) -> Any:
-        resp = await self.client.request(method, path, json=body, params=params)
+        # Polling every few seconds races uvicorn's 5 s keep-alive: a pooled
+        # connection the server just closed fails with RemoteProtocolError.
+        # Reads are idempotent, so retry them; never replay a write.
+        attempts = GET_RETRIES if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                resp = await self.client.request(method, path, json=body, params=params)
+                break
+            except httpx.TransportError:
+                if attempt == attempts - 1:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
         if resp.status_code >= 400:
             raise ApiError(f"{method} {path} -> {resp.status_code} {resp.text[:400]}")
         return resp.json() if resp.content else None
