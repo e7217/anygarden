@@ -70,6 +70,17 @@ describe('parseTaskAssignment', () => {
     })
   })
 
+  it('accepts the resumed event of a general task (#808)', () => {
+    const parsed = parseTaskAssignment(
+      makeMessage({
+        metadata: {
+          task_assignment: { task_id: 't1', assignee_pid: 'p1', event: 'resumed' },
+        },
+      }),
+    )
+    expect(parsed?.event).toBe('resumed')
+  })
+
   it('rejects unknown event values', () => {
     const parsed = parseTaskAssignment(
       makeMessage({

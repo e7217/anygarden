@@ -13,6 +13,13 @@ import type { Participant } from '@/pages/ChatPage'
 import type { TaskAssignmentMeta } from '@/lib/taskAssignment'
 import { useLocale } from '@/i18n/LocaleProvider'
 
+const EVENT_LABEL = {
+  assigned: 'chat.taskAssigned',
+  reassigned: 'chat.taskReassigned',
+  // #808 — a general task resumed by the user's thread answer.
+  resumed: 'chat.taskResumed',
+} as const
+
 interface Props {
   meta: TaskAssignmentMeta
   title: string
@@ -33,7 +40,7 @@ export default function TaskAssignmentCard({ meta, title, assignee }: Props) {
         aria-hidden
       />
       <span className="text-badge font-medium uppercase tracking-[0.06em] text-[var(--color-foreground-muted)]">
-        {t(meta.event === 'assigned' ? 'chat.taskAssigned' : 'chat.taskReassigned')}
+        {t(EVENT_LABEL[meta.event])}
       </span>
       <span className="truncate text-[var(--color-foreground)]">
         {title}

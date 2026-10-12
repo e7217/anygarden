@@ -9,7 +9,7 @@
  */
 import type { ChatMessage } from '@/hooks/useWebSocket'
 
-export type TaskAssignmentEvent = 'assigned' | 'reassigned'
+export type TaskAssignmentEvent = 'assigned' | 'reassigned' | 'resumed'
 
 export interface TaskAssignmentMeta {
   task_id: string
@@ -30,7 +30,7 @@ export function parseTaskAssignment(
   const event = obj.event
   if (typeof task_id !== 'string') return null
   if (typeof assignee_pid !== 'string') return null
-  if (event !== 'assigned' && event !== 'reassigned') return null
+  if (event !== 'assigned' && event !== 'reassigned' && event !== 'resumed') return null
   return { task_id, assignee_pid, event }
 }
 

@@ -3,6 +3,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- A general task resumed by the user's thread answer now wakes its agent with
+  resume instructions instead of the assignment template (#808). The notice's
+  event is `resumed` (the chat card reads "Task resumed"). It no longer asks the
+  agent to record a start or warns that the task auto-fails, and says to report
+  `done` only after the result is actually made and checked, otherwise
+  `blocked` or `failed` with the reason. In live runs the old wording led
+  resumed turns to report failed work as `done` in 2 of 3 runs; with the new
+  notice it was 0 of 3.
+
 ### Added
 
 - An agent can turn the request it is answering into a task (#806). The new

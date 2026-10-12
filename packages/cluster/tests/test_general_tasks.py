@@ -527,3 +527,27 @@ async def test_rpc_without_turn_proof_is_an_error(rpc_env) -> None:
     assert result["isError"] is True
     async with rpc_env["factory"]() as db:
         assert await db.scalar(select(func.count()).select_from(Task)) == 0
+
+
+@pytest.mark.asyncio
+async def test_thread_answer_resume_notice_has_its_own_instructions(db) -> None:
+    """#808: the resume notice must not reuse the assignment template.
+
+    Live, its "call done when you respond" step and auto-failure threat
+    pushed resumed turns into reporting done for work that had failed.
+    """
+    env, trigger, _, _, _, _, _ = await _asked(db)
+    reply = await _user_message(db, env, "10월 16일", thread_root_id=trigger.id)
+
+    result = await answer_from_thread(db, reply=reply, user_id=env["user"].id)
+
+    [resume] = result.messages
+    assert resume.extra_metadata["task_assignment"]["event"] == "resumed"
+    content = resume.content
+    assert content.splitlines()[0].startswith(f"<@user:{env['bot'].id}> [TASK] ")
+    assert "자동 실패" not in content
+    assert "시작 직후" not in content
+    assert "배정되었습니다" not in content
+    assert "10월 16일" in content
+    assert "in_progress" in content and "blocked" in content
+    assert "확인" in content  # done only after the result is actually checked
