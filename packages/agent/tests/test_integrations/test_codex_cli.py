@@ -304,3 +304,145 @@ class TestEngineTimeoutKeyMapping:
         for engine in ENGINES:
             key = _ENGINE_TIMEOUT_KEY.get(engine, engine)
             resolve_turn_timeout(key)  # must not raise
+
+
+# -- non-zero exit diagnosis + transient classification (2026-10-12) -------
+
+
+def _api_error(status: int, etype: str, message: str) -> str:
+    return json.dumps(
+        {"type": "error", "status": status, "error": {"type": etype, "message": message}}
+    )
+
+
+def _jsonl(*events: dict) -> bytes:
+    return ("\n".join(json.dumps(e) for e in events) + "\n").encode()
+
+
+def _failure_stream(message: str, *, side_effect: bool = False) -> bytes:
+    events: list[dict] = [
+        {"type": "thread.started", "thread_id": "tid"},
+        {"type": "turn.started"},
+    ]
+    if side_effect:
+        events += [
+            {"type": "item.started", "item": {"id": "i0", "type": "command_execution", "command": "rm x"}},
+            {"type": "item.completed", "item": {"id": "i0", "type": "command_execution", "exit_code": 0}},
+        ]
+    events += [
+        {"type": "error", "message": message},
+        {"type": "turn.failed", "error": {"message": message}},
+    ]
+    return _jsonl(*events)
+
+
+class _FakeProc:
+    pid = 4242
+
+    def __init__(self, stdout: bytes, stderr: bytes, returncode: int) -> None:
+        self._out = (stdout, stderr)
+        self.returncode = returncode
+
+    async def communicate(self, input: bytes | None = None):
+        return self._out
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
+def _fake_subprocess(monkeypatch, stdout: bytes, stderr: bytes = b"", returncode: int = 1):
+    async def fake_exec(*args, **kwargs):
+        return _FakeProc(stdout, stderr, returncode)
+
+    monkeypatch.setattr(
+        "anygarden_agent.integrations.codex_cli.asyncio.create_subprocess_exec", fake_exec
+    )
+
+
+class TestNonzeroExitClassification:
+    """codex ``exec --json`` failures: reason surfaced, transient only when safe."""
+
+    @staticmethod
+    def _adapter() -> CodexCliAdapter:
+        adapter = CodexCliAdapter()
+        adapter._codex_path = "/usr/bin/codex"
+        return adapter
+
+    @pytest.mark.req("EXE-10")
+    async def test_429_before_any_item_is_transient(self, monkeypatch) -> None:
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+
+        _fake_subprocess(
+            monkeypatch,
+            _failure_stream(_api_error(429, "rate_limit_exceeded", "Rate limit reached for gpt")),
+        )
+        with pytest.raises(EngineError) as error:
+            await self._adapter()._exec_once("hi", None)
+        assert error.value.transient is True
+        assert "429" in str(error.value) and "Rate limit reached" in str(error.value)
+
+    @pytest.mark.req("EXE-10")
+    async def test_500_after_command_execution_is_not_transient(self, monkeypatch) -> None:
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+
+        _fake_subprocess(
+            monkeypatch,
+            _failure_stream(_api_error(500, "server_error", "upstream exploded"), side_effect=True),
+        )
+        with pytest.raises(EngineError) as error:
+            await self._adapter()._exec_once("hi", None)
+        assert error.value.transient is False
+        assert "reconciliation required" in str(error.value)
+        assert "500" in str(error.value)
+
+    @pytest.mark.req("EXE-10")
+    async def test_400_invalid_request_not_transient_with_reason(self, monkeypatch) -> None:
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+
+        _fake_subprocess(
+            monkeypatch,
+            _failure_stream(
+                _api_error(400, "invalid_request_error", "The 'gpt-x' model is not supported")
+            ),
+        )
+        with pytest.raises(EngineError) as error:
+            await self._adapter()._exec_once("hi", None)
+        assert error.value.transient is False
+        text = str(error.value)
+        assert "status 400" in text
+        assert "invalid_request_error" in text
+        assert "is not supported" in text
+
+    @pytest.mark.req("EXE-10")
+    async def test_reason_and_stderr_tail_logged_and_redacted(self, monkeypatch) -> None:
+        from structlog.testing import capture_logs
+
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+
+        monkeypatch.setenv("ANYGARDEN_AGENT_TOKEN", "agent-secret-token-9876")
+        stderr = ("noise " * 200 + "ERROR codex_core::client: stream error agent-secret-token-9876").encode()
+        _fake_subprocess(
+            monkeypatch,
+            _failure_stream("stream disconnected before completion: agent-secret-token-9876"),
+            stderr=stderr,
+        )
+        with capture_logs() as logs, pytest.raises(EngineError) as error:
+            await self._adapter()._exec_once("hi", None)
+        assert error.value.transient is True
+        assert "stream disconnected" in str(error.value)
+        assert "agent-secret-token-9876" not in str(error.value)
+        entry = next(e for e in logs if e["event"] == "codex_cli.nonzero_exit")
+        assert entry["exit_code"] == 1
+        assert "stream disconnected" in entry["reason"]
+        assert "codex_core::client" in entry["stderr_tail"]
+        assert len(entry["stderr_tail"]) <= 500
+        assert "agent-secret-token-9876" not in str(entry)
+
+    async def test_unparseable_output_is_not_transient(self, monkeypatch) -> None:
+        from anygarden_agent.runtime.handler_wrapper import EngineError
+
+        _fake_subprocess(monkeypatch, b"garbage\n", stderr=b"429 Too Many Requests")
+        with pytest.raises(EngineError) as error:
+            await self._adapter()._exec_once("hi", None)
+        assert error.value.transient is False
+        assert "reconciliation required" in str(error.value)

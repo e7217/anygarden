@@ -1,8 +1,14 @@
 """Only safe, unambiguous CLI failures become actionable codes."""
 
+import json
+
 import pytest
 
-from anygarden_agent.runtime.execution.failure_feedback import classify_failure
+from anygarden_agent.runtime.execution.failure_feedback import (
+    CodexFailureTracker,
+    classify_failure,
+    redact_secrets,
+)
 
 
 @pytest.mark.parametrize(
@@ -25,3 +31,151 @@ from anygarden_agent.runtime.execution.failure_feedback import classify_failure
 )
 def test_classify_failure(engine, message, expected):
     assert classify_failure(engine, message) == expected
+
+
+# -- codex-cli turn failure diagnosis (live benchmark 2026-10-12) ----------
+
+
+
+def _api_error(status, etype, message):
+    return json.dumps(
+        {"type": "error", "status": status, "error": {"type": etype, "message": message}}
+    )
+
+
+def _track(events):
+    tracker = CodexFailureTracker()
+    for event in events:
+        tracker.observe(event)
+    return tracker
+
+
+def _failed(message, *, before=()):
+    return [
+        {"type": "thread.started", "thread_id": "t"},
+        {"type": "turn.started"},
+        *before,
+        {"type": "error", "message": message},
+        {"type": "turn.failed", "error": {"message": message}},
+    ]
+
+
+_COMMAND = {"type": "item.started", "item": {"type": "command_execution", "command": "ls"}}
+
+
+@pytest.mark.req("EXE-10")
+def test_tracker_429_before_any_item_is_transient():
+    tracker = _track(_failed(_api_error(429, "rate_limit_exceeded", "Rate limit reached")))
+    assert tracker.status == 429
+    assert tracker.transient is True
+    assert tracker.code() == "MODEL_TRANSIENT_FAILURE"
+    assert "429" in tracker.reason and "Rate limit reached" in tracker.reason
+
+
+@pytest.mark.req("EXE-10")
+def test_tracker_500_after_side_effect_is_not_transient():
+    tracker = _track(_failed(_api_error(500, "server_error", "boom"), before=[_COMMAND]))
+    assert tracker.side_effect_started is True
+    assert tracker.transient is False
+    assert tracker.code() is None
+
+
+@pytest.mark.req("EXE-10")
+def test_tracker_400_invalid_request_is_not_transient_with_reason():
+    message = _api_error(400, "invalid_request_error", "The 'gpt-x' model is not supported, see 500 docs")
+    tracker = _track(_failed(message))
+    assert tracker.status == 400
+    assert tracker.transient is False
+    assert tracker.code() != "MODEL_TRANSIENT_FAILURE"
+    assert tracker.reason.startswith("status 400")
+    assert "invalid_request_error" in tracker.reason
+
+
+@pytest.mark.parametrize(
+    "item_type", ["agent_message", "reasoning", "error", "todo_list"]
+)
+def test_tracker_non_side_effect_items(item_type):
+    events = _failed(
+        "stream disconnected before completion: error sending request",
+        before=[{"type": "item.completed", "item": {"type": item_type, "text": "x"}}],
+    )
+    tracker = _track(events)
+    assert tracker.side_effect_started is False
+    assert tracker.transient is True
+
+
+@pytest.mark.parametrize("item_type", ["file_change", "mcp_tool_call", None])
+def test_tracker_side_effect_items(item_type):
+    item = {"type": "item.started", "item": {"type": item_type} if item_type else {}}
+    tracker = _track(_failed(_api_error(503, "overloaded", "busy"), before=[item]))
+    assert tracker.side_effect_started is True
+    assert tracker.transient is False
+
+
+def test_tracker_top_level_error_without_turn_failed():
+    tracker = _track([
+        {"type": "turn.started"},
+        {"type": "error", "message": _api_error(503, "server_error", "unavailable")},
+    ])
+    assert tracker.status == 503 and tracker.transient is True
+
+
+def test_tracker_turn_failed_wins_over_retry_notices():
+    tracker = _track([
+        {"type": "turn.started"},
+        {"type": "error", "message": "Reconnecting... 1/5 (stream disconnected)"},
+        {"type": "turn.failed", "error": {"message": _api_error(401, "invalid_api_key", "bad key")}},
+    ])
+    assert tracker.status == 401 and tracker.transient is False
+
+
+def test_tracker_without_failure_events_is_empty_and_not_transient():
+    tracker = _track([{"type": "turn.started"}, _COMMAND])
+    assert tracker.reason is None and tracker.transient is False and tracker.code() is None
+
+
+def test_tracker_two_turn_failures_are_ambiguous():
+    msg = _api_error(429, "rate_limit_exceeded", "slow down")
+    tracker = _track([
+        {"type": "turn.failed", "error": {"message": msg}},
+        {"type": "turn.failed", "error": {"message": msg}},
+    ])
+    assert tracker.transient is False and tracker.code() is None
+
+
+def test_tracker_reason_is_truncated_and_redacted(monkeypatch):
+    monkeypatch.setenv("ANYGARDEN_AGENT_TOKEN", "agent-token-value-1234")
+    secret = "sk-proj-" + "a" * 40
+    message = _api_error(
+        500, "server_error",
+        f"key {secret} token agent-token-value-1234 Bearer abc.def.ghi " + "x" * 800,
+    )
+    tracker = _track(_failed(message))
+    assert len(tracker.reason) <= 300
+    assert secret not in tracker.reason
+    assert "agent-token-value-1234" not in tracker.reason
+    assert "abc.def.ghi" not in tracker.reason
+    assert "[REDACTED]" in tracker.reason
+
+
+def test_redact_secrets_patterns():
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlLXZhbHVl"
+    text = redact_secrets(f"api_key=hunter2hunter2 {jwt} Authorization: Bearer tok123")
+    assert "hunter2hunter2" not in text and jwt not in text and "tok123" not in text
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "stream disconnected before completion: Transport error",
+        "request timed out",
+        _api_error(500, "server_error", "internal"),
+    ],
+)
+def test_classify_codex_transient_messages(message):
+    assert classify_failure("codex-cli", message) == "MODEL_TRANSIENT_FAILURE"
+
+
+def test_classify_codex_structured_4xx_is_not_transient_even_with_signal_words():
+    message = _api_error(400, "invalid_request_error", "context too large; retry after timeout 500")
+    assert classify_failure("codex-cli", message) != "MODEL_TRANSIENT_FAILURE"

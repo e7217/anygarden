@@ -54,6 +54,10 @@ from anygarden_agent.integrations.process_helpers import (
     _subprocess_group_kwargs,
     _terminate_tree,
 )
+from anygarden_agent.runtime.execution.failure_feedback import (
+    CodexFailureTracker,
+    stderr_tail,
+)
 from anygarden_agent.runtime.handler_wrapper import (
     EngineError,
     EngineTimeoutError,
@@ -391,7 +395,7 @@ class CodexCliAdapter(EngineAdapter):
                 **_subprocess_group_kwargs(),
             )
             try:
-                stdout, _stderr = await asyncio.wait_for(
+                stdout, stderr = await asyncio.wait_for(
                     proc.communicate(input=prompt.encode()),
                     timeout=_CODEX_CLI_TIMEOUT,
                 )
@@ -411,13 +415,7 @@ class CodexCliAdapter(EngineAdapter):
             parsed_thread_id, jsonl_text, usage = self._parse_codex_jsonl(raw)
 
             if proc.returncode != 0:
-                # A process can fail after a tool side effect with no reply text.
-                # Neither resume nor fresh execution is safe to retry automatically.
-                logger.error("codex_cli.nonzero_exit", code=proc.returncode)
-                raise EngineError(
-                    f"codex-cli exited with code {proc.returncode}; reconciliation required",
-                    transient=False,
-                )
+                raise self._nonzero_exit_error(proc.returncode, raw, stderr)
 
             # Prefer the ``-o`` file; fall back to JSONL agent_message.
             file_text = ""
@@ -432,6 +430,45 @@ class CodexCliAdapter(EngineAdapter):
                 os.unlink(last_msg_path)
             except OSError:
                 pass
+
+    @staticmethod
+    def _nonzero_exit_error(
+        returncode: int, raw: str, stderr: bytes | None
+    ) -> EngineError:
+        """Diagnose a failed ``codex exec`` from its JSONL ``turn.failed``/``error``.
+
+        The failure is transient (eligible for the bounded auto-retry) only
+        when the provider error looks transient (429/5xx, rate limit, stream
+        disconnected, ...) AND no side-effecting item (command_execution,
+        file_change, mcp_tool_call, ...) started in this turn. Anything else,
+        including unparseable output, still requires reconciliation. This
+        never retries in-process, so a failed resume is never re-run fresh.
+        """
+        failures = CodexFailureTracker()
+        for line in raw.splitlines():
+            try:
+                failures.observe(json.loads(line))
+            except (ValueError, TypeError):
+                continue
+        code = failures.code()
+        transient = code == "MODEL_TRANSIENT_FAILURE"
+        reason = failures.reason
+        logger.error(
+            "codex_cli.nonzero_exit",
+            exit_code=returncode,
+            status=failures.status,
+            reason=reason,
+            code=code or "ENGINE_ERROR",
+            transient=transient,
+            side_effect_started=failures.side_effect_started,
+            stderr_tail=stderr_tail(stderr) if stderr else "",
+        )
+        message = f"codex-cli exited with code {returncode}"
+        if reason:
+            message += f": {reason}"
+        if not transient:
+            message += "; reconciliation required"
+        return EngineError(message, transient=transient)
 
     @staticmethod
     def _parse_codex_jsonl(
