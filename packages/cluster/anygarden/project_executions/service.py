@@ -1641,10 +1641,18 @@ async def reconcile_execution(
         from anygarden.project_executions.recovery import public_task_error
 
         reported_error = public_task_error(task.status, task.error)
+    # A lead resume (EXE-21) reopens the same task at the same result
+    # version; its later outcome is a new event, not a replay of the earlier.
+    from anygarden.project_executions.resumes import lead_resume_count
+
+    resumes = 0 if failure_details else await lead_resume_count(
+        db, execution_id=execution.id, task_id=task.id, input_revision=task.input_revision,
+    )
     event_key = (
         f"turn:{failure_details['request_id']}:attempt:{failure_details['attempt']}:recovery-report"
         if failure_details else
         f"execution:{execution.id}:outcome:{task.id}:r{task.input_revision}:v{task.result_version}:{task.status}"
+        + (f":resume{resumes}" if resumes else "")
     )
     event = await _event(
         db,
@@ -1737,7 +1745,10 @@ async def reconcile_execution(
         if reported_error == "TASK_BLOCKED":
             text += (
                 "The assignee stopped this task and explained why in its own thread. "
-                "Decide once: re-delegate the work, ask the user for what is missing, or stop.\n"
+                "Decide once: continue this same task with resume_project_task(execution_id, "
+                "task_id, guidance) giving the assignee concrete guidance (re-delegating with the "
+                "same delegation_key only replays the blocked task), ask the user for what is "
+                "missing, or stop.\n"
             )
     if repair is not None:
         text += f"Automatic QA repair state: {repair}\n"
