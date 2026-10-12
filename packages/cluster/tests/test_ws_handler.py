@@ -53,11 +53,17 @@ def _file_db_url(tmp_path) -> str:
 
 
 @pytest_asyncio.fixture()
-async def ws_env(config: AnygardenSettings):
+async def ws_env(config: AnygardenSettings, tmp_path):
     """Set up a full app with a seeded user, room, and participant.
 
     Yields a dict with keys: app, config, user, room, participant, token.
+
+    Uses a file-backed SQLite DB: with the in-memory StaticPool every session
+    shares one connection, so a WS handler and a background loop could roll
+    back each other's uncommitted rows (a turn vanished before its attempt
+    was inserted → FOREIGN KEY failure, seen once in CI; same trap as #758).
     """
+    config.db_url = f"sqlite+aiosqlite:///{tmp_path / 'ws.db'}"
     engine = build_engine(config.db_url)
     session_factory = build_session_factory(engine)
 
