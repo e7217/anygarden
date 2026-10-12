@@ -78,7 +78,12 @@ PROJECT_TOOL_SCHEMAS = [
             "spec": {**_string, "maxLength": 100000},
             "role": {"type": "string", "default": "work", "enum": [
                 "work", "qa", "repair", "planning", "research", "implementation", "release",
-            ]},
+            ], "description": (
+                "Kind of task. 'release' is only for the task that requests user approval "
+                "and executes the approved managed external action (submission/deployment); "
+                "it cannot be marked done without that action's successful outcome. Writing "
+                "or preparing a document, including release notes, is 'work'."
+            )},
             "required": {"type": "boolean", "default": True},
             "depends_on": {"type": "array", "items": _string},
             "qa_target_task_id": _string,

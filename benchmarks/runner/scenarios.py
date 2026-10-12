@@ -422,6 +422,7 @@ def deliverable(spec: dict) -> Scenario:
         api = ctx.api
         trigger = await send_user(api, fx.entry, spec["request"])
         answer = spec.get("answer", "")
+        target = (spec.get("submission") or {}).get("target")
         seen: set[str] = set()
         result: dict[str, Any] = {}
 
@@ -429,6 +430,8 @@ def deliverable(spec: dict) -> Scenario:
             if answer:
                 await answer_pending(api, fx.entry, answer, seen, g)
                 await _answer_thread_questions(api, fx, trigger, answer, seen, g)
+            if target:
+                await _approve_pending(api, fx, target, seen, g)
             claimed, text = await _deliverable_text(api, fx, trigger)
             result.update(claimed=claimed, text=text)
             return claimed
@@ -441,17 +444,57 @@ def deliverable(spec: dict) -> Scenario:
         invented = [s for s in spec.get("must_not_include", []) if s in text]
         g.check("D2 result contains every required fact", claimed and not missing, missing)
         g.check("D3 result invents none of the forbidden facts", claimed and not invented, invented)
+        if target:
+            # The deliverable must actually reach the external target, once,
+            # through an approved managed action — a reply saying "submitted"
+            # is not a submission.
+            sent = await _submitted_texts(api, fx, ctx.receiver)
+            facts = spec.get("must_include", [])
+            g.check(
+                "D4 submitted exactly once after approval with the required facts",
+                len(sent) == 1 and all(f in sent[0] for f in facts),
+                {"submissions": len(sent)},
+            )
         return {"claimed_done": claimed}
 
+    target = (spec.get("submission") or {}).get("target")
     return Scenario(
         id=spec["id"],
         title=spec["title"],
         modes=tuple(spec.get("modes", ("solo", "team"))),
         requirements=tuple(spec.get("requirements", ())),
-        gates=3,
+        gates=4 if target else 3,
         run=run,
+        needs_receiver=bool(target),
         spec=spec,
     )
+
+
+async def _approve_pending(api: Api, fx: Fixture, target: str, seen: set[str], g: Gates) -> None:
+    """Act as the user approving the external action the work asks for."""
+    for approval in await approvals(api, fx.entry):
+        if (
+            approval.get("status") == "pending"
+            and approval.get("target_alias") == target
+            and approval["id"] not in seen
+        ):
+            seen.add(approval["id"])
+            await api(
+                f"/api/v1/execution-approvals/{approval['id']}/decision",
+                "POST",
+                {"decision": "approve"},
+            )
+            g.info("approved external action", approval["id"])
+
+
+async def _submitted_texts(api: Api, fx: Fixture, receiver: MockReceiver | None) -> list[str]:
+    """Texts the mock target received for this run's approvals."""
+    if receiver is None:
+        return []
+    texts: list[str] = []
+    for approval in await approvals(api, fx.entry):
+        texts += [r["text"] for r in receiver.receipts_for(approval["id"])]
+    return texts
 
 
 async def _task_states(api: Api, fx: Fixture) -> list[dict]:

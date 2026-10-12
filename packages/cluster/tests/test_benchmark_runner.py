@@ -267,3 +267,25 @@ async def test_api_retries_reads_but_never_writes_on_a_dropped_connection():
     finally:
         await api.close()
     assert calls == ["GET", "GET", "POST"]
+
+
+async def test_submission_gate_counts_only_this_runs_receipts():
+    from benchmarks.runner.scenarios import _submitted_texts
+
+    receiver = MockReceiver(port=0)
+    receiver.receipts = [
+        {"approval_id": "mine", "text": "v2.5 notes"},
+        {"approval_id": "other-run", "text": "v2.5 notes"},
+    ]
+    api = _FakeApi([], [], [])
+    api.data["execution-approvals"] = [{"id": "mine"}]
+
+    assert await _submitted_texts(api, _solo_fixture(), receiver) == ["v2.5 notes"]
+    assert await _submitted_texts(api, _solo_fixture(), None) == []
+    receiver._server.server_close()
+
+
+def test_submission_deliverable_needs_the_receiver_and_a_fourth_gate():
+    _, scenarios = load_scenarios(SUITE)
+    dl04 = next(s for s in scenarios if s.id == "DL-04")
+    assert dl04.needs_receiver and dl04.gates == 4
