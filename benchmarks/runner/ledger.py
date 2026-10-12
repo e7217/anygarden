@@ -68,6 +68,11 @@ class Rollup:
     def cost_per_pass(self) -> float | None:
         return self.cost_usd / self.passed if self.passed else None
 
+    @property
+    def tokens_per_pass(self) -> float | None:
+        """Engines that report no USD cost (codex) still report tokens."""
+        return self.tokens / self.passed if self.passed else None
+
 
 def rollup(result: dict) -> list[Rollup]:
     """Per (scenario, mode) figures for one result file."""
@@ -112,6 +117,11 @@ def uplift(rows: list[Rollup]) -> list[dict]:
                     if solo.cost_usd and solo.counted and team.counted
                     else None
                 ),
+                "token_ratio": (
+                    (team.tokens / team.counted) / (solo.tokens / solo.counted)
+                    if solo.tokens and solo.counted and team.counted
+                    else None
+                ),
             }
         )
     return out
@@ -131,38 +141,63 @@ def _usd(value: float | None) -> str:
     return "—" if value is None else f"${value:.2f}"
 
 
+def snapshot(results: list[dict]) -> list[tuple[Rollup, dict]]:
+    """Each (scenario, mode) from the newest result that measured it.
+
+    A focused re-run (``--scenarios``) then updates only its own rows
+    instead of hiding everything else.
+    """
+    latest: dict[tuple[str, str], tuple[Rollup, dict]] = {}
+    for result in results:
+        for r in rollup(result):
+            latest[(r.scenario, r.mode)] = (r, result)
+    return [latest[k] for k in sorted(latest)]
+
+
+def _tokens(value: float | None) -> str:
+    return "—" if value is None else f"{value / 1000:,.0f}k"
+
+
 def report(results: list[dict]) -> str:
-    """Markdown: latest snapshot, team-vs-solo uplift and per-scenario trend."""
+    """Markdown: per-scenario snapshot, team-vs-solo uplift and trend."""
     if not results:
         return "# Benchmark report\n\nNo results yet.\n"
-    latest = results[-1]
-    rows = rollup(latest)
-    engine = latest.get("engine") or {}
+    snap = snapshot(results)
     lines = [
         "# Benchmark report",
         "",
-        (
-            f"Latest: `{latest['_file']}` · commit `{latest.get('commit', '?')[:10]}` · "
-            f"{engine.get('engine', '?')} {engine.get('model') or ''} · k={latest.get('k')}"
-        ),
+        "Each row comes from the newest result file that measured it.",
         "",
-        "| Scenario | Mode | Verdict | Passed | Excluded | False done | Cost/pass | Avg wall |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Scenario | Mode | Verdict | Passed | Excluded | False done | Tokens/pass | Cost/pass | Avg wall | Source |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
-    for r in rows:
+    for r, result in snap:
         avg_wall = f"{r.wall_seconds / r.counted / 60:.1f}m" if r.counted else "—"
+        engine = result.get("engine") or {}
+        source = (
+            f"`{result.get('commit', '?')[:7]}` {engine.get('engine', '?')}"
+            f"/{engine.get('permission_level', '?')}"
+        )
         lines.append(
             f"| {r.scenario} | {r.mode} | {r.verdict} | {r.passed}/{r.counted} | {r.excluded} | "
-            f"{_pct(r.false_done_rate)} | {_usd(r.cost_per_pass)} | {avg_wall} |"
+            f"{_pct(r.false_done_rate)} | {_tokens(r.tokens_per_pass)} | "
+            f"{_usd(r.cost_per_pass)} | {avg_wall} | {source} |"
         )
-    ups = uplift(rows)
+    ups = uplift([r for r, _ in snap])
     if ups:
-        lines += ["", "## Team vs solo", "", "| Scenario | Solo | Team | Uplift | Cost ratio |", "|---|---|---|---|---|"]
+        lines += [
+            "",
+            "## Team vs solo",
+            "",
+            "| Scenario | Solo | Team | Uplift | Token ratio | Cost ratio |",
+            "|---|---|---|---|---|---|",
+        ]
         for u in ups:
+            tokens = "—" if u["token_ratio"] is None else f"{u['token_ratio']:.1f}×"
             ratio = "—" if u["cost_ratio"] is None else f"{u['cost_ratio']:.1f}×"
             lines.append(
                 f"| {u['scenario']} | {_pct(u['solo'])} | {_pct(u['team'])} | "
-                f"{u['uplift']:+.0%} | {ratio} |"
+                f"{u['uplift']:+.0%} | {tokens} | {ratio} |"
             )
     trend: dict[tuple[str, str], list[str]] = defaultdict(list)
     for result in results:

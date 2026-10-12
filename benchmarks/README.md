@@ -82,6 +82,12 @@ uv run python -m benchmarks.runner annotate benchmarks/results/<file>.json GT-03
 
 프로토콜 시나리오(`QA-*`, `GT-*`)는 `runner/scenarios.py`의 코드다. 산출물 시나리오(`DL-*`)는 `suite.json`의 데이터다.
 
+### 측정 기록
+
+- 2026-10-12 첫 코어 측정(codex-cli `gpt-6.1-sol`, k=3, `results/20261012-*.json`): 10개 시나리오 모두 pass^3, 허위 완료 0%, 30회 실행 동안 응답 유실·멈춘 턴·실패 턴 0.
+  - GT-03은 이 호스트에서 `standard`(bwrap 샌드박스)로 파일을 쓸 수 없어 `environment`로 제외하고 `trusted`로 다시 쟀다.
+  - DL-01·DL-02는 solo도 3/3이라 **팀 향상폭을 가르지 못한다**(team은 토큰 7–11×). 분업이 실제로 필요한 산출물 시나리오(여러 하위 산출물의 교차 검증, 긴 맥락 분할 등)를 추가하는 것이 다음 과제다.
+
 ## 비공개(hold-out) 세트
 
 코어 세트는 공개돼 있고, 결함을 고칠 때 함께 보게 된다. 그러면 점수가 시나리오에 과적합된다.

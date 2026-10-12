@@ -112,6 +112,7 @@ def test_rollup_pass_k_false_done_and_cost():
     assert up[0]["scenario"] == "DL-01"
     assert up[0]["uplift"] == pytest.approx(2 / 3 - 1 / 2)
     assert up[0]["cost_ratio"] == pytest.approx(3.0)
+    assert up[0]["token_ratio"] == pytest.approx(1.0)
 
 
 def test_report_and_annotate_round_trip(tmp_path):
@@ -231,3 +232,17 @@ async def test_solo_deliverable_accepts_a_direct_answer_or_a_done_task(tasks, tu
 
     assert claimed is expected
     assert ("notes v2.4" in text) is expected
+
+
+def test_report_snapshot_takes_each_scenario_from_its_newest_result(tmp_path):
+    full = ledger.new_result({"commit": "aaaaaaa1", "started_at": "2026-10-12T01:00:00", "k": 1})
+    full["runs"] = [_run("DL-01", "solo", 1, "fail", True), _run("QA-03", "team", 1, "pass")]
+    rerun = ledger.new_result({"commit": "bbbbbbb2", "started_at": "2026-10-12T02:00:00", "k": 1})
+    rerun["runs"] = [_run("DL-01", "solo", 1, "pass", True)]
+    (tmp_path / "a.json").write_text(json.dumps(full))
+    (tmp_path / "b.json").write_text(json.dumps(rerun))
+
+    out = ledger.report(ledger.load(tmp_path))
+
+    assert "| DL-01 | solo | pass | 1/1 |" in out and "`bbbbbbb`" in out
+    assert "| QA-03 | team | pass | 1/1 |" in out and "`aaaaaaa`" in out
