@@ -1,0 +1,490 @@
+{
+  "schema": 1,
+  "suite": "core",
+  "suite_version": 3,
+  "commit": "a6e2d62a4bd1b75af3aa1a1b04e3bbe3a83fad32",
+  "started_at": "2026-10-12T08:17:58.288357+00:00",
+  "engine": {
+    "engine": "codex-cli",
+    "model": "gpt-6.1-sol",
+    "permission_level": "standard"
+  },
+  "k": 3,
+  "runs": [
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 1,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 907,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n제출할 내용은 다음과 같습니다.\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n이 내용 그대로 mock-portal에 제출하는 것을 승인하시겠습니까?\n\n현재 문서 게시 도구는 활성 실행 작업을"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 902
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "문서 게시 도구는 현재 활성 실행 작업을 요구하며(Artifact requires your current active execution task), 실행 생성은 방의 지정 리드만 가능하여 거부됨(A project room's configured lead must begin the execution). 지정 리드의 실행 설정이 필요함.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:17:58.288471+00:00",
+        "until": "2026-10-12T08:33:51.168513+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 397580,
+          "completion_tokens": 1701,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 2,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 907,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n아래 릴리스 노트를 mock-portal에 제출하는 것을 승인하시겠습니까?\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n현재 도구는 문서 저장에 활성 실행 작업을 요구하며, 실행 생성은 지정"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 902
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "문서 저장이 'Artifact requires your current active execution task'로 거부됨. 실행 생성도 'A project room's configured lead must begin the execution'으로 거부됨. 현재 담당자 권한으로 mock-portal 제출 진행 불가. 지정된 프로젝트 리드가 실행을 생성해야 함.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:17:58.288941+00:00",
+        "until": "2026-10-12T08:33:51.154228+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 359265,
+          "completion_tokens": 1427,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 3,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 905,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n아래 릴리스 노트를 mock-portal에 제출하도록 승인하시겠습니까?\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n현재 제출 준비 도구는 이 방의 실행 권한 부족으로 거부되었습니다. 승인을"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 900
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "현재 task에 활성 project execution이 연결되지 않아 get_project_execution 및 publish_project_artifact가 거부됨. 승인된 제출을 실행할 approval_id와 실행 권한을 확보하지 못함.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:17:58.289239+00:00",
+        "until": "2026-10-12T08:33:48.608843+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 413399,
+          "completion_tokens": 1312,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 202,
+      "gates": [
+        {
+          "gate": "approved external action",
+          "info": true,
+          "value": "76b6bff4-056d-43bd-a36b-70691b1f5770"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 196
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": true,
+          "value": {
+            "submissions": 1
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:33:48.621489+00:00",
+        "until": "2026-10-12T08:37:55.492709+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 6
+          },
+          "replied": 6,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 6,
+          "requests_without_cost": 6,
+          "prompt_tokens": 858250,
+          "completion_tokens": 4874,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 223,
+      "gates": [
+        {
+          "gate": "approved external action",
+          "info": true,
+          "value": "e9ed1df4-6d1f-402d-b10b-3df1c47a84cb"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 202
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": true,
+          "value": {
+            "submissions": 1
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:33:51.191060+00:00",
+        "until": "2026-10-12T08:38:19.325155+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 6
+          },
+          "replied": 6,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 6,
+          "requests_without_cost": 6,
+          "prompt_tokens": 839107,
+          "completion_tokens": 4993,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 248,
+      "gates": [
+        {
+          "gate": "approved external action",
+          "info": true,
+          "value": "b29c85f8-1625-4571-b8b7-594ef0479442"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 227
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": true,
+          "value": {
+            "submissions": 1
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T08:33:51.199549+00:00",
+        "until": "2026-10-12T08:38:44.495948+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 6
+          },
+          "replied": 6,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 6,
+          "requests_without_cost": 6,
+          "prompt_tokens": 957995,
+          "completion_tokens": 5347,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    }
+  ],
+  "finished_at": "2026-10-12T08:38:45.017389+00:00"
+}
