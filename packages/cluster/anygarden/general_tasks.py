@@ -334,7 +334,7 @@ async def answer_from_thread(
                 db, task_id=task.id, room_id=task.room_id, participant_id=participant.id,
             )
             resume = await inject_task_assignment_message(
-                db, room=room, task=task, sender_participant_id=None, event="reassigned",
+                db, room=room, task=task, sender_participant_id=None, event="resumed",
             )
             request.resume_message_id = resume.id
             await db.flush()

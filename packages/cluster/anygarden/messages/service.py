@@ -170,7 +170,7 @@ async def inject_task_assignment_message(
     room: Room,
     task: Task,
     sender_participant_id: str | None,
-    event: Literal["assigned", "reassigned"] = "assigned",
+    event: Literal["assigned", "reassigned", "resumed"] = "assigned",
     manager: ConnectionManager | None = None,
     request_id: str | None = None,
     redispatch_count: int = 0,
@@ -279,21 +279,39 @@ async def inject_task_assignment_message(
     # renders only ``TaskAssignmentCard``, so this trailing prose does
     # not leak into the chat UI; ``stripTaskMentionPrefix`` likewise
     # keeps the card title to the first line. See plan §3.1 / §6 R3.
-    content = (
-        f"<@user:{assignee_pid}> [TASK] {task.title}\n"
-        "\n"
-        "**REQUIRED ACTIONS** - 이 task는 당신에게 배정되었습니다. "
-        "다음 두 단계를 반드시 수행하세요:\n"
-        "\n"
-        "1. **시작 직후**: "
-        f'`mark_task_status(task_id="{task.id}", status="in_progress")` '
-        "를 호출하여 작업 착수를 기록.\n"
-        '2. **응답 완료 시**: 같은 도구로 `status="done"` 을 호출. '
-        '차단되면 `status="blocked"` + 이유 설명.\n'
-        "\n"
-        + ("이 실행의 기한과 서버 상태를 따르세요. 질문이나 승인 대기 중에는 완료로 표시하지 마세요."
-           if task.execution_id else "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다.")
-    )
+    if event == "resumed":
+        # #808 — a general task resumed by the user's thread answer. The
+        # assignee did not change and the server already put the task back
+        # in progress; the assignment steps and their auto-failure warning
+        # pushed resumed turns into reporting failed work as done.
+        content = (
+            f"<@user:{assignee_pid}> [TASK] {task.title}\n"
+            "\n"
+            "**RESUMED** - 사용자가 질문에 답했습니다. 아래 입력의 답변을 반영해 같은 작업을 "
+            "이어가세요. 이 task는 이미 in_progress이므로 착수를 다시 기록하지 않아도 됩니다.\n"
+            "\n"
+            "결과를 실제로 만들고 확인했을 때만 "
+            f'`mark_task_status(task_id="{task.id}", status="done")`에 결과를 담아 보고하세요. '
+            '도구 오류 등으로 끝내지 못했다면 done이 아니라 `status="blocked"` 또는 '
+            '`status="failed"`와 이유를 보고하세요. 정보가 더 필요하면 request_task_input으로 '
+            "다시 질문하세요."
+        )
+    else:
+        content = (
+            f"<@user:{assignee_pid}> [TASK] {task.title}\n"
+            "\n"
+            "**REQUIRED ACTIONS** - 이 task는 당신에게 배정되었습니다. "
+            "다음 두 단계를 반드시 수행하세요:\n"
+            "\n"
+            "1. **시작 직후**: "
+            f'`mark_task_status(task_id="{task.id}", status="in_progress")` '
+            "를 호출하여 작업 착수를 기록.\n"
+            '2. **응답 완료 시**: 같은 도구로 `status="done"` 을 호출. '
+            '차단되면 `status="blocked"` + 이유 설명.\n'
+            "\n"
+            + ("이 실행의 기한과 서버 상태를 따르세요. 질문이나 승인 대기 중에는 완료로 표시하지 마세요."
+               if task.execution_id else "이 호출을 누락하면 작업이 5분 후 자동 실패 처리됩니다.")
+        )
     if task.spec:
         content += f"\n\n**TASK INPUT AND CONSTRAINTS**\n{task.spec}"
     if task.execution_id:
