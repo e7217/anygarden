@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 
 const names = new Set(['create_skill', 'update_skill', 'list_my_skills', 'delete_my_skill', 'claim_task', 'claim_current_request', 'request_task_input', 'mark_task_status', 'add_task_blocker', 'clear_task_blocker']);
-const projectNames = new Set(['begin_project_execution', 'delegate_project_task', 'seal_project_plan', 'get_project_execution', 'complete_project_execution', 'request_project_input', 'publish_project_artifact', 'read_project_artifact', 'request_project_approval', 'execute_approved_project_action']);
+const projectNames = new Set(['begin_project_execution', 'delegate_project_task', 'resume_project_task', 'seal_project_plan', 'get_project_execution', 'complete_project_execution', 'request_project_input', 'publish_project_artifact', 'read_project_artifact', 'request_project_approval', 'execute_approved_project_action']);
 const limit = 262144;
 
 export default function registerAnygardenTools(pi) {

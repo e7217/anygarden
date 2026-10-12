@@ -1,6 +1,6 @@
 # feat(bench): requirement coverage gate, live benchmark runner and gap closure
 
-- Commits: `4afddb5` (harness, coverage, first fixes), merges `7710569` (#769) and `e406b69` (#772), `b49c7b9` (remaining gaps), `0d7d6b8` (solo deliverable check), `93fb7ae` (first core-suite results)
+- Commits: `4afddb5` (harness, coverage, first fixes), merges `7710569` (#769) and `e406b69` (#772), `b49c7b9` (remaining gaps), `0d7d6b8` (solo deliverable check), `93fb7ae` (first core-suite results), `c92a879` (DL-03), `0a49166` (ask_peer wake keeps the task), `c841372` (lead `resume_project_task`)
 - Author: Changyong Um
 - Date: 2026-10-12
 - PR: (not opened yet)
@@ -61,4 +61,8 @@
 - 코어 세트 정식 측정(codex-cli `gpt-6.1-sol`, both, k=3): 10개 시나리오 모두 pass^3, 허위 완료 0%, 30회 실행 동안 응답 유실·멈춘 턴·실패 턴 0
   - DL-01 solo 첫 측정은 러너 결함(직접 답변을 완료로 보지 않음)으로 `invalid` 판정, 수정 후 3/3
   - GT-03은 호스트 bwrap 제약으로 `environment` 판정, `trusted`로 3/3
-- 남은 과제: DL-01·02는 solo도 통과해 팀 향상폭을 가르지 못한다(team 토큰 7–11×). 분업이 필요한 산출물 시나리오를 추가해야 한다
+- DL-03(세 산출물, 사실 14개) 추가: solo 3/3, team은 처음 1/3
+  - `ask_peer`를 부른 작업 턴의 재개 턴이 작업 연결을 잃어 실행이 멈추던 결함을 고쳤다(`peer_fanin._open_caller_task`)
+  - EXE-21로 깨어난 총괄이 막힌 작업을 다시 움직일 수 없던 공백을 `resume_project_task`로 메웠다(태스크당 2회)
+  - 수정 후 team 3/3, 그중 한 회차는 block → 총괄 재개 → 완료 경로를 실제로 탔다
+- 결론: 산출물 과제에서 팀은 솔로보다 더 많이 끝내지 못하고 토큰을 7–40× 쓴다. 팀이 이기는 과제 발굴과 팀 오버헤드 감소가 다음 측정 대상이다
