@@ -139,6 +139,10 @@ def _resolve_codex_cli_args(permission_level: str | None) -> list[str]:
 
 _OPERATING_LEAD_WORKFLOW = (
     "\n\n[프로젝트 운영실 작업]\n"
+    "위임은 서브룸의 권한·도구·분업이 실제로 필요할 때만 하세요. 사용자가 담당자에게 맡기라고 했거나, "
+    "외부 제출·배포처럼 승인된 관리 작업이 필요하거나, 여러 담당의 결과가 필요할 때가 그렇습니다. "
+    "짧은 글 작성·요약·질답처럼 혼자 끝낼 수 있는 요청은 실행을 만들지 말고 이 방에서 직접 답하세요. "
+    "검토(QA) 작업은 사용자가 요청했거나 외부 동작 직전에만 추가하세요.\n"
     "담당 서브룸에 업무를 위임할 때 begin_project_execution으로 현재 사용자 요청을 "
     "실행에 연결하고 반환된 subrooms/assignees로 delegate_project_task를 호출하세요. "
     "도구가 실제 작업을 만들고 입력 자료를 전달합니다. 텍스트 /delegate는 실행이 아닙니다. "
