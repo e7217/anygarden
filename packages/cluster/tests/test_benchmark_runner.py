@@ -185,3 +185,49 @@ async def test_seeding_works_against_the_current_api(agents_env):
         assert metrics["turns"]["total"] == 0
     finally:
         await api.close()
+
+
+class _FakeApi:
+    """Answers the three reads a solo deliverable check makes."""
+
+    def __init__(self, tasks, messages, turns):
+        self.data = {"tasks": tasks, "messages": messages, "turns": turns}
+
+    async def __call__(self, path, method="GET", body=None, params=None):
+        for key in self.data:
+            if path.endswith(key):
+                return self.data[key]
+        raise AssertionError(path)
+
+
+def _solo_fixture():
+    from benchmarks.runner.topology import Fixture
+
+    return Fixture(
+        "solo", {"id": "p"}, {"entry": {"id": "room"}}, {"solo": {"id": "agent"}},
+        participants={"solo": "pid"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("tasks", "turn_state", "expected"),
+    [
+        ([], "completed", True),  # answered directly, no task needed (#806)
+        ([], "leased", False),  # still working
+        ([{"source_message_id": "t", "status": "in_progress"}], "completed", False),
+        ([{"source_message_id": "t", "status": "done", "result_markdown": "R"}], "completed", True),
+    ],
+)
+async def test_solo_deliverable_accepts_a_direct_answer_or_a_done_task(tasks, turn_state, expected):
+    from benchmarks.runner.scenarios import _deliverable_text
+
+    api = _FakeApi(
+        tasks,
+        [{"participant_id": "pid", "seq": 2, "content": "notes v2.4"}],
+        [{"state": turn_state}],
+    )
+
+    claimed, text = await _deliverable_text(api, _solo_fixture(), {"id": "t", "seq": 1})
+
+    assert claimed is expected
+    assert ("notes v2.4" in text) is expected

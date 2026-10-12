@@ -27,6 +27,7 @@ from .client import Api, Gates, items, poll, send_user
 from .receiver import MockReceiver
 from .topology import Fixture
 
+TERMINAL_TURN_STATES = frozenset({"completed", "cancelled", "failed"})
 WAIT = 15 * 60
 SHORT = 10 * 60
 SETTLE = 45
@@ -389,10 +390,19 @@ async def gt03(ctx: Ctx, fx: Fixture, g: Gates, n: int) -> dict:
 async def _deliverable_text(api: Api, fx: Fixture, trigger: dict) -> tuple[bool, str]:
     """(claimed done, text of the final result) for either topology."""
     if fx.mode == "solo":
+        # A request that needs no tools is answered directly and never
+        # becomes a task (#806); that is a finished answer once the agent's
+        # turn is over. A promoted request is finished when its task is done.
         task = await _trigger_task(api, fx, trigger["id"])
-        if not task or task["status"] != "done":
-            return False, ""
         replies = agent_replies(await messages(api, fx.entry), fx.participants["solo"], trigger.get("seq") or 0)
+        if task is None:
+            turns = await agent_turns(api, fx.agents["solo"]["id"])
+            idle = all(t["state"] in TERMINAL_TURN_STATES for t in turns)
+            if not replies or not turns or not idle:
+                return False, ""
+            return True, "\n".join(m["content"] for m in replies)
+        if task["status"] != "done":
+            return False, ""
         return True, "\n".join([task.get("result_markdown") or "", *(m["content"] for m in replies)])
     runs = await executions(api, fx.entry)
     done = [e for e in runs if e.get("status") == "completed"]
