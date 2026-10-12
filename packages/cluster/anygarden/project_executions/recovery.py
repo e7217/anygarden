@@ -228,6 +228,47 @@ async def _retry_denial(db, *, task, execution, turn, attempt) -> str | None:
     return None if admission.allowed else admission.reason_code or "RECOVERY_PENDING"
 
 
+# A worker turn that failed in its engine call, with a terminal receipt proving
+# the native process finished, can be restarted by the lead (EXE-21).
+# PROCESS_OUTCOME_UNKNOWN is deliberately absent: an engine may still run and a
+# replay could duplicate side effects, so that recovery stays user-only.
+LEAD_RESUMABLE_ENGINE_FAILURES = frozenset({"MODEL_EXECUTION_FAILED", "MODEL_TRANSIENT_FAILURE"})
+
+
+async def engine_failure_resume_reason(db, *, task: Task, execution) -> str | None:
+    """The engine failure a lead may restart this task from, else ``None``.
+
+    Eligible exactly when the task's recovery is ``action_required`` with the
+    same-task retry gate open (what a user sees as ``retry_task``) and the
+    failure is a confirmed-finished engine failure. Exhausted automatic
+    retries end ``failed``/``RETRY_EXHAUSTED`` and are not eligible.
+    """
+    if (task.execution_id != execution.id or task.status not in {"blocked", "failed"}
+            or task.input_revision != execution.input_revision):
+        return None
+    turn = await db.scalar(select(AgentTurn).where(
+        AgentTurn.task_id == task.id, AgentTurn.execution_id == execution.id,
+        AgentTurn.execution_input_revision == task.input_revision,
+    ).order_by(AgentTurn.created_at.desc(), AgentTurn.request_id.desc()).limit(1))
+    if turn is None:
+        return None
+    attempt = await db.scalar(select(AgentTurnAttempt).where(
+        AgentTurnAttempt.turn_id == turn.request_id,
+        AgentTurnAttempt.attempt_number == turn.active_attempt,
+    ))
+    if task.source_message_id != turn.trigger_message_id:
+        return None
+    if await _retry_denial(db, task=task, execution=execution, turn=turn, attempt=attempt):
+        return None
+    native = await _native_terminal(db, turn, attempt)
+    reason = public_reason_code(native.get("reason_code")) if native else None
+    payload = await task_recovery_payload(db, task, execution=execution)
+    if (reason not in LEAD_RESUMABLE_ENGINE_FAILURES or payload is None
+            or payload["state"] != "action_required" or payload["reason_code"] != reason):
+        return None
+    return reason
+
+
 async def task_recovery_payload(db, task: Task, *, execution=None, access=None) -> dict | None:
     """Read actual scoped attempts. Caller access controls the retry capability."""
     if not task.execution_id:

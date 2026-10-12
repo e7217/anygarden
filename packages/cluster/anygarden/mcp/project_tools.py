@@ -95,12 +95,15 @@ PROJECT_TOOL_SCHEMAS = [
     ),
     _tool(
         "resume_project_task",
-        "Continue a required delegated task that its worker blocked (TASK_BLOCKED). "
+        "Continue a required delegated task that its worker blocked (TASK_BLOCKED), or "
+        "restart one whose worker's engine call failed (MODEL_EXECUTION_FAILED) when its "
+        "recovery notice says it can be restarted. "
         "Appends your guidance to the same task's assignment, clears the block and wakes "
         "the same assignee once with a new turn bound to that task; the sealed plan is kept. "
         "Re-delegating with the same delegation_key only replays the blocked task, so use "
         "this instead. Give concrete guidance that resolves why the worker stopped. "
-        "Not for tasks waiting on prerequisites, user answers or approvals, and limited "
+        "Not for tasks waiting on prerequisites, user answers or approvals, or with an "
+        "unknown engine outcome (PROCESS_OUTCOME_UNKNOWN), and limited "
         "to a few resumes per task: past the limit ask the user or stop. Repeating the "
         "same call is idempotent. End this turn after resuming; the result wakes you.",
         {"execution_id": _string, "task_id": _string,

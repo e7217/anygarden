@@ -123,7 +123,7 @@ CI의 `Requirement coverage` 잡이 그 선언을 강제한다(`scripts/req_repo
 | EXE-18 | 질문 턴이 끝나기 전에 답이 와도 재개 턴이 작업을 이어받는다. 옛 턴의 상태 변경은 `TASK_TURN_SUPERSEDED`로 거부된다 | pytest |
 | EXE-19 | 담당자가 사유를 적어 막은 태스크는 공개 오류 `TASK_BLOCKED`로 보이고 원문은 노출되지 않는다 | pytest |
 | EXE-20 | 외부 동작 승인을 거절하면 오류는 `APPROVAL_REJECTED`, 총괄이 사유와 함께 깨어난다(기본 동작, 제품 결정 대기) | pytest |
-| EXE-21 | 담당자가 사유를 적어 태스크를 막으면 총괄이 공개 사유(`TASK_BLOCKED`)와 함께 한 번 깨어나, 지침을 붙여 재개(`resume_project_task`, 태스크당 2회)·질문·중단을 결정한다 | pytest |
+| EXE-21 | 담당자가 사유를 적어 태스크를 막거나(`TASK_BLOCKED`) 담당자의 엔진 호출이 실패해 멈추면(`MODEL_EXECUTION_FAILED`, 프로세스 종료가 확인된 경우) 총괄이 공개 사유와 함께 한 번 깨어나, 지침을 붙여 재개(`resume_project_task`, 두 경우 합쳐 태스크당 2회)·질문·중단을 결정한다. 결과를 알 수 없는 실패(`PROCESS_OUTCOME_UNKNOWN`)와 자동 재시도 소진은 사용자 몫으로 남는다 | pytest |
 
 ## 인박스·알림 (INB)
 

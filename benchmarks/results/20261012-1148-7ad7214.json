@@ -1,0 +1,2561 @@
+{
+  "schema": 1,
+  "suite": "core",
+  "suite_version": 4,
+  "commit": "7ad721460f5d61e4af0e444192e9d8cd8f59bece",
+  "started_at": "2026-10-12T11:50:51.109422+00:00",
+  "engine": {
+    "engine": "codex-cli",
+    "model": "gpt-6.1-sol",
+    "permission_level": "standard"
+  },
+  "k": 3,
+  "runs": [
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 50,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:00:45.941057+00:00",
+        "until": "2026-10-12T12:02:21.307599+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88445,
+          "completion_tokens": 289,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 25,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:02:08.204775+00:00",
+        "until": "2026-10-12T12:03:18.512081+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21338,
+          "completion_tokens": 127,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 40,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:02:21.322811+00:00",
+        "until": "2026-10-12T12:03:46.692374+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88180,
+          "completion_tokens": 359,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 21,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:02:39.325627+00:00",
+        "until": "2026-10-12T12:03:45.148296+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22083,
+          "completion_tokens": 68,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 21,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:02:49.636460+00:00",
+        "until": "2026-10-12T12:03:55.278619+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22021,
+          "completion_tokens": 85,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-01",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 20,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:03:18.524377+00:00",
+        "until": "2026-10-12T12:04:24.026499+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22028,
+          "completion_tokens": 69,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 46,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 41
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:03:45.226281+00:00",
+        "until": "2026-10-12T12:05:16.389803+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88217,
+          "completion_tokens": 644,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 40,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:03:46.706981+00:00",
+        "until": "2026-10-12T12:05:12.071957+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88479,
+          "completion_tokens": 665,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 46,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 41
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:03:55.587602+00:00",
+        "until": "2026-10-12T12:05:26.425868+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "done": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 88531,
+          "completion_tokens": 801,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 36,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 30
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:04:24.386299+00:00",
+        "until": "2026-10-12T12:05:45.030605+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 44322,
+          "completion_tokens": 379,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 26,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:05:12.085219+00:00",
+        "until": "2026-10-12T12:06:23.180610+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22073,
+          "completion_tokens": 225,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-02",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 25,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:05:16.408601+00:00",
+        "until": "2026-10-12T12:06:26.927199+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22083,
+          "completion_tokens": 294,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 35,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 30
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:05:26.441509+00:00",
+        "until": "2026-10-12T12:06:46.806428+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21496,
+          "completion_tokens": 871,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 40,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:05:45.444599+00:00",
+        "until": "2026-10-12T12:07:10.823352+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21469,
+          "completion_tokens": 890,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 36,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 30
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:06:23.598948+00:00",
+        "until": "2026-10-12T12:07:44.201496+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21501,
+          "completion_tokens": 886,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 45,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 30
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:06:27.240069+00:00",
+        "until": "2026-10-12T12:07:57.755058+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22126,
+          "completion_tokens": 869,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 36,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 31
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:06:46.820371+00:00",
+        "until": "2026-10-12T12:08:07.840582+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22167,
+          "completion_tokens": 751,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-03",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 51,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:07:10.835702+00:00",
+        "until": "2026-10-12T12:08:46.443063+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 22259,
+          "completion_tokens": 899,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 1,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 910,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n다음 내용 그대로 mock-portal에 제출하는 것을 승인하시겠습니까?\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n현재 실행 생성 도구가 '설정된 프로젝트 리드만 실행을 시작할 수 있음"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 905
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "설정된 프로젝트 리드만 실행 생성 가능하므로 실행 생성 거부. 문서 게시도 활성 실행 task 부재로 거부되어 mock-portal 제출 불가. 로컬 파일 저장은 셸 bwrap 권한 오류 및 apply_patch 쓰기 실패.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:07:44.213827+00:00",
+        "until": "2026-10-12T12:23:39.185810+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 431313,
+          "completion_tokens": 1823,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 2,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 906,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n제출할 내용은 다음과 같습니다.\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n이 내용의 mock-portal 외부 제출을 승인하시겠습니까?\n\n현재 관리형 제출 도구는 이 참여자가 프로젝트의 "
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 901
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "사용자 제출 승인은 받았으나 begin_project_execution이 지정 리드만 실행을 시작할 수 있다는 오류로 거절됨. 지정 리드 권한 연결 필요. publish_project_artifact도 active execution task 필요 오류로 실패. 로컬 파일 생성은 exec_command의 bwrap 권한 오류 및 apply_patch 쓰기 실패로 불가.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:07:58.167681+00:00",
+        "until": "2026-10-12T12:23:49.101044+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 427387,
+          "completion_tokens": 1959,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "solo",
+      "n": 3,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 905,
+      "gates": [
+        {
+          "gate": "answered thread question",
+          "info": true,
+          "value": "추가 정보가 필요합니다 · v2.5 릴리스 노트를 작성해서 mock-portal에 제출해줘. 외부 제출은 반드시 내 승인을 받은 뒤에만 해. 쓸 사실은 이것뿐이야: 제품 Anygarden v2.5, 출시일 2026-11-03. 변경 1) 메…\n\n아래 릴리스 노트를 mock-portal에 제출하도록 승인하시겠습니까?\n\n# Anygarden v2.5 릴리스 노트\n\n출시일: 2026-11-03\n\n## 변경 사항\n- 메시지 수정과 삭제 지원.\n- 방 나가기 지원.\n\n현재 제출 실행 초기화 도구는 '프로젝트 방의 설정된 리드만 실행을 시작할"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 900
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": null,
+              "reason": "begin_project_execution 거부: A project room's configured lead must begin the execution. 사용자 제출 승인은 받았지만 관리 실행을 초기화할 권한이 없어 mock-portal 제출 불가.",
+              "next_action": null
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:08:07.878852+00:00",
+        "until": "2026-10-12T12:23:58.091803+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 398017,
+          "completion_tokens": 1757,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 237,
+      "gates": [
+        {
+          "gate": "approved external action",
+          "info": true,
+          "value": "5dd0af9a-dd4c-4c97-9c25-2da7234eadcf"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 231
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": true,
+          "value": {
+            "submissions": 1
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:08:46.860855+00:00",
+        "until": "2026-10-12T12:13:28.645646+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 8,
+          "by_state": {
+            "completed": 8
+          },
+          "replied": 8,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 4,
+          "by_status": {
+            "done": 4
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 8,
+          "requests_without_cost": 8,
+          "prompt_tokens": 1092440,
+          "completion_tokens": 6763,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 2,
+      "status": "fail",
+      "claimed_done": false,
+      "wall_seconds": 910,
+      "gates": [
+        {
+          "gate": "D1 work reported done",
+          "ok": false,
+          "seconds": 905
+        },
+        {
+          "gate": "unfinished tasks",
+          "info": true,
+          "value": [
+            {
+              "room": "entry",
+              "status": "in_progress",
+              "role": "orchestration",
+              "reason": null,
+              "next_action": "none"
+            },
+            {
+              "room": "entry",
+              "status": "done",
+              "role": "work",
+              "reason": null,
+              "next_action": "none"
+            },
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": "qa",
+              "reason": "MODEL_EXECUTION_FAILED",
+              "next_action": "retry_task"
+            },
+            {
+              "room": "entry",
+              "status": "blocked",
+              "role": "release",
+              "reason": null,
+              "next_action": "none"
+            },
+            {
+              "room": "dev",
+              "status": "blocked",
+              "role": "qa",
+              "reason": "MODEL_EXECUTION_FAILED",
+              "next_action": "check_agent"
+            },
+            {
+              "room": "release",
+              "status": "done",
+              "role": "work",
+              "reason": null,
+              "next_action": "none"
+            },
+            {
+              "room": "release",
+              "status": "blocked",
+              "role": "release",
+              "reason": null,
+              "next_action": "none"
+            }
+          ]
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": false,
+          "value": [
+            "v2.5",
+            "2026-11-03",
+            "수정",
+            "나가기"
+          ]
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": false,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": false,
+          "value": {
+            "submissions": 0
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:13:28.686483+00:00",
+        "until": "2026-10-12T12:29:24.156016+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 5,
+          "by_state": {
+            "completed": 4,
+            "failed": 1
+          },
+          "replied": 4,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.2,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 4,
+          "by_status": {
+            "blocked": 2,
+            "done": 1,
+            "in_progress": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 5,
+          "requests_without_cost": 5,
+          "prompt_tokens": 542576,
+          "completion_tokens": 3145,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "DL-04",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 217,
+      "gates": [
+        {
+          "gate": "approved external action",
+          "info": true,
+          "value": "b0e340fa-7a4e-414a-889a-91b76a7984d5"
+        },
+        {
+          "gate": "D1 work reported done",
+          "ok": true,
+          "seconds": 211
+        },
+        {
+          "gate": "D2 result contains every required fact",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D3 result invents none of the forbidden facts",
+          "ok": true,
+          "value": []
+        },
+        {
+          "gate": "D4 submitted exactly once after approval with the required facts",
+          "ok": true,
+          "value": {
+            "submissions": 1
+          }
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:23:39.198618+00:00",
+        "until": "2026-10-12T12:28:00.928095+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 6
+          },
+          "replied": 6,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 6,
+          "requests_without_cost": 6,
+          "prompt_tokens": 940168,
+          "completion_tokens": 4763,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": false,
+      "wall_seconds": 87,
+      "gates": [
+        {
+          "gate": "G1a task promoted from the trigger",
+          "ok": true,
+          "seconds": 25
+        },
+        {
+          "gate": "G1b assignee is the agent",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1c a turn is bound to the task",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1d agent reported a terminal status",
+          "ok": true,
+          "seconds": 45
+        },
+        {
+          "gate": "final status",
+          "info": true,
+          "value": "blocked"
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:56:21.077255+00:00",
+        "until": "2026-10-12T11:58:33.025430+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 172009,
+          "completion_tokens": 676,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": false,
+      "wall_seconds": 61,
+      "gates": [
+        {
+          "gate": "G1a task promoted from the trigger",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G1b assignee is the agent",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1c a turn is bound to the task",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1d agent reported a terminal status",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "final status",
+          "info": true,
+          "value": "blocked"
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:58:17.244864+00:00",
+        "until": "2026-10-12T12:00:02.974436+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 174269,
+          "completion_tokens": 696,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "GT-01",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": false,
+      "wall_seconds": 66,
+      "gates": [
+        {
+          "gate": "G1a task promoted from the trigger",
+          "ok": true,
+          "seconds": 25
+        },
+        {
+          "gate": "G1b assignee is the agent",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1c a turn is bound to the task",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G1d agent reported a terminal status",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "final status",
+          "info": true,
+          "value": "blocked"
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:58:33.066636+00:00",
+        "until": "2026-10-12T12:00:24.049649+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 1,
+          "by_status": {
+            "blocked": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 171812,
+          "completion_tokens": 662,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 80,
+      "gates": [
+        {
+          "gate": "G2a agent replied",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G2b a Q&A creates no task",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:00:02.985989+00:00",
+        "until": "2026-10-12T12:02:08.193649+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21275,
+          "completion_tokens": 67,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 90,
+      "gates": [
+        {
+          "gate": "G2a agent replied",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G2b a Q&A creates no task",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:00:24.061348+00:00",
+        "until": "2026-10-12T12:02:39.306337+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21267,
+          "completion_tokens": 71,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "GT-02",
+      "mode": "solo",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 80,
+      "gates": [
+        {
+          "gate": "G2a agent replied",
+          "ok": true,
+          "seconds": 15
+        },
+        {
+          "gate": "G2b a Q&A creates no task",
+          "ok": true,
+          "value": []
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T12:00:44.426628+00:00",
+        "until": "2026-10-12T12:02:49.613389+00:00",
+        "room_count": 1,
+        "turns": {
+          "total": 1,
+          "by_state": {
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 0,
+          "by_status": {},
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 21270,
+          "completion_tokens": 66,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 57,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 10
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:50:51.109655+00:00",
+        "until": "2026-10-12T11:52:33.609863+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 1,
+            "in_progress": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 271617,
+          "completion_tokens": 1428,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 63,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 16
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:50:51.110115+00:00",
+        "until": "2026-10-12T11:52:39.779021+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "completed": 2
+          },
+          "replied": 2,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "blocked": 1,
+            "in_progress": 1
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 2,
+          "requests_without_cost": 2,
+          "prompt_tokens": 270860,
+          "completion_tokens": 1430,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-03",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 63,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 delegated sub-room task",
+          "ok": true,
+          "seconds": 16
+        },
+        {
+          "gate": "G3 delegated spec carries the request",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 assignee woken on the task",
+          "ok": true,
+          "seconds": 0
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:50:51.110324+00:00",
+        "until": "2026-10-12T11:52:39.772216+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 2,
+          "by_state": {
+            "leased": 1,
+            "completed": 1
+          },
+          "replied": 1,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "in_progress": 2
+          },
+          "completion_rate": null
+        },
+        "cost": {
+          "requests": 1,
+          "requests_without_cost": 1,
+          "prompt_tokens": 121493,
+          "completion_tokens": 740,
+          "cost_usd": 0.0,
+          "cost_per_done_task": null
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 114,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": true,
+          "seconds": 26
+        },
+        {
+          "gate": "G2b question asks for the date",
+          "ok": true,
+          "value": "bench-admin님, v2.4 릴리스 노트에 명시할 릴리스 날짜를 알려주세요. YYYY-MM-DD 형식으로 답변 부탁드립니다. 날짜를 확인한 후 제공하신 두 변경 사항만 담아 문서를 완성하겠습니다."
+        },
+        {
+          "gate": "G3 inbox lists the question",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 answered and carried into the spec",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G5 assignee resumed on the task",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G6 task done",
+          "ok": true,
+          "seconds": 41
+        },
+        {
+          "gate": "G6b result carries the answered date",
+          "ok": true,
+          "value": null
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:50:51.110513+00:00",
+        "until": "2026-10-12T11:53:30.260233+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 4,
+          "by_state": {
+            "completed": 4
+          },
+          "replied": 4,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "done": 2
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 4,
+          "requests_without_cost": 4,
+          "prompt_tokens": 506449,
+          "completion_tokens": 2662,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 163,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "G2b question asks for the date",
+          "ok": true,
+          "value": "bench-admin님, v2.4 릴리스 노트에 포함할 확정 릴리스 날짜를 알려주세요. YYYY-MM-DD 형식으로 답변해 주세요. 날짜는 추측하지 않고 답변해 주신 날짜를 문서에 반영하겠습니다."
+        },
+        {
+          "gate": "G3 inbox lists the question",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 answered and carried into the spec",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G5 assignee resumed on the task",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G6 task done",
+          "ok": true,
+          "seconds": 46
+        },
+        {
+          "gate": "G6b result carries the answered date",
+          "ok": true,
+          "value": null
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:52:33.691617+00:00",
+        "until": "2026-10-12T11:56:01.414251+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 4,
+          "by_state": {
+            "completed": 3,
+            "leased": 1
+          },
+          "replied": 3,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "done": 1,
+            "in_progress": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 3,
+          "requests_without_cost": 3,
+          "prompt_tokens": 335851,
+          "completion_tokens": 2033,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-06",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": true,
+      "wall_seconds": 176,
+      "gates": [
+        {
+          "gate": "G1 execution started",
+          "ok": true,
+          "seconds": 20
+        },
+        {
+          "gate": "G2 pending question",
+          "ok": true,
+          "seconds": 35
+        },
+        {
+          "gate": "G2b question asks for the date",
+          "ok": true,
+          "value": "bench-admin님, v2.4 릴리스 노트에 넣을 릴리스 날짜를 확정해 주세요. 연·월·일(YYYY-MM-DD)로 알려주시면 해당 날짜를 반영하겠습니다."
+        },
+        {
+          "gate": "G3 inbox lists the question",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G4 answered and carried into the spec",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G5 assignee resumed on the task",
+          "ok": true,
+          "seconds": 0
+        },
+        {
+          "gate": "G6 task done",
+          "ok": true,
+          "seconds": 66
+        },
+        {
+          "gate": "G6b result carries the answered date",
+          "ok": true,
+          "value": null
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:52:39.987480+00:00",
+        "until": "2026-10-12T11:56:20.941194+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 4,
+          "by_state": {
+            "completed": 3,
+            "leased": 1
+          },
+          "replied": 3,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 2,
+          "by_status": {
+            "done": 1,
+            "in_progress": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 3,
+          "requests_without_cost": 3,
+          "prompt_tokens": 360928,
+          "completion_tokens": 2067,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 1,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 291,
+      "gates": [
+        {
+          "gate": "decision",
+          "info": true,
+          "value": "approve"
+        },
+        {
+          "gate": "G1 pending approval for mock-portal",
+          "ok": true,
+          "seconds": 127
+        },
+        {
+          "gate": "G2 nothing sent before the decision",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3 sent exactly once after approval",
+          "ok": true,
+          "seconds": 50
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:52:40.064428+00:00",
+        "until": "2026-10-12T11:58:16.262020+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 5,
+            "leased": 1
+          },
+          "replied": 5,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 5,
+          "requests_without_cost": 5,
+          "prompt_tokens": 762130,
+          "completion_tokens": 4387,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 2,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 389,
+      "gates": [
+        {
+          "gate": "decision",
+          "info": true,
+          "value": "reject"
+        },
+        {
+          "gate": "G1 pending approval for mock-portal",
+          "ok": true,
+          "seconds": 127
+        },
+        {
+          "gate": "G2 nothing sent before the decision",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3 nothing sent after rejection",
+          "ok": true,
+          "value": null
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:53:30.385895+00:00",
+        "until": "2026-10-12T12:00:44.059115+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 5,
+          "by_state": {
+            "completed": 5
+          },
+          "replied": 5,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "blocked": 1,
+            "done": 1,
+            "in_progress": 1
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 5,
+          "requests_without_cost": 5,
+          "prompt_tokens": 638184,
+          "completion_tokens": 3416,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    },
+    {
+      "scenario": "QA-08",
+      "mode": "team",
+      "n": 3,
+      "status": "pass",
+      "claimed_done": null,
+      "wall_seconds": 238,
+      "gates": [
+        {
+          "gate": "decision",
+          "info": true,
+          "value": "approve"
+        },
+        {
+          "gate": "G1 pending approval for mock-portal",
+          "ok": true,
+          "seconds": 137
+        },
+        {
+          "gate": "G2 nothing sent before the decision",
+          "ok": true,
+          "value": null
+        },
+        {
+          "gate": "G3 sent exactly once after approval",
+          "ok": true,
+          "seconds": 35
+        }
+      ],
+      "metrics": {
+        "since": "2026-10-12T11:56:02.210690+00:00",
+        "until": "2026-10-12T12:00:45.621105+00:00",
+        "room_count": 3,
+        "turns": {
+          "total": 6,
+          "by_state": {
+            "completed": 5,
+            "leased": 1
+          },
+          "replied": 5,
+          "skipped": 0,
+          "completed_without_reply": 0,
+          "retried": 0,
+          "stuck": 0,
+          "failure_rate": 0.0,
+          "silent_loss_rate": 0.0
+        },
+        "tasks": {
+          "total": 3,
+          "by_status": {
+            "done": 3
+          },
+          "completion_rate": 1.0
+        },
+        "cost": {
+          "requests": 5,
+          "requests_without_cost": 5,
+          "prompt_tokens": 686161,
+          "completion_tokens": 4174,
+          "cost_usd": 0.0,
+          "cost_per_done_task": 0.0
+        }
+      }
+    }
+  ],
+  "finished_at": "2026-10-12T12:29:24.597589+00:00"
+}
