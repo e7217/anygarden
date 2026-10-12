@@ -387,6 +387,16 @@ async def gt03(ctx: Ctx, fx: Fixture, g: Gates, n: int) -> dict:
 # ── deliverable scenarios (data-driven, solo and team) ──────────────────
 
 
+async def _direct_answer(api: Api, fx: Fixture, key: str, trigger: dict) -> tuple[bool, str]:
+    """An answer given in the entry room once the agent's turns are over."""
+    replies = agent_replies(await messages(api, fx.entry), fx.participants[key], trigger.get("seq") or 0)
+    turns = await agent_turns(api, fx.agents[key]["id"])
+    idle = all(t["state"] in TERMINAL_TURN_STATES for t in turns)
+    if not replies or not turns or not idle:
+        return False, ""
+    return True, "\n".join(m["content"] for m in replies)
+
+
 async def _deliverable_text(api: Api, fx: Fixture, trigger: dict) -> tuple[bool, str]:
     """(claimed done, text of the final result) for either topology."""
     if fx.mode == "solo":
@@ -396,15 +406,15 @@ async def _deliverable_text(api: Api, fx: Fixture, trigger: dict) -> tuple[bool,
         task = await _trigger_task(api, fx, trigger["id"])
         replies = agent_replies(await messages(api, fx.entry), fx.participants["solo"], trigger.get("seq") or 0)
         if task is None:
-            turns = await agent_turns(api, fx.agents["solo"]["id"])
-            idle = all(t["state"] in TERMINAL_TURN_STATES for t in turns)
-            if not replies or not turns or not idle:
-                return False, ""
-            return True, "\n".join(m["content"] for m in replies)
+            return await _direct_answer(api, fx, "solo", trigger)
         if task["status"] != "done":
             return False, ""
         return True, "\n".join([task.get("result_markdown") or "", *(m["content"] for m in replies)])
     runs = await executions(api, fx.entry)
+    if not runs:
+        # The lead may answer a request it can finish alone without opening
+        # an execution (#812); that answer counts once its turns are over.
+        return await _direct_answer(api, fx, "lead", trigger)
     done = [e for e in runs if e.get("status") == "completed"]
     if not done:
         return False, ""

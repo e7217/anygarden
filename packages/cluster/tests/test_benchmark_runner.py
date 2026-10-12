@@ -289,3 +289,20 @@ def test_submission_deliverable_needs_the_receiver_and_a_fourth_gate():
     _, scenarios = load_scenarios(SUITE)
     dl04 = next(s for s in scenarios if s.id == "DL-04")
     assert dl04.needs_receiver and dl04.gates == 4
+
+
+async def test_team_deliverable_accepts_the_leads_direct_answer_without_an_execution():
+    from benchmarks.runner.scenarios import _deliverable_text
+    from benchmarks.runner.topology import Fixture
+
+    team = Fixture(
+        "team", {"id": "p"}, {"entry": {"id": "ops"}}, {"lead": {"id": "lead"}},
+        participants={"lead": "lead-pid"},
+    )
+    api = _FakeApi([], [{"participant_id": "lead-pid", "seq": 2, "content": "notes v2.4"}],
+                   [{"state": "completed"}])
+    api.data["executions"] = []
+
+    assert await _deliverable_text(api, team, {"id": "t", "seq": 1}) == (True, "notes v2.4")
+    api.data["executions"] = [{"id": "e", "status": "executing"}]
+    assert await _deliverable_text(api, team, {"id": "t", "seq": 1}) == (False, "")

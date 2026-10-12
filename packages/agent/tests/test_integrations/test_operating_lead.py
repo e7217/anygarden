@@ -49,3 +49,14 @@ def test_other_leased_turn_has_no_execution_source_scope():
     adapter = RoomExecutionAdapter()
     msg = {"room_id": "room", "metadata": {"turn_lease": "lease", "request_id": "r1"}}
     assert adapter._project_session_scope(msg) is None
+
+
+def test_operating_lead_handles_small_requests_itself() -> None:
+    """#812 — the lead delegates only when sub-room permissions or division of
+    work are needed; a short deliverable is answered directly instead of
+    paying for an execution, a delegation and a QA pass (7–40× tokens)."""
+    workflow = operating_lead_workflow({"operating_lead": True})
+
+    assert "위임은 서브룸의 권한·도구·분업이 실제로 필요할 때만" in workflow
+    assert "직접 답하세요" in workflow
+    assert "검토(QA) 작업은 사용자가 요청했거나 외부 동작 직전에만" in workflow
